@@ -1,0 +1,13 @@
+[Unit]
+Description=Shar API
+After=network.target postgresql.service redis-server.service
+
+[Service]
+WorkingDirectory=/opt/shar/server
+EnvironmentFile=/opt/shar/server/.env
+ExecStart=/opt/shar/server/.venv/bin/python -m app
+Restart=always
+User=shar
+
+[Install]
+WantedBy=multi-user.target

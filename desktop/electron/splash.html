@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shar OS</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body {
+      display: grid;
+      place-items: center;
+      font-family: "Segoe UI Variable", "Segoe UI", sans-serif;
+      color: #111111;
+      background: transparent;
+    }
+    .card {
+      width: calc(100% - 2px);
+      height: calc(100% - 2px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 13px;
+      border: 1px solid rgba(15, 23, 42, .10);
+      border-radius: 24px;
+      background: rgba(255, 255, 255, .97);
+      box-shadow: 0 20px 60px rgba(15, 23, 42, .22), inset 0 1px 0 rgba(255,255,255,.8);
+    }
+    /* 5-frame flipbook sprite, same asset/technique as SharLogoSpinner.tsx in the
+       chat header — layered frames cross-fading in a triangular pulse so exactly
+       two adjacent frames are visible at any instant (opacities sum to 1), giving
+       a continuous dissolve instead of a hard-stepped stutter across 5 frames. */
+    .logo {
+      position: relative;
+      width: 66px;
+      height: 66px;
+    }
+    .logo span {
+      position: absolute;
+      inset: 0;
+      background-image: url(./shar-logo-anim.png);
+      background-repeat: no-repeat;
+      background-size: 330px 66px; /* 5 frames * 66px */
+      opacity: 0;
+      animation: shar-logo-xfade 2600ms linear infinite;
+    }
+    .logo span:nth-child(1) { background-position: 0 0; animation-delay: 0ms; }
+    .logo span:nth-child(2) { background-position: -66px 0; animation-delay: -520ms; }
+    .logo span:nth-child(3) { background-position: -132px 0; animation-delay: -1040ms; }
+    .logo span:nth-child(4) { background-position: -198px 0; animation-delay: -1560ms; }
+    .logo span:nth-child(5) { background-position: -264px 0; animation-delay: -2080ms; }
+    @keyframes shar-logo-xfade {
+      0%   { opacity: 1; }
+      20%  { opacity: 0; }
+      80%  { opacity: 0; }
+      100% { opacity: 1; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .logo span { animation: none !important; opacity: 0 !important; }
+      .logo span:first-child { opacity: 1 !important; }
+    }
+    .title { font-size: 19px; line-height: 1; font-weight: 700; letter-spacing: -.02em; }
+    .status { min-height: 17px; color: #6b7280; font-size: 12px; }
+    .update-progress {
+      display: none;
+      width: 178px;
+      height: 4px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(118, 118, 128, .16);
+    }
+    .update-progress-fill {
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #007aff, #0a84ff);
+      transition: width .2s ease;
+    }
+    @media (prefers-color-scheme: dark) {
+      body { color: #fff; }
+      .card {
+        border-color: rgba(255,255,255,.11);
+        background: rgba(44, 44, 46, .98);
+        box-shadow: 0 22px 64px rgba(0,0,0,.48), inset 0 1px 0 rgba(255,255,255,.08);
+      }
+      .status { color: rgba(255,255,255,.62); }
+      .update-progress { background: rgba(255,255,255,.13); }
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="logo" role="img" aria-label="Shar OS">
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <div class="title">Shar OS</div>
+    <div class="status">Запуск рабочего пространства…</div>
+    <div class="update-progress"><div class="update-progress-fill"></div></div>
+  </main>
+</body>
+</html>

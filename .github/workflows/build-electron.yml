@@ -1,0 +1,124 @@
+name: Build & Deploy Electron
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/build-electron.yml'
+
+jobs:
+  build-and-deploy:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Bump patch version
+        working-directory: desktop
+        run: npm version patch --no-git-tag-version
+
+      - name: Build Electron (Windows NSIS web)
+        working-directory: desktop
+        run: npm run build:win
+
+      - name: Upload installer metadata to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: |
+            desktop/release/latest.yml,
+            desktop/release/Shar setup.exe
+          target: /var/www/shar/updates/
+          strip_components: 2
+
+      - name: Upload installer blockmap (optional)
+        uses: appleboy/scp-action@v0.1.7
+        continue-on-error: true
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: desktop/release/Shar setup.exe.blockmap
+          target: /var/www/shar/updates/
+          strip_components: 2
+
+      - name: Upload NSIS web payload to server root
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: desktop/release/nsis-web/*.7z
+          target: /var/www/shar/updates/
+          strip_components: 3
+
+      - name: Set file permissions on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: chmod -R 644 /var/www/shar/updates/* && chmod 755 /var/www/shar/updates/
+
+      - name: Verify published update artifacts
+        shell: pwsh
+        run: |
+          $baseUrl = 'https://vokrug-sveta.shar-os.ru/updates'
+          $latestUrl = "$baseUrl/latest.yml"
+
+          $latestResp = Invoke-WebRequest -Uri $latestUrl -UseBasicParsing -ErrorAction Stop
+          $latestContent = if ($latestResp.Content -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($latestResp.Content) } else { $latestResp.Content }
+
+          if ([string]::IsNullOrWhiteSpace($latestContent)) {
+            throw 'latest.yml is empty or unavailable'
+          }
+
+          $payloadPath = $null
+          foreach ($line in ($latestContent -split "`n")) {
+            $trimmed = $line.Trim()
+            if ($trimmed -like 'path:*' -and $trimmed -like '*.nsis.7z') {
+              $payloadPath = $trimmed.Substring(5).Trim()
+              break
+            }
+          }
+
+          if ([string]::IsNullOrWhiteSpace($payloadPath)) {
+            throw 'Unable to find nsis-web payload path in latest.yml'
+          }
+
+          $checks = @(
+            "$baseUrl/Shar%20setup.exe",
+            "$baseUrl/$payloadPath"
+          )
+
+          foreach ($url in $checks) {
+            $head = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -ErrorAction Stop
+            if ($head.StatusCode -ne 200) {
+              throw "Unexpected status $($head.StatusCode) for $url"
+            }
+            Write-Host "OK: $url"
+          }
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-installer
+          path: |
+            desktop/release/latest.yml
+            desktop/release/Shar setup.exe
+          retention-days: 30

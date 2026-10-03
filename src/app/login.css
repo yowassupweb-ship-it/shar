@@ -1,0 +1,74 @@
+.nx.nx-login {
+  position: relative;
+  overflow: hidden auto;
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: calc(var(--space-6) + env(safe-area-inset-top, 0px)) var(--space-4) calc(var(--space-6) + env(safe-area-inset-bottom, 0px));
+  background: var(--bg-color);
+  color: var(--text-main);
+  font-family: var(--font-sans);
+}
+
+/* Мягкое свечение за карточкой — единственное украшение. */
+.nx-login-glow {
+  position: absolute;
+  inset: -20% -10% auto;
+  height: 70%;
+  background: radial-gradient(ellipse at 50% 0%, color-mix(in srgb, var(--accent-fill) 22%, transparent), transparent 65%);
+  pointer-events: none;
+}
+
+.nx-login-card {
+  position: relative;
+  display: grid;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 380px;
+  padding: var(--space-6) var(--space-6) var(--space-5);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl);
+  background: var(--surface-panel);
+  box-shadow: var(--glass-shadow);
+}
+
+.nx-login-brand {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  margin-bottom: var(--space-2);
+  text-align: center;
+}
+.nx-login-brand h1 {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.01em;
+}
+.nx-login-brand p { margin: 0; color: var(--text-muted); font-size: var(--text-sm); }
+
+.nx-login-label {
+  display: grid;
+  gap: 6px;
+  font-size: var(--text-sm);
+  color: var(--text-2);
+}
+.nx-login-pass { position: relative; }
+.nx-login-pass input { padding-right: 40px; }
+.nx-login-eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); }
+.nx-login-hint { display: inline-flex; align-items: center; gap: 4px; color: var(--warning, #b7791f); }
+.nx-login-error { margin: 0; }
+
+.nx-login-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--control-field);
+  font-size: var(--text-md);
+}
+.nx-login-foot { margin: 0; text-align: center; color: var(--text-muted); font-size: var(--text-xs, 12px); }
+
+@media (max-width: 480px) {
+  .nx-login-card { padding: var(--space-5) var(--space-4); border-radius: var(--radius-lg); }
+}

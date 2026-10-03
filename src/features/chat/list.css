@@ -1,0 +1,471 @@
+/*
+ * Список чатов (ChatsPanel, ListRow) и листы создания. Токены — tokens.css.
+ */
+
+.cxl {
+  --cxl-avatar: 52px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: var(--surface-panel);
+  border-right: 1px solid var(--border-color);
+  --ring-bg: var(--surface-panel);
+}
+
+/* ── Шапка: поиск · знак ШАР · меню ───────────────────────────────────── */
+.cxl-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  min-height: 52px;
+  padding: calc(var(--space-2) + env(safe-area-inset-top)) var(--space-2) var(--space-1);
+}
+.cxl-search input[type="search"] { appearance: none; -webkit-appearance: none; }
+.cxl-search input[type="search"]::-webkit-search-cancel-button {
+  display: none;
+  -webkit-appearance: none;
+}
+
+.cxl-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+}
+.cxl-brand-word { height: 22px; width: auto; object-fit: contain; }
+.cxl-brand-title { font-size: var(--text-lg); font-weight: var(--weight-semibold); letter-spacing: -0.01em; }
+.cxl-brand-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text-2);
+}
+
+.cxl-archive-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 var(--space-3) var(--space-1);
+  padding: 6px var(--space-3);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface-hover);
+  color: var(--text-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+@media (hover: hover) { .cxl-archive-bar:hover { background: color-mix(in srgb, var(--text-main) 9%, transparent); color: var(--text-main); } }
+
+/* ── Лента строк ──────────────────────────────────────────────────────── */
+.cxl-list {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  padding: 2px 6px calc(var(--space-8) + var(--space-6) + var(--nx-nav-space));
+}
+.cxl-rows { animation: nx-rise var(--duration-base) var(--ease-out); }
+.cxl-skel { --nx-avatar: var(--cxl-avatar); }
+
+.cxl-row-wrap {
+  position: relative;
+  border-radius: var(--radius-lg);
+}
+
+.cxl-row {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: var(--cxl-avatar) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: calc(var(--cxl-avatar) + 2 * var(--space-3));
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--surface-panel);
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  -webkit-touch-callout: none;
+  /* Вдавливание строки — мягче кнопок: 2%. */
+  --press: scale(.98);
+  --btn-transition: background var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+}
+@media (hover: hover) { .cxl-row:hover { background: color-mix(in srgb, var(--text-main) 5%, var(--surface-panel)); } }
+.cxl-row:active { background: color-mix(in srgb, var(--text-main) 8%, var(--surface-panel)); }
+.cxl-row[aria-current="true"] { background: color-mix(in srgb, var(--accent-fill) 17%, var(--surface-panel)); }
+.cxl-row[data-swiping="true"] { --btn-transition: none; }
+.cxl-row:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent-color) 55%, transparent); }
+.cxl-row > .nx-avatar {
+  --size: var(--cxl-avatar);
+  align-self: center;
+  width: var(--cxl-avatar);
+  min-width: var(--cxl-avatar);
+  height: var(--cxl-avatar);
+  min-height: var(--cxl-avatar);
+  aspect-ratio: 1;
+  isolation: isolate;
+}
+.cxl-row > .nx-avatar > img { display: block; }
+
+.cxl-body { display: grid; gap: 2px; min-width: 0; }
+.cxl-top,
+.cxl-bottom { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.cxl-bottom { align-items: flex-start; min-height: calc(2 * 1.35em); }
+
+.cxl-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-reading);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-tight);
+}
+.cxl-flags {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  color: var(--text-muted);
+}
+.cxl-time {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.cxl-row[data-unread="true"] .cxl-time { color: var(--accent-color); font-weight: var(--weight-medium); }
+
+.cxl-preview {
+  flex: 1;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+.cxl-preview b { font-weight: var(--weight-medium); color: var(--text-2); }
+.cxl-preview[data-tone="live"] { color: var(--accent-color); }
+.cxl-preview[data-tone="draft"],
+.cxl-preview[data-tone="draft"] b { color: var(--state-danger); }
+.cxl-preview-icon { display: inline-block; margin-right: 4px; vertical-align: -2px; color: var(--text-2); }
+.cxl-bottom .nx-count { margin-top: 1px; }
+
+/* Точка прочтения своего последнего сообщения + список прочитавших */
+.cxl-read { position: relative; display: inline-grid; place-items: center; width: 10px; height: 10px; }
+.cxl-read-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--text-muted);
+}
+.cxl-read[data-read="true"] .cxl-read-dot { background: var(--accent-color); }
+.cxl-readers {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: 100;
+  display: none;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 140px;
+  max-width: 220px;
+  padding: 6px var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--glass);
+  box-shadow: 0 0 0 1px var(--glass-brd), var(--glass-shadow);
+  pointer-events: none;
+}
+@media (hover: hover) { .cxl-read:hover .cxl-readers { display: flex; } }
+.cxl-readers-title { font-size: var(--text-2xs); font-weight: var(--weight-medium); color: var(--text-muted); }
+.cxl-reader { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--text-xs); color: var(--text-main); }
+.cxl-reader > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Свайп влево — действия под строкой */
+.cxl-swipe {
+  position: absolute;
+  top: 0;
+  right: var(--space-2);
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.cxl-swipe-btn {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--element-bg);
+  box-shadow: 0 0 0 1px var(--border-color), var(--chin-shadow);
+  color: var(--accent-color);
+  cursor: pointer;
+}
+.cxl-swipe-btn:nth-child(2) { color: var(--text-2); }
+.cxl-swipe-btn[data-tone="danger"] {
+  background: color-mix(in srgb, var(--state-danger) 14%, var(--element-bg));
+  color: var(--state-danger);
+}
+
+/* Индикатор жеста «тянуть» */
+.cxl-pull {
+  position: absolute;
+  top: var(--space-2);
+  left: 50%;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 14px;
+  border-radius: var(--radius-pill);
+  background: var(--element-bg);
+  box-shadow: 0 0 0 1px var(--border-color), var(--glass-shadow);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, 0) scale(.9);
+  transition: transform .28s var(--ease-spring), opacity var(--duration-base) var(--ease-out), background var(--duration-fast) var(--ease-out);
+}
+.cxl-pull[data-dragging="true"] { transition: opacity var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out); }
+.cxl-pull[data-stage="refresh"] { color: var(--accent-color); }
+.cxl-pull[data-stage="refresh"] svg { transform: rotate(180deg); transition: transform var(--duration-fast) var(--ease-out); }
+.cxl-pull[data-stage="archive"] { background: var(--accent-fill); color: var(--on-accent); box-shadow: var(--glass-shadow); }
+
+/* Кнопка «Создать» — единственная заливка на панели (§1.2) */
+.cxl-fab {
+  position: absolute;
+  right: var(--space-4);
+  bottom: calc(var(--space-4) + var(--nx-nav-space));
+  z-index: 30;
+  width: 36px;
+  height: 36px;
+  box-shadow: var(--glass-shadow);
+  --btn-transition: background var(--duration-fast) var(--ease-out), transform 0.08s ease;
+}
+.cxl-fab[aria-expanded="true"] svg { transform: rotate(45deg); }
+.cxl-fab svg { transition: transform var(--duration-base) var(--ease-spring); }
+
+/* ── Листы создания ───────────────────────────────────────────────────── */
+.cxs-controls { display: grid; gap: var(--space-2); padding: 0 var(--space-2) var(--space-2); }
+.cxs-dept-dot {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--dot);
+}
+
+@media (max-width: 640px) {
+  .cxl { border-right: 0; --cxl-avatar: 56px; }
+  .cxl-title { font-size: var(--text-lg); }
+}
+
+/* Кнопки шапки списка — круглые стеклянные пилюли, как в шапке переписки. */
+.cxl-head > .nx-icon-btn {
+  width: 40px;
+  height: 40px;
+  background: var(--element-bg);
+  box-shadow: 0 0 0 1px var(--border-color), var(--chin-shadow);
+  color: var(--text-main);
+}
+@media (hover: hover) { .cxl-head > .nx-icon-btn:hover { background: color-mix(in srgb, var(--text-main) 6%, var(--element-bg)); } }
+.cxl-head > .nx-icon-btn[aria-expanded="true"] { background: var(--surface-selected); color: var(--accent-color); }
+/* ── Шапка списка — тулбар macOS (доктрина §10.6) ─────────────────────────
+   Лёгкий вертикальный градиент и волосяная линия снизу; знак и название
+   слева, как заголовок окна; кнопки — скруглённые квадраты без рамки.
+   Поиск идёт отдельной капсулой ниже, без подложки тулбара. «Создать» на десктопе — в тулбаре, на
+   телефоне — круглой кнопкой внизу, под большим пальцем. */
+.cxl-head {
+  display: grid;
+  gap: var(--space-2);
+  min-height: 0;
+  padding: calc(var(--space-2) + env(safe-area-inset-top)) var(--space-3) var(--space-2);
+  background: linear-gradient(color-mix(in srgb, var(--text-main) 3.5%, var(--surface-panel)), var(--surface-panel));
+  border-bottom: 1px solid var(--border-color);
+}
+.cxl-bar { display: flex; align-items: center; gap: var(--space-2); min-height: 40px; }
+.cxl-bar .cxl-brand { flex: 1; justify-content: flex-start; gap: 8px; height: auto; min-width: 0; padding-left: 2px; }
+.cxl-brand-text { display: grid; min-width: 0; line-height: 1; }
+.cxl-brand .nx-wordmark { font-size: 18px; }
+.cxl-bar .cxl-brand-status {
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+}
+.cxl-bar .cxl-brand-status[data-tone="warn"] { color: var(--state-warn); }
+.cxl-tools { display: flex; align-items: center; gap: 2px; flex: none; }
+.cxl-tool {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  --press: none;
+  --btn-transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+@media (hover: hover) { .cxl-tool:hover { background: color-mix(in srgb, var(--text-main) 9%, transparent); color: var(--text-main); } }
+.cxl-tool:active { background: color-mix(in srgb, var(--text-main) 14%, transparent); }
+.cxl-tool[aria-expanded="true"] { background: var(--surface-selected); color: var(--accent-color); }
+.cxl-tool-img { width: 22px; height: 22px; object-fit: contain; -webkit-user-drag: none; }
+.cxl-tool-img { filter: var(--icon-shadow); }
+.cxl-clear { width: 22px; height: 22px; margin-right: -6px; }
+
+@media (min-width: 641px) {
+  .cxl-fab { display: none; }
+}
+@media (max-width: 640px) {
+  .cxl-compose { display: none; }
+  .cxl-tool { width: 40px; height: 40px; border-radius: var(--radius-md); }
+  .cxl-tool-img { width: 26px; height: 26px; }
+  .cxl-brand .nx-wordmark { font-size: 20px; }
+}
+
+/* «Создать» — готовая объёмная иконка без второй подложки. */
+.cxl-compose {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin-right: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  --press: none;
+  --btn-transition: none;
+}
+@media (hover: hover) { .cxl-compose:hover { background: transparent; } }
+.cxl-compose:active { background: transparent; }
+.cxl-compose:focus-visible { box-shadow: var(--focus-ring); }
+.cxl-compose-img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  -webkit-user-drag: none;
+  transition: transform var(--duration-base) var(--ease-spring);
+}
+.cxl-compose[aria-expanded="true"] .cxl-compose-img { transform: rotate(45deg); }
+@media (max-width: 640px) {
+  .cxl-head .cxl-compose { display: none; } /* на телефоне «Создать» — круглая кнопка внизу, под пальцем */
+}
+
+/* ── Поиск — парящая капсула над списком (как композер над перепиской) ─────
+   Капсула и полоса архива лежат поверх ленты; список проезжает под ними и
+   начинается ниже на их реальную высоту (--cxl-float-h, ResizeObserver). */
+.cxl-head { border-bottom: 0; }
+.cxl-stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  --cxl-float-h: 48px;
+}
+.cxl-float {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  pointer-events: none;
+}
+.cxl-float > * { pointer-events: auto; }
+.cxl-float .cxl-search {
+  min-height: 38px;
+  border: 0;
+  background: var(--glass);
+  box-shadow: 0 0 0 1px var(--glass-brd), var(--glass-shadow);
+}
+.cxl-float .cxl-search:focus-within {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-color) 55%, transparent), 0 0 0 4px color-mix(in srgb, var(--accent-color) 18%, transparent), var(--glass-shadow);
+}
+.cxl-float .cxl-archive-bar {
+  justify-self: center;
+  margin: 0;
+  background: var(--glass);
+  box-shadow: 0 0 0 1px var(--glass-brd);
+}
+.cxl-stage > .cxl-list { padding-top: calc(var(--cxl-float-h) + 2px); }
+.cxl-stage .cxl-pull { top: calc(var(--cxl-float-h) + var(--space-1)); }
+@media (max-width: 640px) {
+  .cxl-float .cxl-search { min-height: 44px; }
+  .cxl-float { padding-left: max(var(--space-3), env(safe-area-inset-left)); padding-right: max(var(--space-3), env(safe-area-inset-right)); }
+}
+
+/* Шапка списка — плашка со скруглёнными нижними углами и ниже по высоте:
+   лежит над списком, как тулбар, отделена лёгкой тенью, а не линией. */
+.cxl-head {
+  position: relative;
+  z-index: 21;
+  gap: 0;
+  padding: calc(var(--space-1) + env(safe-area-inset-top)) var(--space-3) var(--space-1);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  box-shadow: 0 1px 0 var(--border-color), var(--chin-shadow);
+}
+.cxl-head .cxl-bar { min-height: 36px; }
+.cxl-stage .cxl-float { padding-top: 4px; }
+/* Список не выезжает в зазор над поиском: сверху он растворяется к середине
+   капсулы — строки видны только сквозь стекло поиска, а не над ним у края шапки. */
+.cxl-stage > .cxl-list {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent 4px, #000 calc(4px + 22px));
+  mask-image: linear-gradient(to bottom, transparent 0, transparent 4px, #000 calc(4px + 22px));
+}
+
+/* Десктоп (Electron): поиск стоит в шапке на месте знака (знак — в заголовке
+   окна). Пустая парящая полоса не занимает места. */
+.cxl-bar .cxl-search-inline { flex: 1; min-width: 0; min-height: 34px; border: 0; background: var(--surface-hover); }
+.cxl-float[data-empty="true"] { padding: 0; }
+/* Колонка шапки не шире самой шапки: иначе «естественная» ширина поля поиска
+   растягивала её и выталкивала «+» и «…» за край списка. */
+.cxl-head { grid-template-columns: minmax(0, 1fr); }
+.cxl-bar { min-width: 0; }
+.cxl-bar .cxl-search-inline { width: auto; max-width: none; }
+.cxl-bar .cxl-search-inline input { width: 100%; min-width: 0; }
+
+/* Знак рядом с поиском в одной строке шапки: занимает только своё место,
+   длинный статус связи обрезается, а не отнимает ширину у поиска. */
+.cxl-bar .cxl-brand-compact { flex: none; max-width: 40%; }
+.cxl-brand-compact .cxl-brand-text { max-width: 120px; }
+@media (max-width: 640px) {
+  .cxl-brand-compact .nx-wordmark { display: none; }
+  .cxl-brand-compact .cxl-brand-text { max-width: 84px; }
+}

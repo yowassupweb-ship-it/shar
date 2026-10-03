@@ -1,0 +1,439 @@
+/*
+ * Модуль чатов. Токены — в next/styles/tokens.css, здесь только правила.
+ */
+
+.cxn {
+  --cxn-sidebar: 360px;
+  --cxn-header: 56px;
+  /* Пузыри как в iMessage: свои — синие, чужие — серые. Синий — --accent-fill
+     (#0071e3, белый текст 4.70:1), а не #007aff из iMessage (4.0:1, ниже AA). */
+  --cxn-bubble-max: min(70%, 580px);
+  /* --user-* — оформление пользователя (Настройки → Внешний вид,
+     shared/settings/chatAppearance.ts); не задано — токены. */
+  --bubble-in: var(--user-bubble-in, var(--bubble-gray));
+  --bubble-out: var(--user-bubble-out, var(--accent-fill));
+  --on-bubble-in: var(--user-on-bubble-in, var(--text-main));
+  --on-bubble-out: var(--user-on-bubble-out, var(--on-accent));
+  --on-bubble-out-muted: color-mix(in srgb, var(--on-bubble-out) 78%, transparent);
+  --bubble-radius: var(--user-bubble-radius, 18px);
+  /* Колонка переписки: лента и композер одной ширины по центру. */
+  --cxv-max: 720px;
+}
+
+.cxn {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--cxn-sidebar) minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+.cxn > .nx-splitter { left: var(--cxn-sidebar); }
+
+/* ── Переписка ────────────────────────────────────────────────────────── */
+.cxn-main {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-color);
+}
+
+.cxn-main[data-full="true"] { grid-column: 1 / -1; }
+
+.cxn-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: none;
+  min-height: calc(var(--cxn-header) + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) var(--space-4) 0;
+  background: linear-gradient(color-mix(in srgb, var(--text-main) 3.5%, var(--surface-chrome)), var(--surface-chrome));
+  border-bottom: 1px solid var(--border-color);
+}
+.cxn-head-text { display: grid; min-width: 0; flex: 1; }
+.cxn-head-title {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.01em;
+}
+.cxn-head-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.cxn-head-sub[data-live="true"] { color: var(--accent-color); }
+.cxn-back { display: none; }
+
+.cxn-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+.cxn-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: var(--cxv-max);
+  min-height: 100%;
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-4) var(--space-3);
+  justify-content: flex-end;
+}
+
+.cxn-older {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-2) 0 var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.cxn-day {
+  position: sticky;
+  top: var(--space-2);
+  z-index: 10;
+  align-self: center;
+  margin: var(--space-3) 0 var(--space-2);
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--glass);
+  box-shadow: 0 0 0 1px var(--glass-brd);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-2);
+}
+
+.cxn-system {
+  align-self: center;
+  max-width: 80%;
+  margin: var(--space-2) 0;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--surface-hover);
+  font-size: var(--text-xs);
+  color: var(--text-2);
+  text-align: center;
+}
+
+/* Пузыри одного автора подряд — вплотную, новая группа — с отступом. */
+
+.cxn-bubble {
+  --bubble-bg: var(--bubble-in);
+  position: relative;
+  /* Своя плоскость наложения: хвостик с z-index:-1 уходит под текст пузыря,
+     а не за пределы пузыря под соседние строки. */
+  isolation: isolate;
+  max-width: var(--cxn-bubble-max);
+  min-width: 0;
+  padding: 7px var(--space-3) 7px;
+  border-radius: var(--bubble-radius);
+  background: var(--bubble-bg);
+  color: var(--on-bubble-in);
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+.cxm-row[data-mine="true"] .cxn-bubble {
+  --bubble-bg: var(--bubble-out);
+  color: var(--on-bubble-out);
+}
+.cxm-row[data-status="failed"] .cxn-bubble {
+  --bubble-bg: color-mix(in srgb, var(--state-danger) 14%, var(--container-bg));
+  color: var(--text-main);
+}
+
+/* Хвостик iMessage — перенесён из MessageBubbleTail: та же кривая, тот же сдвиг. */
+.cxn-tail {
+  position: absolute;
+  bottom: -1px;
+  z-index: -1;
+  width: 20px;
+  height: 16px;
+  pointer-events: none;
+  fill: var(--bubble-bg);
+}
+/* Свои — справа, чужие (и «печатает») — слева, отражённый. */
+.cxm-row[data-mine="true"] .cxn-tail { right: -6.75px; }
+.cxm-row[data-mine="false"] .cxn-tail,
+.cxm-ghost .cxn-tail { left: -4.75px; transform: scaleX(-1); }
+
+.cxn-author {
+  display: block;
+  margin-bottom: 1px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: color-mix(in srgb, var(--tint, var(--accent-color)) 70%, var(--text-main));
+}
+
+.cxn-text { white-space: pre-wrap; }
+.cxn-text a { color: var(--accent-color); text-decoration: underline; text-underline-offset: 2px; }
+
+.cxn-meta {
+  float: right;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin: 6px 0 -2px var(--space-2);
+  font-size: var(--text-2xs);
+  line-height: 1;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cxn-reply-quote {
+  display: block;
+  margin: 2px 0 var(--space-1);
+  padding: 2px var(--space-2);
+  border-left: 2px solid currentColor;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  font-size: var(--text-xs);
+  opacity: .9;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cxn-atts { display: grid; gap: var(--space-1); margin: 2px 0 var(--space-1); }
+.cxn-att-img {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+  border-radius: var(--radius-md);
+  object-fit: cover;
+}
+.cxn-att-file {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  color: inherit;
+  text-decoration: none;
+  font-size: var(--text-sm);
+}
+.cxn-att-file span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (hover: hover) { .cxn-att-file:hover { background: color-mix(in srgb, currentColor 14%, transparent); } }
+
+.cxn-reactions { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-top: var(--space-1); }
+.cxn-reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.cxn-failed-actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+  margin: var(--space-1) 0 var(--space-2);
+}
+
+.cxn-scroll-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.cxn-jump {
+  position: absolute;
+  right: var(--space-4);
+  bottom: var(--space-3);
+  z-index: 20;
+  width: 38px;
+  height: 38px;
+  background: var(--glass);
+  box-shadow: 0 0 0 1px var(--glass-brd), var(--chin-shadow);
+  color: var(--text-main);
+}
+.cxn-jump .nx-count { position: absolute; top: -6px; right: -4px; }
+
+/* ── Композер ─────────────────────────────────────────────────────────── */
+.cxn-composer-wrap {
+  flex: none;
+  /* На iPhone поле садится в полосу «домой», как в iMessage, а не висит над
+     ней на всю её высоту; с клавиатурой — вплотную к ней. */
+  padding: 6px var(--space-4) max(var(--space-2), calc(var(--nx-safe-bottom) - 10px));
+}
+
+/* Композер как в iMessage: пилюля с тонкой рамкой, кнопка отправки — синий
+   круг внутри поля справа; появляется, только когда есть что отправить. */
+.cxn-composer { max-width: calc(var(--cxv-max) - 2 * var(--space-4)); margin: 0 auto; }
+.cxn-field {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  min-height: 36px;
+  border: 1px solid color-mix(in srgb, var(--text-main) 22%, transparent);
+  border-radius: var(--bubble-radius);
+  background: var(--bg-color);
+  transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
+}
+.cxn-field:focus-within {
+  border-color: color-mix(in srgb, var(--accent-color) 55%, var(--border-color));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 18%, transparent);
+}
+.cxn-field .cxn-input {
+  flex: 1;
+  min-width: 0;
+  max-height: 200px;
+  min-height: 20px;
+  margin: 0;
+  padding: 7px var(--space-3) 7px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text-main);
+  font: inherit;
+  font-size: var(--text-md);
+  line-height: 20px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  outline: none;
+  cursor: text;
+  -webkit-user-modify: read-write-plaintext-only;
+}
+.cxn-field[data-has-text="true"] .cxn-input { padding-right: 40px; }
+.cxn-field .cxn-input[data-empty="true"]::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.cxn-field .cxn-input:focus-visible { box-shadow: none; }
+/* Эмодзи в поле: настоящий символ (он уходит в сообщение), невидимый, с картинкой Apple поверх. */
+.nxr-emoji {
+  display: inline-block;
+  width: 1.2em;
+  height: 1.2em;
+  margin: 0 1.5px;
+  vertical-align: -0.2em;
+  overflow: hidden;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  user-select: all;
+}
+.nxr-emoji::selection { background: color-mix(in srgb, var(--accent-color) 35%, transparent); }
+
+.cxn-send {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  cursor: pointer;
+  --btn-transition: background var(--duration-fast) var(--ease-out), transform 0.08s ease;
+  animation: nx-pop var(--duration-fast) var(--ease-spring);
+}
+@media (hover: hover) { .cxn-send:hover { background: var(--accent-fill-hover); } }
+.cxn-send:focus-visible { box-shadow: var(--focus-ring); }
+
+/* Фото и стикеры без подложки — время лежит поверх картинки */
+.cxn-bubble[data-media="true"] { --bubble-bg: transparent; padding: 0; }
+.cxn-bubble[data-media="true"] .cxn-atts { margin: 0; }
+.cxn-bubble[data-media="true"] .cxn-meta {
+  position: absolute;
+  right: var(--space-2);
+  bottom: var(--space-2);
+  float: none;
+  margin: 0;
+  padding: 3px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--scrim);
+  color: var(--on-accent);
+}
+
+/* ── Адаптив: ≤640 — мастер-деталь в два экрана (§12) ─────────────────── */
+@media (max-width: 640px) {
+  .cxn { grid-template-columns: minmax(0, 1fr); }
+  .cxn[data-pane="list"] .cxn-main { display: none; }
+  .cxn[data-pane="chat"] .cxl { display: none; }
+  .cxn-back { display: inline-grid; margin-left: calc(var(--space-2) * -1); }
+  .cxn-head { gap: var(--space-2); padding-left: var(--space-3); padding-right: var(--space-3); }
+  .cxn-timeline { padding-left: var(--space-3); padding-right: var(--space-3); }
+  /* Поле ввода как в Telegram на iOS: в покое — поуже, с воздухом по бокам; с
+     клавиатурой — растягивается почти до краёв, «+» сворачивается, поле садится
+     вплотную к клавиатуре. */
+  .cxn-composer-wrap {
+    padding-left: max(18px, env(safe-area-inset-left));
+    padding-right: max(18px, env(safe-area-inset-right));
+    transition: padding var(--duration-base) var(--ease-out);
+  }
+  .nx[data-kb="open"] .cxn-composer-wrap { padding: 4px 6px 6px; }
+  .nx .cxc-row .cxn-field { min-height: 40px; }
+  .nx .cxc-row .cxn-field .cxn-input { padding-top: 9px; padding-bottom: 9px; }
+  .nx .cxc-plus,
+  .nx .cxc-mic,
+  .nx .cxc-row > .cxn-send { width: 40px; height: 40px; }
+  .nx .cxc-plus {
+    overflow: hidden;
+    transition: width var(--duration-base) var(--ease-out), margin var(--duration-base) var(--ease-out), opacity var(--duration-fast) var(--ease-out);
+  }
+  .nx[data-kb="open"] .cxc-plus {
+    width: 0;
+    margin-right: calc(var(--space-2) * -1);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .cxn-head .nx-icon-btn { width: 44px; height: 44px; }
+  .cxn-field .cxn-input { font-size: var(--text-lg); /* iOS не зумит поле от 16px */ }
+  .cxn-send { width: 30px; height: 30px; }
+
+  /* Жест «назад» от края (useEdgeBack): переписка уезжает за пальцем, список
+     выдвигается из-под неё с отставанием, как в iOS. */
+  .cxn[data-edge] > .cxl {
+    display: flex;
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    transform: translateX(calc((var(--edge-p, 0) - 1) * 28%));
+  }
+  .cxn[data-edge] > .cxn-main {
+    z-index: 1;
+    box-shadow: -12px 0 32px rgba(0, 0, 0, .22);
+  }
+}
+
+/* Кнопка «вниз»: сплошная подложка. Полупрозрачная (стекло и общий hover
+   .nx-icon-btn) просвечивала синий пузырь под собой — кнопка «синела». */
+.cxn-scroll-wrap .cxn-jump {
+  background: var(--element-bg);
+  box-shadow: 0 0 0 1px var(--border-color), var(--glass-shadow);
+  color: var(--text-main);
+}
+@media (hover: hover) {
+  .cxn-scroll-wrap .cxn-jump:hover { background: color-mix(in srgb, var(--text-main) 6%, var(--element-bg)); color: var(--text-main); }
+}
+.cxn-scroll-wrap .cxn-jump:active { background: color-mix(in srgb, var(--text-main) 10%, var(--element-bg)); }
+
+.cxn-empty img { margin-bottom: var(--space-2); object-fit: contain; filter: var(--icon-shadow); }

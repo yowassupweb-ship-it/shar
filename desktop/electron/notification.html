@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+    }
+
+    body {
+      font-family: 'Segoe UI Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', Arial, sans-serif;
+      overflow: hidden;
+      background: transparent;
+      -webkit-app-region: no-drag;
+      color-scheme: light dark;
+      display: flex;
+      align-items: stretch;
+      justify-content: stretch;
+    }
+
+    .notification-container {
+      width: 100%;
+      height: 100%;
+      background: rgba(255, 255, 255, 0.98);
+      backdrop-filter: blur(24px) saturate(150%);
+      border-radius: 16px;
+      box-shadow: 0 14px 38px rgba(15, 23, 42, 0.20),
+                  0 0 0 1px rgba(15, 23, 42, 0.10),
+                  inset 0 1px 0 rgba(255, 255, 255, 0.80);
+      padding: 9px 12px;
+      cursor: pointer;
+      animation: slideIn 0.22s cubic-bezier(0.22, 0.9, 0.32, 1);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .notification-container.detailed {
+      padding-top: 11px;
+      padding-bottom: 11px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .notification-container {
+        background: rgba(44, 44, 46, 0.98);
+        box-shadow: 0 16px 42px rgba(0, 0, 0, 0.46),
+                    0 0 0 1px rgba(255, 255, 255, 0.11),
+                    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      }
+    }
+
+    @keyframes slideIn {
+      from {
+        transform: translateX(32px) scale(0.985);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(0) scale(1);
+        opacity: 1;
+      }
+    }
+
+    @keyframes slideOut {
+      from {
+        transform: translateX(0) scale(1);
+        opacity: 1;
+      }
+      to {
+        transform: translateX(30px) scale(0.985);
+        opacity: 0;
+      }
+    }
+
+    .notification-container.is-closing {
+      animation: slideOut 0.28s ease-in forwards;
+      pointer-events: none;
+    }
+
+    .notification-content {
+      display: flex;
+      gap: 11px;
+      align-items: center;
+      height: 100%;
+    }
+
+    .avatar {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      align-self: center;
+      background: linear-gradient(145deg, #0a84ff 0%, #007aff 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 600;
+      font-size: 13px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 3px 10px rgba(0, 122, 255, 0.24);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .avatar.kind-task {
+      background: linear-gradient(145deg, rgba(59, 130, 246, 0.45) 0%, rgba(37, 99, 235, 0.58) 100%);
+    }
+
+    .avatar.kind-event {
+      background: linear-gradient(145deg, rgba(16, 185, 129, 0.45) 0%, rgba(5, 150, 105, 0.58) 100%);
+    }
+
+    .avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+
+    .text-content {
+      flex: 1;
+      min-width: 0;
+      padding-right: 24px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 1px;
+      min-height: 100%;
+      padding-top: 1px;
+      padding-bottom: 1px;
+    }
+
+    .notification-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 0;
+      min-height: 14px;
+    }
+
+    .sender-name {
+      font-weight: 600;
+      font-size: 13px;
+      color: #111111;
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      letter-spacing: -0.005em;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .sender-name {
+        color: #eef2f7;
+      }
+    }
+
+    .timestamp {
+      font-size: 10px;
+      color: #6b7280;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .timestamp {
+        color: rgba(226, 232, 240, 0.64);
+      }
+    }
+
+    .chat-name {
+      font-size: 11px;
+      color: #007aff;
+      margin-bottom: 0;
+      min-height: 14px;
+      line-height: 14px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .kind-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-bottom: 0;
+      padding: 1px 6px;
+      border-radius: 999px;
+      font-size: 8px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      background: rgba(241, 90, 34, 0.2);
+      color: #fdba74;
+      width: fit-content;
+    }
+
+    .kind-pill[data-kind="task"] {
+      background: rgba(59, 130, 246, 0.14);
+      color: #2563eb;
+    }
+
+    .kind-pill[data-kind="event"] {
+      background: rgba(139, 92, 246, 0.14);
+      color: #7c3aed;
+    }
+
+    .kind-pill[data-kind="system"] {
+      background: rgba(107, 114, 128, 0.14);
+      color: #4b5563;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .kind-pill[data-kind="task"] {
+        color: #60a5fa;
+      }
+
+      .kind-pill[data-kind="event"] {
+        color: #c084fc;
+      }
+
+      .kind-pill[data-kind="system"] {
+        color: #d1d5db;
+      }
+    }
+
+    .message-text {
+      font-size: 12px;
+      line-height: 1.26;
+      color: #1f2937;
+      display: -webkit-box;
+      line-clamp: 2;
+      -webkit-line-clamp: 1;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+      font-weight: 400;
+    }
+
+    .notification-container.detailed .message-text {
+      -webkit-line-clamp: 3;
+      line-height: 1.34;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .message-text {
+        color: #e0e0e0;
+      }
+    }
+
+    .badge {
+      position: absolute;
+      top: -3px;
+      right: -3px;
+      background: #ff3b30;
+      color: white;
+      font-size: 9px;
+      font-weight: 600;
+      padding: 1px 5px;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(255, 59, 48, 0.4);
+      min-width: 18px;
+      text-align: center;
+    }
+
+    .close-btn {
+      position: absolute;
+      top: 5px;
+      right: 5px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: rgba(118, 118, 128, 0.12);
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 1;
+      color: #6b7280;
+      font-weight: 600;
+      line-height: 1;
+    }
+
+    .avatar-icon {
+      width: 16px;
+      height: 16px;
+      display: block;
+      color: #e2e8f0;
+      opacity: 0.9;
+    }
+
+    .close-btn:active {
+      background: rgba(118, 118, 128, 0.2);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .close-btn {
+        background: rgba(255, 255, 255, 0.09);
+        color: #d1d5db;
+      }
+      
+    }
+  </style>
+</head>
+<body>
+  <div class="notification-container" id="notification">
+    <button class="close-btn" id="closeBtn" title="Закрыть" aria-label="Закрыть">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button>
+    <div class="notification-content">
+      <div class="avatar" id="avatar">
+        <span id="avatarText"></span>
+      </div>
+      <div class="text-content">
+        <div class="kind-pill" id="kindPill" style="display: none;"></div>
+        <div class="notification-header">
+          <div class="sender-name" id="senderName"></div>
+          <div class="timestamp" id="timestamp"></div>
+        </div>
+        <div class="chat-name" id="chatName" style="display: none;"></div>
+        <div class="message-text" id="messageText"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+    let isClosing = false;
+
+    function closeWithAnimation() {
+      if (isClosing) return;
+      isClosing = true;
+      const notification = document.getElementById('notification');
+      notification.classList.add('is-closing');
+      setTimeout(() => ipcRenderer.send('notification-dismissed'), 280);
+    }
+
+    ipcRenderer.on('notification-closing', closeWithAnimation);
+
+    // Получаем данные уведомления
+    ipcRenderer.on('notification-data', (event, data) => {
+      const {
+        title,
+        subtitle,
+        senderName,
+        chatName,
+        message,
+        avatar,
+        appOrigin,
+        timestamp,
+        badge,
+        chatId,
+        url,
+        kind,
+        displayMode
+      } = data;
+
+      document.getElementById('notification').classList.toggle('detailed', displayMode === 'detailed');
+
+      const genericLabels = new Set([
+        'новое сообщение',
+        'тестовое уведомление',
+        'новое событие',
+        'событие обновлено',
+        'напоминание о событии',
+        'уведомление'
+      ]);
+
+      const normalizedSender = String(senderName || '').trim();
+      const normalizedChatName = String(chatName || '').trim();
+      const normalizedSubtitle = String(subtitle || '').trim();
+      const normalizedTitle = String(title || '').trim();
+
+      const isGenericSender = normalizedSender && genericLabels.has(normalizedSender.toLowerCase());
+      const senderCandidate = !isGenericSender ? normalizedSender : '';
+
+      const resolvedMessage = String(message || 'Откройте приложение, чтобы посмотреть детали').trim();
+      const kindType = String(kind || '').trim().toLowerCase();
+      const systemNoiseLabels = new Set([
+        'системные уведомления',
+        'сообщения',
+        'задачи',
+        'календарь',
+        'shar os',
+        'админка'
+      ]);
+
+      const isNoiseLabel = (value) => {
+        const normalized = String(value || '').trim().toLowerCase();
+        return !normalized || systemNoiseLabels.has(normalized);
+      };
+
+      const extractEntityFromMessage = () => {
+        const msg = String(resolvedMessage || '').trim();
+        const parts = msg.split(':');
+        if (parts.length < 2) return '';
+        return String(parts.slice(1).join(':') || '').trim();
+      };
+
+      let resolvedTitle = 'Новое уведомление';
+      let resolvedSubtitle = '';
+
+      if (kindType === 'task') {
+        const taskTitle = normalizedTitle && !genericLabels.has(normalizedTitle.toLowerCase())
+          ? normalizedTitle
+          : extractEntityFromMessage();
+        resolvedTitle = taskTitle || 'Задача';
+        resolvedSubtitle = senderCandidate && !isNoiseLabel(senderCandidate) ? senderCandidate : '';
+      } else if (kindType === 'event') {
+        const eventTitle = normalizedTitle && !genericLabels.has(normalizedTitle.toLowerCase())
+          ? normalizedTitle
+          : extractEntityFromMessage();
+        resolvedTitle = eventTitle || 'Событие';
+        resolvedSubtitle = senderCandidate && !isNoiseLabel(senderCandidate) ? senderCandidate : '';
+      } else if (kindType === 'message') {
+        resolvedTitle = senderCandidate || normalizedTitle || 'Новое сообщение';
+        resolvedSubtitle = '';
+      } else {
+        resolvedTitle = senderCandidate || normalizedTitle || normalizedSubtitle || 'Новое уведомление';
+        resolvedSubtitle = '';
+      }
+
+      // Устанавливаем имя отправителя
+      document.getElementById('senderName').textContent = resolvedTitle;
+
+      const kindPillEl = document.getElementById('kindPill');
+      if (kind) {
+        kindPillEl.textContent = kind === 'task' ? 'Задача' : kind === 'event' ? 'Событие' : kind === 'system' ? 'Система' : 'Сообщение';
+        kindPillEl.dataset.kind = kind;
+        kindPillEl.style.display = 'inline-flex';
+      }
+
+      // Устанавливаем название чата (если групповой)
+      const chatNameEl = document.getElementById('chatName');
+      if (resolvedSubtitle && resolvedSubtitle !== resolvedTitle && !isNoiseLabel(resolvedSubtitle)) {
+        chatNameEl.textContent = resolvedSubtitle;
+        chatNameEl.style.display = 'block';
+      } else {
+        chatNameEl.style.display = 'none';
+      }
+
+      // Устанавливаем текст сообщения
+      document.getElementById('messageText').textContent = resolvedMessage;
+
+      // Устанавливаем время
+      const timeString = timestamp ? formatTime(timestamp) : 'только что';
+      document.getElementById('timestamp').textContent = timeString;
+
+      // Устанавливаем аватар
+      const avatarEl = document.getElementById('avatar');
+      const avatarTextEl = document.getElementById('avatarText');
+      avatarEl.querySelectorAll('img, .badge').forEach((node) => node.remove());
+      avatarTextEl.textContent = '';
+      avatarEl.classList.remove('kind-task', 'kind-event');
+
+      const resolveAvatarUrl = (rawAvatar, origin) => {
+        const value = String(rawAvatar || '').trim();
+        if (!value) return '';
+        if (/^(https?:|data:|blob:|file:)/i.test(value)) return value;
+        if (value.startsWith('/')) {
+          const safeOrigin = String(origin || '').trim();
+          // Old records store the path without the /api prefix our proxy routes
+          // actually live under (see normalizeAvatarUrl in ChatProfile.tsx, which
+          // the rest of the UI already accounts for) — without this, these avatars
+          // silently 404'd here and notifications fell back to initials.
+          const path = value.startsWith('/uploads/') ? `/api${value}` : value;
+          return safeOrigin ? `${safeOrigin}${path}` : '';
+        }
+        return '';
+      };
+
+      const avatarUrl = resolveAvatarUrl(avatar, appOrigin);
+      const diceBearFallback = `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(resolvedTitle || 'user')}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`;
+
+      if (kindType === 'task') {
+        avatarEl.classList.add('kind-task');
+        avatarTextEl.innerHTML = getTaskSvg();
+      } else if (kindType === 'event') {
+        avatarEl.classList.add('kind-event');
+        avatarTextEl.innerHTML = getEventSvg();
+      } else if (avatarUrl) {
+        const img = document.createElement('img');
+        img.src = avatarUrl;
+        img.onerror = () => {
+          // A broken uploaded URL must never turn into the Electron-only
+          // letter badge. Retry with exactly the deterministic fallback used
+          // by Shar's chat UI; if even that is unavailable, use a neutral icon.
+          if (img.src !== diceBearFallback) {
+            img.src = diceBearFallback;
+          } else {
+            img.remove();
+            avatarTextEl.innerHTML = getUserSvg();
+          }
+        };
+        avatarEl.appendChild(img);
+      } else {
+        const img = document.createElement('img');
+        img.src = diceBearFallback;
+        img.onerror = () => {
+          img.remove();
+          avatarTextEl.innerHTML = getUserSvg();
+        };
+        avatarEl.appendChild(img);
+      }
+
+      // Устанавливаем бейдж (если есть)
+      if (badge && badge > 0) {
+        const badgeEl = document.createElement('div');
+        badgeEl.className = 'badge';
+        badgeEl.textContent = badge > 99 ? '99+' : badge;
+        avatarEl.style.position = 'relative';
+        avatarEl.appendChild(badgeEl);
+      }
+
+      // Клик по уведомлению - открываем чат
+      document.getElementById('notification').addEventListener('click', (e) => {
+        if (!e.target.closest('#closeBtn')) {
+          ipcRenderer.send('notification-click', { chatId, url });
+        }
+      });
+
+      // Звук при появлении уведомления
+      playMessageSound(kindType || 'message');
+
+      // Кнопка закрытия
+      document.getElementById('closeBtn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeWithAnimation();
+      });
+
+      // Уведомление будет висеть пока его не закроют вручную
+    });
+
+    function getBellSvg() {
+      return '<svg class="avatar-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path><path d="M10 17a2 2 0 0 0 4 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>';
+    }
+
+    function getUserSvg() {
+      return '<svg class="avatar-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="8" r="3.5" stroke="currentColor" stroke-width="1.8"></circle><path d="M4.5 20c.8-3.4 3.2-5.2 7.5-5.2s6.7 1.8 7.5 5.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path></svg>';
+    }
+
+    function getTaskSvg() {
+      return '<svg class="avatar-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 11.5l2 2 4-4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"></path><rect x="4" y="4" width="16" height="16" rx="3" stroke="currentColor" stroke-width="1.8"></rect></svg>';
+    }
+
+    function getEventSvg() {
+      return '<svg class="avatar-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="3" stroke="currentColor" stroke-width="1.8"></rect><path d="M8 3.5v3M16 3.5v3M4 9.5h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path></svg>';
+    }
+
+    function getAvatarInitials(value) {
+      const text = String(value || '').trim();
+      if (!text) return '';
+
+      const parts = text
+        .replace(/[()\[\]{}.,:;!@#$%^&*+=~`"'<>/?\\|-]+/g, ' ')
+        .split(' ')
+        .map((part) => part.trim())
+        .filter(Boolean);
+
+      if (parts.length === 0) return '';
+      if (parts.length === 1) {
+        return parts[0].slice(0, 2).toUpperCase();
+      }
+
+      return `${parts[0].charAt(0)}${parts[1].charAt(0)}`.toUpperCase();
+    }
+
+    function formatTime(timestamp) {
+      const date = new Date(timestamp);
+      const now = new Date();
+      const diff = now - date;
+
+      if (diff < 60000) return 'только что';
+      if (diff < 3600000) return `${Math.floor(diff / 60000)} мин назад`;
+      
+      const hours = date.getHours().toString().padStart(2, '0');
+      const minutes = date.getMinutes().toString().padStart(2, '0');
+      return `${hours}:${minutes}`;
+    }
+
+    // Предотвращаем выделение текста
+    document.addEventListener('selectstart', (e) => e.preventDefault());
+
+    // Щелчок нового сообщения — синтезируем через Web Audio API
+    function playMessageSound(kind) {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+
+        if (kind === 'message') {
+          // Лёгкий мягкий «pop» — два тона
+          const tones = [
+            { freq: 880, start: 0,    dur: 0.07, gain: 0.20 },
+            { freq: 1100, start: 0.05, dur: 0.10, gain: 0.14 },
+          ];
+          tones.forEach(({ freq, start, dur, gain }) => {
+            const osc = ctx.createOscillator();
+            const amp = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+            amp.gain.setValueAtTime(0, ctx.currentTime + start);
+            amp.gain.linearRampToValueAtTime(gain, ctx.currentTime + start + 0.012);
+            amp.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
+            osc.connect(amp);
+            amp.connect(ctx.destination);
+            osc.start(ctx.currentTime + start);
+            osc.stop(ctx.currentTime + start + dur + 0.01);
+          });
+          setTimeout(() => ctx.close(), 400);
+        } else {
+          // Для задач/событий — нейтральный одиночный тон
+          const osc = ctx.createOscillator();
+          const amp = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.value = 660;
+          amp.gain.setValueAtTime(0.12, ctx.currentTime);
+          amp.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+          osc.connect(amp);
+          amp.connect(ctx.destination);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.16);
+          setTimeout(() => ctx.close(), 400);
+        }
+      } catch (_) { /* AudioContext not available — silent */ }
+    }
+  </script>
+</body>
+</html>

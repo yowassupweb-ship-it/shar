@@ -1,0 +1,189 @@
+/*
+ * Формы и страницы-документы: группа строк (как «Системные настройки»
+ * macOS), переключатель, ползунок, строка действий, каркас страницы.
+ * React-обёртки — shared/ui/controls.tsx. Используют настройки, админка, UTM.
+ */
+
+
+/* Блок: заголовок, группа строк, пояснение */
+.nx-block { display: grid; gap: var(--space-2); }
+.nx-block-title { margin: 0 var(--space-1); font-size: var(--text-xs); font-weight: var(--weight-semibold); color: var(--text-2); }
+.nx-note { margin: 0 var(--space-1); font-size: var(--text-xs); line-height: var(--leading-normal); color: var(--text-muted); }
+
+.nx-group { display: grid; overflow: hidden; border-radius: var(--radius-md); background: var(--surface-hover); }
+
+.nx-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 48px;
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-main);
+  font-size: var(--text-md);
+}
+.nx-row + .nx-row { box-shadow: inset 0 1px 0 var(--border-color); }
+.nx-row-end { justify-content: flex-end; }
+.nx-row-text { display: grid; gap: 2px; flex: 1; min-width: 0; }
+.nx-row-label { display: flex; align-items: center; gap: var(--space-2); min-width: 0; overflow-wrap: anywhere; }
+.nx-row-hint { font-size: var(--text-xs); color: var(--text-muted); }
+.nx-row-control { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); flex: none; max-width: 60%; }
+.nx-row-control .nx-field { width: min(280px, 100%); }
+.nx-value { color: var(--text-muted); font-size: var(--text-sm); text-align: right; overflow-wrap: anywhere; }
+
+/* Переключатель */
+.nx-switch {
+  position: relative;
+  flex: none;
+  width: 44px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  cursor: pointer;
+  transition: background var(--duration-base) var(--ease-out);
+}
+.nx-switch[aria-checked="true"] { background: var(--state-ok); }
+.nx-switch:disabled { opacity: .6; cursor: default; }
+.nx-switch:focus-visible { box-shadow: var(--focus-ring); }
+.nx-switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--knob);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
+  transition: transform var(--duration-base) var(--ease-spring);
+}
+.nx-switch[aria-checked="true"] .nx-switch-knob { transform: translateX(18px); }
+
+/* Ползунок */
+.nx-slider { display: flex; align-items: center; gap: var(--space-3); width: min(280px, 100%); }
+.nx-slider input { flex: 1; min-width: 0; accent-color: var(--accent-fill); }
+.nx-slider output { min-width: 44px; text-align: right; font-size: var(--text-sm); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+.nx-actions { display: flex; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; }
+
+/* Оформление переписки: заголовок блока с переключателем темы */
+.nx-block-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+/* ── Страница-документ (админка, UTM, инструкция) ───────────────────────── */
+.nx-page { height: 100%; min-height: 0; background: var(--surface-panel); }
+.nx-page-inner {
+  display: grid;
+  align-content: start;
+  gap: var(--space-5);
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: calc(var(--space-5) + env(safe-area-inset-top, 0px)) var(--space-5) calc(var(--space-7) + var(--nx-nav-space, 0px));
+}
+.nx-page-inner[data-wide] { max-width: 1180px; }
+.nx-page-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2) var(--space-3); min-height: var(--control-round); }
+.nx-page-head h1 { margin: 0; font-size: var(--text-2xl); font-weight: var(--weight-bold); letter-spacing: -0.02em; }
+.nx-page-head .nx-page-back { margin-left: calc(var(--space-2) * -1); }
+.nx-page-head .nx-page-tools { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; }
+
+/* Таблица-список в группе: строка с аватаром/значком, текстом и действиями */
+.nx-row-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+.nx-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-hover);
+  color: var(--text-2);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+.nx-tag[data-tone="accent"] { background: color-mix(in srgb, var(--accent-color) 14%, transparent); color: var(--accent-color); }
+.nx-tag[data-tone="warn"] { background: color-mix(in srgb, var(--state-warn) 16%, transparent); color: var(--state-warn); }
+.nx-tag[data-tone="danger"] { background: color-mix(in srgb, var(--state-danger) 14%, transparent); color: var(--state-danger); }
+.nx-tag[data-tone="ok"] { background: color-mix(in srgb, var(--state-ok) 16%, transparent); color: var(--state-ok); }
+
+/* Поле-колонка в форме листа: подпись над полем */
+.nx-form { display: grid; gap: var(--space-3); }
+.nx-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.nx-label { display: grid; gap: 5px; min-width: 0; font-size: var(--text-xs); color: var(--text-2); }
+.nx-label > .nx-field { width: 100%; border-radius: var(--radius-md); }
+.nx-label textarea, .nx-label select {
+  width: 100%;
+  min-height: var(--control-field);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--element-bg);
+  color: var(--text-main);
+  font: inherit;
+  font-size: var(--text-md);
+}
+.nx-label textarea { resize: vertical; line-height: var(--leading-normal); }
+.nx-label textarea:focus-visible, .nx-label select:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+@media (max-width: 640px) {
+  .nx-row { flex-wrap: wrap; }
+  .nx-row-control { max-width: 100%; }
+  .nx-row .nx-segment { width: 100%; grid-auto-columns: 1fr; }
+  .nx-page-inner { padding-inline: var(--space-3); }
+  .nx-form-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Палитра: круглые образцы цвета + «свой цвет» (настройки, пресеты UTM) */
+.nx-colors { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.nx-color {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--on-media);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .12);
+  cursor: pointer;
+}
+.nx-color[aria-checked="true"], .nx-color-custom[data-on] { box-shadow: 0 0 0 2px var(--surface-panel), 0 0 0 4px var(--accent-fill); }
+.nx-color:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.nx-color-custom { background: var(--surface-hover); color: var(--text-2); overflow: hidden; }
+.nx-color-custom input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.nx-color-custom:focus-within { box-shadow: var(--focus-ring); }
+
+
+/* Мелочи: цветная точка (отдел, пресет), ряд кнопок справа */
+.nx-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; }
+.nx-inline { display: flex; flex-wrap: wrap; gap: var(--space-1); justify-content: flex-end; }
+
+/* Выбор темы: плитки с образцом палитры. Образцы — фиксированные цвета самих тем. */
+.nx-theme-picker { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.nx-theme-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  padding: 0 var(--space-3) 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface-hover);
+  color: var(--text-main);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.nx-theme-opt[aria-pressed="true"] { background: var(--surface-selected); box-shadow: inset 0 0 0 1.5px var(--accent-color); }
+.nx-theme-swatch {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  color: var(--text-main);
+}
+.nx-theme-swatch[data-palette="light"] { background: #f5f5f7; }
+.nx-theme-swatch[data-palette="gray"] { background: #3a3b3f; }
+.nx-theme-swatch[data-palette="graphite"] { background: #202124; }
+.nx-theme-swatch[data-palette="black"] { background: #000000; }
+.nx-theme-swatch[data-palette="system"] { background: linear-gradient(90deg, #f5f5f7 50%, #202124 50%); color: #8a8a8e; }

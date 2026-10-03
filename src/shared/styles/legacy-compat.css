@@ -1,0 +1,16 @@
+/*
+ * Переменные старого фронта, на которых держатся перенесённые компоненты
+ * (голосовые, опросы, стикеры, Toast, превью ссылок). Все выражены через
+ * токены v2 — отдельной палитры нет. Когда компонент переписан на токены,
+ * его строки отсюда удаляются; пустой файл — цель.
+ */
+.nx {
+  --text-primary: var(--text-main);
+  --accent-primary: var(--accent-color);
+  --apple-accent: var(--accent-color);
+  --apple-border-w: 1px;
+  --apple-border-color: var(--border-color);
+  --bubble-bg: var(--bubble-gray);
+  --container-inset: inset 0 1.5px 3px rgba(0, 0, 0, .08);
+  --accent-shadow: none;
+}

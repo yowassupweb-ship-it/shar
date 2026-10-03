@@ -1,0 +1,211 @@
+/*
+ * Настройки: список разделов + открытый раздел, как «Системные настройки»
+ * macOS. Префикс nst-. Только токены из shared/styles/tokens.css.
+ */
+
+.nst {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  background: var(--surface-panel);
+}
+
+.nst-list { min-height: 0; border-right: 1px solid var(--border-color); background: var(--surface-chrome); }
+.nst-detail { min-height: 0; }
+
+.nst-list-inner,
+.nst-detail-inner {
+  display: grid;
+  align-content: start;
+  gap: var(--space-5);
+  padding: calc(var(--space-5) + env(safe-area-inset-top, 0px)) var(--space-4) calc(var(--space-7) + var(--nx-nav-space, 0px));
+}
+.nst-detail-inner { max-width: 720px; margin: 0 auto; width: 100%; padding-inline: var(--space-6); }
+
+.nst-head { display: flex; align-items: center; gap: var(--space-2); min-height: var(--control-round); }
+.nst-head h1 { margin: 0; font-size: var(--text-2xl); font-weight: var(--weight-bold); letter-spacing: -0.02em; }
+.nst-back { margin-left: calc(var(--space-2) * -1); }
+
+/* Строки списка разделов */
+.nst-nav-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+@media (hover: hover) { .nst-nav-row:hover { background: var(--surface-hover); } }
+.nst-nav-row[aria-current="page"] { background: var(--surface-selected); }
+.nst-nav-row .nx-row-label { flex: 1; }
+.nst-chevron { color: var(--text-muted); }
+.nst-danger, .nst-danger .nx-row-label { color: var(--state-danger); }
+
+.nst-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .25), rgba(255, 255, 255, 0) 55%),
+    linear-gradient(145deg, var(--a), var(--b));
+  color: var(--on-media);
+  box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .25);
+}
+
+/* Профиль */
+.nst-hero { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-4); }
+.nst-hero-text { display: grid; gap: 2px; flex: 1; min-width: 160px; }
+.nst-hero-text b { font-size: var(--text-xl); font-weight: var(--weight-semibold); }
+.nst-hero-text span { font-size: var(--text-sm); color: var(--text-muted); }
+.nst-hero-actions { display: flex; align-items: center; gap: var(--space-1); }
+
+.nst-reveal {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+/* Устройства */
+.nst-device-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
+  color: var(--text-2);
+}
+.nst-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--state-ok) 16%, transparent);
+  color: var(--state-ok);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+/* Рингтоны */
+.nst-choice { padding-left: var(--space-2); }
+.nst-choice-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex: 1;
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-main);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.nst-choice-label svg { color: var(--accent-color); }
+
+/* Образец переписки — фон, узор и пузыри, как в ленте */
+.nst-chat-preview {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  align-content: end;
+  gap: 4px;
+  min-height: 190px;
+  padding: var(--space-4);
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 0 1px var(--border-color);
+}
+.nst-chat-pattern { position: absolute; inset: 0; z-index: -1; background-repeat: repeat; pointer-events: none; }
+.nst-bubble {
+  max-width: 75%;
+  padding: 7px 12px;
+  line-height: 1.35;
+}
+.nst-bubble[data-side="in"] { justify-self: start; }
+.nst-bubble[data-side="out"] { justify-self: end; margin: 2px 0; }
+
+/* Плитки фона и узора */
+.nst-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+.nst-tile {
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+.nst-tile-swatch {
+  position: relative;
+  display: block;
+  aspect-ratio: 3 / 4;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1px var(--border-color);
+  background-size: cover;
+  transition: box-shadow var(--duration-fast) var(--ease-out);
+}
+.nst-tile[aria-checked="true"] .nst-tile-swatch { box-shadow: 0 0 0 2px var(--accent-fill), 0 0 0 4px color-mix(in srgb, var(--accent-fill) 25%, transparent); }
+.nst-tile:focus-visible { outline: none; }
+.nst-tile:focus-visible .nst-tile-swatch { box-shadow: var(--focus-ring); }
+.nst-tile-check {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent-fill);
+  color: var(--on-accent);
+}
+.nst-tile-name { overflow: hidden; font-size: var(--text-2xs); text-overflow: ellipsis; white-space: nowrap; }
+.nst-tile[aria-checked="true"] .nst-tile-name { color: var(--text-main); font-weight: var(--weight-semibold); }
+
+/* Журнал проверки уведомлений */
+.nst-log {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface-hover);
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+.nst-log li[data-tone="ok"] { color: var(--state-ok); }
+.nst-log li[data-tone="warn"] { color: var(--state-warn); }
+.nst-log li[data-tone="bad"] { color: var(--state-danger); }
+
+/* Телефон: один экран за раз */
+@media (max-width: 860px) {
+  .nst { grid-template-columns: minmax(0, 1fr); }
+  .nst-list { border-right: 0; background: var(--surface-panel); }
+  .nst-list-inner, .nst-detail-inner { padding-inline: var(--space-3); }
+  .nx-block-head .nx-segment { width: 100%; grid-auto-columns: 1fr; }
+  .nx-colors { justify-content: flex-start; }
+  .nst-tiles { grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); padding-inline: var(--space-3); }
+  .nst[data-open] .nst-detail-inner { padding-bottom: calc(var(--space-7) + env(safe-area-inset-bottom, 0px)); }
+}

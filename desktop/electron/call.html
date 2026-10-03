@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Звонок</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: transparent;
+      overflow: hidden;
+      -webkit-app-region: no-drag;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    /* Same light/dark system-card language as splash.html — this app doesn't have
+       a permanently-dark "call screen" look elsewhere, so a navy gradient here read
+       as a different, unrelated app skinning through. */
+    :root {
+      --call-bg: rgba(255, 255, 255, .98);
+      --call-border: rgba(15, 23, 42, .10);
+      --call-text: #111111;
+      --call-text-dim: rgba(0, 0, 0, .45);
+      --call-surface: rgba(0, 0, 0, .05);
+      --call-surface-border: rgba(0, 0, 0, .08);
+      --call-surface-hover: rgba(0, 0, 0, .09);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --call-bg: rgba(44, 44, 46, .98);
+        --call-border: rgba(255, 255, 255, .11);
+        --call-text: #ffffff;
+        --call-text-dim: rgba(255, 255, 255, .55);
+        --call-surface: rgba(255, 255, 255, .1);
+        --call-surface-border: rgba(255, 255, 255, .12);
+        --call-surface-hover: rgba(255, 255, 255, .18);
+      }
+    }
+
+    .window {
+      width: 340px;
+      height: 560px;
+      border-radius: 24px;
+      overflow: hidden;
+      background: var(--call-bg);
+      border: 1px solid var(--call-border);
+      box-shadow: 0 20px 60px rgba(15, 23, 42, .28), inset 0 1px 0 rgba(255,255,255,.08);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      position: relative;
+    }
+
+    /* Drag zone top */
+    .drag-zone {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 40px;
+      -webkit-app-region: drag;
+      z-index: 0;
+    }
+
+    /* Top bar with minimize */
+    .top-bar {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 14px 16px 0;
+      position: relative;
+      z-index: 10;
+      -webkit-app-region: drag;
+    }
+
+    .minimize-btn {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      background: var(--call-surface);
+      border: 1px solid var(--call-surface-border);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--call-text-dim);
+      -webkit-app-region: no-drag;
+      transition: background 0.15s, color 0.15s;
+      flex-shrink: 0;
+    }
+    .minimize-btn:hover { background: var(--call-surface-hover); color: var(--call-text); }
+
+    /* Avatar section */
+    .avatar-section {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      padding: 16px 24px;
+    }
+
+    .avatar-ring-wrap {
+      position: relative;
+      width: 120px; height: 120px;
+    }
+
+    .ring-anim {
+      position: absolute;
+      border-radius: 50%;
+      border: 2px solid rgba(52, 211, 153, 0.35);
+      animation: ring-pulse 2s ease-in-out infinite;
+    }
+    .ring-anim:nth-child(1) { inset: -14px; animation-delay: 0s; }
+    .ring-anim:nth-child(2) { inset: -26px; border-color: rgba(52, 211, 153, 0.18); animation-delay: 0.5s; }
+    /* Outgoing ring uses the app's own accent blue (--accent-primary/#007aff family
+       in globals.css) instead of an unrelated purple, so it reads as this app. */
+    .ring-anim.outgoing { border-color: rgba(0, 122, 255, 0.4); }
+    .ring-anim.outgoing:nth-child(2) { border-color: rgba(10, 132, 255, 0.2); }
+
+    @keyframes ring-pulse {
+      0%   { opacity: 0; transform: scale(0.85); }
+      40%  { opacity: 1; }
+      100% { opacity: 0; transform: scale(1.08); }
+    }
+
+    .avatar {
+      width: 120px; height: 120px;
+      border-radius: 50%;
+      /* Same accent gradient as --accent-gradient in globals.css. */
+      background: linear-gradient(135deg, #007aff, #0a84ff);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 44px; font-weight: 700;
+      color: white;
+      position: relative;
+      z-index: 1;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.28);
+      overflow: hidden;
+    }
+    .avatar img {
+      width: 100%; height: 100%;
+      object-fit: cover;
+      position: absolute; inset: 0;
+      border-radius: 50%;
+    }
+
+    .caller-name {
+      font-size: 24px;
+      font-weight: 600;
+      color: var(--call-text);
+      text-align: center;
+      letter-spacing: -0.4px;
+      max-width: 280px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .call-status {
+      font-size: 14px;
+      color: var(--call-text-dim);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #34d399;
+    }
+    .status-dot.pulse {
+      animation: dot-pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes dot-pulse {
+      0%, 100% { opacity: 0.45; transform: scale(0.78); }
+      50%       { opacity: 1;    transform: scale(1); }
+    }
+
+    /* ── Controls ─────────────────────────────────────────── */
+    .controls {
+      width: 100%;
+      padding: 16px 28px 40px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .controls-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+    }
+
+    /* Small icon buttons (mute, video) */
+    .ctrl-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 7px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--call-text-dim);
+      -webkit-app-region: no-drag;
+      transition: color 0.15s, transform 0.15s;
+    }
+    .ctrl-btn:hover { color: var(--call-text); transform: scale(1.05); }
+    .ctrl-btn.active .ctrl-icon { background: var(--call-text); }
+    .ctrl-btn.active .ctrl-icon svg { stroke: var(--call-bg); }
+
+    .ctrl-icon {
+      width: 54px; height: 54px;
+      border-radius: 50%;
+      background: var(--call-surface);
+      border: 1px solid var(--call-surface-border);
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s;
+    }
+    .ctrl-btn:hover .ctrl-icon { background: var(--call-surface-hover); }
+
+    .ctrl-label { font-size: 12px; font-weight: 500; }
+
+    /* Big call action buttons */
+    .btn-answer {
+      width: 68px; height: 68px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #22c55e, #16a34a);
+      box-shadow: 0 8px 24px rgba(34, 197, 94, 0.5);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; border: none; color: white;
+      -webkit-app-region: no-drag;
+      transition: transform 0.15s, box-shadow 0.15s;
+      animation: answer-pulse 2s ease-in-out infinite;
+    }
+    .btn-answer:hover { transform: scale(1.08); box-shadow: 0 10px 28px rgba(34, 197, 94, 0.65); animation: none; }
+
+    @keyframes answer-pulse {
+      0%, 100% { box-shadow: 0 8px 24px rgba(34, 197, 94, 0.4); }
+      50%       { box-shadow: 0 8px 32px rgba(34, 197, 94, 0.7), 0 0 0 8px rgba(34, 197, 94, 0.12); }
+    }
+
+    .btn-reject, .btn-hangup {
+      width: 68px; height: 68px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #ef4444, #dc2626);
+      box-shadow: 0 8px 24px rgba(239, 68, 68, 0.4);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; border: none; color: white;
+      -webkit-app-region: no-drag;
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .btn-reject:hover, .btn-hangup:hover { transform: scale(1.08); box-shadow: 0 10px 28px rgba(239, 68, 68, 0.6); }
+
+    /* Timer */
+    #call-timer {
+      font-size: 20px;
+      font-weight: 500;
+      color: var(--call-text);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 1px;
+      text-align: center;
+    }
+
+    /* SVGs */
+    svg { display: block; flex-shrink: 0; }
+  </style>
+</head>
+<body>
+<div class="window">
+  <div class="drag-zone"></div>
+
+  <!-- Top bar -->
+  <div class="top-bar">
+    <button class="minimize-btn" id="minimize-btn" title="Свернуть">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Avatar & Status -->
+  <div class="avatar-section">
+    <div class="avatar-ring-wrap" id="avatar-ring-wrap">
+      <div class="ring-anim" id="ring1"></div>
+      <div class="ring-anim" id="ring2"></div>
+      <div class="avatar" id="avatar">
+        <span id="avatar-initials">?</span>
+        <img id="avatar-img" src="" alt="" style="display:none"/>
+      </div>
+    </div>
+    <div class="caller-name" id="caller-name">...</div>
+    <div class="call-status">
+      <div class="status-dot pulse" id="status-dot"></div>
+      <span id="status-text">Подключение...</span>
+    </div>
+  </div>
+
+  <!-- ── Incoming call controls ── -->
+  <div class="controls" id="ctrl-incoming" style="display:none">
+    <div class="controls-row">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:7px">
+        <button class="btn-reject" id="btn-reject" title="Отклонить">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate(135deg)">
+            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.49a2 2 0 0 1 1.99-2.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.96a16 16 0 0 0 6.13 6.13l1.22-1.22a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
+          </svg>
+        </button>
+        <span style="font-size:12px;color:var(--call-text-dim)">Отклонить</span>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:7px">
+        <button class="btn-answer" id="btn-answer" title="Принять">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.49a2 2 0 0 1 1.99-2.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.96a16 16 0 0 0 6.13 6.13l1.22-1.22a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
+          </svg>
+        </button>
+        <span style="font-size:12px;color:var(--call-text-dim)">Принять</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Outgoing call controls ── -->
+  <div class="controls" id="ctrl-outgoing" style="display:none">
+    <div class="controls-row">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:7px">
+        <button class="btn-reject" id="btn-cancel" title="Отменить">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate(135deg)">
+            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.49a2 2 0 0 1 1.99-2.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.96a16 16 0 0 0 6.13 6.13l1.22-1.22a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
+          </svg>
+        </button>
+        <span style="font-size:12px;color:var(--call-text-dim)">Отменить</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Active call controls ── -->
+  <div class="controls" id="ctrl-active" style="display:none">
+    <div style="text-align:center;margin-bottom:2px">
+      <div id="call-timer">0:00</div>
+    </div>
+    <div class="controls-row">
+      <button class="ctrl-btn" id="btn-mute" title="Заглушить">
+        <div class="ctrl-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+        </div>
+        <span class="ctrl-label">Микрофон</span>
+      </button>
+
+      <div style="display:flex;flex-direction:column;align-items:center;gap:7px">
+        <button class="btn-hangup" id="btn-hangup" title="Завершить">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate(135deg)">
+            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.49a2 2 0 0 1 1.99-2.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.96a16 16 0 0 0 6.13 6.13l1.22-1.22a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
+          </svg>
+        </button>
+        <span style="font-size:12px;color:var(--call-text-dim)">Завершить</span>
+      </div>
+
+      <button class="ctrl-btn" id="btn-video" title="Камера">
+        <div class="ctrl-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="23 7 16 12 23 17 23 7"/>
+            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+          </svg>
+        </div>
+        <span class="ctrl-label">Камера</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const { ipcRenderer } = require('electron');
+
+  let callData = null;
+  let timerInterval = null;
+  let callStartTime = null;
+  let isMuted = false;
+  let isVideoOff = false;
+  let callState = 'connecting';
+
+  function formatTime(ms) {
+    const total = Math.floor(ms / 1000);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+
+  function startTimer() {
+    callStartTime = Date.now();
+    timerInterval = setInterval(() => {
+      document.getElementById('call-timer').textContent = formatTime(Date.now() - callStartTime);
+      // Keep island in sync if minimized
+      sendIslandUpdate(callState);
+    }, 1000);
+  }
+
+  function stopTimer() {
+    if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  }
+
+  function sendIslandUpdate(state) {
+    ipcRenderer.send('call:island-update', {
+      state: state || null,
+      callerName: callData ? callData.callerName : '',
+      callerInitials: callData ? callData.callerInitials : '?',
+      callType: callData ? callData.callType : 'audio',
+      timer: callStartTime ? formatTime(Date.now() - callStartTime) : null,
+    });
+  }
+
+  function setCallState(state) {
+    callState = state;
+    if (callData) callData._currentCallState = state;
+
+    const ctrlIncoming = document.getElementById('ctrl-incoming');
+    const ctrlOutgoing = document.getElementById('ctrl-outgoing');
+    const ctrlActive   = document.getElementById('ctrl-active');
+    const statusDot  = document.getElementById('status-dot');
+    const statusText = document.getElementById('status-text');
+
+    ctrlIncoming.style.display = 'none';
+    ctrlOutgoing.style.display = 'none';
+    ctrlActive.style.display   = 'none';
+
+    // Ring animations
+    const ring1 = document.getElementById('ring1');
+    const ring2 = document.getElementById('ring2');
+
+    if (state === 'ringing-in') {
+      ctrlIncoming.style.display = 'flex';
+      statusText.textContent = callData?.callType === 'video' ? 'Входящий видеозвонок' : 'Входящий звонок';
+      statusDot.style.background = '#facc15';
+      ring1.style.display = ring2.style.display = '';
+    } else if (state === 'ringing-out') {
+      ctrlOutgoing.style.display = 'flex';
+      statusText.textContent = 'Вызов...';
+      statusDot.style.background = '#60a5fa';
+      ring1.classList.add('outgoing'); ring2.classList.add('outgoing');
+      ring1.style.display = ring2.style.display = '';
+    } else if (state === 'active') {
+      ctrlActive.style.display = 'flex';
+      statusText.textContent = '';
+      statusDot.style.background = '#34d399';
+      ring1.style.display = ring2.style.display = 'none';
+      if (!timerInterval) startTimer();
+    }
+  }
+
+  // ── Receive call data ─────────────────────────────────────
+  ipcRenderer.on('call-data', (_, data) => {
+    callData = data;
+
+    document.getElementById('caller-name').textContent = data.callerName || 'Неизвестный';
+    document.getElementById('avatar-initials').textContent = data.callerInitials || '?';
+
+    if (data.callerAvatar) {
+      const img = document.getElementById('avatar-img');
+      img.src = data.callerAvatar;
+      img.style.display = 'block';
+      document.getElementById('avatar-initials').style.display = 'none';
+    }
+
+    setCallState(data.direction === 'incoming' ? 'ringing-in' : 'ringing-out');
+  });
+
+  // Real name/avatar resolved late (or after the call already went active) — patch
+  // in place, no state/UI reset (unlike the 'call-data' handler above).
+  ipcRenderer.on('call:update-caller-info', (_, data) => {
+    if (!data) return;
+    callData = { ...(callData || {}), ...data };
+    if (data.callerName) document.getElementById('caller-name').textContent = data.callerName;
+    if (data.callerInitials) document.getElementById('avatar-initials').textContent = data.callerInitials;
+    if (data.callerAvatar) {
+      const img = document.getElementById('avatar-img');
+      img.src = data.callerAvatar;
+      img.style.display = 'block';
+      document.getElementById('avatar-initials').style.display = 'none';
+    }
+  });
+
+  // Other side answered (for outgoing calls)
+  ipcRenderer.on('call:answered-by-peer', () => {
+    setCallState('active');
+    sendIslandUpdate('active');
+  });
+
+  // Force hangup from island
+  ipcRenderer.on('call:force-hangup', () => {
+    stopTimer();
+    window.close();
+  });
+
+  // Answer from island: restore + answer
+  ipcRenderer.on('call:answer-from-island', () => {
+    setCallState('active');
+    sendIslandUpdate('active');
+    ipcRenderer.send('call:action', { type: 'answer' });
+  });
+
+  // ── Buttons ───────────────────────────────────────────────
+  document.getElementById('minimize-btn').onclick = () => {
+    sendIslandUpdate(callState);
+    ipcRenderer.send('call:window-minimize');
+  };
+
+  document.getElementById('btn-reject').onclick = () => {
+    ipcRenderer.send('call:action', { type: 'reject' });
+    sendIslandUpdate(null);
+    stopTimer();
+    window.close();
+  };
+
+  document.getElementById('btn-answer').onclick = () => {
+    ipcRenderer.send('call:action', { type: 'answer' });
+    setCallState('active');
+  };
+
+  document.getElementById('btn-cancel').onclick = () => {
+    ipcRenderer.send('call:action', { type: 'cancel' });
+    sendIslandUpdate(null);
+    stopTimer();
+    window.close();
+  };
+
+  document.getElementById('btn-hangup').onclick = () => {
+    ipcRenderer.send('call:action', { type: 'hangup' });
+    sendIslandUpdate(null);
+    stopTimer();
+    window.close();
+  };
+
+  document.getElementById('btn-mute').onclick = function () {
+    isMuted = !isMuted;
+    this.classList.toggle('active', isMuted);
+    ipcRenderer.send('call:action', { type: 'mute', value: isMuted });
+  };
+
+  document.getElementById('btn-video').onclick = function () {
+    isVideoOff = !isVideoOff;
+    this.classList.toggle('active', isVideoOff);
+    ipcRenderer.send('call:action', { type: 'video', value: !isVideoOff });
+  };
+</script>
+</body>
+</html>

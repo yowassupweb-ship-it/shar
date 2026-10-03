@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.log
+.env
+.env.local
+.venv/
+__pycache__/
+*.pyc
+server/data/
+desktop/release/
+desktop/web/
+.DS_Store

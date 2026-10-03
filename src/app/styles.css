@@ -1,0 +1,39 @@
+/*
+ * Стили приложения, в порядке каскада. Токены и база — общие, дальше —
+ * разделы (порядок тот же, что был в старом layout: от него зависят
+ * переопределения между файлами).
+ */
+
+/* Tailwind. Preflight (сброс кнопок, отступов, img) — как в старом фронте:
+   стили разделов отлаживались поверх него. Утилиты генерируются только для
+   перенесённых из старого фронта компонентов (голосовые, опросы, стикеры,
+   Toast), новый код пишется на токенах. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@source "../shared/ui/Toast.tsx";
+@source "../features/chat/bubbles";
+@source "../features/chat/polls";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@import "../shared/styles/tokens.css";
+@import "../shared/styles/legacy-compat.css";
+@import "../shared/styles/base.css";
+@import "../shared/styles/controls.css";
+@import "../features/chat/list.css";
+@import "../features/chat/chat.css";
+@import "../features/chat/timeline/timeline.css";
+@import "../features/contacts/contacts.css";
+@import "../features/files/files.css";
+@import "../features/tasks/tasks.css";
+@import "../features/calendar/calendar.css";
+@import "../features/more/more.css";
+@import "../features/mail/mail.css";
+
+/* Фон документа до того, как смонтирован корень .nx (значения — --bg-color
+   светлой и тёмной темы из tokens.css): без этого тёмная тема мигает белым. */
+body { background: #f5f5f7; }
+html.dark body { background: #202124; }
+html[data-theme="gray"] body { background: #3a3b3f; }
+html[data-theme="black"] body { background: #000000; }

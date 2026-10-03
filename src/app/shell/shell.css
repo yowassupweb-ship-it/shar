@@ -1,0 +1,186 @@
+/*
+ * Каркас: область раздела + навигация. Токены — в next/styles/tokens.css.
+ */
+
+.nx-app {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) var(--nx-bar-h);
+  --nx-nav-space: 0px;
+}
+
+.nx-app-main {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Десктоп: нижняя полоса ───────────────────────────────────────────── */
+.nx-nav {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0 var(--space-3);
+  background: var(--surface-chrome);
+  border-top: 1px solid var(--border-color);
+}
+
+.nx .nx-nav-list {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.nx .nx-nav-list::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.nx-nav-item {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--control-h);
+  padding: 0 var(--space-3) 0 10px;
+  border-radius: var(--radius-pill);
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+@media (hover: hover) { .nx-nav-item:hover { background: var(--surface-hover); color: var(--text-main); } }
+.nx-nav-item:active { transform: translateY(1px); }
+.nx-nav-item[aria-current="page"] {
+  background: var(--surface-selected);
+  color: var(--accent-color);
+}
+
+.nx-nav-icon {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 22px;
+  height: 22px;
+}
+.nx-nav-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  -webkit-user-drag: none;
+}
+/* Иконки объёмные и цветные — одна картинка на все темы. Неактивные чуть
+   приглушены, чтобы выбранный раздел читался сразу. */
+.nx-nav-item:not([aria-current="page"]) .nx-nav-icon img { opacity: .82; }
+/* Светлая тема: объёмные иконки на светлом фоне терялись по краям — лёгкая
+   тень отделяет их от подложки. В тёмной не нужна: там их держит контраст. */
+.nx-nav-icon img { filter: var(--icon-shadow); }
+
+.nx-nav-badge { min-width: 18px; height: 18px; padding: 0 5px; }
+
+/* ── Телефон: парящая капсула (§12) ───────────────────────────────────── */
+@media (max-width: 640px) {
+  .nx-app {
+    grid-template-rows: minmax(0, 1fr);
+    /* На iPhone капсула садится в полосу «домой», как таб-бар iOS, а не над ней. */
+    --nx-nav-bottom: max(var(--nx-nav-gap), calc(var(--nx-safe-bottom) - 12px));
+    --nx-nav-space: calc(var(--nx-nav-h) + var(--nx-nav-gap) + var(--nx-nav-bottom));
+  }
+  .nx-app[data-nav-hidden="true"],
+  .nx-app[data-kb="open"] { --nx-nav-space: 0px; }
+
+  .nx-nav {
+    position: absolute;
+    left: max(var(--nx-nav-side), env(safe-area-inset-left));
+    right: max(var(--nx-nav-side), env(safe-area-inset-right));
+    bottom: var(--nx-nav-bottom);
+    z-index: 60;
+    height: var(--nx-nav-h);
+    padding: 0 6px;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: var(--glass);
+    box-shadow: 0 0 0 1px var(--glass-brd), var(--glass-shadow);
+    transition: transform var(--duration-base) var(--ease-out), opacity var(--duration-base) var(--ease-out);
+  }
+  .nx-app[data-nav-hidden="true"] .nx-nav,
+  .nx-app[data-kb="open"] .nx-nav {
+    transform: translateY(calc(100% + var(--nx-nav-bottom) + 4px));
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .nx-nav-list {
+    flex: 1;
+    height: 100%;
+    gap: 2px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x;
+    scroll-snap-type: x proximity;
+    scroll-padding-inline: 6px;
+    padding: 0 6px;
+  }
+  .nx-nav-list > li {
+    flex: none;
+    scroll-snap-align: center;
+  }
+
+  .nx-nav-item {
+    height: 44px;
+    padding: 0 var(--space-3) 0 10px;
+  }
+  .nx-nav-icon { width: 26px; height: 26px; }
+  .nx-nav-badge {
+    position: absolute;
+    top: 2px;
+    left: 22px;
+    box-shadow: 0 0 0 2px var(--glass);
+  }
+}
+
+@media (pointer: coarse) {
+  .nx-nav-item { min-height: 44px; }
+}
+
+/* Аватар в правом углу меню (как в старой нижней полосе). */
+.nx-nav { gap: var(--space-2); }
+.nx-nav-list { flex: 1; }
+.nx-account {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  cursor: pointer;
+  --ring-bg: var(--surface-chrome);
+  /* Аватар не сжимается при нажатии — отклик даёт кольцо (оно же у открытого меню). */
+  --press: none;
+  --btn-transition: none;
+}
+.nx-account .nx-avatar { transition: box-shadow var(--duration-fast) var(--ease-out); }
+.nx-account:active .nx-avatar { box-shadow: 0 0 0 2px var(--accent-color); }
+@media (hover: hover) { .nx-account:hover .nx-avatar { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color) 40%, transparent); } }
+.nx-account[aria-expanded="true"] .nx-avatar { box-shadow: 0 0 0 2px var(--accent-color); }
+.nx-account-card { display: flex; align-items: center; gap: 10px; padding: 6px 10px 8px; }
+.nx-account-text { display: grid; min-width: 0; }
+.nx-account-text b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+.nx-account-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-xs); color: var(--text-muted); }
+@media (max-width: 640px) {
+  .nx-account { width: 44px; height: 44px; margin-right: 2px; --ring-bg: var(--glass); }
+}

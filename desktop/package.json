@@ -1,0 +1,86 @@
+{
+  "name": "shar-os-client",
+  "version": "0.2.80",
+  "private": true,
+  "author": "Shar OS",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "electron electron/main.cjs",
+    "start": "cross-env NODE_ENV=production electron electron/main.cjs",
+    "build": "electron-builder",
+    "prepare:web": "node scripts/prepare-web.cjs",
+    "prebuild:win": "npm run prepare:web",
+    "build:win": "electron-builder --win nsis-web"
+  },
+  "dependencies": {
+    "cross-env": "^7.0.3",
+    "dotenv": "^16.6.1",
+    "electron-updater": "^6.3.9",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "electron": "^37.7.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "ru.shar.os",
+    "productName": "Shar OS",
+    "npmRebuild": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "web",
+        "to": "web",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "asar": true,
+    "icon": "electron/icon.png",
+    "publish": {
+      "provider": "generic",
+      "url": "https://vokrug-sveta.shar-os.ru/updates"
+    },
+    "win": {
+      "target": [
+        "nsis-web"
+      ],
+      "executableName": "Shar OS",
+      "signAndEditExecutable": true,
+      "icon": "electron/icon.png",
+      "publish": {
+        "provider": "generic",
+        "url": "https://vokrug-sveta.shar-os.ru/updates"
+      }
+    },
+    "nsis": {
+      "artifactName": "Shar setup-${version}.${ext}",
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Shar OS",
+      "include": "electron/installer.nsh",
+      "differentialPackage": true,
+      "installerIcon": "electron/icon.ico",
+      "uninstallerIcon": "electron/icon.ico"
+    },
+    "nsisWeb": {
+      "artifactName": "Shar setup-${version}.${ext}"
+    },
+    "mac": {
+      "icon": "electron/icon.png"
+    },
+    "linux": {
+      "icon": "electron/icon.png"
+    }
+  }
+}
