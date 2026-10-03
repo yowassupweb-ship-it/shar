@@ -68,10 +68,15 @@
 }
 .cxm-row[data-status="sending"] .cxm-bubble { opacity: 1; }
 
-.cxm-bubble[data-kind="media"] {
+/* Только фото/видео: пузырь — просто рамка картинки. Селектор с .cxm-row —
+   иначе «свой» пузырь (.cxm-row[data-mine] .cxm-bubble) перебивает фон и вокруг
+   фото остаётся синяя кайма-«подбородок». */
+.cxm-row .cxm-bubble[data-kind="media"] {
   --bubble-bg: transparent;
   padding: 0;
   overflow: hidden;
+  background: transparent;
+  box-shadow: none;
 }
 .cxm-row .cxm-bubble[data-kind="bare"] {
   --bubble-bg: transparent;
@@ -151,8 +156,10 @@
   object-fit: cover;
   cursor: zoom-in;
 }
-.cxm-photo-single { object-fit: contain; }
-.cxm-media-top .cxm-photo-single { object-fit: contain; }
+/* Одно фото: коробка всегда по настоящим пропорциям картинки (см. Photo), поэтому
+   cover не режет её, а поля вокруг — «подбородки» — не появляются. */
+.cxm-photo-single { object-fit: cover; }
+.cxm-media-top .cxm-photo-single { object-fit: cover; }
 .cxm-photo-fill { width: 100%; height: 100%; }
 .cxm-album { position: relative; }
 .cxm-album-cell { position: absolute; overflow: hidden; }

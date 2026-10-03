@@ -172,6 +172,8 @@ function Photo({ att, style, width, onOpen, onRatio, className }: {
   const [state, setState] = useState<PhotoState>('loading');
   const [original, setOriginal] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // Настоящие пропорции загруженной картинки: ими, а не прикидкой по метаданным, задаётся рамка.
+  const [natural, setNatural] = useState<number | null>(null);
 
   // Только что отправленное фото: пока серверная копия не скачана и не
   // декодирована, показываем локальное превью — подмена происходит, когда
@@ -215,7 +217,7 @@ function Photo({ att, style, width, onOpen, onRatio, className }: {
       loading="lazy"
       decoding="async"
       draggable={false}
-      style={style}
+      style={natural && className?.includes('cxm-photo-single') ? { ...style, height: 'auto', aspectRatio: String(natural) } : style}
       onLoad={(e) => {
         const img = e.currentTarget;
         if (img.naturalWidth && img.naturalHeight) {
@@ -226,6 +228,7 @@ function Photo({ att, style, width, onOpen, onRatio, className }: {
           const planned = knownRatio(att.url) ?? (att.width && att.height ? att.width / att.height : undefined);
           const r = img.naturalWidth / img.naturalHeight;
           rememberRatio(att.url, r);
+          setNatural(r);
           if (!planned || Math.abs(planned - r) / r > 0.02) onRatio();
         }
         setState('ok');
