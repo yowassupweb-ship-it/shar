@@ -871,20 +871,20 @@ html.nx-locked body {
    у --surface-panel и --border-color в tokens.css для каждой темы. Правило
    действует, только пока на странице новый Шар (:has(.nx)): старый интерфейс
    не трогаем. Заголовок сливается с шапкой списка чатов под ним. */
-html[data-platform="electron"]:has(.nx) #shar-electron-telegram-header {
+html[data-platform="electron"]:has(.nx) #shar-titlebar {
   background: #2a2b2f !important;
   border-color: rgba(255, 255, 255, .08) !important;
   box-shadow: none !important;
 }
-html[data-platform="electron"]:not(.dark):has(.nx) #shar-electron-telegram-header {
+html[data-platform="electron"]:not(.dark):has(.nx) #shar-titlebar {
   background: #ffffff !important;
   border-color: rgba(22, 24, 29, .08) !important;
 }
-html[data-platform="electron"][data-theme="gray"]:has(.nx) #shar-electron-telegram-header {
+html[data-platform="electron"][data-theme="gray"]:has(.nx) #shar-titlebar {
   background: #444549 !important;
   border-color: rgba(255, 255, 255, .13) !important;
 }
-html[data-platform="electron"][data-theme="black"]:has(.nx) #shar-electron-telegram-header {
+html[data-platform="electron"][data-theme="black"]:has(.nx) #shar-titlebar {
   background: #0d0d10 !important;
   border-color: rgba(255, 255, 255, .08) !important;
 }

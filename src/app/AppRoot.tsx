@@ -12,6 +12,7 @@ import { ShellContext, type ShellOptions } from '@/shared/shell/ShellContext';
 import { sectionFor } from './shell/sections';
 import { useSession, verifySession } from '@/shared/session/session';
 import LoginScreen from './LoginScreen';
+import ElectronTitlebar from './electron/ElectronTitlebar';
 
 /**
  * Корень Шара v2 — живёт над всеми разделами и не пересоздаётся при переходе
@@ -157,6 +158,9 @@ export default function AppRoot() {
   }, [navigate]);
 
   return (
-    status === 'checking' ? null : me ? <Workspace key={String(me.id)} me={me} /> : <LoginScreen />
+    <>
+      <ElectronTitlebar />
+      {status === 'checking' ? null : me ? <Workspace key={String(me.id)} me={me} /> : <LoginScreen />}
+    </>
   );
 }

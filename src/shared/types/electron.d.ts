@@ -21,7 +21,7 @@ export interface WindowControls {
   reload: () => Promise<void>;
   zoomIn: () => Promise<void>;
   zoomOut: () => Promise<void>;
-  setZoom: (factor: number) => Promise<void>;
+  setZoom: (factor: number) => Promise<number | void>;
   getZoom: () => Promise<number>;
   onMaximizedChanged: (callback: (isMaximized: boolean) => void) => () => void;
 }
@@ -47,6 +47,10 @@ export interface SharDesktop {
     unregister: () => Promise<boolean>;
     setContext?: (ctx: { activeChatId: string; focused: boolean; lastInputAt: number }) => void;
     setAvatars?: (avatars: Record<string, string>) => void;
+  };
+  call?: {
+    onIslandUpdate?: (callback: (data: { state: string | null; callerName?: string } | null) => void) => () => void;
+    islandAction: (action: 'answer' | 'reject' | 'hangup' | 'restore') => void;
   };
   updater?: {
     onStatus: (callback: (data: { state: 'downloading' | 'downloaded'; version?: string; percent?: number }) => void) => () => void;

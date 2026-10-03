@@ -44,6 +44,12 @@ def _client_ip(request: Request) -> str:
 def _issue_session(response: Response, request: Request, user: dict) -> Optional[str]:
     """Создаёт сессию и кладёт токен в HttpOnly-куку."""
     user_agent = request.headers.get("user-agent", "")
+    # Повторный вход с устройства, где сессия уже есть, заменяет её, а не добавляет рядом:
+    # иначе каждый вход (и каждый запуск клиента без куки) оставлял «призрак» на 90 дней.
+    previous = request.cookies.get(auth_sessions.SESSION_COOKIE) or ""
+    old = auth_sessions.get_session(previous, touch=False) if previous else None
+    if old and str(old.get("userId")) == str(user.get("id")):
+        auth_sessions.revoke_session(previous)
     token = auth_sessions.create_session(
         str(user.get("id")),
         str(user.get("username") or ""),
@@ -53,6 +59,7 @@ def _issue_session(response: Response, request: Request, user: dict) -> Optional
     )
     if not token:
         return None
+    auth_sessions.prune_user_sessions(str(user.get("id")))
     response.set_cookie(
         auth_sessions.SESSION_COOKIE, token,
         max_age=auth_sessions.SESSION_TTL_SECONDS,

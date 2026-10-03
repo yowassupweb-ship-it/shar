@@ -58,3 +58,20 @@ def test_devices_list_and_revoke_others(users, anna):
     assert anna.get("/api/auth/devices").json()["devices"]
     assert anna.post("/api/auth/devices/revoke-others").status_code == 200
     assert anna.get("/api/auth/session").json()["authenticated"] is True
+
+
+def test_relogin_replaces_session_and_caps_devices(users):
+    """Повторный вход с той же сессией не плодит «призраков»; потолок устройств держится."""
+    from app.core import sessions as s
+    uid = users.create("loopy")
+    device = users.login("loopy")
+    old = device.cookies[s.SESSION_COOKIE]
+    r = device.post("/api/auth/login", json={"username": uid, "password": "secret-pass"})
+    assert r.status_code == 200
+    assert device.cookies[s.SESSION_COOKIE] != old
+    assert len(s.list_sessions(uid)) == 1  # прежняя заменена, а не добавлена рядом
+
+    for i in range(s.MAX_SESSIONS_PER_USER + 5):  # новые устройства
+        s.create_session(uid, uid, user_agent=f"device-{i}")
+    s.prune_user_sessions(uid)
+    assert len(s.list_sessions(uid)) == s.MAX_SESSIONS_PER_USER

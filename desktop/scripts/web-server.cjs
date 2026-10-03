@@ -1,5 +1,5 @@
 // Локальный сервер встроенного клиента: раздаёт dist/ со SPA-fallback и проксирует
-// /api (HTTP + WebSocket) и /emojis на удалённый бэкенд. Только модули Node.
+// /api (HTTP + WebSocket) на удалённый бэкенд. Только модули Node.
 // Окружение: PORT, HOSTNAME, BACKEND_URL.
 const http = require('http');
 const https = require('https');
@@ -54,7 +54,7 @@ function serveStatic(req, res) {
 }
 
 const server = http.createServer((req, res) => {
-  if (req.url.startsWith('/api/') || req.url.startsWith('/emojis/')) return proxy(req, res);
+  if (req.url.startsWith('/api/')) return proxy(req, res);
   return serveStatic(req, res);
 });
 

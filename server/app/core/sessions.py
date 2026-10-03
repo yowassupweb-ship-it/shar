@@ -282,6 +282,30 @@ def list_sessions(user_id: str, *, current_token: str = "") -> List[Dict[str, An
         return []
 
 
+MAX_SESSIONS_PER_USER = int(os.getenv("SHAR_MAX_SESSIONS", "10"))
+
+
+def prune_user_sessions(user_id: str, keep: int = MAX_SESSIONS_PER_USER) -> int:
+    """Оставляет `keep` самых свежих (по lastSeenAt) сессий пользователя, остальные закрывает.
+    Без потолка список устройств рос бесконечно: каждый вход добавлял сессию на 90 дней."""
+    client = _client()
+    if client is None:
+        return 0
+    try:
+        rows = []
+        for token in list(client.smembers(_USER_SESSIONS_KEY + str(user_id)) or set()):
+            record = client.hgetall(_SESSION_KEY + token)
+            if not record:
+                client.srem(_USER_SESSIONS_KEY + str(user_id), token)
+                continue
+            rows.append((int(record.get("lastSeenAt") or 0), token))
+        rows.sort(reverse=True)
+        return sum(1 for _, token in rows[max(keep, 1):] if revoke_session(token))
+    except Exception as exc:
+        _mark_down(exc)
+        return 0
+
+
 def revoke_by_short_id(user_id: str, short_id: str) -> bool:
     """UI знает только первые 16 символов токена — находим полный по набору."""
     client = _client()

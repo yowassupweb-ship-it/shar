@@ -88,8 +88,10 @@ class UserClient:
         for k, v in self.cookies.items():
             self._base.cookies.set(k, v)
         r = self._base.request(method, url, **kw)
-        for k, v in self._base.cookies.items():
-            self.cookies[k] = v
+        before = dict(self.cookies)
+        for c in self._base.cookies.jar:  # jar, а не items(): имя куки может встретиться дважды (домен/без)
+            if c.name not in before or c.value != before[c.name] or c.name not in self.cookies:
+                self.cookies[c.name] = c.value
         self._base.cookies.clear()  # общий jar не должен «протекать» к анониму
         if r.status_code == 200 and url.endswith("/api/auth/logout"):
             self.cookies.clear()
