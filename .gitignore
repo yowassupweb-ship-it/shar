@@ -4,3 +4,4 @@ dist
 *.local
 desktop/release-beta
 desktop/web
+desktop/release
