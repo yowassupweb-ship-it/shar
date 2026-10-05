@@ -32,8 +32,19 @@ export const links = {
   contact: (userId: string) => `${paths.contacts}${q('user', userId)}`,
 };
 
+/** Публичный адрес Шара. В Electron интерфейс живёт на http://127.0.0.1:<порт> —
+ *  ссылку с таким адресом никто, кроме автора, не откроет. */
+const PUBLIC_ORIGIN = 'https://vokrug-sveta.shar-os.ru';
+
+function publicOrigin(): string {
+  const { origin, hostname } = window.location;
+  const local = hostname === '127.0.0.1' || hostname === 'localhost';
+  const desktop = Boolean((window as unknown as { sharDesktop?: unknown }).sharDesktop);
+  return local && desktop ? PUBLIC_ORIGIN : origin;
+}
+
 /** Абсолютная ссылка — чтобы скопировать и отправить. */
-export const absolute = (path: string) => `${window.location.origin}${path}`;
+export const absolute = (path: string) => `${publicOrigin()}${path}`;
 
 /**
  * Адрес старого приложения (`/account?tab=…`, `/test-*-next`) → адрес v2.

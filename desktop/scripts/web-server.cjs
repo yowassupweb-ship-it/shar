@@ -1,6 +1,6 @@
-// Локальный сервер встроенного клиента: раздаёт dist/ со SPA-fallback и проксирует
-// /api (HTTP + WebSocket) на удалённый бэкенд. Только модули Node.
-// Окружение: PORT, HOSTNAME, BACKEND_URL.
+// Локальный сервер встроенного клиента: интерфейс берёт с сервера (запасная копия — dist/),
+// /api (HTTP + WebSocket) проксирует на удалённый бэкенд. Только модули Node.
+// Окружение: PORT, HOSTNAME, BACKEND_URL, SHAR_UI_LOCAL=1 (только встроенная копия).
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
@@ -53,9 +53,41 @@ function serveStatic(req, res) {
   fs.createReadStream(file).pipe(res);
 }
 
+// Интерфейс берём с сервера: правки фронта выходят вместе с сайтом, без нового установщика.
+// Встроенная копия (dist/) — запасная: сервер недоступен или отвечает 5xx. SHAR_UI_LOCAL=1 — только она.
+const UI_FROM_SERVER = process.env.SHAR_UI_LOCAL !== '1';
+const UI_TIMEOUT_MS = 6000;
+const PASS_HEADERS = ['accept', 'accept-encoding', 'accept-language', 'if-none-match', 'if-modified-since', 'range', 'user-agent'];
+
+function serveFromServer(req, res, fallback) {
+  const headers = { host: BACKEND.host };
+  for (const name of PASS_HEADERS) if (req.headers[name]) headers[name] = req.headers[name];
+  let answered = false;
+  const upstream = client.request({
+    protocol: BACKEND.protocol, hostname: BACKEND.hostname, port: BACKEND.port || undefined,
+    method: req.method, path: req.url, headers, timeout: UI_TIMEOUT_MS,
+  }, (up) => {
+    answered = true;
+    if ((up.statusCode || 502) >= 500) { up.resume(); return fallback(); }
+    const out = { ...up.headers };
+    delete out['set-cookie'];
+    res.writeHead(up.statusCode || 502, out);
+    up.on('error', () => res.destroy());
+    up.pipe(res);
+  });
+  upstream.on('timeout', () => upstream.destroy());
+  upstream.on('error', () => {
+    if (!answered && !res.headersSent) { answered = true; return fallback(); }
+    res.destroy();
+  });
+  upstream.end();
+}
+
 const server = http.createServer((req, res) => {
+  if (req.url.startsWith('/api/')) return proxy(req, res);
   // /emojis (~27 МБ) в установщик не кладём (prepare-web.cjs) — их отдаёт сервер.
-  if (req.url.startsWith('/api/') || req.url.startsWith('/emojis/')) return proxy(req, res);
+  if (req.url.startsWith('/emojis/')) return proxy(req, res);
+  if (UI_FROM_SERVER && (req.method === 'GET' || req.method === 'HEAD')) return serveFromServer(req, res, () => serveStatic(req, res));
   return serveStatic(req, res);
 });
 
