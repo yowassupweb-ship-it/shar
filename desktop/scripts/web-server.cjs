@@ -54,7 +54,8 @@ function serveStatic(req, res) {
 }
 
 const server = http.createServer((req, res) => {
-  if (req.url.startsWith('/api/')) return proxy(req, res);
+  // /emojis (~27 МБ) в установщик не кладём (prepare-web.cjs) — их отдаёт сервер.
+  if (req.url.startsWith('/api/') || req.url.startsWith('/emojis/')) return proxy(req, res);
   return serveStatic(req, res);
 });
 
