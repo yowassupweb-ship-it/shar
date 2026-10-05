@@ -1,0 +1,80 @@
+name: shar-local
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: unless-stopped
+    init: true
+    environment:
+      SHAR_V2_HOST: 0.0.0.0
+      SHAR_V2_PORT: 8100
+      SHAR_DATA_DIR: /app/data
+      SHAR_UPLOADS_DIR: /app/data/uploads
+      SHAR_AUTO_MIGRATE: "0"
+      SHAR_MAIL_WATCH: "0"
+      SHAR_COOKIE_SECURE: "0"
+      SHAR_STARTUP_MAINTENANCE: "0"
+      SHAR_SCHEDULED_JOBS: "0"
+      DB_HOST: host.docker.internal
+      DB_PORT: "${DB_PORT:-55432}"
+      DB_NAME: "${DB_NAME:-shar_messenger}"
+      DB_USER: "${DB_USER:-postgres}"
+      DB_PASSWORD: "${DB_PASSWORD:-}"
+      DB_STATEMENT_TIMEOUT_MS: "${DB_STATEMENT_TIMEOUT_MS:-30000}"
+      REDIS_URL: redis://redis:6379/0
+      SHAR_SECRET_KEY: "${SHAR_SECRET_KEY:-}"
+      SHAR_INTEGRATION_API_KEY: "${SHAR_INTEGRATION_API_KEY:-}"
+      SHAR_INTERNAL_PUSH_KEY: "${SHAR_INTERNAL_PUSH_KEY:-}"
+      WEB_PUSH_PUBLIC_KEY: "${WEB_PUSH_PUBLIC_KEY:-}"
+      WEB_PUSH_PRIVATE_KEY: "${WEB_PUSH_PRIVATE_KEY:-}"
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - type: bind
+        source: ./server/data
+        target: /app/data
+    ports:
+      - 127.0.0.1:18100:8100
+    depends_on:
+      redis:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 45s
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    restart: unless-stopped
+    environment:
+      SHAR_WEB_LISTEN: "8080"
+      SHAR_API_UPSTREAM: api:8100
+    ports:
+      - 127.0.0.1:8085:8080
+    depends_on:
+      api:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
+
+volumes:
+  redis-data:

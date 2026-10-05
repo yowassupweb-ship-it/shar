@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "generate:chat-thumbnails": "node scripts/generate-chat-background-thumbnails.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src"
@@ -32,6 +33,7 @@
     "@vitejs/plugin-react": "^5.0.0",
     "eslint": "^9.36.0",
     "eslint-plugin-react-hooks": "^6.1.0",
+    "sharp": "^0.35.5",
     "tailwindcss": "^4.1.0",
     "typescript": "5.9.3",
     "typescript-eslint": "^8.44.0",

@@ -106,7 +106,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setThemePrefState(pref);
     setPalette(resolve(pref));
   };
-  const toggleTheme = () => setThemePref(palette === 'light' ? loadLastDark() : 'light');
+  const toggleTheme = () => {
+    const index = PALETTES.indexOf(palette);
+    setThemePref(PALETTES[(index + 1) % PALETTES.length]);
+  };
   const setTheme = (t: Theme) => setThemePref(t === 'light' ? 'light' : loadLastDark());
   const theme = familyOf(palette);
 

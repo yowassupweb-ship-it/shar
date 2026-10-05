@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import { Moon, Settings, Sun } from 'lucide-react';
-import { useTheme } from '@/shared/theme/ThemeContext';
+import { Palette as PaletteIcon, Settings } from 'lucide-react';
+import { PALETTES, useTheme } from '@/shared/theme/ThemeContext';
 import { Avatar } from '@/shared/ui/Avatar';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { useViewportSync } from '@/shared/platform/viewport';
@@ -46,7 +46,9 @@ export interface AppShellProps {
 /** Аватар в углу меню и его всплывающее меню — как в старой нижней полосе. */
 function AccountButton({ account }: { account: NonNullable<AppShellProps['account']> }) {
   const [anchor, setAnchor] = useState<MenuAnchor | null>(null);
-  const { theme, toggleTheme } = useTheme();
+  const { palette, toggleTheme } = useTheme();
+  const nextPalette = PALETTES[(PALETTES.indexOf(palette) + 1) % PALETTES.length];
+  const nextPaletteName = { light: 'Светлая', gray: 'Серая', graphite: 'Графитовая', black: 'Чёрная' }[nextPalette];
   return (
     <>
       <button
@@ -69,8 +71,8 @@ function AccountButton({ account }: { account: NonNullable<AppShellProps['accoun
             </span>
           </div>
           <div className="nx-menu-sep" />
-          <MenuItem icon={theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />} onSelect={() => { toggleTheme(); setAnchor(null); }}>
-            {theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
+          <MenuItem icon={<PaletteIcon size={16} />} onSelect={() => { toggleTheme(); setAnchor(null); }}>
+            Следующая тема: {nextPaletteName}
           </MenuItem>
           <MenuItem icon={<Settings size={16} />} onSelect={() => { setAnchor(null); navigate(paths.settings); }}>
             Настройки

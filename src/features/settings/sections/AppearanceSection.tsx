@@ -1,5 +1,5 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
-import { Check, Laptop, Moon, Plus, Sun } from 'lucide-react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Check, Moon, Plus, Sun } from 'lucide-react';
 import { useTheme } from '@/shared/theme/ThemeContext';
 import { ThemePicker } from '@/shared/theme/ThemePicker';
 import { FONT_LIMITS, readAppearance, readChatPrefs, saveAppearance, saveChatPrefs } from '@/shared/settings/chatPrefs';
@@ -13,6 +13,34 @@ import { Group, Row, Slider } from '@/shared/ui/controls';
 
 const PALETTE_NAMES = { light: 'светлая', gray: 'серая', graphite: 'графитовая', black: 'чёрная' } as const;
 const EMPTY_ASSETS: ChatAssets = { light: { backgrounds: [], overlays: [] }, dark: { backgrounds: [], overlays: [] } };
+
+/** Heavy SVG previews are attached only when their tile approaches the viewport. */
+function LazyAssetPreview({ src, pattern = false }: { src: string; pattern?: boolean }) {
+  const host = useRef<HTMLSpanElement>(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const node = host.current;
+    if (!node || visible) return undefined;
+    if (!('IntersectionObserver' in window)) {
+      setVisible(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting) return;
+      setVisible(true);
+      observer.disconnect();
+    }, { rootMargin: '160px' });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [visible]);
+
+  return (
+    <span ref={host} className="nst-tile-asset" data-pattern={pattern ? 'true' : undefined} aria-hidden="true">
+      {visible && <img src={src} alt="" loading="lazy" decoding="async" fetchPriority="low" />}
+    </span>
+  );
+}
 
 /** Плитка выбора: образец + подпись, отмечена галочкой. */
 function Tile({ selected, label, onSelect, style, children }: {
@@ -77,8 +105,8 @@ export default function AppearanceSection() {
 
   const t = look[edit];
   const bgOptions = [
-    ...GRADIENTS[edit].map((g) => ({ key: g.id, name: g.name, value: g.value })),
-    ...assets[edit].backgrounds.map((a) => ({ key: a.url, name: a.name, value: imageBackground(a.url) })),
+    ...GRADIENTS[edit].map((g) => ({ key: g.id, name: g.name, value: g.value, previewUrl: undefined })),
+    ...assets[edit].backgrounds.map((a) => ({ key: a.url, name: a.name, value: imageBackground(a.url), previewUrl: a.url })),
   ];
   const patterns = assets[edit].overlays;
 
@@ -132,7 +160,10 @@ export default function AppearanceSection() {
         <div className="nst-tiles" role="radiogroup" aria-label="Фон переписки">
           <Tile selected={!t.background} label="Без фона" onSelect={() => setTheme({ background: '' })} style={{ background: previewBase }} />
           {bgOptions.map((o) => (
-            <Tile key={o.key} selected={t.background === o.value} label={o.name} onSelect={() => setTheme({ background: o.value })} style={{ background: o.value }} />
+            <Tile key={o.key} selected={t.background === o.value} label={o.name} onSelect={() => setTheme({ background: o.value })}
+              style={{ background: o.previewUrl ? previewBase : o.value }}>
+              {o.previewUrl && <LazyAssetPreview src={o.previewUrl} />}
+            </Tile>
           ))}
         </div>
       </Group>
@@ -142,7 +173,9 @@ export default function AppearanceSection() {
           <Tile selected={!t.pattern} label="Без узора" onSelect={() => setTheme({ pattern: '' })} style={{ background: t.background || previewBase }} />
           {patterns.map((p) => (
             <Tile key={p.url} selected={t.pattern === p.url} label={p.name} onSelect={() => setTheme({ pattern: p.url })}
-              style={{ background: `url("${p.url}") center / 180% repeat, ${t.background || previewBase}` }} />
+              style={{ background: t.background || previewBase }}>
+              <LazyAssetPreview src={p.thumbnailUrl || p.url} pattern />
+            </Tile>
           ))}
         </div>
         {t.pattern && (
