@@ -1018,6 +1018,9 @@ function createNotificationWindow(data, mainWindow) {
     },
   });
   notificationWindow.__notificationHeight = notificationHeight;
+  // Lets the card be dismissed once its chat is open and in focus (see 'realtime:context').
+  notificationWindow.__chatId = (() => { const raw = String(data?.chatId || '').trim(); try { return decodeURIComponent(raw); } catch { return raw; } })();
+  notificationWindow.__isMessageCard = String(data?.kind || '').toLowerCase() === 'message';
 
   notificationWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   notificationWindow.setAlwaysOnTop(true, 'screen-saver', 1);
@@ -1339,12 +1342,25 @@ ipcMain.on('realtime:avatars', (_event, avatars) => {
     if (id && value) authorAvatarCache.set(id, value);
   }
 });
+function dismissMessageCardsForChat(chatId) {
+  if (!chatId) return;
+  for (const card of [...activeNotifications]) {
+    if (card && !card.isDestroyed() && card.__isMessageCard && card.__chatId === chatId) closeNotification(card);
+  }
+}
+
 ipcMain.on('realtime:context', (_event, ctx) => {
   rendererContext = {
     activeChatId: String(ctx?.activeChatId || ''),
     focused: Boolean(ctx?.focused),
     lastInputAt: Number(ctx?.lastInputAt) || 0,
   };
+  // The user is looking at this chat: its toast has served its purpose.
+  if (rendererContext.focused) {
+    let activeId = rendererContext.activeChatId;
+    try { activeId = decodeURIComponent(activeId); } catch {}
+    dismissMessageCardsForChat(activeId);
+  }
 });
 
 // call.html asks to minimize itself
