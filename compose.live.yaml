@@ -32,7 +32,7 @@ services:
         source: /var/www/shar/data
         target: /app/data
       - type: bind
-        source: /var/www/shar/backend/uploads/uploads
+        source: /var/www/shar/backend/uploads
         target: /app/uploads
     read_only: true
     tmpfs:
