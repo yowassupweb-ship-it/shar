@@ -241,7 +241,15 @@ function previewFromThread(chatId: string) {
     const m = t.byId[t.ids[i]];
     if (m && !m._status) { newest = m; break; }
   }
-  if (!newest || String(chat.lastMessage?.id ?? '') === newest.id) return;
+  if (!newest) return;
+  if (String(chat.lastMessage?.id ?? '') === newest.id) {
+    // То же сообщение, но его правили: превью в списке должно показать новый текст.
+    if (chat.lastMessage && (chat.lastMessage.content !== newest.content || Boolean(chat.lastMessage.isEdited) !== Boolean(newest.isEdited))) {
+      const { content, isEdited } = newest;
+      patchChat(chatId, (c) => (c.lastMessage ? { ...c, lastMessage: { ...c.lastMessage, content, isEdited } } : c));
+    }
+    return;
+  }
   if (ts(newest.createdAt) <= ts(chat.lastMessage?.createdAt)) return;
   const { _key, _status, ...message } = newest;
   touchPreview(chatId, message);
@@ -599,6 +607,27 @@ function catchUpThreads(chats: Record<string, ChatRow>) {
   }
 }
 
+/** Удалённые сообщения: их нельзя возвращать в превью чата как «более свежее из двух». */
+const deletedMessageIds = new Set<string>();
+export function markMessageDeleted(id: string, chatId?: string) {
+  deletedMessageIds.add(id);
+  if (deletedMessageIds.size > 500) deletedMessageIds.delete(deletedMessageIds.values().next().value as string);
+  // Удалили последнее сообщение — сразу показываем предыдущее из загруженной ленты,
+  // не дожидаясь перечитывания списка.
+  const chat = chatId ? get().chats[chatId] : undefined;
+  if (!chatId || !chat || String(chat.lastMessage?.id ?? '') !== id) return;
+  const t = get().threads[chatId];
+  if (!t) return;
+  for (let i = t.ids.length - 1; i >= 0; i--) {
+    const m = t.byId[t.ids[i]];
+    if (m && !m._status && String(m.id) !== id) {
+      const { _key, _status, ...message } = m;
+      patchChat(chatId, (c) => ({ ...c, lastMessage: message, preview: undefined }));
+      return;
+    }
+  }
+}
+
 export function loadChats(): Promise<void> {
   const me = get().me;
   if (!me) return Promise.resolve();
@@ -616,7 +645,7 @@ export function loadChats(): Promise<void> {
         const old = prev[id];
         // Сокет мог принести сообщение, которого в снимке сервера ещё нет —
         // превью берём свежее из двух.
-        if (old && ts(old.lastMessage?.createdAt) > ts(server.lastMessage?.createdAt)) server.lastMessage = old.lastMessage;
+        if (old && !deletedMessageIds.has(String(old.lastMessage?.id ?? '')) && ts(old.lastMessage?.createdAt) > ts(server.lastMessage?.createdAt)) server.lastMessage = old.lastMessage;
         if (old?.preview && String(server.lastMessage?.id ?? '') === (old.preview.afterId ?? '')) server.preview = old.preview;
         // «Прочитано» собеседника: сокет мог принести отметку новее снимка (сервер
         // рассылает её до записи в базу). Для каждого берём более позднюю — иначе
@@ -1169,6 +1198,7 @@ function onEvent(e: RealtimeEvent) {
       return;
     }
     case 'message_deleted': {
+      if (e.messageId) markMessageDeleted(String(e.messageId), chatId);
       patchThread(chatId, (t) => removeMsg(t, String(e.messageId || '')));
       reloadChatsSoon();
       return;
