@@ -10,7 +10,8 @@
     "build": "electron-builder",
     "prepare:web": "node scripts/prepare-web.cjs",
     "prebuild:win": "npm run prepare:web",
-    "build:win": "electron-builder --win nsis-web"
+    "build:win": "electron-builder --win nsis-web",
+    "build:beta": "npm run prepare:web && electron-builder --win nsis --config.appId=ru.shar.os.beta --config.productName=\"Shar OS Beta\" --config.win.executableName=\"Shar OS Beta\" --config.win.target=nsis --config.nsis.shortcutName=\"Shar OS Beta\" --config.nsis.artifactName=\"Shar-Beta-setup-${version}.${ext}\" --publish never --config.publish.url=http://127.0.0.1:9/none --config.win.publish.url=http://127.0.0.1:9/none --config.directories.output=release-beta --config.extraMetadata.sharChannel=beta"
   },
   "dependencies": {
     "cross-env": "^7.0.3",

@@ -33,6 +33,16 @@ try { dns.setDefaultResultOrder('ipv4first'); } catch {}
 // TURN-сервера у нас нет (см. webrtcConfig.ts: только STUN). Двое в одной сети
 // тогда не соединяются никак. Внутри компании настоящий локальный адрес
 // скрывать не от кого.
+// Beta channel: installs next to the production client (own appId, own userData,
+// no auto-update feed) and talks to the New Shar backend. Set by the build
+// (package.json "sharChannel") or by SHAR_CHANNEL=beta for a dev run.
+const IS_BETA = process.env.SHAR_CHANNEL === 'beta' || require('../package.json').sharChannel === 'beta';
+const BETA_BACKEND_URL = 'http://127.0.0.1:18080';
+if (IS_BETA) {
+  app.setPath('userData', path.join(app.getPath('appData'), 'Shar OS Beta'));
+  process.env.SHAR_BACKEND_URL = process.env.SHAR_BACKEND_URL || BETA_BACKEND_URL;
+}
+
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,WebRtcHideLocalIpsWithMdns');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -266,7 +276,7 @@ function launchUpdateSplash(handle) {
 
 require('electron').ipcMain.handle('updater:install', () => installUpdateNow());
 
-const DEFAULT_REMOTE_URL = 'https://vokrug-sveta.shar-os.ru';
+const DEFAULT_REMOTE_URL = IS_BETA ? BETA_BACKEND_URL : 'https://vokrug-sveta.shar-os.ru';
 
 function resolveRemoteUrl() {
   return process.env.REMOTE_WEB_URL || process.env.ELECTRON_REMOTE_WEB_URL || DEFAULT_REMOTE_URL;
@@ -304,7 +314,7 @@ function reserveLocalPort() {
 // Try this fixed port first so the origin — and everything stored under it —
 // stays the same across launches; only fall back to a random one if it's taken
 // (e.g. a second copy somehow running despite the single-instance lock).
-const PREFERRED_FRONTEND_PORT = 47821;
+const PREFERRED_FRONTEND_PORT = IS_BETA ? 47822 : 47821;
 async function reserveFrontendPort() {
   try {
     await new Promise((resolve, reject) => {
@@ -2502,14 +2512,14 @@ async function createWindow(existingSplash) {
 }
 
 // Устанавливаем название приложения для уведомлений и других системных diалогов
-app.setName('Shar OS');
+app.setName(IS_BETA ? 'Shar OS Beta' : 'Shar OS');
 
 if (process.platform === 'win32') {
-  app.setAppUserModelId('ru.shar.os');
+  app.setAppUserModelId(IS_BETA ? 'ru.shar.os.beta' : 'ru.shar.os');
 }
 
 function ensureAutoLaunchEnabled() {
-  if (!app.isPackaged || process.platform !== 'win32') return;
+  if (IS_BETA || !app.isPackaged || process.platform !== 'win32') return;
 
   try {
     if (!getAutoLaunchPreference()) return;
@@ -2590,7 +2600,7 @@ if (!gotSingleInstanceLock) {
 // launch — this makes the currently-running instance never launch on stale code.
 function waitForUpdateOrProceed() {
   return new Promise((resolve) => {
-    if (!app.isPackaged) { resolve(); return; }
+    if (!app.isPackaged || IS_BETA) { resolve(); return; }
 
     let settled = false;
     const proceed = () => { if (!settled) { settled = true; resolve(); } };
@@ -2679,7 +2689,7 @@ app.whenReady().then(async () => {
   // трее неделями, о новой версии так и не узнавало: спрашивать сервер было
   // некому. Дальше опрашиваем регулярно, а установку берёт на себя
     // Установка запускается только явным действием пользователя из интерфейса.
-  if (app.isPackaged) {
+  if (app.isPackaged && !IS_BETA) {
     setInterval(() => {
       autoUpdater.checkForUpdates().catch((err) => {
         console.error('[updater] периодическая проверка не удалась:', err?.message || err);
