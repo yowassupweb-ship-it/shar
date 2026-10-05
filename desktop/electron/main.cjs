@@ -443,12 +443,12 @@ function stopMainRealtime() {
   mainRealtimeUserId = null;
 }
 
-function scheduleMainRealtimeReconnect() {
+function scheduleMainRealtimeReconnect(delayMs = 1000) {
   if (mainRealtimeStopped || !mainRealtimeUserId || mainRealtimeReconnectTimer) return;
   mainRealtimeReconnectTimer = setTimeout(() => {
     mainRealtimeReconnectTimer = null;
     void connectMainRealtime();
-  }, 1000);
+  }, delayMs);
 }
 
 async function connectMainRealtime() {
@@ -504,10 +504,12 @@ async function connectMainRealtime() {
     // Only the current socket may trigger a reconnect.  An old socket closed by
     // stopMainRealtime() used to schedule one after the renderer had already
     // re-registered, leaving an extra live socket behind on every restart.
-    ws.on('close', () => {
+    ws.on('close', (code) => {
       if (mainRealtimeWs !== ws) return;
       mainRealtimeWs = null;
-      scheduleMainRealtimeReconnect();
+      // 1008: the server does not recognise the session. Retrying every second only
+      // hammers it (hundreds of rejections per 10 minutes) — back off.
+      scheduleMainRealtimeReconnect(code === 1008 ? 30000 : 1000);
     });
     ws.on('error', () => { try { ws.close(); } catch {} });
     return true;

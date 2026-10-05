@@ -25,13 +25,13 @@ const STALE_ON_WAKE_MS = 30000;
 const BACKOFF_MAX_MS = 30000;
 
 function socketUrl(userId: string): string {
-  const w = window as unknown as { sharDesktop?: { backendUrl?: string } };
-  const backendBase = w.sharDesktop?.backendUrl || '';
   const path = `/api/ws/${encodeURIComponent(userId)}`;
-  if (backendBase) return `${backendBase.replace(/^http/, 'ws')}${path}`;
   const https = window.location.protocol === 'https:';
   // Всегда свой origin: в проде /api/ws отдаёт nginx, в dev — прокси Vite
-  // (vite.config.ts). Кука сессии уходит сама, адрес бэкенда клиенту знать не нужно.
+  // (vite.config.ts), в Electron — локальный сервер встроенного клиента, который
+  // пробрасывает сокет на бэкенд с кукой сессии и родным Origin. Прямое подключение
+  // на домен бэкенда из Electron несёт Origin http://127.0.0.1:… и без куки: сервер
+  // отвечает отказом (origin/session), и реалтайм молча не работает.
   return `${https ? 'wss:' : 'ws:'}//${window.location.host}${path}`;
 }
 
