@@ -943,6 +943,11 @@ button.cxm-status { cursor: pointer; }
   /* Запас соседних дней перекрывается — он не должен перехватывать клики по краю чужого сообщения. */
   pointer-events: none;
 }
+/* Телефон: Safari при резкой смене высоты ленты (выезжает клавиатура) на кадр сбрасывал отрисовку
+   пропущенных дней — пузыри мигали. Там ленты короче, обходимся без пропуска. */
+@media (pointer: coarse) {
+  .cxm-daygroup { content-visibility: visible; contain-intrinsic-size: none; }
+}
 .cxm-daygroup > :not(.cxm-day) { pointer-events: auto; }
 
 /* ── Эмодзи и стикеры ──────────────────────────────────────────────────── */

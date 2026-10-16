@@ -71,6 +71,15 @@ function pinched(vv: VisualViewport): boolean {
   return Math.abs(vv.scale / baseScale - 1) > 0.01;
 }
 
+/** Высота экрана в CSS-пикселях для установленного на iPhone приложения (портрет), иначе 0. */
+function screenHeightCss(): number {
+  if (!isIosStandalone() || typeof screen === 'undefined' || !/iPhone/.test(navigator.userAgent)) return 0;
+  if (window.innerHeight <= window.innerWidth) return 0;
+  const scale = window.innerWidth / Math.min(screen.width, screen.height);
+  if (scale < 0.5 || scale > 1.01) return 0;
+  return Math.round(Math.max(screen.width, screen.height) * scale);
+}
+
 function isEditable(el: Element | null): boolean {
   if (!el) return false;
   if (el instanceof HTMLTextAreaElement) return true;
@@ -112,6 +121,16 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     // сдвинуть видимую область, и её мы тут же возвращаем (scrollTo). Так было в
     // старом чате, отлаженном на iPhone. Без замка документ ездил под корнем.
     document.documentElement.classList.add('nx-locked');
+    // iOS 26, приложение с главного экрана: окно короче экрана (у 440×956 при масштабе 115% — 778 вместо 832),
+    // ниже его края iOS ничего не рисует — чёрная полоса снизу. Замер показал: когда сам документ
+    // (html, body) высотой с экран, iOS отдаёт окно целиком. Высота — постоянная (base.css, nx-ios-app),
+    // при клавиатуре не снимается: иначе после неё окно оставалось коротким.
+    const html = document.documentElement;
+    const screenH = screenHeightCss();
+    if (screenH) {
+      html.classList.add('nx-ios-app');
+      html.style.setProperty('--nx-screen-h', `${screenH}px`);
+    }
 
     let raf = 0;
     let lastKb = 0;
@@ -245,7 +264,8 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       document.removeEventListener('touchstart', onTouchStart, { capture: true });
       document.removeEventListener('touchmove', onTouchMove);
       delete root.dataset.kb;
-      document.documentElement.classList.remove('nx-locked');
+      document.documentElement.classList.remove('nx-locked', 'nx-ios-app');
+      document.documentElement.style.removeProperty('--nx-screen-h');
       ['--nx-vvh', '--nx-vv-top'].forEach((p) => root.style.removeProperty(p));    };
   }, [rootRef]);
 }
