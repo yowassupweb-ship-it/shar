@@ -53,6 +53,10 @@ function screenHeightCss(): number {
   return Math.round(Math.max(screen.width, screen.height) * scale);
 }
 
+/** Масштаб видимой области при запуске (useViewportSync): у увеличенного отображения он ≠ 1. */
+let launchScale = 1;
+const pinched = (vv: VisualViewport) => Math.abs(vv.scale / launchScale - 1) > 0.01;
+
 function isEditable(el: Element | null): boolean {
   if (!el) return false;
   if (el instanceof HTMLTextAreaElement) return true;
@@ -85,9 +89,10 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     const vv = window.visualViewport;
     if (!root || !vv || !isCoarse()) return undefined;
 
+    let savedKb = 0;
     try {
       const saved = Number(localStorage.getItem(KB_KEY));
-      if (saved > KB_MIN) root.style.setProperty('--nx-kb-last', `${saved}px`);
+      if (saved > KB_MIN) { savedKb = saved; root.style.setProperty('--nx-kb-last', `${saved}px`); }
     } catch { /* нет хранилища — панель эмодзи возьмёт высоту по умолчанию */ }
 
     // Документ заперт: iOS не может прокрутить страницу к полю ввода — только
@@ -113,10 +118,15 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     // полосы «домой» (поле висело высоко). Считаем от наибольшей высоты,
     // замеренной без фокуса в поле.
     let baseline = Math.max(window.innerHeight, Math.round(vv.height));
+    // Щипок-увеличение тоже меняет visualViewport — это не клавиатура. Сравниваем с масштабом при
+    // запуске, а не с 1: при увеличенном масштабе отображения (115%) iOS отдаёт scale ≠ 1 всегда,
+    // и подгонка под клавиатуру не работала вовсе.
+    launchScale = vv.scale || 1;
+    // Поле ввода «заранее» в положении над клавиатурой (см. preopen): пока ждём саму клавиатуру.
+    let preTimer = 0;
     const apply = () => {
       raf = 0;
-      // Щипок-увеличение тоже меняет visualViewport — это не клавиатура.
-      if (Math.abs(vv.scale - 1) > 0.01) return;
+      if (pinched(vv)) return;
       // Safari сдвигает видимую область к полю ввода — возвращаем (scrollTo).
       // Пока она не вернулась, корень следует за её верхом (offsetTop), иначе
       // шапка уезжает за верх экрана. offsetTop после scrollTo обновится
@@ -130,6 +140,11 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       const kb = Math.max(0, baseline - height);
       root.style.setProperty('--nx-vvh', `${height}px`);
       const open = kb > KB_MIN && editing;
+      if (preTimer) {
+        if (!open) return; // клавиатура ещё выезжает — держим раскладку, выставленную заранее
+        window.clearTimeout(preTimer);
+        preTimer = 0;
+      }
       root.style.setProperty('--nx-vv-top', open ? `${Math.max(0, Math.round(vv.offsetTop))}px` : '0px');
       if (open) {
         root.dataset.kb = 'open';
@@ -156,6 +171,28 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     };
     const onBlur = () => { window.setTimeout(schedule, 50); };
 
+    // Касание поля ввода: раскладка сразу переходит в «клавиатура открыта» с высотой прошлой
+    // клавиатуры — поле уже стоит там, где окажется над ней. Safari видит его на экране и не
+    // прокручивает страницу к нему: шапка остаётся на месте, без рывка вверх и обратно. Если
+    // касание не закончилось фокусом (прокрутили), через 700 мс раскладка вернётся.
+    const preopen = () => {
+      const guess = lastKb || savedKb;
+      if (guess <= KB_MIN || pinched(vv)) return;
+      root.style.setProperty('--nx-vvh', `${Math.max(0, baseline - guess)}px`);
+      root.style.setProperty('--nx-vv-top', '0px');
+      root.dataset.kb = 'open';
+      window.clearTimeout(preTimer);
+      preTimer = window.setTimeout(() => { preTimer = 0; schedule(); }, 700);
+    };
+    let tapStartY = 0;
+    const onTouchEnd = (e: TouchEvent) => {
+      const target = (e.target as Element | null)?.closest?.('[contenteditable="true"], textarea, input');
+      if (!target || !isEditable(target) || document.activeElement === target || !root.contains(target)) return;
+      const y = e.changedTouches[0]?.clientY ?? tapStartY;
+      if (Math.abs(y - tapStartY) > 10) return; // это была прокрутка, а не касание
+      preopen();
+    };
+
     // Страница не должна ездить за пальцем. При открытой клавиатуре видимая
     // область iOS меньше окна, и «лишнее» движение — там, где нечего
     // прокручивать, или по ленте, упёршейся в край, — сдвигает саму видимую
@@ -165,6 +202,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     const onTouchStart = (e: TouchEvent) => {
       scroller = scrollerFrom(e.target as Element | null, root);
       lastY = e.touches[0]?.clientY ?? 0;
+      tapStartY = lastY;
     };
     const onTouchMove = (e: TouchEvent) => {
       if (e.touches.length !== 1 || !e.cancelable || scroller === 'free') return;
@@ -193,8 +231,11 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     document.addEventListener('focusout', onBlur);
     document.addEventListener('touchstart', onTouchStart, { passive: true, capture: true });
     document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('touchend', onTouchEnd, { passive: true, capture: true });
     return () => {
       cancelAnimationFrame(raf);
+      window.clearTimeout(preTimer);
+      document.removeEventListener('touchend', onTouchEnd, { capture: true });
       settle.forEach((t) => window.clearTimeout(t));
       document.removeEventListener('visibilitychange', onShow);
       window.removeEventListener('pageshow', onShow);
@@ -217,6 +258,6 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
 /** Видимая часть экрана в координатах fixed-позиционирования — для меню и подсказок. */
 export function visibleBox(): { top: number; bottom: number; width: number } {
   const vv = typeof window !== 'undefined' ? window.visualViewport : null;
-  if (!vv || Math.abs(vv.scale - 1) > 0.01) return { top: 0, bottom: window.innerHeight, width: window.innerWidth };
+  if (!vv || pinched(vv)) return { top: 0, bottom: window.innerHeight, width: window.innerWidth };
   return { top: vv.offsetTop, bottom: vv.offsetTop + vv.height, width: vv.width };
 }
