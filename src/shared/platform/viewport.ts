@@ -50,8 +50,14 @@ export function isEdgeSwipeStart(x: number): boolean {
 function standaloneHeight(editing: boolean): number {
   if (editing || !isIosStandalone() || typeof screen === 'undefined') return 0;
   if (window.innerHeight <= window.innerWidth) return 0; // в альбомной окна и экран не сравнить
-  const full = Math.max(screen.width, screen.height);
-  return full - window.innerHeight <= 120 && window.innerWidth >= Math.min(screen.width, screen.height) - 2 ? full : 0;
+  if (!/iPhone/.test(navigator.userAgent)) return 0; // iPad: окно бывает меньше экрана (Split View)
+  // Экран — в точках, страница — в CSS-пикселях: при увеличенном масштабе (115% и т.п.) их меньше.
+  // Ширину iOS не урезает — по ней и масштаб: экран 440×956 при окне 383 → страница должна быть 832.
+  const scale = window.innerWidth / Math.min(screen.width, screen.height);
+  if (scale < 0.5 || scale > 1.01) return 0;
+  const full = Math.round(Math.max(screen.width, screen.height) * scale);
+  const gap = full - window.innerHeight;
+  return gap > 0 && gap <= 140 ? full : 0;
 }
 
 function isEditable(el: Element | null): boolean {
