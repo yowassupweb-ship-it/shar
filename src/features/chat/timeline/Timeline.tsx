@@ -26,6 +26,7 @@ import ForwardSheet from '../ForwardSheet';
 import { readerName } from './content';
 import { MessageRow, type RowCtx } from './MessageRow';
 import { Spinner } from '@/shared/ui/Spinner';
+import { BubbleFocus, focusAnchor, focusShot, type FocusShot } from './BubbleFocus';
 import { SectionIcon } from '@/shared/ui/SectionIcon';
 
 const ImageViewer = lazyComponent(() => import('@/shared/ui/ImageViewer'));
@@ -139,6 +140,15 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
   const [mobile, setMobile] = useState(false);
   const [width, setWidth] = useState(0);
   const [menu, setMenu] = useState<{ msg: Msg; at: { x: number; y: number }; image: string | null } | null>(null);
+  // Телефон: нажатое сообщение поверх размытой переписки (BubbleFocus). Живёт чуть дольше меню —
+  // пока сообщение возвращается на место.
+  const [focus, setFocus] = useState<{ shot: FocusShot; closing: boolean } | null>(null);
+  useEffect(() => {
+    if (menu || !focus || focus.closing) return undefined;
+    setFocus({ ...focus, closing: true });
+    const t = window.setTimeout(() => setFocus(null), 230);
+    return () => window.clearTimeout(t);
+  }, [menu, focus]);
   const [forwarding, setForwarding] = useState<Message[] | null>(null);
   const [pollEdit, setPollEdit] = useState<Msg | null>(null);
   const selection = useChatStore((s) => (s.selection?.chatId === chatId ? s.selection.ids : null));
@@ -399,7 +409,10 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
         g.mode = 'none';
         navigator.vibrate?.(8);
         const img = target.closest<HTMLImageElement>('img.cxm-photo');
-        setMenu({ msg, at: { x: t.clientX, y: t.clientY }, image: img?.src ?? null });
+        const bubble = target.closest<HTMLElement>('.cxm-bubble');
+        const shot = g.row && bubble ? focusShot(g.row, bubble) : null;
+        if (shot) setFocus({ shot, closing: false });
+        setMenu({ msg, at: shot ? focusAnchor(shot) : { x: t.clientX, y: t.clientY }, image: img?.src ?? null });
       }, LONG_PRESS_MS);
     }
   };
@@ -638,6 +651,7 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
         </button>
       )}
 
+      {focus && <BubbleFocus shot={focus.shot} closing={focus.closing} />}
       {menu && menuMsg && (
         <Menu anchor={menu.at} label="Действия с сообщением" onClose={() => setMenu(null)}>
           {!notificationsChat && (
