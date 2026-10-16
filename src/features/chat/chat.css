@@ -385,9 +385,10 @@
      клавиатурой — растягивается почти до краёв, «+» сворачивается, поле садится
      вплотную к клавиатуре. */
   .cxn-composer-wrap {
-    padding-left: max(6px, env(safe-area-inset-left));
-    padding-right: max(6px, env(safe-area-inset-right));
-    padding-bottom: max(2px, calc(var(--nx-safe-bottom) - 30px));
+    /* Без клавиатуры — поуже и над скруглением углов iPhone, чтобы они не срезали поле. */
+    padding-left: max(14px, env(safe-area-inset-left));
+    padding-right: max(14px, env(safe-area-inset-right));
+    padding-bottom: max(12px, calc(var(--nx-safe-bottom) - 20px));
     transition: padding var(--duration-base) var(--ease-out);
   }
   .nx[data-kb="open"] .cxn-composer-wrap { padding: 4px 4px 0; }

@@ -1,5 +1,4 @@
 import { useEffect, type RefObject } from 'react';
-import { reportClientError } from './telemetry';
 
 /**
  * Видимая область телефона и клавиатура — один механизм на весь новый шар.
@@ -41,25 +40,6 @@ export function isEdgeSwipeStart(x: number): boolean {
 }
 
 /**
- * Высота экрана в CSS-пикселях, если окно установленного на iPhone приложения
- * короче неё (иначе 0). iOS после клавиатуры, а порой и с запуска оставляет окно
- * укороченным и ниже его края ничего не рисует — внизу чёрная полоса (лечится
- * манифестом в index.html). Здесь — только для замера. iPad не трогаем (Split View).
- */
-function standaloneHeight(editing: boolean): number {
-  if (editing || !isIosStandalone() || typeof screen === 'undefined') return 0;
-  if (window.innerHeight <= window.innerWidth) return 0; // в альбомной окна и экран не сравнить
-  if (!/iPhone/.test(navigator.userAgent)) return 0; // iPad: окно бывает меньше экрана (Split View)
-  // Экран — в точках, страница — в CSS-пикселях: при увеличенном масштабе (115% и т.п.) их меньше.
-  // Ширину iOS не урезает — по ней и масштаб: экран 440×956 при окне 383 → страница должна быть 832.
-  const scale = window.innerWidth / Math.min(screen.width, screen.height);
-  if (scale < 0.5 || scale > 1.01) return 0;
-  const full = Math.round(Math.max(screen.width, screen.height) * scale);
-  const gap = full - window.innerHeight;
-  return gap > 0 && gap <= 140 ? full : 0;
-}
-
-/**
  * Увеличена ли страница щипком. Сравниваем с масштабом при запуске, а не с 1: при увеличенном
  * масштабе отображения (115% и т.п.) iOS отдаёт visualViewport.scale ≠ 1 постоянно — проверка
  * «scale ≠ 1» считала это щипком и выключала всю подгонку под экран и клавиатуру (полоса снизу,
@@ -71,10 +51,15 @@ function pinched(vv: VisualViewport): boolean {
   return Math.abs(vv.scale / baseScale - 1) > 0.01;
 }
 
-/** Высота экрана в CSS-пикселях для установленного на iPhone приложения (портрет), иначе 0. */
+/**
+ * Высота экрана в CSS-пикселях для установленного на iPhone приложения (портрет), иначе 0.
+ * iPad не трогаем: там окно бывает меньше экрана (Split View).
+ */
 function screenHeightCss(): number {
   if (!isIosStandalone() || typeof screen === 'undefined' || !/iPhone/.test(navigator.userAgent)) return 0;
   if (window.innerHeight <= window.innerWidth) return 0;
+  // Экран — в точках, страница — в CSS-пикселях: при увеличенном масштабе (115% и т.п.) их меньше.
+  // Ширину iOS не урезает — по ней и масштаб: экран 440×956 при окне 383 → страница 832.
   const scale = window.innerWidth / Math.min(screen.width, screen.height);
   if (scale < 0.5 || scale > 1.01) return 0;
   return Math.round(Math.max(screen.width, screen.height) * scale);
@@ -134,7 +119,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
 
     let raf = 0;
     let lastKb = 0;
-    let kbProbed = false;
+    let settleTimer = 0;
     // Высота экрана без клавиатуры. В установленном PWA iOS сжимает не только
     // visualViewport, но порой и innerHeight — разница innerHeight − vv.height
     // тогда ≈ 0, и интерфейс «не видел» клавиатуру: оставлял под полем отступ
@@ -160,21 +145,14 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       const open = kb > KB_MIN && editing;
       root.style.setProperty('--nx-vv-top', open ? `${Math.max(0, Math.round(vv.offsetTop))}px` : '0px');
       if (open) {
-        root.dataset.kb = 'open';
-        if (!kbProbed && isIosStandalone()) {
-          kbProbed = true;
-          // Замер для отладки: куда iOS 26 сдвигает страницу при открытой клавиатуре (шапка уезжала вверх).
-          window.setTimeout(() => {
-            const head = document.querySelector('.cxv-head')?.getBoundingClientRect();
-            const box = root.getBoundingClientRect();
-            reportClientError('manual', new Error('ios-keyboard probe'), {
-              inner: `${window.innerWidth}x${window.innerHeight}`, scrollY: window.scrollY,
-              vv: `${Math.round(vv.width)}x${Math.round(vv.height)}@${Math.round(vv.offsetTop)}`, baseline, kb,
-              rootTop: Math.round(box.top), rootBottom: Math.round(box.bottom), headTop: head ? Math.round(head.top) : null,
-              bodyTop: Math.round(document.body.getBoundingClientRect().top),
-            });
-          }, 700);
+        // Пока клавиатура выезжает, iOS двигает видимую область, и шапка дёргалась вверх-вниз.
+        // На это время её прячем (data-kb-settling, base.css) и показываем, когда всё встало.
+        if (root.dataset.kb !== 'open' || root.dataset.kbSettling) {
+          root.dataset.kbSettling = 'true';
+          window.clearTimeout(settleTimer);
+          settleTimer = window.setTimeout(() => { delete root.dataset.kbSettling; }, 260);
         }
+        root.dataset.kb = 'open';
         if (Math.abs(kb - lastKb) > 4) {
           lastKb = kb;
           root.style.setProperty('--nx-kb-last', `${kb}px`);
@@ -227,19 +205,6 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     const onShow = () => { if (document.visibilityState === 'visible') { schedule(); window.setTimeout(schedule, 400); } };
     document.addEventListener('visibilitychange', onShow);
     window.addEventListener('pageshow', onShow);
-    // Замер для отладки полосы снизу на iPhone (iOS 26): что видит страница в установленном приложении.
-    // Раз за запуск, в журнал ошибок клиента на сервере.
-    const probe = isIosStandalone() ? window.setTimeout(() => {
-      const box = root.getBoundingClientRect();
-      const safe = getComputedStyle(root).getPropertyValue('--nx-safe-bottom');
-      reportClientError('manual', new Error('ios-viewport probe'), {
-        inner: `${window.innerWidth}x${window.innerHeight}`, screen: `${screen.width}x${screen.height}`,
-        vv: `${Math.round(vv.width)}x${Math.round(vv.height)}@${Math.round(vv.offsetTop)}`,
-        html: document.documentElement.clientHeight, rootTop: Math.round(box.top), rootBottom: Math.round(box.bottom),
-        safe,
-        navStandalone: (navigator as Navigator & { standalone?: boolean }).standalone ?? null, fullH: standaloneHeight(false), scale: vv.scale, baseScale,
-      });
-    }, 3600) : 0;
     vv.addEventListener('resize', schedule);
     vv.addEventListener('scroll', schedule);
     window.addEventListener('resize', schedule);
@@ -250,7 +215,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     document.addEventListener('touchmove', onTouchMove, { passive: false });
     return () => {
       cancelAnimationFrame(raf);
-      window.clearTimeout(probe);
+      window.clearTimeout(settleTimer);
       settle.forEach((t) => window.clearTimeout(t));
       document.removeEventListener('visibilitychange', onShow);
       window.removeEventListener('pageshow', onShow);
@@ -264,6 +229,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       document.removeEventListener('touchstart', onTouchStart, { capture: true });
       document.removeEventListener('touchmove', onTouchMove);
       delete root.dataset.kb;
+      delete root.dataset.kbSettling;
       document.documentElement.classList.remove('nx-locked', 'nx-ios-app');
       document.documentElement.style.removeProperty('--nx-screen-h');
       ['--nx-vvh', '--nx-vv-top'].forEach((p) => root.style.removeProperty(p));    };
