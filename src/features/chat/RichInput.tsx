@@ -140,6 +140,15 @@ const hasEmojiText = (root: HTMLElement): boolean => {
   return false;
 };
 
+/** Текст из HTML буфера обмена — когда text/plain нет. */
+function htmlText(html: string): string {
+  if (!html) return '';
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('br').forEach((br) => br.replaceWith('\n'));
+  doc.querySelectorAll('p, div, li, h1, h2, h3, h4, h5, h6, tr').forEach((el) => el.append('\n'));
+  return (doc.body.textContent || '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 const RichInput = forwardRef<RichInputHandle, Props>(function RichInput(
   { id, value, placeholder, className, enterKeyHint, onChange, onFocus, onPasteFiles, onKeyDown }, handle,
 ) {
@@ -234,12 +243,21 @@ const RichInput = forwardRef<RichInputHandle, Props>(function RichInput(
         emit();
       }}
       onPaste={(e) => {
-        const files = Array.from(e.clipboardData.files || []);
-        if (files.length) { e.preventDefault(); onPasteFiles?.(files); return; }
-        // Только текст: HTML из буфера (шрифты, цвета, ссылки) в сообщение не нужен.
         e.preventDefault();
-        const text = e.clipboardData.getData('text/plain');
-        if (text) document.execCommand('insertText', false, text);
+        const data = e.clipboardData;
+        // Только текст: HTML из буфера (шрифты, цвета, ссылки) в сообщение не нужен. Без text/plain
+        // (бывает при копировании со страниц) — текст из HTML.
+        const text = data.getData('text/plain') || htmlText(data.getData('text/html'));
+        const files = Array.from(data.files || []);
+        // iOS кладёт большой скопированный текст в буфер ещё и файлом — тогда он уходил во вложения
+        // (или терялся), и вставить длинный текст в поле было нельзя. Текстовые «файлы» при тексте не берём.
+        const real = text ? files.filter((f) => !/^text\//.test(f.type) && f.type !== '') : files;
+        if (real.length) { onPasteFiles?.(real); return; }
+        if (!text) return;
+        // execCommand на длинном тексте в contenteditable тормозит до зависания (особенно на iPhone) —
+        // большой текст вставляем узлом напрямую; короткий — как раньше, с отменой по Ctrl+Z.
+        if (text.length < 2000 && document.execCommand('insertText', false, text)) return;
+        insertNode(document.createTextNode(text.replace(/\r\n?/g, '\n')));
       }}
       onDrop={(e) => { if (e.dataTransfer.files.length) e.preventDefault(); }}
       onKeyDown={onKeyDown}

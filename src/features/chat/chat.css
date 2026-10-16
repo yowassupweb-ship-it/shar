@@ -385,11 +385,12 @@
      клавиатурой — растягивается почти до краёв, «+» сворачивается, поле садится
      вплотную к клавиатуре. */
   .cxn-composer-wrap {
-    padding-left: max(18px, env(safe-area-inset-left));
-    padding-right: max(18px, env(safe-area-inset-right));
+    padding-left: max(10px, env(safe-area-inset-left));
+    padding-right: max(10px, env(safe-area-inset-right));
     transition: padding var(--duration-base) var(--ease-out);
   }
-  .nx[data-kb="open"] .cxn-composer-wrap { padding: 4px 6px 6px; }
+  .nx[data-kb="open"] .cxn-composer-wrap { padding: 4px 6px 2px; }
+  .nx .cxc-row { gap: 6px; }
   .nx .cxc-row .cxn-field { min-height: 40px; }
   .nx .cxc-row .cxn-field .cxn-input { padding-top: 9px; padding-bottom: 9px; }
   .nx .cxc-plus,
@@ -401,7 +402,7 @@
   }
   .nx[data-kb="open"] .cxc-plus {
     width: 0;
-    margin-right: calc(var(--space-2) * -1);
+    margin-right: -6px;
     opacity: 0;
     pointer-events: none;
   }

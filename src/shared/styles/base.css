@@ -36,9 +36,18 @@
   }
 }
 .nx[data-kb="open"] { --nx-safe-bottom: 0px; }
-/* Установленное приложение на iPhone: корень — во весь экран от верха, а не до
-   низа области fixed-элементов: iOS порой её укорачивает (viewport.ts). */
-.nx:not([data-kb="open"])[style*="--nx-full-h"] {
+/* Установленное приложение на iPhone (iOS 26): окно и область fixed-элементов
+   короче экрана на строку состояния (viewport.ts, standaloneHeight). html и body —
+   высотой с экран, корень — absolute от body, а не fixed от укороченного окна. */
+html.nx-locked.nx-full,
+html.nx-locked.nx-full body {
+  height: 100vh;
+  height: 100lvh;
+  height: var(--nx-full-h);
+}
+html.nx-locked.nx-full body { bottom: auto; }
+html.nx-full .nx:not([data-kb="open"]) {
+  position: absolute;
   bottom: auto;
   height: calc(var(--nx-full-h) - var(--electron-titlebar-height, 0px) - var(--pwa-banner-h, 0px));
 }
@@ -58,6 +67,9 @@ html.nx-locked body {
 .nx *,
 .nx *::before,
 .nx *::after { box-sizing: border-box; }
+/* Удержание пальцем на логотипе, иконке, аватаре не открывает в Safari меню «Скопировать картинку»
+   и не тащит её: это интерфейс, а не содержимое (у фото в сообщениях — своё меню). */
+.nx img, .nx svg { -webkit-touch-callout: none; -webkit-user-drag: none; }
 
 /* Сброс — с нулевой специфичностью (:where): любой класс компонента
    (.nx-primary, .nx-ghost, ссылка-действие) сильнее него. С «.nx button» было

@@ -1,4 +1,5 @@
 import { useEffect, type RefObject } from 'react';
+import { reportClientError } from './telemetry';
 
 /**
  * Видимая область телефона и клавиатура — один механизм на весь новый шар.
@@ -38,12 +39,12 @@ export function isEdgeSwipeStart(x: number): boolean {
 
 /**
  * Высота экрана для установленного на iPhone приложения (или 0 — не нужна).
- * iOS в таком приложении порой укорачивает область fixed-элементов — после
- * закрытия клавиатуры или возврата из фона, — и корень, прижатый к её низу,
- * заканчивается выше полосы «домой»: под панелью остаётся пустая полоса фона,
- * а «капсула» меню висит посреди списка. Разницу по innerHeight не поймать —
- * он в этом сбое бывает и полным. Поэтому корень в портрете не прижимаем к
- * низу, а даём ему высоту экрана (viewport-fit=cover — экран весь наш).
+ * Регрессия iOS 26 (WebKit 301108): в приложении с главного экрана при
+ * black-translucent + viewport-fit=cover окно, 100%, dvh и область
+ * fixed-элементов короче экрана на высоту строки состояния — корень,
+ * прижатый к низу окна, заканчивался выше полосы «домой», под меню оставалась
+ * пустая полоса. Поэтому html и body получают высоту экрана, а корень меряется
+ * от body (base.css, html.nx-full), а не от укороченного окна.
  * Окно заметно меньше экрана (iPad в Split View) — не трогаем.
  */
 function standaloneHeight(editing: boolean): number {
@@ -121,8 +122,10 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       root.style.setProperty('--nx-vvh', `${height}px`);
       const open = kb > KB_MIN && editing;
       const full = open ? 0 : standaloneHeight(editing);
-      if (full) root.style.setProperty('--nx-full-h', `${full}px`);
-      else root.style.removeProperty('--nx-full-h');
+      const html = document.documentElement;
+      if (full) html.style.setProperty('--nx-full-h', `${full}px`);
+      else html.style.removeProperty('--nx-full-h');
+      html.classList.toggle('nx-full', full > 0);
       root.style.setProperty('--nx-vv-top', open ? `${Math.max(0, Math.round(vv.offsetTop))}px` : '0px');
       if (open) {
         root.dataset.kb = 'open';
@@ -170,6 +173,18 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     };
 
     apply();
+    // Замер для отладки полосы снизу на iPhone (iOS 26): что видит страница в установленном приложении.
+    // Раз за запуск, в журнал ошибок клиента на сервере.
+    const probe = isIosStandalone() ? window.setTimeout(() => {
+      const box = root.getBoundingClientRect();
+      const safe = getComputedStyle(root).getPropertyValue('--nx-safe-bottom');
+      reportClientError('manual', new Error('ios-viewport probe'), {
+        inner: `${window.innerWidth}x${window.innerHeight}`, screen: `${screen.width}x${screen.height}`,
+        vv: `${Math.round(vv.width)}x${Math.round(vv.height)}@${Math.round(vv.offsetTop)}`,
+        html: document.documentElement.clientHeight, rootTop: Math.round(box.top), rootBottom: Math.round(box.bottom),
+        full: document.documentElement.classList.contains('nx-full'), safe,
+      });
+    }, 3000) : 0;
     vv.addEventListener('resize', schedule);
     vv.addEventListener('scroll', schedule);
     window.addEventListener('resize', schedule);
@@ -180,6 +195,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     document.addEventListener('touchmove', onTouchMove, { passive: false });
     return () => {
       cancelAnimationFrame(raf);
+      window.clearTimeout(probe);
       window.clearInterval(poll);
       vv.removeEventListener('resize', schedule);
       vv.removeEventListener('scroll', schedule);
@@ -191,7 +207,9 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       document.removeEventListener('touchmove', onTouchMove);
       delete root.dataset.kb;
       document.documentElement.classList.remove('nx-locked');
-      ['--nx-vvh', '--nx-vv-top', '--nx-full-h'].forEach((p) => root.style.removeProperty(p));
+      ['--nx-vvh', '--nx-vv-top'].forEach((p) => root.style.removeProperty(p));
+      document.documentElement.style.removeProperty('--nx-full-h');
+      document.documentElement.classList.remove('nx-full');
     };
   }, [rootRef]);
 }

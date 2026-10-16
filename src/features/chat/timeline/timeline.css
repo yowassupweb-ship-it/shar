@@ -1061,6 +1061,24 @@ button.cxm-status { cursor: pointer; }
   pointer-events: none;
 }
 .cxv-head > * { pointer-events: auto; }
+/* iPhone: лента уезжает под строку состояния (часы, батарея) — под ней затемнение цвета темы,
+   плавно сходящее на нет у шапки, чтобы системные значки читались поверх сообщений. */
+@media (max-width: 640px) {
+  .cxv-head::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: -1;
+    height: calc(env(safe-area-inset-top, 0px) + 28px);
+    background: linear-gradient(to bottom,
+      color-mix(in srgb, var(--bg-color) 92%, transparent) 0,
+      color-mix(in srgb, var(--bg-color) 80%, transparent) env(safe-area-inset-top, 0px),
+      transparent 100%);
+    pointer-events: none;
+  }
+}
 .cxv-body { --header-h: 60px; }
 .cxv-body .cxm-list { padding-top: calc(var(--header-h) + var(--space-2)); }
 .cxv-body .cxm-day { top: calc(var(--header-h) + var(--space-1)); }
@@ -1577,6 +1595,8 @@ button.cxm-status { cursor: pointer; }
   .cxh-actions [data-wide-only] { display: none; }
   .cxh-muted { display: inline-block; }
   .cxv-head {
+    /* Шапка (назад, пилюля с именем) — вплотную под строкой состояния, на 14px выше прежнего. */
+    padding-top: max(var(--space-1), calc(var(--space-2) + env(safe-area-inset-top, 0px) - 14px));
     padding-left: max(var(--space-2), env(safe-area-inset-left));
     padding-right: max(var(--space-2), env(safe-area-inset-right));
   }
