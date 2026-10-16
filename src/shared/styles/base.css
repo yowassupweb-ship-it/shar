@@ -36,21 +36,6 @@
   }
 }
 .nx[data-kb="open"] { --nx-safe-bottom: 0px; }
-/* Установленное приложение на iPhone (iOS 26): окно и область fixed-элементов
-   короче экрана на строку состояния (viewport.ts, standaloneHeight). html и body —
-   высотой с экран, корень — absolute от body, а не fixed от укороченного окна. */
-html.nx-locked.nx-full,
-html.nx-locked.nx-full body {
-  height: 100vh;
-  height: 100lvh;
-  height: var(--nx-full-h);
-}
-html.nx-locked.nx-full body { bottom: auto; }
-html.nx-full .nx:not([data-kb="open"]) {
-  position: absolute;
-  bottom: auto;
-  height: calc(var(--nx-full-h) - var(--electron-titlebar-height, 0px) - var(--pwa-banner-h, 0px));
-}
 
 /* Телефон: документ заперт (viewport.ts ставит класс). Прокручиваются только
    ленты внутри .nx; сама страница не может уехать к полю ввода. */

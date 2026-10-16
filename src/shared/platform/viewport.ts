@@ -41,14 +41,10 @@ export function isEdgeSwipeStart(x: number): boolean {
 }
 
 /**
- * Высота экрана для установленного на iPhone приложения (или 0 — не нужна).
- * Регрессия iOS 26 (WebKit 301108): в приложении с главного экрана при
- * black-translucent + viewport-fit=cover окно, 100%, dvh и область
- * fixed-элементов короче экрана на высоту строки состояния — корень,
- * прижатый к низу окна, заканчивался выше полосы «домой», под меню оставалась
- * пустая полоса. Поэтому html и body получают высоту экрана, а корень меряется
- * от body (base.css, html.nx-full), а не от укороченного окна.
- * Окно заметно меньше экрана (iPad в Split View) — не трогаем.
+ * Высота экрана в CSS-пикселях, если окно установленного на iPhone приложения
+ * короче неё (иначе 0). iOS после клавиатуры, а порой и с запуска оставляет окно
+ * укороченным и ниже его края ничего не рисует — внизу чёрная полоса. Тогда
+ * окно перемеряется (heal в useViewportSync). iPad не трогаем (Split View).
  */
 function standaloneHeight(editing: boolean): number {
   if (editing || !isIosStandalone() || typeof screen === 'undefined') return 0;
@@ -143,11 +139,6 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       const kb = Math.max(0, baseline - height);
       root.style.setProperty('--nx-vvh', `${height}px`);
       const open = kb > KB_MIN && editing;
-      const full = open ? 0 : standaloneHeight(editing);
-      const html = document.documentElement;
-      if (full) html.style.setProperty('--nx-full-h', `${full}px`);
-      else html.style.removeProperty('--nx-full-h');
-      html.classList.toggle('nx-full', full > 0);
       root.style.setProperty('--nx-vv-top', open ? `${Math.max(0, Math.round(vv.offsetTop))}px` : '0px');
       if (open) {
         root.dataset.kb = 'open';
@@ -176,6 +167,33 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     };
     const schedule = () => { if (!raf) raf = requestAnimationFrame(apply); };
 
+    // iOS (установленное приложение): после клавиатуры, а порой и с запуска окно остаётся короче
+    // экрана, и ниже его края iOS ничего не рисует — внизу чёрная полоса, она же закрывала композер.
+    // Растянуть корень туда нельзя. Лечит пересчёт: корень на миг убираем из раскладки (display:
+    // none + принудительная раскладка) — WebKit перемеряет окно, и оно снова во весь экран.
+    // Прокрутка внутри корня при этом сбрасывается — запоминаем и возвращаем.
+    let healReported = false;
+    const heal = () => {
+      if (!isIosStandalone() || isEditable(document.activeElement)) return;
+      const expected = standaloneHeight(false);
+      if (!expected) return; // окно не короче экрана — лечить нечего
+      const before = window.innerHeight;
+      const scrolled: Array<[HTMLElement, number]> = [];
+      root.querySelectorAll<HTMLElement>('*').forEach((el) => { if (el.scrollTop > 0) scrolled.push([el, el.scrollTop]); });
+      root.style.display = 'none';
+      void root.offsetHeight;
+      root.style.display = '';
+      scrolled.forEach(([el, top]) => { el.scrollTop = top; });
+      schedule();
+      if (!healReported) {
+        healReported = true;
+        window.setTimeout(() => reportClientError('manual', new Error('ios-heal probe'), {
+          before, after: window.innerHeight, expected, vv: Math.round(vv.height),
+        }), 300);
+      }
+    };
+    const healSoon = () => { window.setTimeout(heal, 140); window.setTimeout(heal, 600); };
+
     // Первый показ клавиатуры после запуска iOS иногда не присылает resize
     // вовремя — после фокуса сверяемся с visualViewport ещё секунду.
     let poll = 0;
@@ -185,7 +203,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       window.clearInterval(poll);
       poll = window.setInterval(() => { schedule(); if (++n >= 8) window.clearInterval(poll); }, 125);
     };
-    const onBlur = () => { window.setTimeout(schedule, 50); };
+    const onBlur = () => { window.setTimeout(schedule, 50); healSoon(); };
 
     // Страница не должна ездить за пальцем. При открытой клавиатуре видимая
     // область iOS меньше окна, и «лишнее» движение — там, где нечего
@@ -213,7 +231,8 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     // первый замер видел другую высоту, и корень так и оставался коротким. Пересчитываем ещё
     // несколько раз после старта и при возврате из фона.
     const settle = [100, 500, 1500, 3000].map((ms) => window.setTimeout(schedule, ms));
-    const onShow = () => { if (document.visibilityState === 'visible') { schedule(); window.setTimeout(schedule, 400); } };
+    settle.push(window.setTimeout(heal, 1000));
+    const onShow = () => { if (document.visibilityState === 'visible') { schedule(); window.setTimeout(schedule, 400); healSoon(); } };
     document.addEventListener('visibilitychange', onShow);
     window.addEventListener('pageshow', onShow);
     // Замер для отладки полосы снизу на iPhone (iOS 26): что видит страница в установленном приложении.
@@ -225,7 +244,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
         inner: `${window.innerWidth}x${window.innerHeight}`, screen: `${screen.width}x${screen.height}`,
         vv: `${Math.round(vv.width)}x${Math.round(vv.height)}@${Math.round(vv.offsetTop)}`,
         html: document.documentElement.clientHeight, rootTop: Math.round(box.top), rootBottom: Math.round(box.bottom),
-        full: document.documentElement.classList.contains('nx-full'), safe,
+        safe,
         navStandalone: (navigator as Navigator & { standalone?: boolean }).standalone ?? null, fullH: standaloneHeight(false), scale: vv.scale, baseScale,
       });
     }, 3600) : 0;
@@ -254,10 +273,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       document.removeEventListener('touchmove', onTouchMove);
       delete root.dataset.kb;
       document.documentElement.classList.remove('nx-locked');
-      ['--nx-vvh', '--nx-vv-top'].forEach((p) => root.style.removeProperty(p));
-      document.documentElement.style.removeProperty('--nx-full-h');
-      document.documentElement.classList.remove('nx-full');
-    };
+      ['--nx-vvh', '--nx-vv-top'].forEach((p) => root.style.removeProperty(p));    };
   }, [rootRef]);
 }
 
