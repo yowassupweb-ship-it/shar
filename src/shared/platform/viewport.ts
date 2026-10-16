@@ -29,7 +29,10 @@ export function isCoarse(): boolean {
 /** Установленное на iPhone приложение: у него нет системного жеста «назад»
  *  от края — его делаем сами. Во вкладке Safari жест свой, наш бы с ним спорил. */
 export function isIosStandalone(): boolean {
-  return typeof navigator !== 'undefined' && (navigator as Navigator & { standalone?: boolean }).standalone === true;
+  if (typeof navigator === 'undefined') return false;
+  if ((navigator as Navigator & { standalone?: boolean }).standalone === true) return true;
+  // iOS 26: у приложения, установленного по манифесту, navigator.standalone бывает пуст — смотрим display-mode.
+  return /iPhone|iPad|iPod/.test(navigator.userAgent) && window.matchMedia('(display-mode: standalone)').matches;
 }
 
 /** Касание у левого края в установленном приложении — это жест «назад», а не свайп по сообщению. */
@@ -189,6 +192,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
         vv: `${Math.round(vv.width)}x${Math.round(vv.height)}@${Math.round(vv.offsetTop)}`,
         html: document.documentElement.clientHeight, rootTop: Math.round(box.top), rootBottom: Math.round(box.bottom),
         full: document.documentElement.classList.contains('nx-full'), safe,
+        navStandalone: (navigator as Navigator & { standalone?: boolean }).standalone ?? null, fullH: standaloneHeight(false),
       });
     }, 3000) : 0;
     vv.addEventListener('resize', schedule);
