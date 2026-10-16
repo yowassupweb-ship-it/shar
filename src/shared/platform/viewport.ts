@@ -43,8 +43,8 @@ export function isEdgeSwipeStart(x: number): boolean {
 /**
  * Высота экрана в CSS-пикселях, если окно установленного на iPhone приложения
  * короче неё (иначе 0). iOS после клавиатуры, а порой и с запуска оставляет окно
- * укороченным и ниже его края ничего не рисует — внизу чёрная полоса. Тогда
- * окно перемеряется (heal в useViewportSync). iPad не трогаем (Split View).
+ * укороченным и ниже его края ничего не рисует — внизу чёрная полоса (лечится
+ * манифестом в index.html). Здесь — только для замера. iPad не трогаем (Split View).
  */
 function standaloneHeight(editing: boolean): number {
   if (editing || !isIosStandalone() || typeof screen === 'undefined') return 0;
@@ -167,32 +167,6 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     };
     const schedule = () => { if (!raf) raf = requestAnimationFrame(apply); };
 
-    // iOS (установленное приложение): после клавиатуры, а порой и с запуска окно остаётся короче
-    // экрана, и ниже его края iOS ничего не рисует — внизу чёрная полоса, она же закрывала композер.
-    // Растянуть корень туда нельзя. Лечит пересчёт: корень на миг убираем из раскладки (display:
-    // none + принудительная раскладка) — WebKit перемеряет окно, и оно снова во весь экран.
-    // Прокрутка внутри корня при этом сбрасывается — запоминаем и возвращаем.
-    let healReported = false;
-    const heal = () => {
-      if (!isIosStandalone() || isEditable(document.activeElement)) return;
-      const expected = standaloneHeight(false);
-      if (!expected) return; // окно не короче экрана — лечить нечего
-      const before = window.innerHeight;
-      const scrolled: Array<[HTMLElement, number]> = [];
-      root.querySelectorAll<HTMLElement>('*').forEach((el) => { if (el.scrollTop > 0) scrolled.push([el, el.scrollTop]); });
-      root.style.display = 'none';
-      void root.offsetHeight;
-      root.style.display = '';
-      scrolled.forEach(([el, top]) => { el.scrollTop = top; });
-      schedule();
-      if (!healReported) {
-        healReported = true;
-        window.setTimeout(() => reportClientError('manual', new Error('ios-heal probe'), {
-          before, after: window.innerHeight, expected, vv: Math.round(vv.height),
-        }), 300);
-      }
-    };
-    const healSoon = () => { window.setTimeout(heal, 140); window.setTimeout(heal, 600); };
 
     // Первый показ клавиатуры после запуска iOS иногда не присылает resize
     // вовремя — после фокуса сверяемся с visualViewport ещё секунду.
@@ -203,7 +177,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       window.clearInterval(poll);
       poll = window.setInterval(() => { schedule(); if (++n >= 8) window.clearInterval(poll); }, 125);
     };
-    const onBlur = () => { window.setTimeout(schedule, 50); healSoon(); };
+    const onBlur = () => { window.setTimeout(schedule, 50); };
 
     // Страница не должна ездить за пальцем. При открытой клавиатуре видимая
     // область iOS меньше окна, и «лишнее» движение — там, где нечего
@@ -231,8 +205,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     // первый замер видел другую высоту, и корень так и оставался коротким. Пересчитываем ещё
     // несколько раз после старта и при возврате из фона.
     const settle = [100, 500, 1500, 3000].map((ms) => window.setTimeout(schedule, ms));
-    settle.push(window.setTimeout(heal, 1000));
-    const onShow = () => { if (document.visibilityState === 'visible') { schedule(); window.setTimeout(schedule, 400); healSoon(); } };
+    const onShow = () => { if (document.visibilityState === 'visible') { schedule(); window.setTimeout(schedule, 400); } };
     document.addEventListener('visibilitychange', onShow);
     window.addEventListener('pageshow', onShow);
     // Замер для отладки полосы снизу на iPhone (iOS 26): что видит страница в установленном приложении.
