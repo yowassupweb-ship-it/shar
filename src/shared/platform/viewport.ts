@@ -175,14 +175,15 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     // клавиатуры — поле уже стоит там, где окажется над ней. Safari видит его на экране и не
     // прокручивает страницу к нему: шапка остаётся на месте, без рывка вверх и обратно. Если
     // касание не закончилось фокусом (прокрутили), через 700 мс раскладка вернётся.
-    const preopen = () => {
+    const preopen = (): boolean => {
       const guess = lastKb || savedKb;
-      if (guess <= KB_MIN || pinched(vv)) return;
+      if (guess <= KB_MIN || pinched(vv)) return false;
       root.style.setProperty('--nx-vvh', `${Math.max(0, baseline - guess)}px`);
       root.style.setProperty('--nx-vv-top', '0px');
       root.dataset.kb = 'open';
       window.clearTimeout(preTimer);
       preTimer = window.setTimeout(() => { preTimer = 0; schedule(); }, 700);
+      return true;
     };
     let tapStartY = 0;
     const onTouchEnd = (e: TouchEvent) => {
@@ -190,7 +191,20 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       if (!target || !isEditable(target) || document.activeElement === target || !root.contains(target)) return;
       const y = e.changedTouches[0]?.clientY ?? tapStartY;
       if (Math.abs(y - tapStartY) > 10) return; // это была прокрутка, а не касание
-      preopen();
+      if (!preopen()) return;
+      // Поле уже уехало вверх из-под пальца — «клик» пришёлся бы мимо, фокуса и клавиатуры не было бы.
+      // Фокус ставим сами, прямо в касании (iOS открывает клавиатуру только так), курсор — в конец.
+      e.preventDefault();
+      const field = target as HTMLElement;
+      field.focus({ preventScroll: true });
+      if (field.isContentEditable) {
+        const range = document.createRange();
+        range.selectNodeContents(field);
+        range.collapse(false);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+      }
     };
 
     // Страница не должна ездить за пальцем. При открытой клавиатуре видимая
@@ -231,7 +245,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     document.addEventListener('focusout', onBlur);
     document.addEventListener('touchstart', onTouchStart, { passive: true, capture: true });
     document.addEventListener('touchmove', onTouchMove, { passive: false });
-    document.addEventListener('touchend', onTouchEnd, { passive: true, capture: true });
+    document.addEventListener('touchend', onTouchEnd, { passive: false, capture: true });
     return () => {
       cancelAnimationFrame(raf);
       window.clearTimeout(preTimer);
