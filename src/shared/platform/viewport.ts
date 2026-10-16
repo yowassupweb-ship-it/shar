@@ -107,6 +107,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
 
     let raf = 0;
     let lastKb = 0;
+    let kbProbed = false;
     // Высота экрана без клавиатуры. В установленном PWA iOS сжимает не только
     // visualViewport, но порой и innerHeight — разница innerHeight − vv.height
     // тогда ≈ 0, и интерфейс «не видел» клавиатуру: оставлял под полем отступ
@@ -138,6 +139,20 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       root.style.setProperty('--nx-vv-top', open ? `${Math.max(0, Math.round(vv.offsetTop))}px` : '0px');
       if (open) {
         root.dataset.kb = 'open';
+        if (!kbProbed && isIosStandalone()) {
+          kbProbed = true;
+          // Замер для отладки: куда iOS 26 сдвигает страницу при открытой клавиатуре (шапка уезжала вверх).
+          window.setTimeout(() => {
+            const head = document.querySelector('.cxv-head')?.getBoundingClientRect();
+            const box = root.getBoundingClientRect();
+            reportClientError('manual', new Error('ios-keyboard probe'), {
+              inner: `${window.innerWidth}x${window.innerHeight}`, scrollY: window.scrollY,
+              vv: `${Math.round(vv.width)}x${Math.round(vv.height)}@${Math.round(vv.offsetTop)}`, baseline, kb,
+              rootTop: Math.round(box.top), rootBottom: Math.round(box.bottom), headTop: head ? Math.round(head.top) : null,
+              bodyTop: Math.round(document.body.getBoundingClientRect().top),
+            });
+          }, 700);
+        }
         if (Math.abs(kb - lastKb) > 4) {
           lastKb = kb;
           root.style.setProperty('--nx-kb-last', `${kb}px`);
@@ -182,6 +197,13 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     };
 
     apply();
+    // iOS 26 укорачивает окно установленного приложения уже после запуска и без события resize —
+    // первый замер видел другую высоту, и корень так и оставался коротким. Пересчитываем ещё
+    // несколько раз после старта и при возврате из фона.
+    const settle = [100, 500, 1500, 3000].map((ms) => window.setTimeout(schedule, ms));
+    const onShow = () => { if (document.visibilityState === 'visible') { schedule(); window.setTimeout(schedule, 400); } };
+    document.addEventListener('visibilitychange', onShow);
+    window.addEventListener('pageshow', onShow);
     // Замер для отладки полосы снизу на iPhone (iOS 26): что видит страница в установленном приложении.
     // Раз за запуск, в журнал ошибок клиента на сервере.
     const probe = isIosStandalone() ? window.setTimeout(() => {
@@ -194,7 +216,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
         full: document.documentElement.classList.contains('nx-full'), safe,
         navStandalone: (navigator as Navigator & { standalone?: boolean }).standalone ?? null, fullH: standaloneHeight(false),
       });
-    }, 3000) : 0;
+    }, 3600) : 0;
     vv.addEventListener('resize', schedule);
     vv.addEventListener('scroll', schedule);
     window.addEventListener('resize', schedule);
@@ -206,6 +228,9 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     return () => {
       cancelAnimationFrame(raf);
       window.clearTimeout(probe);
+      settle.forEach((t) => window.clearTimeout(t));
+      document.removeEventListener('visibilitychange', onShow);
+      window.removeEventListener('pageshow', onShow);
       window.clearInterval(poll);
       vv.removeEventListener('resize', schedule);
       vv.removeEventListener('scroll', schedule);
