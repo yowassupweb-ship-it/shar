@@ -1,4 +1,5 @@
 import { playBellStrike } from '@/shared/platform/push/sounds';
+import { dicebearUrl } from '@/shared/ui/Avatar';
 import { isUserAttending } from '@/shared/platform/push/userAttention';
 import { realtime } from '@/shared/realtime/realtime';
 import { navigate } from '@/shared/navigation/navigate';
@@ -124,6 +125,8 @@ export class BrowserPushService {
   private seenTaskIds = new Set<string>();
   private chatSnapshots = new Map<string, ChatSnapshot>();
   private userAvatarCache = new Map<string, string>(); // userId → avatarUrl
+  /** userId → имя, от которого в самом приложении считается рисованный аватар (readerName: name, затем username). */
+  private userNameCache = new Map<string, string>();
   private eventVersions = new Map<string, string>();
   private calendarEventVersions = new Map<string, string>();
   private calendarEventSnapshots = new Map<string, CalendarEventSnapshot>();
@@ -430,12 +433,18 @@ export class BrowserPushService {
         const user = asRecord(u);
         const id = String(user.id || '').trim();
         const avatar = String(user.avatar || '').trim();
+        const name = String(user.name || user.username || '').trim();
+        if (id && name) this.userNameCache.set(id, name);
         if (id && avatar) this.userAvatarCache.set(id, avatar);
       }
       // Electron: message cards come from the main-process socket, and the
       // backend's new_message event carries no author photo — without this map
       // every card fell back to the DiceBear face.
-      window.sharDesktop?.realtime?.setAvatars?.(Object.fromEntries(this.userAvatarCache));
+      // Тем, у кого нет фото, главному процессу отдаём готовый рисованный аватар — от того же имени,
+      // что и в приложении, а не от имени, записанного в сообщении: оно могло устареть или отличаться.
+      const faces = new Map(this.userAvatarCache);
+      for (const [id, name] of this.userNameCache) if (!faces.has(id)) faces.set(id, dicebearUrl(name));
+      window.sharDesktop?.realtime?.setAvatars?.(Object.fromEntries(faces));
     } catch {
       // non-critical
     }
@@ -451,8 +460,8 @@ export class BrowserPushService {
     if (realAvatar) return realAvatar;
 
     // Match the normal Shar UI instead of falling back to Electron-only letters.
-    const seed = authorName || authorId || 'user';
-    return `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(seed)}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`;
+    const seed = this.userNameCache.get(authorId) || authorName || authorId || 'user';
+    return dicebearUrl(seed);
   }
 
   private attachWakeHandlers(): void {
@@ -698,12 +707,8 @@ export class BrowserPushService {
         if ('clearAppBadge' in navigator) (navigator as Navigator & { clearAppBadge(): Promise<void> }).clearAppBadge().catch(() => {});
       }
     } catch { /* not supported */ }
-    // Chromium's Badging API (above) doesn't reach the Windows taskbar icon for a bare
-    // BrowserWindow the way it does for an installed PWA — main.cjs draws the actual
-    // overlay icon natively, this just forwards the same count it already computed.
-    try {
-      (window as unknown as { sharDesktop?: { setBadgeCount?(n: number): void } }).sharDesktop?.setBadgeCount?.(count);
-    } catch { /* not in Electron */ }
+    // Значок на кнопке приложения в Electron ведёт AppRoot (число чатов прямо из стора):
+    // два источника с разными числами перебивали бы друг друга.
   }
 
   private claimEventVersionNotification(eventId: string, version: string): boolean {

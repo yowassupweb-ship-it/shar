@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import { Select } from '@/shared/ui/Select';
 import { Bell, Mail, Trash2 } from 'lucide-react';
 import { askConfirm } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
@@ -63,10 +64,8 @@ function EmailRules() {
             <span className="nx-field"><input value={draft.emailPattern} placeholder="noreply@otzovik.com или @domain.com" onChange={(e) => setDraft({ ...draft, emailPattern: e.target.value })} /></span>
           </label>
           <label className="nx-label">Чат
-            <select value={draft.chatId} onChange={(e) => setDraft({ ...draft, chatId: e.target.value })}>
-              <option value="">Выберите чат</option>
-              {chats.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
-            </select>
+            <Select label="Чат" placeholder="Выберите чат" value={draft.chatId} onChange={(v) => setDraft({ ...draft, chatId: v })}
+              groups={[{ options: chats.map((c) => ({ value: String(c.id), label: c.title })) }]} />
           </label>
           <label className="nx-label">Слово в теме или тексте (необязательно)
             <span className="nx-field"><input value={draft.keyword} placeholder="отзыв" onChange={(e) => setDraft({ ...draft, keyword: e.target.value })} /></span>

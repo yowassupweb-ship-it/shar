@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { lazyComponent } from '@/shared/ui/lazy';
 import {
   BellPlus,
-  AlertCircle, ArrowDown, CheckCheck, Copy, CornerUpLeft, Forward, ImageDown, Loader2, MessageCircle, Pencil,
+  AlertCircle, ArrowDown, CheckCheck, Copy, CornerUpLeft, Forward, ImageDown, Pencil,
   Pin, PinOff, RotateCw, Trash2,
 } from 'lucide-react';
 import type { Message, User } from '@/shared/types/chat';
@@ -25,6 +25,8 @@ import {
 import ForwardSheet from '../ForwardSheet';
 import { readerName } from './content';
 import { MessageRow, type RowCtx } from './MessageRow';
+import { Spinner } from '@/shared/ui/Spinner';
+import { SectionIcon } from '@/shared/ui/SectionIcon';
 
 const ImageViewer = lazyComponent(() => import('@/shared/ui/ImageViewer'));
 const PollCreatorModal = lazyComponent(() => import('@/features/chat/polls/PollCreatorModal'));
@@ -74,6 +76,23 @@ type ReadInfo = { ts: number; label: string | null };
  *  позиционированной обёртки — дня, — а не от ленты). */
 function topIn(scroller: HTMLElement, el: HTMLElement): number {
   return el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+}
+
+/** Первое сообщение, видимое вверху ленты, и его отступ от верха. Строки идут сверху вниз, поэтому
+ *  ищем делением пополам: десяток замеров вместо замера каждой строки (в длинной переписке — сотни,
+ *  и каждый заставлял браузер раскладывать скрытые дни). */
+function firstVisibleRow(scroller: HTMLElement): { id: string; offset: number } | null {
+  const rows = scroller.querySelectorAll<HTMLElement>('.cxm-row[data-msg-id]');
+  if (!rows.length) return null;
+  const top = scroller.getBoundingClientRect().top;
+  let lo = 0;
+  let hi = rows.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (rows[mid].getBoundingClientRect().bottom > top) hi = mid; else lo = mid + 1;
+  }
+  const row = rows[lo];
+  return { id: row.dataset.msgId || '', offset: row.getBoundingClientRect().top - top };
 }
 
 /** Для каждого собеседника — докуда он прочитал (время) и когда. */
@@ -144,9 +163,17 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
     const cs = getComputedStyle(el);
     setWidth(Math.round((el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)) / 16) * 16);
     mq.addEventListener('change', onMq);
-    const ro = new ResizeObserver(([entry]) => setWidth(Math.round(entry.contentRect.width / 16) * 16));
+    // Ширина входит в общие настройки строк — её смена перерисовывает все сообщения ленты. Пока тянут край
+    // окна или панели, раскладку ведёт CSS, а новую ширину строки получают, когда движение остановилось:
+    // иначе каждые 16px шёл полный рендер ленты, и окно не поспевало за рамкой.
+    let timer = 0;
+    const ro = new ResizeObserver(([entry]) => {
+      const next = Math.round(entry.contentRect.width / 16) * 16;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setWidth(next), 150);
+    });
     ro.observe(el);
-    return () => { mq.removeEventListener('change', onMq); ro.disconnect(); };
+    return () => { mq.removeEventListener('change', onMq); ro.disconnect(); window.clearTimeout(timer); };
   }, []);
 
   const toBottom = useCallback((smooth = false) => {
@@ -250,22 +277,22 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
   // Позиция запоминается после каждой остановки прокрутки: при размонтировании
   // ленты сохранять уже поздно — React к тому времени отцепил ссылку на неё.
   const saveTimer = useRef(0);
+  const scrollingTimer = useRef(0);
   const rememberPosition = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
     if (atBottom.current) { savePosition(chatId, null); return; }
-    for (const row of Array.from(el.querySelectorAll<HTMLElement>('.cxm-row[data-msg-id]'))) {
-      const top = topIn(el, row);
-      if (top + row.offsetHeight > el.scrollTop) {
-        savePosition(chatId, { id: row.dataset.msgId || '', offset: top - el.scrollTop });
-        return;
-      }
-    }
+    const first = firstVisibleRow(el);
+    if (first) savePosition(chatId, first);
   }, [chatId]);
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+    // Пока ленту крутят, прилипшая дата видна (CSS по data-scrolling); через секунду покоя гаснет.
+    el.dataset.scrolling = '';
+    window.clearTimeout(scrollingTimer.current);
+    scrollingTimer.current = window.setTimeout(() => { delete el.dataset.scrolling; }, 1000);
     window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(rememberPosition, 150);
     const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM;
@@ -279,14 +306,8 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
     const loading = Boolean(t?.olderLoading);
     if ((el.scrollTop < LOAD_OLDER_AT && t?.hasMore && t.phase === 'ready') || loading) {
       // Пока грузится история, держим актуальным верхнее видимое сообщение.
-      const rows = el.querySelectorAll<HTMLElement>('.cxm-row[data-msg-id]');
-      for (const row of Array.from(rows)) {
-        const top = topIn(el, row);
-        if (top + row.offsetHeight > el.scrollTop) {
-          topAnchor.current = { id: row.dataset.msgId || '', offset: top - el.scrollTop };
-          break;
-        }
-      }
+      const first = firstVisibleRow(el);
+      if (first) topAnchor.current = first;
       if (!loading) void loadOlder(chatId);
     }
   }, [chatId, rememberPosition]);
@@ -560,7 +581,7 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
 
   let content: ReactNode;
   if (!thread.ids.length && (thread.phase === 'loading' || thread.phase === 'idle')) {
-    content = <div className="nx-state" aria-busy="true"><Loader2 size={24} className="nx-spin" aria-hidden="true" /><p>Загружаю сообщения</p></div>;
+    content = <div className="nx-state" aria-busy="true"><Spinner size={24} /><p>Загружаю сообщения</p></div>;
   } else if (!thread.ids.length && thread.phase === 'error') {
     content = (
       <div className="nx-state" data-tone="danger" role="alert">
@@ -571,11 +592,11 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
       </div>
     );
   } else if (!thread.ids.length) {
-    content = <div className="nx-state"><MessageCircle size={32} aria-hidden="true" /><h2>Сообщений пока нет</h2><p>Напишите первое — оно появится здесь.</p></div>;
+    content = <div className="nx-state"><SectionIcon name="chats" size={56} /><h2>Сообщений пока нет</h2><p>Напишите первое — оно появится здесь.</p></div>;
   } else {
     content = (
       <>
-        {thread.olderLoading && <div className="cxm-older" aria-busy="true"><Loader2 size={16} className="nx-spin" aria-label="Загружаю историю" /></div>}
+        {thread.olderLoading && <div className="cxm-older" aria-busy="true"><Spinner size={16} label="Загружаю историю" /></div>}
         {!thread.hasMore && thread.phase === 'ready' && <div className="cxm-start">Начало переписки</div>}
         {rows}
       </>

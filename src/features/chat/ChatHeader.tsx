@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
-  ArrowLeft, BellOff, CheckCircle2, ChevronDown, ChevronUp, Loader2, RotateCcw, Search, X,
+  ArrowLeft, BellOff, CheckCircle2, ChevronDown, ChevronUp, RotateCcw, Search, X,
 } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
 import { Avatar } from '@/shared/ui/Avatar';
@@ -10,6 +10,7 @@ import {
   chatTitle, isFavorites, isGroupChat, isMuted, isNotifications, isRequestChat, loadChats, otherParticipant, previewText,
   setPanel, useChatStore, type Msg,
 } from './store';
+import { Spinner } from '@/shared/ui/Spinner';
 
 /**
  * Шапка переписки пилюлями, как панель инструментов macOS: слева —
@@ -161,7 +162,7 @@ export default function ChatHeader({
         <span className="cxh-spacer" />
         {requestMine && (
           <button type="button" className="cxh-pill cxh-request" disabled={requestBusy} onClick={() => void setRequest(!requestResolved)}>
-            {requestBusy ? <Loader2 size={15} className="nx-spin" aria-hidden="true" /> : requestResolved ? <RotateCcw size={15} aria-hidden="true" /> : <CheckCircle2 size={15} aria-hidden="true" />}
+            {requestBusy ? <Spinner size={15} /> : requestResolved ? <RotateCcw size={15} aria-hidden="true" /> : <CheckCircle2 size={15} aria-hidden="true" />}
             {requestResolved ? 'Возобновить заявку' : 'Закрыть заявку'}
           </button>
         )}

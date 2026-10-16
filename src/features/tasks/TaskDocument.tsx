@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import {
-  AlertCircle, ArrowLeft, CalendarDays, Check, ChevronDown, Eye, Flag, FolderClosed, Loader2, MoreHorizontal, Pencil,
+  AlertCircle, ArrowLeft, CalendarDays, Check, ChevronDown, Eye, Flag, FolderClosed, MoreHorizontal, Pencil,
   Repeat, Search, Trash2, UserPlus,
 } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
@@ -15,6 +15,7 @@ import { renderMarkdown, toggleTaskLine } from './markdown';
 import { repeatIdOf, repeatLabel, syncTaskRepeat, TASK_REPEATS } from './repeat';
 import { DatePicker } from '@/shared/ui/DatePicker';
 import { continueList, MarkdownToolbar, markdownShortcut, replaceRange } from './MarkdownToolbar';
+import { Spinner } from '@/shared/ui/Spinner';
 
 /**
  * Задача — документ, как заметка MBOX: первая строка — крупный заголовок,
@@ -225,7 +226,7 @@ export default function TaskDocument({ task, onBack, onGone }: {
         )}
         <span className="ntd-save" aria-live="polite">
           {state === 'error' ? <span data-tone="danger"><AlertCircle size={13} aria-hidden="true" /> Не сохранилось — Ctrl+S</span>
-            : state === 'saving' || state === 'pending' ? <span><Loader2 size={13} className="nx-spin" aria-hidden="true" /> Сохраняю</span>
+            : state === 'saving' || state === 'pending' ? <span><Spinner size={13} /> Сохраняю</span>
               : <span><Check size={13} aria-hidden="true" /> Сохранено</span>}
         </span>
         <button type="button" className="nx-icon-btn" onClick={open('more')} aria-label="Ещё действия" aria-haspopup="menu"><MoreHorizontal size={18} /></button>

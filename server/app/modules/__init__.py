@@ -28,15 +28,18 @@ def _collect() -> list[APIRouter]:
     from app.modules.push import router as push
     from app.modules.realtime import router as realtime
     from app.modules.requests import router as requests_mod
+    from app.modules.search import router as search
     from app.modules.todos import router as todos
     from app.modules.users import router as users
     from app.modules.utm import router as utm
+    from app.modules.workspace import public as workspace_public
+    from app.modules.workspace import router as workspace
 
     mods = [
         auth, users, departments, chats, messages, receipts, chat_notifications, inline,
         realtime, calls_rooms, calls_signaling, mail_messages, mail_sync, accounts, mailboxes, email_chat_rules,
         cloud, uploads, avatars, backgrounds, stickers, calendar, todos, notifications, push, requests_mod, admin,
-        client_errors, health, utm, og, integrations,
+        client_errors, health, utm, og, integrations, workspace, workspace_public, search,
     ]
     return [m.router for m in mods]
 

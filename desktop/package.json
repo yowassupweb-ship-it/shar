@@ -1,6 +1,6 @@
 {
   "name": "shar-os-client",
-  "version": "0.2.80",
+  "version": "0.2.88",
   "private": true,
   "author": "Shar OS",
   "main": "electron/main.cjs",
@@ -16,6 +16,7 @@
     "cross-env": "^7.0.3",
     "dotenv": "^16.6.1",
     "electron-updater": "^6.3.9",
+    "koffi": "^3.3.3",
     "ws": "^8.21.3"
   },
   "devDependencies": {

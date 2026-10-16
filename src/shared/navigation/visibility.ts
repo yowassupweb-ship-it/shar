@@ -3,7 +3,7 @@
  * (ключи общие со старым фронтом). По умолчанию видно всё, кроме почты:
  * её включают явно. «Чаты» и «Ещё» не скрываются.
  */
-export type TabKey = 'tasks' | 'calendar' | 'contacts' | 'files' | 'mail';
+export type TabKey = 'tasks' | 'calendar' | 'contacts' | 'files' | 'mail' | 'office';
 
 export function isTabVisible(tabs: Record<string, boolean> | undefined, key: string): boolean {
   if (key === 'chats' || key === 'more') return true;

@@ -13,6 +13,13 @@ export {
   displayName,
   chatTitle,
   isFavorites,
+  isMuted,
   isNotifications,
+  isGroupChat,
+  otherParticipant,
+  lastActivity,
 } from './store';
+export { requestJump } from './jump';
+export { sendText, openDocument } from './store';
+export { createChat } from './actions';
 export type { ChatRow } from './store';

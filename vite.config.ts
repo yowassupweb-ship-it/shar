@@ -43,6 +43,10 @@ export default defineConfig(({ mode }) => {
       chunkSizeWarningLimit: 800,
       rollupOptions: {
         output: {
+          // Воркер pdf.js лежит в пакете как .mjs, а сервера (nginx, локальный сервер приложения) отдают
+          // .mjs как application/octet-stream — браузер отказывается его грузить («fake worker failed»).
+          // Кладём его под именем .js; заодно у адреса нет записи в кэше со старым неверным типом.
+          assetFileNames: (asset) => (asset.names?.some((name) => name.endsWith('.mjs')) ? 'assets/[name]-[hash].js' : 'assets/[name]-[hash][extname]'),
           manualChunks(id) {
             if (id.includes('/src/shared/emoji/')) return 'emoji-data';
             if (/node_modules\/(react|react-dom|react-router|scheduler|zustand)\//.test(id)) return 'vendor-react';

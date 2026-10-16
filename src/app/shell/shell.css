@@ -182,5 +182,6 @@
 .nx-account-text b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); font-weight: var(--weight-semibold); }
 .nx-account-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-xs); color: var(--text-muted); }
 @media (max-width: 640px) {
-  .nx-account { width: 44px; height: 44px; margin-right: 2px; --ring-bg: var(--glass); }
+  /* На телефоне аватарки в капсуле нет: профиль, тема и настройки — в разделе «Ещё». */
+  .nx-account { display: none; }
 }

@@ -80,6 +80,21 @@ export function isUserAttending(): boolean {
   return browserAttending();
 }
 
+/**
+ * Можно ли сейчас отмечать сообщения прочитанными.
+ *
+ * В Electron окклюзия окна отключена (см. main.cjs), поэтому страница
+ * перекрытого окна всё равно «visible» — и сообщения прочитывались, пока человек
+ * работал в другом приложении. Там читаем только при реальном внимании к окну.
+ * В браузере и на телефоне — как раньше, по видимости страницы: у вкладки на
+ * втором мониторе фокуса нет, но читают именно её.
+ */
+export function isReadingNow(): boolean {
+  if (typeof document === 'undefined') return false;
+  if (bridge()) return isUserAttending();
+  return document.visibilityState === 'visible';
+}
+
 export function subscribeAttention(listener: Listener): () => void {
   start();
   listeners.add(listener);

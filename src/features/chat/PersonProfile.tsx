@@ -1,5 +1,5 @@
 import { useState, type CSSProperties } from 'react';
-import { ArrowLeft, AtSign, Clock, Loader2, Mail, Phone, Send, X } from 'lucide-react';
+import { ArrowLeft, AtSign, Clock, Mail, Phone, Send, X } from 'lucide-react';
 import type { User } from '@/shared/types/chat';
 import { showToast } from '@/shared/ui/Toast';
 import { getDepartmentColor, getDepartmentName } from '@/shared/lib/departmentColors';
@@ -8,6 +8,7 @@ import { lastSeenText } from '@/shared/ui/format';
 import { SectionIcon } from '@/shared/ui/SectionIcon';
 import { createChat } from './actions';
 import { displayName, openChat, setPanel, useChatStore } from './store';
+import { Spinner } from '@/shared/ui/Spinner';
 
 /**
  * Профиль человека внутри боковой панели — открывается нажатием на его
@@ -67,7 +68,7 @@ export default function PersonProfile({ userId, onBack }: { userId: string; onBa
 
         <div className="cxf-actions">
           <button type="button" className="cxf-action" onClick={() => void write()} disabled={busy} aria-busy={busy || undefined}>
-            <span className="cxf-action-icon">{busy ? <Loader2 size={18} className="nx-spin" /> : <SectionIcon name="chats" size={22} />}</span>
+            <span className="cxf-action-icon">{busy ? <Spinner size={18} /> : <SectionIcon name="chats" size={22} />}</span>
             <span>{mine ? 'Избранное' : 'Написать'}</span>
           </button>
           {u?.phone && (

@@ -25,13 +25,13 @@ const STALE_ON_WAKE_MS = 30000;
 const BACKOFF_MAX_MS = 30000;
 
 function socketUrl(userId: string): string {
-  const w = window as unknown as { sharDesktop?: { backendUrl?: string } };
-  const backendBase = w.sharDesktop?.backendUrl || '';
   const path = `/api/ws/${encodeURIComponent(userId)}`;
-  if (backendBase) return `${backendBase.replace(/^http/, 'ws')}${path}`;
   const https = window.location.protocol === 'https:';
   // Всегда свой origin: в проде /api/ws отдаёт nginx, в dev — прокси Vite
-  // (vite.config.ts). Кука сессии уходит сама, адрес бэкенда клиенту знать не нужно.
+  // (vite.config.ts), в Electron — локальный сервер встроенного клиента, который
+  // пробрасывает сокет на бэкенд с кукой сессии и родным Origin. Прямое подключение
+  // на домен бэкенда из Electron несёт Origin http://127.0.0.1:… и без куки: сервер
+  // отвечает отказом (origin/session), и реалтайм молча не работает.
   return `${https ? 'wss:' : 'ws:'}//${window.location.host}${path}`;
 }
 
@@ -68,6 +68,8 @@ class RealtimeClient {
   /** Номер последнего события этого соединения (см. checkSeq). */
   private lastSeq: number | null = null;
   private lastGapAt = 0;
+  /** Подписка на события, принятые главным процессом Electron (см. start). */
+  private offDesktop: (() => void) | null = null;
 
   start(userId: string): () => void {
     if (this.userId && this.userId !== userId) this.teardown();
@@ -78,6 +80,13 @@ class RealtimeClient {
       window.addEventListener('online', this.onWake);
       window.addEventListener('focus', this.onWake);
       document.addEventListener('visibilitychange', this.onWake);
+      // Electron: у главного процесса свой прямой сокет, и он узнаёт о сообщении
+      // раньше и надёжнее, чем страница через локальный сервер. Новые сообщения
+      // берём и оттуда; повтор по тому же id стор отсеивает (seenMessage).
+      const desktop = (window as unknown as { sharDesktop?: { onRealtimeEvent?: (cb: (e: RealtimeEvent) => void) => () => void } }).sharDesktop;
+      this.offDesktop = desktop?.onRealtimeEvent?.((event) => {
+        if (event && event.type === 'new_message') this.emit(event);
+      }) ?? null;
       this.connect();
     }
     return () => {
@@ -262,6 +271,7 @@ class RealtimeClient {
   };
 
   private teardown() {
+    this.offDesktop?.(); this.offDesktop = null;
     window.removeEventListener('shar:session-ready', this.onWake);
     window.removeEventListener('online', this.onWake);
     window.removeEventListener('focus', this.onWake);

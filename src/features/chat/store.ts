@@ -3,6 +3,8 @@ import type { Chat, Message, User } from '@/shared/types/chat';
 import { api, HttpError, isRetryableStatus } from './api';
 import { sendMessage, sendRead, sendTyping } from './transport';
 import { realtime, type RealtimeEvent, type RealtimeStatus } from '@/shared/realtime/realtime';
+import { isReadingNow } from '@/shared/platform/push/userAttention';
+import type { FileRef } from '@/features/workspace';
 
 /**
  * Состояние мессенджера живёт здесь, а не в компоненте страницы.
@@ -100,12 +102,16 @@ interface State {
   localPins: string[];
   /** Композер по чатам: на что отвечаем, что правим. */
   compose: Record<string, { replyToId?: string; editingId?: string }>;
-  /** Боковая панель переписки: эмодзи и стикеры, профиль. */
-  panel: 'emoji' | 'profile' | null;
+  /** Боковая панель переписки: эмодзи и стикеры, профиль, просмотр вложения. */
+  panel: 'emoji' | 'profile' | 'doc' | null;
+  /** Вложение, открытое в панели просмотра (panel === 'doc'). */
+  docView: FileRef | null;
   /** Чей профиль открыт в панели поверх профиля чата (аватар в ленте, участник). */
   personId: string | null;
   /** Режим выделения сообщений (пересылка и удаление пачкой). */
   selection: { chatId: string; ids: string[] } | null;
+  /** Пересылаемые сообщения, прикреплённые к композеру чата: уходят по кнопке отправки вместе с комментарием. */
+  forwardDraft: Record<string, Message[]>;
 }
 
 export const useChatStore = create<State>(() => ({
@@ -123,8 +129,10 @@ export const useChatStore = create<State>(() => ({
   localPins: [],
   compose: {},
   panel: null,
+  docView: null,
   personId: null,
   selection: null,
+  forwardDraft: {},
 }));
 
 const set = useChatStore.setState;
@@ -241,7 +249,15 @@ function previewFromThread(chatId: string) {
     const m = t.byId[t.ids[i]];
     if (m && !m._status) { newest = m; break; }
   }
-  if (!newest || String(chat.lastMessage?.id ?? '') === newest.id) return;
+  if (!newest) return;
+  if (String(chat.lastMessage?.id ?? '') === newest.id) {
+    // То же сообщение, но его правили: превью в списке должно показать новый текст.
+    if (chat.lastMessage && (chat.lastMessage.content !== newest.content || Boolean(chat.lastMessage.isEdited) !== Boolean(newest.isEdited))) {
+      const { content, isEdited } = newest;
+      patchChat(chatId, (c) => (c.lastMessage ? { ...c, lastMessage: { ...c.lastMessage, content, isEdited } } : c));
+    }
+    return;
+  }
   if (ts(newest.createdAt) <= ts(chat.lastMessage?.createdAt)) return;
   const { _key, _status, ...message } = newest;
   touchPreview(chatId, message);
@@ -548,7 +564,7 @@ function closeChatNotifications(chatId: string) {
 
 export function markActiveRead() {
   const { activeChatId: chatId, threads, me } = get();
-  if (!chatId || !me || document.visibilityState !== 'visible') return;
+  if (!chatId || !me || !isReadingNow()) return;
   const t = threads[chatId];
   const lastId = t?.ids.slice().reverse().find((id) => !t.byId[id]._status);
   const chat = get().chats[chatId];
@@ -599,6 +615,27 @@ function catchUpThreads(chats: Record<string, ChatRow>) {
   }
 }
 
+/** Удалённые сообщения: их нельзя возвращать в превью чата как «более свежее из двух». */
+const deletedMessageIds = new Set<string>();
+export function markMessageDeleted(id: string, chatId?: string) {
+  deletedMessageIds.add(id);
+  if (deletedMessageIds.size > 500) deletedMessageIds.delete(deletedMessageIds.values().next().value as string);
+  // Удалили последнее сообщение — сразу показываем предыдущее из загруженной ленты,
+  // не дожидаясь перечитывания списка.
+  const chat = chatId ? get().chats[chatId] : undefined;
+  if (!chatId || !chat || String(chat.lastMessage?.id ?? '') !== id) return;
+  const t = get().threads[chatId];
+  if (!t) return;
+  for (let i = t.ids.length - 1; i >= 0; i--) {
+    const m = t.byId[t.ids[i]];
+    if (m && !m._status && String(m.id) !== id) {
+      const { _key, _status, ...message } = m;
+      patchChat(chatId, (c) => ({ ...c, lastMessage: message, preview: undefined }));
+      return;
+    }
+  }
+}
+
 export function loadChats(): Promise<void> {
   const me = get().me;
   if (!me) return Promise.resolve();
@@ -616,7 +653,7 @@ export function loadChats(): Promise<void> {
         const old = prev[id];
         // Сокет мог принести сообщение, которого в снимке сервера ещё нет —
         // превью берём свежее из двух.
-        if (old && ts(old.lastMessage?.createdAt) > ts(server.lastMessage?.createdAt)) server.lastMessage = old.lastMessage;
+        if (old && !deletedMessageIds.has(String(old.lastMessage?.id ?? '')) && ts(old.lastMessage?.createdAt) > ts(server.lastMessage?.createdAt)) server.lastMessage = old.lastMessage;
         if (old?.preview && String(server.lastMessage?.id ?? '') === (old.preview.afterId ?? '')) server.preview = old.preview;
         // «Прочитано» собеседника: сокет мог принести отметку новее снимка (сервер
         // рассылает её до записи в базу). Для каждого берём более позднюю — иначе
@@ -805,6 +842,15 @@ export function sendText(chatId: string, text: string, replyToId = get().compose
   touchPreview(chatId, draft);
   setCompose(chatId, {});
   void deliver(nonce);
+}
+
+/** Прикрепить сообщения к композеру чата для пересылки (null или пусто — снять). */
+export function setForwardDraft(chatId: string, messages: Message[] | null) {
+  set((st) => {
+    const next = { ...st.forwardDraft };
+    if (messages && messages.length) next[chatId] = messages; else delete next[chatId];
+    return { forwardDraft: next };
+  });
 }
 
 export function setCompose(chatId: string, value: { replyToId?: string; editingId?: string }) {
@@ -1028,7 +1074,12 @@ export function toggleSelected(chatId: string, id: string) {
 }
 
 export function setPanel(panel: 'emoji' | 'profile' | null) {
-  set({ panel, personId: null });
+  set({ panel, personId: null, docView: null });
+}
+
+/** Просмотр вложения в боковой панели переписки (вместо профиля или эмодзи). */
+export function openDocument(file: FileRef) {
+  set({ panel: 'doc', docView: file, personId: null });
 }
 
 /** Профиль человека в боковой панели; null — назад к профилю чата. */
@@ -1154,7 +1205,7 @@ function onEvent(e: RealtimeEvent) {
       touchPreview(messageChatId, msg);
       setTyping(messageChatId, String(msg.authorId), null);
       const mine = String(msg.authorId) === String(me.id);
-      const looking = messageChatId === activeChatId && document.visibilityState === 'visible';
+      const looking = messageChatId === activeChatId && isReadingNow();
       // В «Уведомлениях» всё системное и «от меня» — и всё же это новости.
       const notice = isNotifications(get().chats[messageChatId]);
       if (!known && !looking && (notice || ((!mine || msg.metadata?.source === 'manager') && !isSystem(msg)))) {
@@ -1169,6 +1220,7 @@ function onEvent(e: RealtimeEvent) {
       return;
     }
     case 'message_deleted': {
+      if (e.messageId) markMessageDeleted(String(e.messageId), chatId);
       patchThread(chatId, (t) => removeMsg(t, String(e.messageId || '')));
       reloadChatsSoon();
       return;

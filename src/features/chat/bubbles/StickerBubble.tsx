@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Plus, Loader2 } from 'lucide-react';
+import { X, Plus } from 'lucide-react';
 import AnimatedSticker from './AnimatedSticker';
+import { Spinner } from '@/shared/ui/Spinner';
 
 interface StickerMeta { url: string; emoji: string; setName: string }
 
@@ -147,7 +148,7 @@ export default function StickerBubble({ sticker, size = 132, hasReactions, isMob
               opacity: importing ? 0.7 : 1,
             }}
           >
-            {importing && <Loader2 style={{ width: 13, height: 13, animation: 'spin 1s linear infinite' }} />}
+            {importing && <Spinner size={13} />}
             {alreadyHave ? '✓ Уже добавлен' : imported ? '✓ Добавлен!' : <><Plus style={{ width: 13, height: 13 }} /> Добавить набор</>}
           </button>
         </div>

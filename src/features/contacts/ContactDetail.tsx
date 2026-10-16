@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import {
-  ArrowLeft, AtSign, CalendarDays, Clock, Loader2, Mail, Phone, Send, Shield, UserRound,
+  ArrowLeft, AtSign, CalendarDays, Clock, Mail, Phone, Send, Shield, UserRound,
 } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { links } from '@/shared/navigation/routes';
@@ -10,6 +10,7 @@ import { lastSeenText } from '@/shared/ui/format';
 import { SectionIcon } from '@/shared/ui/SectionIcon';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { contactName, readMe, type Contact, type Department } from './data';
+import { Spinner } from '@/shared/ui/Spinner';
 
 /**
  * Карточка сотрудника — правая область мастер-детали.
@@ -160,7 +161,7 @@ export default function ContactDetail({ contact, departments, onBack }: {
 
           <div className="ctd-actions">
             <button type="button" className="nx-primary ctd-write" onClick={() => void write()} disabled={opening} aria-busy={opening || undefined}>
-              {opening ? <Loader2 size={16} className="nx-spin" aria-hidden="true" /> : <SectionIcon name="chats" size={20} />}
+              {opening ? <Spinner size={16} /> : <SectionIcon name="chats" size={20} />}
               {opening ? 'Открываю чат' : contact.id === myId ? 'Избранное' : 'Написать'}
             </button>
             {contact.id !== myId && (
@@ -244,7 +245,7 @@ export default function ContactDetail({ contact, departments, onBack }: {
         <Menu anchor={taskAnchor} label="Список для задачи" onClose={() => setTaskAnchor(null)}>
           <div className="nx-menu-note"><b>В какой список</b>Задача откроется с {name} исполнителем.</div>
           {lists === null ? (
-            <div className="nx-menu-note" aria-busy="true"><Loader2 size={14} className="nx-spin" aria-hidden="true" /></div>
+            <div className="nx-menu-note" aria-busy="true"><Spinner size={14} /></div>
           ) : !lists.length ? (
             <div className="nx-menu-note">Нет списков, куда вы можете добавлять задачи.</div>
           ) : lists.map((l) => (

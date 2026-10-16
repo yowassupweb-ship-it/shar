@@ -65,7 +65,7 @@ def _issue_session(response: Response, request: Request, user: dict) -> Optional
         max_age=auth_sessions.SESSION_TTL_SECONDS,
         httponly=True,          # JS до токена не дотянется — в отличие от localStorage
         samesite="lax",
-        secure=True,
+        secure=request.app.state.settings.cookie_secure,
         path="/",
     )
     return token

@@ -469,3 +469,12 @@
   .cxl-brand-compact .nx-wordmark { display: none; }
   .cxl-brand-compact .cxl-brand-text { max-width: 84px; }
 }
+
+/* Телефон: лента не оставляет под последней строкой полэкрана пустоты (запас
+   нужен только под капсулу меню и кнопку «+»), аватар чуть меньше — на экран
+   помещается больше чатов. */
+@media (max-width: 640px) {
+  .cxl { --cxl-avatar: 48px; }
+  .cxl-list { padding-bottom: calc(var(--space-7) + var(--nx-nav-space)); }
+  .cxl-fab { bottom: calc(var(--space-3) + var(--nx-nav-space)); }
+}

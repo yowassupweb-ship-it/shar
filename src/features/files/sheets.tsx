@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Folder, Loader2, Search } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Folder, Search } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
 import { chatTitle, displayName, isFavorites, isNotifications, useChatStore } from '@/features/chat';
 import { Avatar } from '@/shared/ui/Avatar';
@@ -7,6 +7,7 @@ import { Sheet } from '@/shared/ui/overlay';
 import {
   loadFolder, moveFile, moveFolder, myId, saveAccess, shareToChat, type CloudFile, type CloudFolder,
 } from './api';
+import { Spinner } from '@/shared/ui/Spinner';
 
 /**
  * Листы раздела «Файлы»: переместить, доступ, отправить в чат. Люди и чаты —
@@ -69,7 +70,7 @@ export function MoveSheet({ item, kind, onClose, onDone }: {
         <span>{trail.map((f) => f.name).join(' / ') || 'Мои файлы'}</span>
       </div>
       {folders === null ? (
-        <div className="nx-state" aria-busy="true"><Loader2 size={20} className="nx-spin" aria-hidden="true" /></div>
+        <div className="nx-state" aria-busy="true"><Spinner size={20} /></div>
       ) : !folders.length ? (
         <p className="nx-hint">Здесь нет вложенных папок — можно переместить прямо сюда.</p>
       ) : folders.map((f) => (
@@ -207,7 +208,7 @@ export function SendSheet({ item, onClose }: {
           <button key={c.id} type="button" className="nx-pick" disabled={Boolean(busy)} onClick={() => void send(c.id, title)}>
             <Avatar name={title} seed={c.id} src={c.avatar} kind={isFavorites(c) ? 'favorites' : undefined} person={!c.isGroup} size={32} />
             <span className="nx-pick-text"><span>{title}</span></span>
-            {busy === c.id && <Loader2 size={16} className="nx-spin" aria-hidden="true" />}
+            {busy === c.id && <Spinner size={16} />}
           </button>
         ))}
       </div>

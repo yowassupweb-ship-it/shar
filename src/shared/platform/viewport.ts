@@ -36,6 +36,23 @@ export function isEdgeSwipeStart(x: number): boolean {
   return x <= EDGE_SWIPE_PX && isIosStandalone();
 }
 
+/**
+ * Сколько пикселей снизу установленное на iPhone приложение «не дотягивает» до
+ * края экрана. iOS в таком приложении порой оставляет окну страницы меньшую
+ * высоту, чем у экрана — после закрытия клавиатуры или возврата из фона, — и
+ * корень, прижатый к низу окна, заканчивается выше полосы «домой»: под панелью
+ * остаётся пустая тёмная полоса, а «капсула» меню висит посреди списка. Экран
+ * при этом полноразмерный (viewport-fit=cover), так что корню достаточно
+ * продлиться вниз на эту разницу. Вне такого сбоя разница равна нулю.
+ */
+function standaloneGap(editing: boolean): number {
+  if (editing || !isIosStandalone() || typeof screen === 'undefined') return 0;
+  if (window.innerHeight <= window.innerWidth) return 0; // в альбомной окна и экран не сравнить
+  const full = Math.max(screen.width, screen.height);
+  const gap = full - Math.round(window.innerHeight);
+  return gap >= 6 && gap <= 120 ? gap : 0;
+}
+
 function isEditable(el: Element | null): boolean {
   if (!el) return false;
   if (el instanceof HTMLTextAreaElement) return true;
@@ -103,6 +120,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       const kb = Math.max(0, baseline - height);
       root.style.setProperty('--nx-vvh', `${height}px`);
       const open = kb > KB_MIN && editing;
+      root.style.setProperty('--nx-fill', `${open ? 0 : standaloneGap(editing)}px`);
       root.style.setProperty('--nx-vv-top', open ? `${Math.max(0, Math.round(vv.offsetTop))}px` : '0px');
       if (open) {
         root.dataset.kb = 'open';
@@ -171,7 +189,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       document.removeEventListener('touchmove', onTouchMove);
       delete root.dataset.kb;
       document.documentElement.classList.remove('nx-locked');
-      ['--nx-vvh', '--nx-vv-top'].forEach((p) => root.style.removeProperty(p));
+      ['--nx-vvh', '--nx-vv-top', '--nx-fill'].forEach((p) => root.style.removeProperty(p));
     };
   }, [rootRef]);
 }

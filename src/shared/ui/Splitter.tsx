@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef } from 'react';
  * ширина по умолчанию.
  */
 export default function Splitter({
-  containerRef, cssVar, storageKey, min, max, initial, label, edge = 'right',
+  containerRef, cssVar, storageKey, min, max, initial, label, edge = 'right', maxRatio = 0.5,
 }: {
   containerRef: React.RefObject<HTMLElement | null>;
   cssVar: string;
@@ -19,15 +19,17 @@ export default function Splitter({
   label: string;
   /** С какой стороны панели граница: у правой панели тянем левый край. */
   edge?: 'right' | 'left';
+  /** Какую долю окна панель может занять (по умолчанию половину). */
+  maxRatio?: number;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const width = useRef(initial);
 
   // Верхняя граница зависит от окна: список не шире половины экрана.
   const clamp = useCallback((w: number) => {
-    const limit = Math.min(max, Math.round(window.innerWidth * 0.5));
+    const limit = Math.min(max, Math.round(window.innerWidth * maxRatio));
     return Math.round(Math.max(min, Math.min(limit, w)));
-  }, [min, max]);
+  }, [min, max, maxRatio]);
 
   const apply = useCallback((w: number, persist: boolean) => {
     const next = clamp(w);

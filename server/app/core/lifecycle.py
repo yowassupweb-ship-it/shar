@@ -74,17 +74,23 @@ async def run(settings: Settings):
         from app import migrate  # noqa: PLC0415
 
         await anyio.to_thread.run_sync(migrate.run)  # без схемы сервис не стартует — ошибка видна сразу
-    await _safe_sync("Mail secrets", migrate_legacy_passwords)
-    await _safe_sync("Legacy data import", import_legacy_data)
-    await _safe_sync("Calendar migration", migrate_legacy_calendar_rows)
-    # Отключённого за время жизни процесса пользователя нужно вывести из конференций.
-    await _safe_sync("calls eviction", evict_disabled_users_from_calls)
+    if settings.startup_maintenance:
+        await _safe_sync("Mail secrets", migrate_legacy_passwords)
+        await _safe_sync("Legacy data import", import_legacy_data)
+        await _safe_sync("Calendar migration", migrate_legacy_calendar_rows)
+        # Отключённого за время жизни процесса пользователя нужно вывести из конференций.
+        await _safe_sync("calls eviction", evict_disabled_users_from_calls)
+    else:
+        log.info("startup maintenance disabled")
 
     tasks = [
         asyncio.create_task(health_probe_loop(), name="health-probe"),
         asyncio.create_task(redis_fanout_loop(), name="redis-fanout"),  # ОДНО pub/sub-соединение на процесс
-        asyncio.create_task(reminder_loop(), name="reminders"),          # напоминания работают и при закрытой PWA
     ]
+    if settings.scheduled_jobs:
+        tasks.append(asyncio.create_task(reminder_loop(), name="reminders"))
+    else:
+        log.info("scheduled jobs disabled")
     if settings.mail_watch:
         try:
             started = await anyio.to_thread.run_sync(mail_realtime.start_all)

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AlertCircle, ChevronLeft, ChevronRight, Copy, LogOut, Pencil, Plus, RotateCw, Trash2 } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
 import { useShellOptions } from '@/shared/shell/ShellContext';
@@ -43,6 +43,16 @@ function rangeOf(view: View, anchor: Date): { from: Date; to: Date } {
   return { from: grid[0], to: addDays(grid[grid.length - 1], 1) };
 }
 
+/** Ссылка из поиска: ?event=<id>&date=YYYY-MM-DD — показать этот день и открыть событие. */
+function readEventLink(): { id: string; day: Date | null } | null {
+  if (typeof window === 'undefined') return null;
+  const p = new URLSearchParams(window.location.search);
+  const id = p.get('event');
+  if (!id) return null;
+  const date = p.get('date');
+  return { id, day: date && /^\d{4}-\d{2}-\d{2}/.test(date) ? startOfDay(parseLocal(date)) : null };
+}
+
 function titleOf(view: View, anchor: Date): { main: string; sub?: string } {
   if (view === 'month') return { main: MONTHS[anchor.getMonth()], sub: String(anchor.getFullYear()) };
   if (view === 'day') {
@@ -60,9 +70,11 @@ export default function CalendarScreen() {
   const [viewPref, setViewPref] = useState<View>(readView);
   // На телефоне недели нет: семь колонок по 50px не читаются.
   const view: View = narrow && viewPref === 'week' ? 'month' : viewPref;
-  const [anchor, setAnchor] = useState(() => startOfDay(new Date()));
-  const [selected, setSelected] = useState(() => startOfDay(new Date()));
-  const [miniMonth, setMiniMonth] = useState(() => startOfMonth(new Date()));
+  const eventLink = useRef(readEventLink());
+  const startDay = () => eventLink.current?.day ?? startOfDay(new Date());
+  const [anchor, setAnchor] = useState(startDay);
+  const [selected, setSelected] = useState(startDay);
+  const [miniMonth, setMiniMonth] = useState(() => startOfMonth(startDay()));
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [evMenu, setEvMenu] = useState<{ event: CalEvent; anchor: MenuAnchor } | null>(null);
   const showMenu = useCallback((event: CalEvent, at: { x: number; y: number }) => setEvMenu({ event, anchor: at }), []);
@@ -117,6 +129,15 @@ export default function CalendarScreen() {
   }, [selected, createAt]);
 
   const openEvent = useCallback((e: CalEvent) => setEditor({ mode: 'edit', event: e }), []);
+
+  // Событие из ссылки (поиск): ждём, пока загрузится нужный период, и открываем его один раз.
+  useEffect(() => {
+    const link = eventLink.current;
+    if (!link) return;
+    const found = events.find((e) => e.id === link.id || e.masterId === link.id);
+    if (found) { eventLink.current = null; setEditor({ mode: 'edit', event: found }); return; }
+    if (phase === 'ready') { eventLink.current = null; showToast('Событие не найдено или к нему нет доступа', 'error'); }
+  }, [events, phase]);
 
   const move = useCallback(async (e: CalEvent, start: Date, end: Date) => {
     let scope: Scope = 'all';

@@ -12,15 +12,41 @@ const PORT = Number(process.env.PORT || 47821);
 const HOST = process.env.HOSTNAME || '127.0.0.1';
 const BACKEND = new URL(process.env.BACKEND_URL || 'https://vokrug-sveta.shar-os.ru');
 const ROOT = path.join(__dirname, 'dist');
+// Картинки эмодзи в установщик не входят — их отдаёт боевой сервер (кэш на год, качаются один раз).
+// Отдельный адрес: у бета-канала и тестовых стендов бэкенд свой, а эмодзи всё равно на проде.
+const EMOJI_ORIGIN = process.env.EMOJI_URL || 'https://vokrug-sveta.shar-os.ru';
 
 const TYPES = {
-  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
   '.webp': 'image/webp', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.woff': 'font/woff', '.map': 'application/json',
   '.webmanifest': 'application/manifest+json', '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
 };
 
 const client = BACKEND.protocol === 'https:' ? https : http;
+
+// Файлы (/api/uploads/…) бэкенд отдаёт редиректом на объектное хранилище, а у его бакета CORS открыт только
+// для боевого сайта: fetch() с http://127.0.0.1:PORT (просмотр HTML/таблиц/PDF) падал бы «Failed to fetch».
+// Поэтому редирект на другой хост проходим здесь, на сервере, и отдаём файл со своего origin.
+function followRedirect(location, res, hops) {
+  let target;
+  try { target = new URL(location); } catch { return false; }
+  if (!/^https?:$/.test(target.protocol) || hops > 3) return false;
+  const lib = target.protocol === 'https:' ? https : http;
+  const out = lib.get(target, { headers: { 'accept-encoding': 'identity' } }, (up) => {
+    if (up.statusCode >= 300 && up.statusCode < 400 && up.headers.location) {
+      up.resume();
+      if (!followRedirect(new URL(up.headers.location, target).href, res, hops + 1)) { res.writeHead(502); res.end('Bad gateway'); }
+      return;
+    }
+    const headers = {};
+    for (const k of ['content-type', 'content-length', 'content-disposition', 'last-modified', 'etag', 'cache-control']) if (up.headers[k]) headers[k] = up.headers[k];
+    res.writeHead(up.statusCode || 502, headers);
+    up.pipe(res);
+  });
+  out.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end('Bad gateway'); });
+  return true;
+}
 
 function proxy(req, res) {
   const headers = { ...req.headers, host: BACKEND.host };
@@ -29,6 +55,11 @@ function proxy(req, res) {
     protocol: BACKEND.protocol, hostname: BACKEND.hostname, port: BACKEND.port || undefined,
     method: req.method, path: req.url, headers,
   }, (up) => {
+    const location = up.headers.location;
+    if (req.method === 'GET' && location && up.statusCode >= 300 && up.statusCode < 400 && req.url.startsWith('/api/uploads/')) {
+      const abs = new URL(location, BACKEND).href;
+      if (new URL(abs).host !== BACKEND.host) { up.resume(); if (followRedirect(abs, res, 0)) return; }
+    }
     // Куку сессии бэкенд ставит с Secure; на http://127.0.0.1 браузер её бы отверг.
     const out = { ...up.headers };
     if (out['set-cookie']) out['set-cookie'] = [].concat(out['set-cookie']).map((c) => c.replace(/;\s*secure/ig, '').replace(/;\s*domain=[^;]+/ig, ''));
@@ -55,6 +86,11 @@ function serveStatic(req, res) {
 
 const server = http.createServer((req, res) => {
   if (req.url.startsWith('/api/')) return proxy(req, res);
+  if (req.url.startsWith('/emojis/') && req.method === 'GET') {
+    // Без этого запрос попадал в SPA-fallback и получал index.html — эмодзи были «битыми картинками».
+    if (!followRedirect(new URL(req.url, EMOJI_ORIGIN).href, res, 0)) { res.writeHead(502); res.end('Bad gateway'); }
+    return undefined;
+  }
   return serveStatic(req, res);
 });
 

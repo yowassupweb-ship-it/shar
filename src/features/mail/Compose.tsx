@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { File as FileIcon, Loader2, Paperclip, Send, X } from 'lucide-react';
+import { File as FileIcon, Paperclip, Send, X } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
 import { EmailHtmlView } from '@/features/mail/html/EmailHtmlView';
 import { askConfirm } from '@/shared/ui/overlay';
 import { recipients, sendMail, type Addr, type MailFull, type Outgoing } from './api';
 import { fileSize, fmtFullDate } from './format';
+import { Spinner } from '@/shared/ui/Spinner';
 
 /**
  * Новое письмо, ответ, пересылка. Окно, а не лист: письму нужно место.
@@ -291,7 +292,7 @@ export default function Compose({ mode, me, signature, onClose }: { mode: Compos
           <input ref={fileRef} type="file" multiple hidden onChange={(e) => { void addFiles(Array.from(e.target.files || [])); e.target.value = ''; }} />
           <span className="ncm-hint">Перетащите файлы в окно · Ctrl+Enter — отправить</span>
           <button type="button" className="nx-primary" onClick={() => void send()} disabled={sending}>
-            {sending ? <Loader2 size={15} className="nx-spin" aria-hidden="true" /> : <Send size={15} aria-hidden="true" />}
+            {sending ? <Spinner size={15} /> : <Send size={15} aria-hidden="true" />}
             {sending ? 'Отправляю…' : uploading ? 'Файлы загружаются…' : 'Отправить'}
           </button>
         </footer>

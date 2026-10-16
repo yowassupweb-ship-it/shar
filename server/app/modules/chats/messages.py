@@ -410,8 +410,11 @@ _PATCHABLE_META = {"reactionToggle", "poll", "voiceListened"}
 
 
 def _push_chat_event(chat: dict, actor_id: str, event: dict) -> None:
+    # Автора не исключаем: его второе устройство (телефон при правке с компьютера) иначе
+    # не узнает о правке/удалении/реакции до перезагрузки. Клиент применяет события
+    # идемпотентно — на устройстве, где действие сделано, это то же самое состояние.
     try:
-        sse_manager.push_to_chat(chat, actor_id, event)
+        sse_manager.push_to_chat(chat, '', event)
     except Exception as e:
         logger.error(f"Failed to push {event.get('type')} SSE: {e}")
 

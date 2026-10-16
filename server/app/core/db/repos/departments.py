@@ -11,10 +11,17 @@ logger = logging.getLogger(__name__)
 class DepartmentsRepo:
     """Запросы области «departments». Требует self.conn (PostgresConnection)."""
 
+    _departments_columns_ensured = False  # class-level flag: run once per process
+
     def _ensure_departments_columns(self):
         """Idempotent schema guard: the departments table exists and carries parent_id
         (sub-departments — a department can nest one level under another, e.g. a
-        "Продукт" department with several подразделы). Additive, safe to run always."""
+        "Продукт" department with several подразделы). Once per process: ALTER TABLE
+        takes an exclusive lock on the table even when the column already exists, and
+        the Office calls this on every permission check."""
+        if type(self)._departments_columns_ensured:
+            return
+        type(self)._departments_columns_ensured = True
         try:
             self.conn.execute_query(
                 "ALTER TABLE departments ADD COLUMN IF NOT EXISTS parent_id VARCHAR(255)"

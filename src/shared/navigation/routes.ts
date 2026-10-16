@@ -10,6 +10,7 @@ export const paths = {
   contacts: '/contacts',
   files: '/files',
   mail: '/mail',
+  office: '/office',
   more: '/more',
   settings: '/settings',
   // Адреса инструментов совпадают со старыми — закладки и ссылки продолжают работать.
@@ -30,10 +31,42 @@ export const links = {
   file: (fileId: string) => `${paths.files}${q('file', fileId)}`,
   folder: (folderId: string) => `${paths.files}${q('folder', folderId)}`,
   contact: (userId: string) => `${paths.contacts}${q('user', userId)}`,
+  /** Событие календаря: день (YYYY-MM-DD) нужен, чтобы показать нужный период и открыть событие. */
+  event: (eventId: string, day?: string) => `${paths.calendar}${q('event', eventId)}${day ? `&date=${encodeURIComponent(day)}` : ''}`,
+  /** Письмо: ящик и папка, в которых оно лежит. */
+  mail: (messageId: string, accountId?: string, folder?: string) =>
+    `${paths.mail}${q('message', messageId)}${accountId ? `&account=${encodeURIComponent(accountId)}` : ''}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}`,
+  /** Раздел «Офис»: вид материалов (note | document | table | presentation) и/или открытый материал. */
+  office: (kind?: string, id?: string) => {
+    const qs = [kind ? `kind=${encodeURIComponent(kind)}` : '', id ? `id=${encodeURIComponent(id)}` : ''].filter(Boolean).join('&');
+    return `${paths.office}${qs ? `?${qs}` : ''}`;
+  },
 };
 
-/** Абсолютная ссылка — чтобы скопировать и отправить. */
-export const absolute = (path: string) => `${window.location.origin}${path}`;
+/** Боевой адрес Шара. */
+export const PUBLIC_ORIGIN = 'https://vokrug-sveta.shar-os.ru';
+
+/**
+ * Если ссылка ведёт в сам Шар (свой адрес или боевой, страница из `paths`), — путь внутри приложения, иначе null.
+ * Такие ссылки из чата открываются на месте, а не в новой вкладке или внешнем браузере.
+ */
+export function internalPath(href: string): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const url = new URL(href, window.location.origin);
+    if (url.origin !== window.location.origin && url.origin !== PUBLIC_ORIGIN) return null;
+    return (Object.values(paths) as string[]).includes(url.pathname) ? `${url.pathname}${url.search}${url.hash}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Абсолютная ссылка — чтобы скопировать и отправить. В приложении для компьютера
+ * интерфейс живёт на локальном 127.0.0.1:порт — ссылка с него никому, кроме
+ * самого этого компьютера, не открылась бы, поэтому там берём боевой адрес.
+ */
+export const absolute = (path: string) => `${window.sharDesktop ? PUBLIC_ORIGIN : window.location.origin}${path}`;
 
 /**
  * Адрес старого приложения (`/account?tab=…`, `/test-*-next`) → адрес v2.

@@ -1,7 +1,8 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import { ChevronRight, Loader2 } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import { Sheet } from '@/shared/ui/overlay';
 import { createRequest, loadRequestDepartments, type Department } from './actions';
+import { Spinner } from '@/shared/ui/Spinner';
 
 /** Новая заявка в отдел — перенос RequestModal. */
 export default function RequestSheet({ onClose, onCreated }: { onClose: () => void; onCreated: (chatId: string) => void }) {
@@ -33,7 +34,7 @@ export default function RequestSheet({ onClose, onCreated }: { onClose: () => vo
       <p className="nx-hint">Выберите отдел. Будет создан чат со всеми его сотрудниками.</p>
       {error && <p className="nx-error" role="alert">{error}</p>}
       {phase === 'loading' && (
-        <div className="nx-state" aria-busy="true"><Loader2 size={20} className="nx-spin" aria-hidden="true" /><p>Загружаю отделы</p></div>
+        <div className="nx-state" aria-busy="true"><Spinner size={20} /><p>Загружаю отделы</p></div>
       )}
       {phase === 'error' && (
         <div className="nx-state" data-tone="danger" role="alert">
@@ -52,7 +53,7 @@ export default function RequestSheet({ onClose, onCreated }: { onClose: () => vo
         <button key={d.id} type="button" className="nx-pick" disabled={Boolean(creating)} onClick={() => void pick(d.id)}>
           <span className="cxs-dept-dot" style={{ '--dot': d.color || 'var(--note-gray)' } as CSSProperties} aria-hidden="true" />
           <span className="nx-pick-text"><span>{d.name}</span></span>
-          {creating === d.id ? <Loader2 size={16} className="nx-spin" aria-label="Создаю" /> : <ChevronRight size={16} aria-hidden="true" />}
+          {creating === d.id ? <Spinner size={16} label="Создаю" /> : <ChevronRight size={16} aria-hidden="true" />}
         </button>
       ))}
     </Sheet>

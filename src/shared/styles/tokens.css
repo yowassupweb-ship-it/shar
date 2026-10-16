@@ -8,8 +8,11 @@
  */
 
 /* ── Токены: Графит (по умолчанию для тёмного) ─────────────────────────── */
+/* Univer-окна (поиск по документу) рисуются в body, вне .nx, — им нужны те же токены. */
 .nx,
-.ntb {
+.ntb,
+div:has(> .univer-contents > [data-u-comp="find-replace-dialog"]),
+.nem-host {
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -101,6 +104,7 @@
   --glass: #2a2b2f;
   --glass-brd: rgba(255, 255, 255, .10);
   --chin-shadow: 0 1px 2px rgba(0, 0, 0, .18);
+  --edge-shade: rgba(0, 0, 0, .30); /* тень ленты под шапкой и полем ввода */
   --float: 0 12px 40px rgba(0, 0, 0, .38), 0 0 0 1px var(--border-color);
   /* Объёмные иконки разделов: в тёмных темах тень не нужна. */
   --icon-shadow: none;
@@ -142,33 +146,52 @@ html:not(.dark) .ntb {
   --glass-brd: rgba(22, 24, 29, .10);
   --glass-shadow: 0 12px 32px rgba(0, 0, 0, .12);
   --chin-shadow: 0 1px 2px rgba(0, 0, 0, .08);
+  --edge-shade: rgba(0, 0, 0, .07); /* тень ленты под шапкой и полем ввода */
   --float: 0 12px 40px rgba(0, 0, 0, .14), 0 0 0 1px var(--border-color);
   --icon-shadow: drop-shadow(0 1px 1.5px rgba(22, 24, 29, .22)) drop-shadow(0 2px 5px rgba(22, 24, 29, .10));
 }
 
-/* ── Серая (светлее Графита, наследует его) ───────────────────────────── */
+/* ── Серая ───────────────────────────────────────────────────────────────
+   Светлая тема на мягком сером: тот же тёмный текст и все правила светлой (класса .dark нет), но
+   страница не белая, а нейтрально-серая (R ≈ G ≈ B), панели и поля — ступенями светлее, пузыри почти белые.
+   Контраст (WCAG): основной текст ≥ 11:1 на всех поверхностях, приглушённый, акцент и состояния ≥ 4.5:1. */
 html[data-theme="gray"] .nx,
-html[data-theme="gray"] .ntb {
-  --bg-color: #3a3b3f;
-  --container-bg: #414247;
-  --element-bg: #47484d;
-  --bg-raised: #4f5056;
-  --bg-sunken: #313235;
-  --surface-chrome: #3e3f43;
-  --surface-panel: #444549;
-  --surface-hover: rgba(255, 255, 255, .08);
-  --surface-selected: rgba(77, 163, 255, .22);
-  --text-muted: color-mix(in srgb, var(--text-main) 64%, transparent);
-  --border-color: rgba(255, 255, 255, .13);
-  --border-strong: rgba(255, 255, 255, .32);
-  --glass: #444549;
-  --glass-brd: rgba(255, 255, 255, .13);
-  --bubble-gray: #56575d;
+html[data-theme="gray"] .ntb,
+html[data-theme="gray"] div:has(> .univer-contents > [data-u-comp="find-replace-dialog"]),
+html[data-theme="gray"] .nem-host {
+  --bg-color: #e3e3e6;
+  --bg-sunken: #d8d8dc;
+  --surface-chrome: #e9e9ec;
+  --container-bg: #eeeef1;
+  --surface-panel: #ececef;
+  --element-bg: #f5f5f7;
+  --bg-raised: #f8f8fa;
+  --surface-hover: rgba(22, 24, 29, .06);
+  --surface-selected: rgba(0, 102, 204, .14);
+  --text-main: #1d1d1f;
+  --text-2: color-mix(in srgb, var(--text-main) 84%, transparent);
+  --text-muted: color-mix(in srgb, var(--text-main) 66%, transparent);
+  --border-color: rgba(22, 24, 29, .13);
+  --border-strong: rgba(22, 24, 29, .30);
+  --accent-color: #005bb8;
+  --state-ok: #14632f;
+  --state-warn: #835000;
+  --state-danger: #c00013;
+  --state-live: #005bb8;
+  --glass: #f2f2f4;
+  --glass-brd: rgba(22, 24, 29, .10);
+  --glass-shadow: 0 12px 32px rgba(0, 0, 0, .12);
+  --chin-shadow: 0 1px 2px rgba(0, 0, 0, .08);
+  --edge-shade: rgba(0, 0, 0, .07); /* тень ленты под шапкой и полем ввода */
+  --float: 0 12px 40px rgba(0, 0, 0, .14), 0 0 0 1px var(--border-color);
+  --bubble-gray: #f9f9fb;
 }
 
 /* ── Чёрная (наследует Графит; чистый чёрный для OLED) ────────────────── */
 html[data-theme="black"] .nx,
-html[data-theme="black"] .ntb {
+html[data-theme="black"] .ntb,
+html[data-theme="black"] div:has(> .univer-contents > [data-u-comp="find-replace-dialog"]),
+html[data-theme="black"] .nem-host {
   --bg-color: #000000;
   --container-bg: #08080a;
   --element-bg: #111114;

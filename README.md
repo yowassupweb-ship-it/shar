@@ -3,7 +3,7 @@
 Мессенджер команды: чаты, задачи, календарь, почта, файлы, контакты.
 
 - `src/` — клиент: React 19 + Vite + react-router 7 + zustand (слои `app → features → shared`, проверяет eslint);
-- `server/` — API: FastAPI + PostgreSQL + Redis (см. [server/README.md](server/README.md));
+- `server/` — API: FastAPI + PostgreSQL + Redis (см. [server/README.md](server/README.md)); документы «Офиса» хранятся в S3;
 - `desktop/` — клиент для компьютера на Electron;
 - `deploy/` — примеры nginx и systemd;
 - `docs/` — API уведомлений для внешних систем.

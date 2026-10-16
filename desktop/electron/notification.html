@@ -482,7 +482,15 @@
       };
 
       const avatarUrl = resolveAvatarUrl(avatar, appOrigin);
-      const diceBearFallback = `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(resolvedTitle || 'user')}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`;
+      // Та же формула, что у аватара в приложении (shared/ui/Avatar.tsx): единый цвет по хешу имени.
+      const diceBearFallback = (() => {
+        const seed = String(resolvedTitle || 'user');
+        const colors = ['b6e3f4', 'c0aede', 'd1d4f9', 'ffd5dc', 'ffdfbf'];
+        let hash = 0;
+        for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+        const color = colors[Math.abs(hash) % colors.length];
+        return `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(seed)}&backgroundColor=${color}&shapeColor=${color}`;
+      })();
 
       if (kindType === 'task') {
         avatarEl.classList.add('kind-task');
@@ -532,7 +540,7 @@
       });
 
       // Звук при появлении уведомления
-      playMessageSound(kindType || 'message');
+      playMessageSound(kindType || 'message', data.volume);
 
       // Кнопка закрытия
       document.getElementById('closeBtn').addEventListener('click', (e) => {
@@ -594,9 +602,15 @@
     document.addEventListener('selectstart', (e) => e.preventDefault());
 
     // Щелчок нового сообщения — синтезируем через Web Audio API
-    function playMessageSound(kind) {
+    function playMessageSound(kind, volume) {
+      // Громкость задана в настройках Шара: 0 — без звука, 1 — как раньше, до 2 — громче.
+      const vol = Number.isFinite(volume) ? Math.max(0, Math.min(2, volume)) : 1;
+      if (vol <= 0.01) return;
       try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const master = ctx.createGain();
+        master.gain.value = vol;
+        master.connect(ctx.destination);
 
         if (kind === 'message') {
           // Лёгкий мягкий «pop» — два тона
@@ -613,7 +627,7 @@
             amp.gain.linearRampToValueAtTime(gain, ctx.currentTime + start + 0.012);
             amp.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
             osc.connect(amp);
-            amp.connect(ctx.destination);
+            amp.connect(master);
             osc.start(ctx.currentTime + start);
             osc.stop(ctx.currentTime + start + dur + 0.01);
           });
@@ -627,7 +641,7 @@
           amp.gain.setValueAtTime(0.12, ctx.currentTime);
           amp.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
           osc.connect(amp);
-          amp.connect(ctx.destination);
+          amp.connect(master);
           osc.start();
           osc.stop(ctx.currentTime + 0.16);
           setTimeout(() => ctx.close(), 400);

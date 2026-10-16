@@ -24,12 +24,39 @@
 .ntb-conn { white-space: nowrap; color: var(--text-muted); }
 .ntb-conn[data-state="closed"] { color: var(--state-warn); }
 
-.ntb-island {
+/* Поиск «как Spotlight» — по центру шапки. */
+.ntb-search {
   position: absolute;
   left: 50%;
+  top: 3px;
+  bottom: 3px;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: min(300px, calc(100vw - 520px));
+  min-width: 150px;
+  padding: 0 6px 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--text-main) 6%, transparent);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.ntb-search span { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ntb-search kbd { padding: 1px 6px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--text-main) 10%, transparent); color: var(--text-2); font: inherit; font-size: 10px; }
+@media (hover: hover) { .ntb-search:hover { background: var(--surface-hover); color: var(--text-main); } }
+.ntb-search:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 1px; }
+
+/* Звонок и счётчик уведомлений — справа от поиска, чтобы не перекрывать его. */
+.ntb-island {
+  position: absolute;
+  left: calc(50% + min(300px, calc(100vw - 520px)) / 2 + 12px);
   top: 4px;
   bottom: 4px;
-  transform: translateX(-50%);
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -75,6 +102,8 @@
   color: var(--accent-color);
 }
 .ntb-update[data-state="downloaded"] { background: var(--state-ok); color: var(--on-media); cursor: pointer; }
+.ntb-update[data-state="installing"] { background: var(--surface-hover); color: var(--text-2); }
+.ntb-spin { animation: ntb-spin 1s linear infinite; }
 .ntb-controls { display: flex; align-items: center; gap: 2px; }
 .ntb-btn {
   display: grid;

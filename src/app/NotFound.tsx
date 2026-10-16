@@ -1,11 +1,15 @@
-import { useNavigate } from 'react-router';
+import { Navigate, useLocation, useNavigate } from 'react-router';
 import { Compass } from 'lucide-react';
-import { paths } from '@/shared/navigation/routes';
+import { fromLegacyUrl, paths } from '@/shared/navigation/routes';
 import './notfound.css';
 
 /** Адрес не найден. Раньше любой неизвестный путь молча уводил в чаты — опечатка в ссылке выглядела как «ничего не произошло». */
 export default function NotFound() {
   const navigate = useNavigate();
+  const { pathname, search } = useLocation();
+  // Адреса старого приложения (/account?tab=…, /test-*-next) ведут в соответствующий раздел v2.
+  const legacy = fromLegacyUrl(`${pathname}${search}`) ?? (pathname === '/account' ? paths.chats : null);
+  if (legacy && legacy !== `${pathname}${search}`) return <Navigate to={legacy} replace />;
   return (
     <div className="nx-state nx-notfound" role="alert">
       <Compass size={32} aria-hidden="true" />

@@ -8,6 +8,7 @@ import { SearchField } from '@/shared/ui/SearchField';
 import { useLongPress } from '@/shared/ui/useLongPress';
 import { availableTools, type Account, type Tool } from './tools';
 import { navigate } from '@/shared/navigation/navigate';
+import { openSpotlight } from '@/features/spotlight';
 import { myId } from '@/shared/session/session';
 
 /**
@@ -25,6 +26,7 @@ type Desktop = { appVersion?: string; openExternal?: (url: string) => Promise<un
 const desktop = (): Desktop | undefined => (window as unknown as { sharDesktop?: Desktop }).sharDesktop;
 
 function openTool(t: Tool) {
+  if (t.id === 'spotlight') { openSpotlight(); return; }
   if (t.external) {
     const d = desktop();
     if (d?.openExternal) void d.openExternal(t.href);

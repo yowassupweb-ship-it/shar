@@ -10,7 +10,7 @@ export function SectionIcon({ name, size = 20 }: { name: SectionIconName; size?:
   return (
     <img
       className="nx-sicon"
-      src={`/icons/nav-v2/${name}.png?v=3`}
+      src={`/icons/nav-v2/${name}.png?v=6`}
       alt=""
       aria-hidden="true"
       width={size}

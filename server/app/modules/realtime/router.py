@@ -115,13 +115,16 @@ async def ws_stream(websocket: WebSocket, user_id: str):
         if not _origin_allowed(websocket, settings):
             reason = "origin"
         else:
-            ident = await websocket.app.state.verifier.identity(websocket.headers.get("cookie", ""))
-            if ident is None or ident.user_id != str(user_id):
-                reason = "session"
+            cookie_header = websocket.headers.get("cookie", "")
+            ident = await websocket.app.state.verifier.identity(cookie_header)
+            if ident is None:
+                reason = "session:no-identity cookie=%s" % ("yes" if cookie_header else "none")
+            elif ident.user_id != str(user_id):
+                reason = "session:mismatch owner=%s" % ident.user_id
         if reason:
             await websocket.accept()
             await websocket.close(code=1008)
-            logger.warning("[ws] rejected subscribe to %s (%s)", user_id, reason)
+            logger.warning("[ws] rejected subscribe to %s (%s) ua=%s", user_id, reason, (websocket.headers.get("user-agent") or "-")[:60])
             return
 
     await websocket.accept()

@@ -1,4 +1,4 @@
-import { lazy } from 'react';
+import { lazy, Suspense } from 'react';
 import { Navigate, type RouteObject } from 'react-router';
 import { paths } from '@/shared/navigation/routes';
 import ChatsScreen from '@/features/chat/ChatsScreen';
@@ -22,8 +22,19 @@ const SettingsScreen = lazy(() => import('@/features/settings/SettingsScreen'));
 const AdminScreen = lazy(() => import('@/features/admin/AdminScreen'));
 const UtmScreen = lazy(() => import('@/features/utm/UtmScreen'));
 const GuideScreen = lazy(() => import('@/features/guide/GuideScreen'));
+const OfficeScreen = lazy(() => import('@/features/workspace/OfficeScreen'));
+const SharedPage = lazy(() => import('@/features/workspace/SharedPage'));
+const StickyPage = lazy(() => import('@/features/workspace/StickyPage'));
 
 export const routes: RouteObject[] = [
+  // Материалы по ссылке открываются без входа — вне каркаса с проверкой сессии.
+  ...['n', 'd', 't', 'p'].map((prefix): RouteObject => ({
+    path: `/${prefix}/:token`,
+    element: <Suspense fallback={null}><SharedPage /></Suspense>,
+    errorElement: <RouteError />,
+  })),
+  // Заметка в отдельном окне на рабочем столе: без каркаса приложения, только сама заметка.
+  { path: '/sticky/:id', element: <Suspense fallback={null}><StickyPage /></Suspense>, errorElement: <RouteError /> },
   {
     element: <AppRoot />,
     errorElement: <RouteError />,
@@ -44,6 +55,7 @@ export const routes: RouteObject[] = [
           { path: paths.admin, element: <AdminScreen /> },
           { path: paths.utm, element: <UtmScreen /> },
           { path: paths.guide, element: <GuideScreen /> },
+          { path: paths.office, element: <OfficeScreen /> },
           // Вход показывает корень, пока сессии нет; вошедшего — в чаты.
           { path: paths.login, element: <Navigate to={paths.chats} replace /> },
           { path: '*', element: <NotFound /> },

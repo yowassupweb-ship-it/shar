@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { Select } from '@/shared/ui/Select';
 import { Check } from 'lucide-react';
 import { Sheet } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
@@ -122,10 +123,8 @@ export default function UserSheet({ user, departments, onClose, onSaved }: {
           {field('telegramId', 'Telegram ID')}
           <label className="nx-label">
             Роль
-            <select value={draft.role} onChange={(e) => set('role', e.target.value as 'admin' | 'user')}>
-              <option value="user">Пользователь</option>
-              <option value="admin">Администратор</option>
-            </select>
+            <Select label="Роль" value={draft.role} onChange={(v) => set('role', v as 'admin' | 'user')}
+              groups={[{ options: [{ value: 'user', label: 'Пользователь' }, { value: 'admin', label: 'Администратор' }] }]} />
           </label>
         </div>
 

@@ -31,6 +31,12 @@ CHAT_BACKGROUNDS_LIGHT_GRADIENT_DIR = CHAT_BACKGROUNDS_DIR / "light-gradient"
 CHAT_BACKGROUNDS_DARK_GRADIENT_DIR = CHAT_BACKGROUNDS_DIR / "dark-gradient"
 
 
+CHAT_BACKGROUNDS_LIGHT_THUMBNAIL_DIR = CHAT_BACKGROUNDS_DIR / "light-thumbnails"
+
+
+CHAT_BACKGROUNDS_DARK_THUMBNAIL_DIR = CHAT_BACKGROUNDS_DIR / "dark-thumbnails"
+
+
 CHAT_BACKGROUNDS_LIGHT_BG_DIR = CHAT_BACKGROUNDS_LIGHT_DIR / "backgrounds"
 
 
@@ -48,6 +54,8 @@ _upload_dirs = [
     CHAT_BACKGROUNDS_DARK_DIR,
     CHAT_BACKGROUNDS_LIGHT_GRADIENT_DIR,
     CHAT_BACKGROUNDS_DARK_GRADIENT_DIR,
+    CHAT_BACKGROUNDS_LIGHT_THUMBNAIL_DIR,
+    CHAT_BACKGROUNDS_DARK_THUMBNAIL_DIR,
     CHAT_BACKGROUNDS_LIGHT_BG_DIR,
     CHAT_BACKGROUNDS_LIGHT_OVERLAY_DIR,
     CHAT_BACKGROUNDS_DARK_BG_DIR,
@@ -83,7 +91,7 @@ def _get_theme_asset_dirs(theme: str) -> Dict[str, List[Path]]:
                 CHAT_BACKGROUNDS_LIGHT_OVERLAY_DIR,
                 CHAT_BACKGROUNDS_LIGHT_DIR,
             ],
-            'allowed_prefixes': ['light-gradient/', 'light/'],
+            'allowed_prefixes': ['light-gradient/', 'light-thumbnails/', 'light/'],
         }
     if normalized == 'dark':
         return {
@@ -95,7 +103,7 @@ def _get_theme_asset_dirs(theme: str) -> Dict[str, List[Path]]:
                 CHAT_BACKGROUNDS_DARK_OVERLAY_DIR,
                 CHAT_BACKGROUNDS_DARK_DIR,
             ],
-            'allowed_prefixes': ['dark-gradient/', 'dark/'],
+            'allowed_prefixes': ['dark-gradient/', 'dark-thumbnails/', 'dark/'],
         }
     raise HTTPException(status_code=400, detail="theme must be 'light' or 'dark'")
 
@@ -145,11 +153,21 @@ def _collect_assets(theme: str, source_dirs: List[Path]) -> List[Dict[str, str]]
             seen_names.add(lower_name)
 
             encoded_rel_path = quote(rel_path, safe='/')
-            collected.append({
+            asset = {
                 'name': file_path.name,
                 'path': rel_path,
                 'url': f"/api/chat-backgrounds/{theme}/{encoded_rel_path}",
-            })
+            }
+            thumbnail_dir = (
+                CHAT_BACKGROUNDS_LIGHT_THUMBNAIL_DIR
+                if theme == 'light'
+                else CHAT_BACKGROUNDS_DARK_THUMBNAIL_DIR
+            )
+            thumbnail_path = thumbnail_dir / f"{file_path.stem}.webp"
+            if thumbnail_path.is_file():
+                thumbnail_rel = thumbnail_path.relative_to(root_dir).as_posix()
+                asset['thumbnailUrl'] = f"/api/chat-backgrounds/{theme}/{quote(thumbnail_rel, safe='/')}"
+            collected.append(asset)
 
     return collected
 

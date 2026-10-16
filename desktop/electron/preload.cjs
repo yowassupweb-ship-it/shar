@@ -34,6 +34,8 @@ const HEADER_HEIGHT = 46;
 const windowControls = {
   minimize: () => ipcRenderer.invoke('window:minimize'),
   toggleMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
+  // Показ презентации: окно без рамки на Windows не входит в HTML-fullscreen (requestFullscreen висит) — просим окно само.
+  setFullScreen: (on) => ipcRenderer.invoke('window:set-fullscreen', Boolean(on)),
   close: () => ipcRenderer.invoke('window:close'),
   isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
   reload: () => ipcRenderer.invoke('window:reload'),
@@ -75,6 +77,8 @@ contextBridge.exposeInMainWorld('sharDesktop', {
     logoSrc,
   },
   openExternal: (url) => ipcRenderer.invoke('window:open-external', url),
+  // Скачать файл силами приложения: окно «Сохранить как» с человеческим именем, без внешнего браузера.
+  downloadFile: (url, name) => ipcRenderer.invoke('file:download', String(url || ''), String(name || '')),
   windowControls,
   startup: {
     get: () => ipcRenderer.invoke('startup:get'),
@@ -82,6 +86,11 @@ contextBridge.exposeInMainWorld('sharDesktop', {
   },
   // Windows taskbar overlay badge — see badge.html/setOverlayIcon wiring in main.cjs.
   setBadgeCount: (count) => ipcRenderer.send('badge:set-count', count),
+  // Громкость сигнала карточек уведомлений: 0…2, хранится в главном процессе.
+  notifications: {
+    setVolume: (volume) => ipcRenderer.send('notify:set-volume', volume),
+    getVolume: () => ipcRenderer.invoke('notify:get-volume'),
+  },
   // Native "Save As" dialog — used by the docx viewer's export (see file:save in main.cjs).
   saveFile: (data, suggestedName) => ipcRenderer.invoke('file:save', data, suggestedName),
   showNotification: (data) => ipcRenderer.invoke('show-notification', data),
@@ -113,11 +122,30 @@ contextBridge.exposeInMainWorld('sharDesktop', {
     ipcRenderer.on('realtime:notification-poke', handler);
     return () => ipcRenderer.removeListener('realtime:notification-poke', handler);
   },
+  // События, принятые главным процессом по прямому сокету (см. realtime:event в main.cjs).
+  onRealtimeEvent: (callback) => {
+    const handler = (_, event) => callback(event);
+    ipcRenderer.on('realtime:event', handler);
+    return () => ipcRenderer.removeListener('realtime:event', handler);
+  },
   realtime: {
     register: (userId) => ipcRenderer.invoke('realtime:register', userId),
     unregister: () => ipcRenderer.invoke('realtime:unregister'),
     setContext: (ctx) => ipcRenderer.send('realtime:context', ctx),
     setAvatars: (avatars) => ipcRenderer.send('realtime:avatars', avatars),
+    // Чаты с выключенными уведомлениями: по ним главный процесс не показывает карточки.
+    setMutedChats: (ids) => ipcRenderer.send('realtime:muted', ids),
+  },
+
+  // ── Заметки на рабочем столе (sticky-notes.cjs) ────────────────────
+  sticky: {
+    open: (noteId, point) => ipcRenderer.invoke('sticky:open', String(noteId), point || null),
+    close: (noteId) => ipcRenderer.invoke('sticky:close', noteId ? String(noteId) : ''),
+    forget: (noteId) => ipcRenderer.invoke('sticky:forget', String(noteId)),
+    setOnTop: (value) => ipcRenderer.invoke('sticky:set-on-top', value),
+    minimize: () => ipcRenderer.invoke('sticky:minimize'),
+    state: () => ipcRenderer.invoke('sticky:state'),
+    focusMain: (url) => ipcRenderer.invoke('sticky:focus-main', url || ''),
   },
 
   // ── Call window API ──────────────────────────────────────

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ChatHeader, { type SearchState } from './ChatHeader';
 import Composer from './Composer';
 import EmojiPanel from './EmojiPanel';
@@ -6,7 +6,10 @@ import PersonProfile from './PersonProfile';
 import ProfilePanel from './ProfilePanel';
 import Timeline from './timeline/Timeline';
 import Splitter from '@/shared/ui/Splitter';
+import { takeJump } from './jump';
+import { DocPanel } from '@/features/workspace';
 import { useEdgeBack } from './useEdgeBack';
+import { subscribeAttention } from '@/shared/platform/push/userAttention';
 import { chatTitle, ensureLoaded, isNotifications, markActiveRead, openPerson, setPanel, useChatStore, type Msg } from './store';
 
 /**
@@ -20,6 +23,7 @@ export default function Conversation({ chatId, onBack }: { chatId: string; onBac
   const me = useChatStore((s) => s.me);
   const users = useChatStore((s) => s.users);
   const panel = useChatStore((s) => s.panel);
+  const docView = useChatStore((s) => s.docView);
   const thread = useChatStore((s) => s.threads[chatId]);
   const bodyRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
@@ -57,11 +61,13 @@ export default function Conversation({ chatId, onBack }: { chatId: string; onBac
 
   useEffect(() => { setSearch(null); }, [chatId]);
 
-  // Вернулись на вкладку — всё, что видно, прочитано.
+  // Вернулись на вкладку или к окну — всё, что видно, прочитано. markActiveRead
+  // сама проверяет, смотрит ли человек: перекрытое окно Electron не читает.
   useEffect(() => {
     const onVisible = () => { if (document.visibilityState === 'visible') markActiveRead(); };
     document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
+    const off = subscribeAttention((attending) => { if (attending) markActiveRead(); });
+    return () => { document.removeEventListener('visibilitychange', onVisible); off(); };
   }, []);
 
   // Высоты шапки и композера → отступы ленты сверху и снизу.
@@ -107,6 +113,18 @@ export default function Conversation({ chatId, onBack }: { chatId: string; onBac
     void ensureLoaded(chatId, id).then((ok) => { if (ok) requestAnimationFrame(() => jump(id)); });
   }, [chatId, jump]);
 
+  // Поиск по Шару: «открыть сообщение» — чат открывается и прокручивается к нему (просьба может прийти до или после открытия).
+  useEffect(() => {
+    const pending = takeJump(chatId);
+    if (pending) jumpDeep(pending);
+    const onJump = (e: Event) => {
+      const d = (e as CustomEvent<{ chatId: string; messageId: string }>).detail;
+      if (d && d.chatId === chatId && takeJump(chatId)) jumpDeep(d.messageId);
+    };
+    window.addEventListener('nx:jump-message', onJump);
+    return () => window.removeEventListener('nx:jump-message', onJump);
+  }, [chatId, jumpDeep]);
+
   return (
     <section ref={sectionRef} className="cxn-main cxv" aria-label={title} data-panel={panel || undefined}>
       <div className="cxv-column">
@@ -128,16 +146,23 @@ export default function Conversation({ chatId, onBack }: { chatId: string; onBac
         </div>
       </div>
       {panel && !narrow && (
+        // Просмотр документа тянется шире профиля и эмодзи — до 3/4 окна, ширина запоминается отдельно.
         <Splitter
           containerRef={sectionRef}
           cssVar="--cxv-panel"
-          storageKey="nx:chat-panel-width"
-          min={300}
-          max={560}
-          initial={340}
+          storageKey={panel === 'doc' ? 'nx:chat-doc-width' : 'nx:chat-panel-width'}
+          min={panel === 'doc' ? 360 : 300}
+          max={panel === 'doc' ? 1400 : 560}
+          initial={panel === 'doc' ? 560 : 340}
+          maxRatio={panel === 'doc' ? 0.75 : 0.5}
           edge="left"
           label="Ширина боковой панели"
         />
+      )}
+      {panel === 'doc' && docView && (
+        <Suspense fallback={<aside className="cxp"><div className="cxp-body" /></aside>}>
+          <DocPanel file={docView} onClose={() => setPanel(null)} />
+        </Suspense>
       )}
       {panel === 'emoji' && <EmojiPanel chatId={chatId} />}
       {panel === 'profile' && person && <PersonProfile userId={person} onBack={() => openPerson(null)} />}

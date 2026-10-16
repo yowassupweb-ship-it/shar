@@ -88,8 +88,8 @@ export default function ToastContainer() {
     // floating composer/keyboard. Top stays clear on every screen this renders
     // on, mobile or desktop.
     <div
-      className="fixed left-1/2 -translate-x-1/2 z-[200] flex flex-col gap-2 items-center px-4 w-full max-w-md"
-      style={{ top: 'calc(env(safe-area-inset-top, 0px) + 12px)' }}
+      className="fixed left-1/2 -translate-x-1/2 z-[250] flex flex-col gap-2 items-center px-4 w-full max-w-md"
+      style={{ top: 'calc(var(--electron-titlebar-height, 0px) + env(safe-area-inset-top, 0px) + 12px)' }}
     >
       {toasts.map((toast) => (
         <div

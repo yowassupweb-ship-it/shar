@@ -4,7 +4,7 @@ import {
   ArrowRight, Bell, CheckCircle2, ChevronLeft, Chrome, Copy, Download, Laptop, MessageCircle, MonitorDown, Phone, RefreshCw,
   ShieldCheck, Smartphone, Wifi, type LucideIcon,
 } from 'lucide-react';
-import { paths } from '@/shared/navigation/routes';
+import { paths, PUBLIC_ORIGIN } from '@/shared/navigation/routes';
 import { showToast } from '@/shared/ui/Toast';
 import {
   BROWSER_STEPS, DESKTOP_STEPS, FEATURES, HELP, NOTIFICATION_CHECKS, PHONE_STEPS, PRIORITY, PROD_URL, SECTIONS, UPDATES, WORK_RULES,
@@ -80,14 +80,23 @@ export default function GuideScreen() {
     catch { showToast(PROD_URL, 'info'); }
   };
 
-  // Установщик лежит рядом с обновлениями (nginx отдаёт /updates).
-  const download = '/updates/Shar%20setup.exe';
+  // Установщик лежит рядом с обновлениями (nginx отдаёт /updates). Адрес полный:
+  // в приложении для компьютера относительный вёл бы на локальный 127.0.0.1.
+  const download = `${PUBLIC_ORIGIN}/updates/Shar%20setup.exe`;
+
+  // Назад — туда, откуда пришли (в приложении для компьютера иначе вернуться нечем);
+  // если страницу открыли по прямой ссылке, истории нет — тогда в «Ещё».
+  const goBack = () => {
+    const idx = (window.history.state as { idx?: number } | null)?.idx;
+    if (typeof idx === 'number' && idx > 0) navigate(-1);
+    else navigate(paths.more, { replace: true });
+  };
 
   return (
     <div ref={scrollRef} className="nx-page nx-scroll-y">
       <div className="nx-page-inner ngd" data-wide="">
-        <header className="nx-page-head">
-          <button type="button" className="nx-icon-btn nx-page-back" aria-label="Назад в «Ещё»" onClick={() => navigate(paths.more)}>
+        <header className="nx-page-head ngd-head">
+          <button type="button" className="nx-icon-btn nx-page-back" aria-label="Назад" title="Назад" onClick={goBack}>
             <ChevronLeft size={20} />
           </button>
           <h1>Инструкция</h1>
@@ -96,7 +105,7 @@ export default function GuideScreen() {
         <div className="ngd-layout">
           <aside className="ngd-aside">
             <button type="button" className="ngd-brand" onClick={() => void copyLink()} title="Скопировать ссылку на Шар">
-              <img src="/shar-logo.png" alt="" width={36} height={36} />
+              <img src="/logo-shar-120.png" alt="" width={36} height={36} />
               <span><b>Шар</b><small><Copy size={11} aria-hidden="true" /> скопировать ссылку</small></span>
             </button>
             <nav className="ngd-toc" aria-label="Разделы инструкции">

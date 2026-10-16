@@ -63,6 +63,13 @@ class S3Storage:
         head = self._client.head_object(Bucket=self.bucket, Key=key)
         return int(head.get("ContentLength", 0))
 
+    def put_private(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> int:
+        """Положить объект БЕЗ публичного ACL: документы Шара читаются только через API."""
+        if not self.enabled or self._client is None:
+            raise RuntimeError("S3 storage is not enabled")
+        self._client.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type)
+        return len(data)
+
     def generate_presigned_put_url(self, key: str, content_type: str, expires_in: int = 3600) -> str:
         """Generate a presigned URL for direct client-to-S3 PUT upload."""
         if not self.enabled or self._client is None:

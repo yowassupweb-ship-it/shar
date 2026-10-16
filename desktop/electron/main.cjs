@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { app, BrowserWindow, Menu, Notification, Tray, shell, ipcMain, nativeImage, net, session, dialog, desktopCapturer } = require('electron');
+const { app, BrowserWindow, Menu, Notification, Tray, shell, ipcMain, nativeImage, net, session, dialog, desktopCapturer, powerMonitor } = require('electron');
 const http = require('http');
 const WebSocket = require('ws');
 const { autoUpdater } = require('electron-updater');
@@ -8,6 +8,7 @@ const dotenv = require('dotenv');
 const { spawn } = require('child_process');
 const nodeNet = require('net');
 const dns = require('dns');
+const { visibleFraction } = require('./occlusion.cjs');
 
 // Same IPv6-first-then-timeout-then-fallback issue as the bundled server (see its
 // NODE_OPTIONS below) — but THIS process isn't spawned with its own env, it's the
@@ -33,11 +34,22 @@ try { dns.setDefaultResultOrder('ipv4first'); } catch {}
 // TURN-сервера у нас нет (см. webrtcConfig.ts: только STUN). Двое в одной сети
 // тогда не соединяются никак. Внутри компании настоящий локальный адрес
 // скрывать не от кого.
+// Beta channel: installs next to the production client (own appId, own userData,
+// no auto-update feed) and talks to the New Shar backend. Set by the build
+// (package.json "sharChannel") or by SHAR_CHANNEL=beta for a dev run.
+const IS_BETA = process.env.SHAR_CHANNEL === 'beta' || require('../package.json').sharChannel === 'beta';
+const BETA_BACKEND_URL = 'http://127.0.0.1:18080';
+if (IS_BETA) {
+  app.setPath('userData', path.join(app.getPath('appData'), 'Shar OS Beta'));
+  process.env.SHAR_BACKEND_URL = process.env.SHAR_BACKEND_URL || BETA_BACKEND_URL;
+}
+
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,WebRtcHideLocalIpsWithMdns');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
 // Load environment variables based on NODE_ENV
+const { createStickyNotes } = require('./sticky-notes.cjs');
 const isDev = process.env.NODE_ENV !== 'production' && !app.isPackaged;
 const envFile = isDev ? '.env.local' : '.env.production';
 dotenv.config({ path: path.join(__dirname, '..', envFile) });
@@ -60,6 +72,7 @@ function callDebugLog(msg) {
 }
 
 let isInstallingUpdate = false;
+let startHiddenAfterUpdate = false;
 let downloadedUpdateVersion = null;
 let tray = null;
 let splashWindowRef = null;
@@ -97,6 +110,8 @@ autoUpdater.on('update-available', (info) => {
   console.log('Update available:', info);
   callDebugLog(`[updater] available: ${info?.version || 'unknown'}`);
   sendSplashStatus(`Найдено обновление v${info.version}...`);
+  // Та же версия уже скачана — повторная проверка не должна гасить кнопку «Обновить».
+  if (downloadedUpdateVersion && downloadedUpdateVersion === info.version) return;
   sendUpdaterStatus({ state: 'downloading', version: info.version, percent: 0 });
 });
 
@@ -110,6 +125,7 @@ autoUpdater.on('download-progress', (progressObj) => {
   console.log(`Download progress: ${progressObj.percent}%`);
   callDebugLog(`[updater] download: ${Math.round(progressObj.percent || 0)}%`);
   sendSplashStatus(`Загрузка обновления ${Math.round(progressObj.percent)}%`, progressObj.percent);
+  if (downloadedUpdateVersion) return;
   sendUpdaterStatus({ state: 'downloading', percent: progressObj.percent });
 });
 
@@ -126,6 +142,7 @@ autoUpdater.on('update-downloaded', (info) => {
   console.log('Update downloaded:', info);
   callDebugLog(`[updater] downloaded: ${info?.version || 'unknown'}`);
   downloadedUpdateVersion = info?.version || null;
+  updateDownloadedAt = Date.now();
   // Кнопка «Обновить» в шапке зажигается этим же статусом — уведомление идёт
   // вместе с ней, чтобы новость не зависела от того, смотрит ли человек в окно.
   sendUpdaterStatus({ state: 'downloaded', version: info.version });
@@ -155,13 +172,56 @@ function sendUpdaterStatus(payload) {
   } catch {}
 }
 
-// Установка вынесена из обработчика кнопки: её же запускает клик по
-// уведомлению о новой версии.
-function installUpdateNow() {
+// ── Установка обновления ───────────────────────────────────────────────────
+// Перезапуск ради обновления бывает трёх видов:
+//  - по кнопке «Обновить» или клику по карточке — с брендированным окном установки;
+//  - при запуске: свежая версия нашлась и скачалась, пока висит заставка, —
+//    ставим сразу, человек ещё ничего не успел открыть;
+//  - тихий: сам, когда человек заведомо не за компьютером (окно в трее или не в
+//    фокусе, система простаивает, ничего не печатается и не играет). Окно после
+//    него не выскакивает, если до этого было спрятано.
+// Перед перезапуском пишется маркер: по нему новый процесс понимает, что это
+// «после обновления» (без заставки, окно в прежнем состоянии, сообщение
+// «обновлено») — или что установщик не сработал и тихо повторять нельзя.
+const RESTART_MARKER_TTL_MS = 30 * 60 * 1000;
+const SILENT_IDLE_BACKGROUND_S = 60;    // окно не в фокусе или в трее — хватит минуты простоя
+const SILENT_IDLE_FOREGROUND_S = 600;   // окно в фокусе — только если человек давно ушёл
+const SILENT_TYPING_QUIET_MS = 5 * 60 * 1000;
+const SILENT_MIN_AFTER_DOWNLOAD_MS = 30 * 1000;
+const SILENT_CHECK_INTERVAL_MS = 60 * 1000;
+let updateDownloadedAt = 0;
+let blockedSilentVersion = null;
+
+function restartMarkerPath() { return path.join(app.getPath('userData'), 'update-restart.json'); }
+function writeRestartMarker(data) { try { fs.writeFileSync(restartMarkerPath(), JSON.stringify(data), 'utf8'); } catch {} }
+function clearRestartMarker() { try { fs.unlinkSync(restartMarkerPath()); } catch {} }
+
+// Читает и удаляет маркер. null — запуск обычный.
+function consumeRestartMarker() {
+  let marker = null;
+  try { marker = JSON.parse(fs.readFileSync(restartMarkerPath(), 'utf8')); } catch { return null; }
+  clearRestartMarker();
+  if (!marker || Date.now() - Number(marker.at || 0) > RESTART_MARKER_TTL_MS) return null;
+  if (marker.toVersion && String(marker.toVersion) !== app.getVersion()) {
+    // Установщик отработал, а версия прежняя: тихо повторять для неё бессмысленно.
+    blockedSilentVersion = String(marker.toVersion);
+    callDebugLog(`[updater] установка ${marker.toVersion} не применилась, тихие перезапуски для неё отключены`);
+    return { updated: false, hidden: false };
+  }
+  return { updated: true, hidden: Boolean(marker.hidden), version: app.getVersion() };
+}
+
+// opts.silent — без окна установки; opts.onFail — что делать, если перезапуск не удался.
+function installUpdateNow(opts = {}) {
   if (isInstallingUpdate) return;
   isInstallingUpdate = true;
-  console.log('Manual update installation requested');
-  callDebugLog('[updater] manual installation requested');
+  const silent = Boolean(opts.silent);
+  const win = mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null;
+  const wasShown = Boolean(win && win.isVisible() && !win.isMinimized());
+  console.log('Update installation requested');
+  callDebugLog(`[updater] installation requested (${silent ? 'silent' : opts.atStartup ? 'at startup' : 'manual'})`);
+  writeRestartMarker({ at: Date.now(), fromVersion: app.getVersion(), toVersion: downloadedUpdateVersion, hidden: silent && !wasShown });
+  sendUpdaterStatus({ state: 'installing', version: downloadedUpdateVersion });
 
   // The stock NSIS progress window (grey, with a 16-colour icon) looked like a
   // foreign installer, and our Electron splash dies with this process.  A small
@@ -169,19 +229,19 @@ function installUpdateNow() {
   // closes itself once the new version starts.  The main window stays on screen
   // until that window has painted, so the click never lands on an empty desktop.
   const splashHandle = { process: null, cancelPath: null };
-  void launchUpdateSplash(splashHandle).then((splashShown) => {
-    callDebugLog(`[updater] install splash ${splashShown ? 'shown, installing silently' : 'unavailable, using NSIS window'}`);
-    if (mainWindowRef && !mainWindowRef.isDestroyed()) mainWindowRef.hide();
 
-    const failInstall = (message, error) => {
-      isInstallingUpdate = false;
-      console.error(message, error || '');
-      // The splash is not our child any more (see launchUpdateSplash): ask it to close.
-      try { if (splashHandle.cancelPath) fs.writeFileSync(splashHandle.cancelPath, 'cancel'); } catch {}
-      if (mainWindowRef && !mainWindowRef.isDestroyed()) mainWindowRef.show();
-      sendUpdaterStatus({ state: 'error', message: 'Не удалось установить обновление автоматически' });
-    };
+  const failInstall = (message, error) => {
+    isInstallingUpdate = false;
+    console.error(message, error || '');
+    clearRestartMarker();
+    // The splash is not our child any more (see launchUpdateSplash): ask it to close.
+    try { if (splashHandle.cancelPath) fs.writeFileSync(splashHandle.cancelPath, 'cancel'); } catch {}
+    if (!silent && win && !win.isDestroyed()) win.show();
+    sendUpdaterStatus({ state: 'error', message: 'Не удалось установить обновление автоматически' });
+    if (typeof opts.onFail === 'function') opts.onFail();
+  };
 
+  const quit = (nsisSilent) => {
     // If quitAndInstall actually works the process is gone before this fires, so it's
     // a no-op on the happy path. If it silently fails (was seen with no console output
     // and no thrown error at all), this unsticks the flag, brings the window back and
@@ -189,14 +249,43 @@ function installUpdateNow() {
     const stuckTimer = setTimeout(() => {
       failInstall('[updater] quitAndInstall did not quit the app within 5s — treating as failed');
     }, 5000);
-
     try {
-      autoUpdater.quitAndInstall(splashShown, true);
+      autoUpdater.quitAndInstall(nsisSilent, true);
     } catch (error) {
       clearTimeout(stuckTimer);
       failInstall('Failed to install update:', error);
     }
+  };
+
+  if (silent) { quit(true); return; }
+  void launchUpdateSplash(splashHandle).then((splashShown) => {
+    callDebugLog(`[updater] install splash ${splashShown ? 'shown, installing silently' : 'unavailable, using NSIS window'}`);
+    if (win && !win.isDestroyed()) win.hide();
+    quit(splashShown);
   });
+}
+
+// Можно ли перезапустить приложение прямо сейчас, не помешав человеку.
+function isSafeForSilentRestart() {
+  if (isInstallingUpdate || !downloadedUpdateVersion) return false;
+  if (blockedSilentVersion && blockedSilentVersion === downloadedUpdateVersion) return false;
+  if (Date.now() - updateDownloadedAt < SILENT_MIN_AFTER_DOWNLOAD_MS) return false;
+  if (callWindowRef && !callWindowRef.isDestroyed()) return false;
+  const win = mainWindowRef;
+  if (!win || win.isDestroyed()) return false;
+  if (win.webContents.isCurrentlyAudible()) return false;
+  if (rendererContext.lastInputAt && Date.now() - rendererContext.lastInputAt < SILENT_TYPING_QUIET_MS) return false;
+  let idle = 0;
+  try { idle = powerMonitor.getSystemIdleTime(); } catch { return false; }
+  const inBackground = !win.isVisible() || win.isMinimized() || !win.isFocused();
+  return idle >= (inBackground ? SILENT_IDLE_BACKGROUND_S : SILENT_IDLE_FOREGROUND_S);
+}
+
+function startSilentUpdateWatcher() {
+  if (!app.isPackaged) return;
+  setInterval(() => {
+    if (isSafeForSilentRestart()) installUpdateNow({ silent: true });
+  }, SILENT_CHECK_INTERVAL_MS);
 }
 
 // Starts update-splash.ps1 as a detached process and resolves true once its
@@ -266,7 +355,16 @@ function launchUpdateSplash(handle) {
 
 require('electron').ipcMain.handle('updater:install', () => installUpdateNow());
 
-const DEFAULT_REMOTE_URL = 'https://vokrug-sveta.shar-os.ru';
+// Проверка при выходе из сна: машина могла проспать несколько выкладок.
+function checkForUpdatesQuietly() {
+  // Скачанное ждёт установки: повторная проверка только перекачивала бы тот же файл.
+  if (!app.isPackaged || downloadedUpdateVersion || isInstallingUpdate) return;
+  autoUpdater.checkForUpdates().catch((err) => {
+    console.error('[updater] проверка не удалась:', err?.message || err);
+  });
+}
+
+const DEFAULT_REMOTE_URL = IS_BETA ? BETA_BACKEND_URL : 'https://vokrug-sveta.shar-os.ru';
 
 function resolveRemoteUrl() {
   return process.env.REMOTE_WEB_URL || process.env.ELECTRON_REMOTE_WEB_URL || DEFAULT_REMOTE_URL;
@@ -304,7 +402,7 @@ function reserveLocalPort() {
 // Try this fixed port first so the origin — and everything stored under it —
 // stays the same across launches; only fall back to a random one if it's taken
 // (e.g. a second copy somehow running despite the single-instance lock).
-const PREFERRED_FRONTEND_PORT = 47821;
+const PREFERRED_FRONTEND_PORT = IS_BETA ? 47822 : 47821;
 async function reserveFrontendPort() {
   try {
     await new Promise((resolve, reject) => {
@@ -359,19 +457,42 @@ let mainRealtimeGeneration = 0;
 // within 30 s" rule was tried and removed: it silenced replies for half a minute
 // after switching to another window, which the log showed as focused=false skips.)
 let rendererContext = { activeChatId: '', focused: false, lastInputAt: 0 };
+
+// «Человек смотрит на окно» — это не только «окно в фокусе»: пишут в одном окне,
+// а Шар открыт целиком на втором мониторе, и за перепиской следят именно там.
+// Окно, на которое можно смотреть, — показанное, не свёрнутое и либо в фокусе,
+// либо почти целиком на виду (доля считается раз в секунду, см. occlusion.cjs).
+// Если посчитать нельзя (нет koffi), остаётся прежнее правило — только по фокусу.
+const ATTENDED_VISIBLE_SHARE = 0.9;
+let visibleShare = null;
+function isWindowAttended(win = mainWindowRef) {
+  if (!win || win.isDestroyed() || !win.isVisible() || win.isMinimized()) return false;
+  if (win.isFocused()) return true;
+  return visibleShare !== null && visibleShare >= ATTENDED_VISIBLE_SHARE;
+}
 // userId → uploaded photo URL, sent by the renderer from /api/users.  The
 // backend's new_message event has no author avatar, so cards from this socket
 // showed only DiceBear faces without it.
 const authorAvatarCache = new Map();
-// Taskbar badge.  The main-process socket used to add 1 per incoming message to
-// a counter nothing ever reset — not reading the chat, not the renderer's own
-// count — so the icon showed "1" while the app had zero unread.
-let rendererBadgeCount = 0;
-const mainPendingUnreadChats = new Set();
+// Чаты с выключенными уведомлениями. Список присылает страница (она знает и
+// серверный мьют, и локальный): сокет главного процесса видит только события и
+// без него показывал карточки даже из заглушённых чатов.
+let mutedChatIds = new Set();
 // A reconnect can replay the final websocket frame. Keep message identity here
 // (outside the renderer) so it cannot make two native notification cards.
 const mainRealtimeSeenMessageKeys = new Map();
 const MAIN_REALTIME_DEDUPE_MS = 5 * 60 * 1000;
+
+// Тот же рисованный аватар, что в самом приложении (shared/ui/Avatar.tsx dicebearUrl):
+// один цвет на фон и на фигуру, выбранный по хешу имени. Другой набор параметров
+// рисовал в карточке не то лицо, что у человека в чате.
+const DICEBEAR_COLORS = ['b6e3f4', 'c0aede', 'd1d4f9', 'ffd5dc', 'ffdfbf'];
+function dicebearUrl(seed) {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+  const color = DICEBEAR_COLORS[Math.abs(hash) % DICEBEAR_COLORS.length];
+  return `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(seed)}&backgroundColor=${color}&shapeColor=${color}`;
+}
 
 function claimMainRealtimeMessage(key) {
   const now = Date.now();
@@ -433,12 +554,12 @@ function stopMainRealtime() {
   mainRealtimeUserId = null;
 }
 
-function scheduleMainRealtimeReconnect() {
+function scheduleMainRealtimeReconnect(delayMs = 1000) {
   if (mainRealtimeStopped || !mainRealtimeUserId || mainRealtimeReconnectTimer) return;
   mainRealtimeReconnectTimer = setTimeout(() => {
     mainRealtimeReconnectTimer = null;
     void connectMainRealtime();
-  }, 1000);
+  }, delayMs);
 }
 
 async function connectMainRealtime() {
@@ -461,6 +582,10 @@ async function connectMainRealtime() {
       try { event = JSON.parse(String(raw)); } catch { return; }
       if (event?.type !== 'new_message' || !event?.chatId) return;
       const message = event.message || {};
+      // Этот сокет — прямой, а у страницы своя цепочка через локальный сервер,
+      // и она опаздывала или теряла сообщения (карточка уже показана, а в ленте
+      // пусто). Отдаём событие странице отсюда: повтор по тому же id она отсеивает.
+      if (mainWindowRef && !mainWindowRef.isDestroyed()) mainWindowRef.webContents.send('realtime:event', event);
       const authorId = String(message.authorId || message.author_id || '');
       // Свои сообщения карточкой не показываем — кроме системных уведомлений
       // (напоминание о событии и т.п.): они записываются от имени самого человека.
@@ -473,31 +598,32 @@ async function connectMainRealtime() {
       if (!messageId || !claimMainRealtimeMessage(`msg:${chatId}:${messageId}`)) return;
       const authorName = String(message.authorName || message.author_name || message.senderName || 'Новое сообщение');
       const avatar = String(authorAvatarCache.get(authorId) || message.authorAvatar || message.author_avatar || '').trim()
-        || `https://api.dicebear.com/9.x/thumbs/svg?seed=${encodeURIComponent(authorName || authorId || 'user')}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`;
+        || dicebearUrl(authorName || authorId || 'user');
       win.webContents.send('realtime:notification-poke', { chatId, at: Date.now() });
       const onScreen = win.isVisible() && !win.isMinimized();
       const windowFocused = win.isFocused();
+      const windowAttended = isWindowAttended(win);
       const rendererFocused = rendererContext.focused;
       const inThisChat = rendererContext.activeChatId === chatId;
       const inputAgoMs = rendererContext.lastInputAt ? Date.now() - rendererContext.lastInputAt : Infinity;
-      const attending = onScreen && (windowFocused || rendererFocused);
-      callDebugLog(`[notify] main-ws chat=${chatId} message=${messageId} onScreen=${onScreen} windowFocused=${windowFocused} rendererFocused=${rendererFocused} inThisChat=${inThisChat} inputAgo=${Number.isFinite(inputAgoMs) ? Math.round(inputAgoMs / 1000) + 's' : '-'} -> ${attending ? 'skip' : 'show'}`);
+      const attending = onScreen && (windowAttended || rendererFocused);
+      callDebugLog(`[notify] main-ws chat=${chatId} message=${messageId} onScreen=${onScreen} windowFocused=${windowFocused} visibleShare=${visibleShare === null ? '-' : visibleShare.toFixed(2)} rendererFocused=${rendererFocused} inThisChat=${inThisChat} inputAgo=${Number.isFinite(inputAgoMs) ? Math.round(inputAgoMs / 1000) + 's' : '-'} -> ${attending ? 'skip' : 'show'}`);
       if (!attending) {
-        // The renderer may be throttled while nobody is looking, so the badge
-        // moves here too — but by CHATS (the renderer's unit), on top of the
-        // renderer's own last count, and only while unattended.
-        mainPendingUnreadChats.add(chatId);
-        setBadgeCount(rendererBadgeCount + mainPendingUnreadChats.size);
+        // Значок считает страница (число чатов с непрочитанным). Раньше главный
+        // процесс добавлял к нему «+1» за каждое событие, и для чата, который уже
+        // был непрочитан, число раздувалось до следующего пересчёта.
         createNotificationWindow({ title: authorName, senderName: authorName, message: String(message.content || 'Вложение'), avatar, chatId, messageId, source: 'main-ws', url: `/account?tab=messages&chat=${encodeURIComponent(chatId)}`, kind: 'message', timestamp: Date.now() }, win);
       }
     });
     // Only the current socket may trigger a reconnect.  An old socket closed by
     // stopMainRealtime() used to schedule one after the renderer had already
     // re-registered, leaving an extra live socket behind on every restart.
-    ws.on('close', () => {
+    ws.on('close', (code) => {
       if (mainRealtimeWs !== ws) return;
       mainRealtimeWs = null;
-      scheduleMainRealtimeReconnect();
+      // 1008: the server does not recognise the session. Retrying every second only
+      // hammers it (hundreds of rejections per 10 minutes) — back off.
+      scheduleMainRealtimeReconnect(code === 1008 ? 30000 : 1000);
     });
     ws.on('error', () => { try { ws.close(); } catch {} });
     return true;
@@ -669,9 +795,30 @@ function getLogoDataUrl() {
   return 'https://vokrug-sveta.shar-os.ru/favicon.png';
 }
 
+// Окно показывает интерфейс с локального сервера (127.0.0.1:порт), и любая
+// ссылка, построенная от адреса страницы, ведёт туда же: в браузере это
+// «localhost», который ничего не открывает и которым нельзя поделиться.
+// Адрес встроенного сервера подменяем на боевой — сервер тот же, пути те же.
+function toPublicUrl(raw) {
+  try {
+    const url = new URL(raw);
+    if (!bundledFrontendUrl || url.origin !== new URL(bundledFrontendUrl).origin) return raw;
+    const base = new URL(resolveBackendUrl());
+    url.protocol = base.protocol;
+    // host без порта порт прежнего адреса не сбрасывает («…ru:47821») — задаём имя и порт по отдельности.
+    url.hostname = base.hostname;
+    url.port = base.port;
+    return url.toString();
+  } catch {
+    return raw;
+  }
+}
+
 function registerWindowControls(mainWindow) {
   ipcMain.removeHandler('window:minimize');
   ipcMain.removeHandler('window:toggle-maximize');
+  ipcMain.removeHandler('window:set-fullscreen');
+  ipcMain.removeHandler('file:download');
   ipcMain.removeHandler('window:close');
   ipcMain.removeHandler('window:is-maximized');
   ipcMain.removeHandler('window:open-external');
@@ -696,6 +843,35 @@ function registerWindowControls(mainWindow) {
     return true;
   });
 
+  // Скачивание файлов из интерфейса. Ссылка <a download> на /api/uploads уходила редиректом на хранилище
+  // (другой домен) — download игнорировался, переход уводил во внешний браузер. Здесь качает само окно:
+  // «Сохранить как» с именем файла из интерфейса (а не uuid из адреса хранилища).
+  const downloadNames = new Map();
+  if (!mainWindow.webContents.session.__sharDownloads) {
+    mainWindow.webContents.session.__sharDownloads = true;
+    mainWindow.webContents.session.on('will-download', (_event, item) => {
+      const chain = item.getURLChain ? item.getURLChain() : [item.getURL()];
+      const name = chain.map((u) => downloadNames.get(u)).find(Boolean);
+      chain.forEach((u) => downloadNames.delete(u));
+      const fileName = (name || item.getFilename()).replace(/[\\/:*?"<>|]+/g, ' ').trim() || item.getFilename();
+      item.setSaveDialogOptions({ title: 'Сохранить файл', defaultPath: path.join(app.getPath('downloads'), fileName) });
+    });
+  }
+  ipcMain.handle('file:download', (_event, url, name) => {
+    if (mainWindow.isDestroyed() || !url) return;
+    let absolute;
+    try { absolute = new URL(url, mainWindow.webContents.getURL()).href; } catch { return; }
+    if (!/^https?:/i.test(absolute)) return;
+    if (name) downloadNames.set(absolute, name);
+    mainWindow.webContents.downloadURL(absolute);
+  });
+
+  ipcMain.handle('window:set-fullscreen', (_event, on) => {
+    if (mainWindow.isDestroyed()) return false;
+    mainWindow.setFullScreen(Boolean(on));
+    return mainWindow.isFullScreen();
+  });
+
   ipcMain.handle('window:close', () => {
     if (!mainWindow.isDestroyed()) {
       mainWindow.close();
@@ -709,7 +885,7 @@ function registerWindowControls(mainWindow) {
 
   ipcMain.handle('window:open-external', (_, url) => {
     if (typeof url === 'string' && url.trim()) {
-      return shell.openExternal(url);
+      return shell.openExternal(toPublicUrl(url));
     }
 
     return shell.openExternal(resolveRemoteUrl());
@@ -889,6 +1065,9 @@ function registerInputContextMenu(mainWindow) {
 // Notification system
 let activeNotifications = [];
 let mainWindowRef = null;
+// Заметки на рабочем столе (sticky-notes.cjs): отдельные окна того же интерфейса по адресу /sticky/<id>.
+let stickyNotes = null;
+let uiBaseUrl = '';
 const NOTIFICATION_WIDTH = 376;
 const NOTIFICATION_COMPACT_HEIGHT = 76;
 const NOTIFICATION_DETAILED_HEIGHT = 112;
@@ -958,7 +1137,40 @@ function showNativeNotification(data, mainWindow) {
   return true;
 }
 
+// Карточка из заглушённого чата не показывается — кроме сообщений с «!» в начале:
+// они по правилам Шара доходят до всех.
+function isMutedMessageCard(data) {
+  if (String(data?.kind || '').toLowerCase() !== 'message') return false;
+  let chatId = String(data?.chatId || '').trim();
+  try { chatId = decodeURIComponent(chatId); } catch {}
+  if (!chatId || !mutedChatIds.has(chatId)) return false;
+  return !String(data?.message || '').trimStart().startsWith('!');
+}
+
+// Громкость сигнала карточек (0…2, 1 — как раньше). Задаёт страница в настройках; хранится в файле, чтобы
+// карточки, пришедшие до загрузки страницы, звучали так же.
+let notificationVolume = 1;
+function notificationVolumePath() { return path.join(app.getPath('userData'), 'notification-prefs.json'); }
+try {
+  const saved = JSON.parse(fs.readFileSync(notificationVolumePath(), 'utf8'));
+  if (Number.isFinite(saved.volume)) notificationVolume = Math.max(0, Math.min(2, saved.volume));
+} catch {}
+ipcMain.on('notify:set-volume', (_event, value) => {
+  const v = Number(value);
+  if (!Number.isFinite(v)) return;
+  notificationVolume = Math.max(0, Math.min(2, v));
+  try {
+    fs.mkdirSync(path.dirname(notificationVolumePath()), { recursive: true });
+    fs.writeFileSync(notificationVolumePath(), JSON.stringify({ volume: notificationVolume }), 'utf8');
+  } catch {}
+});
+ipcMain.handle('notify:get-volume', () => notificationVolume);
+
 function createNotificationWindow(data, mainWindow) {
+  if (isMutedMessageCard(data)) {
+    callDebugLog(`[notify] muted chat dropped source=${data?.source || 'unknown'} chat=${data?.chatId}`);
+    return null;
+  }
   if (String(data?.kind || '').toLowerCase() === 'message' && !claimMessageCard(data)) return null;
   // The update card is from Shar OS itself: without a picture notification.html
   // seeded a DiceBear face off "Shar OS", which read as some random user.
@@ -1008,6 +1220,9 @@ function createNotificationWindow(data, mainWindow) {
     },
   });
   notificationWindow.__notificationHeight = notificationHeight;
+  // Lets the card be dismissed once its chat is open and in focus (see 'realtime:context').
+  notificationWindow.__chatId = (() => { const raw = String(data?.chatId || '').trim(); try { return decodeURIComponent(raw); } catch { return raw; } })();
+  notificationWindow.__isMessageCard = String(data?.kind || '').toLowerCase() === 'message';
 
   notificationWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   notificationWindow.setAlwaysOnTop(true, 'screen-saver', 1);
@@ -1031,6 +1246,7 @@ function createNotificationWindow(data, mainWindow) {
     notificationWindow.webContents.send('notification-data', {
       ...data,
       appOrigin,
+      volume: notificationVolume,
       displayMode: isDetailed ? 'detailed' : 'compact',
     });
   });
@@ -1241,74 +1457,149 @@ ipcMain.handle('call:open', (_event, data) => {
   return true;
 });
 
-// ── Windows taskbar overlay badge (unread chat count) ──────────────────────────
-// nativeImage has no text/shape drawing API, so the badge is rendered by a tiny
-// hidden BrowserWindow (plain HTML circle+number) and captured as a bitmap —
-// reused across updates rather than recreated per count.
-let badgeWindow = null;
-let badgeRenderQueue = Promise.resolve();
-let lastBadgeCount = -1;
+// ── Значок непрочитанных на кнопке панели задач и в трее ──────────────────────
+// Картинка рисуется прямо в памяти (красный кружок с числом, шрифт 3×5 клеток).
+// Раньше её снимали capturePage() с невидимого BrowserWindow: скрытое окно не
+// обязано отрисовываться, и на части машин значок не появлялся вовсе.
+const BADGE_GLYPHS = {
+  '0': ['111', '101', '101', '101', '111'],
+  '1': ['010', '110', '010', '010', '111'],
+  '2': ['111', '001', '111', '100', '111'],
+  '3': ['111', '001', '111', '001', '111'],
+  '4': ['101', '101', '111', '001', '001'],
+  '5': ['111', '100', '111', '001', '111'],
+  '6': ['111', '100', '111', '101', '111'],
+  '7': ['111', '001', '001', '001', '001'],
+  '8': ['111', '101', '111', '101', '111'],
+  '9': ['111', '101', '111', '001', '111'],
+  '+': ['000', '010', '111', '010', '000'],
+};
+const BADGE_RED = [255, 59, 48]; // R, G, B
 
-async function ensureBadgeWindow() {
-  if (badgeWindow && !badgeWindow.isDestroyed()) return badgeWindow;
-  badgeWindow = new BrowserWindow({
-    width: 32,
-    height: 32,
-    show: false,
-    frame: false,
-    transparent: true,
-    skipTaskbar: true,
-    webPreferences: { offscreen: false },
-  });
-  const html = `<!DOCTYPE html><html><head><style>
-    html,body{margin:0;width:32px;height:32px;background:transparent;overflow:hidden}
-    #b{width:32px;height:32px;border-radius:50%;background:#ff3b30;display:flex;
-       align-items:center;justify-content:center;font:700 16px -apple-system,'Segoe UI',sans-serif;
-       color:#fff;box-shadow:0 0 0 2px rgba(0,0,0,.15)}
-  </style></head><body><div id="b"></div></body></html>`;
-  await badgeWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
-  return badgeWindow;
+// Кружок с числом: 32×32 пикселя (на панели задач — 16 DIP при масштабе 200%).
+function renderBadgeImage(label) {
+  const SIZE = 32;
+  const SS = 4; // сглаживание: 4×4 подотсчёта на пиксель
+  const chars = String(label).split('');
+  const u = chars.length === 1 ? 4 : chars.length === 2 ? 3 : 2;
+  const textW = (chars.length * 3 + (chars.length - 1)) * u;
+  const textH = 5 * u;
+  const x0 = (SIZE - textW) / 2;
+  const y0 = (SIZE - textH) / 2;
+  const isGlyph = (px, py) => {
+    const dx = px - x0;
+    const dy = py - y0;
+    if (dx < 0 || dy < 0 || dx >= textW || dy >= textH) return false;
+    const cell = Math.floor(dx / u);
+    const col = cell % 4;
+    if (col === 3) return false; // промежуток между знаками
+    const glyph = BADGE_GLYPHS[chars[Math.floor(cell / 4)]];
+    return Boolean(glyph && glyph[Math.floor(dy / u)][col] === '1');
+  };
+  const buf = Buffer.alloc(SIZE * SIZE * 4);
+  const total = SS * SS;
+  for (let y = 0; y < SIZE; y += 1) {
+    for (let x = 0; x < SIZE; x += 1) {
+      let red = 0;
+      let white = 0;
+      for (let sy = 0; sy < SS; sy += 1) {
+        for (let sx = 0; sx < SS; sx += 1) {
+          const px = x + (sx + 0.5) / SS;
+          const py = y + (sy + 0.5) / SS;
+          if (Math.hypot(px - SIZE / 2, py - SIZE / 2) > SIZE / 2 - 1) continue;
+          if (isGlyph(px, py)) white += 1; else red += 1;
+        }
+      }
+      // BGRA, цвета уже умножены на прозрачность (так хранит картинки Chromium).
+      const i = (y * SIZE + x) * 4;
+      buf[i] = Math.round((red * BADGE_RED[2] + white * 255) / total);
+      buf[i + 1] = Math.round((red * BADGE_RED[1] + white * 255) / total);
+      buf[i + 2] = Math.round((red * BADGE_RED[0] + white * 255) / total);
+      buf[i + 3] = Math.round(((red + white) / total) * 255);
+    }
+  }
+  return nativeImage.createFromBitmap(buf, { width: SIZE, height: SIZE, scaleFactor: 2 });
 }
 
-async function setBadgeCount(count) {
-  if (process.platform !== 'win32') return; // setOverlayIcon is Windows-only
-  const n = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
-  // Serialize: capturePage() on the same hidden window from overlapping calls
-  // (badge updates can fire in quick succession) would race on its DOM content.
-  badgeRenderQueue = badgeRenderQueue.then(async () => {
-    if (n === lastBadgeCount) return;
-    // Запоминаем только ПОСЛЕ того, как оверлей реально применён: иначе при
-    // отсутствующем окне счётчик считался бы уже нарисованным, и следующий
-    // такой же запрос отсеялся бы проверкой выше — бейдж застревал бы в
-    // старом состоянии до тех пор, пока число не изменится на другое.
-    if (!mainWindowRef || mainWindowRef.isDestroyed()) return;
-    lastBadgeCount = n;
-    if (n <= 0) {
-      mainWindowRef.setOverlayIcon(null, '');
-      return;
+// Иконка трея с красной точкой в углу: пока окно спрятано, кнопки на панели задач
+// нет, и счётчик показать больше негде.
+let trayBaseBitmap = null;
+function renderTrayIcon(withDot) {
+  const SIZE = 32;
+  if (!trayBaseBitmap) {
+    const base = nativeImage.createFromPath(path.join(__dirname, 'icon.png')).resize({ width: SIZE, height: SIZE });
+    trayBaseBitmap = base.toBitmap();
+  }
+  const buf = Buffer.from(trayBaseBitmap);
+  if (withDot) {
+    const cx = SIZE - 9;
+    const cy = SIZE - 9;
+    const r = 8;
+    for (let y = 0; y < SIZE; y += 1) {
+      for (let x = 0; x < SIZE; x += 1) {
+        const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+        const cover = Math.max(0, Math.min(1, r + 0.5 - d));
+        if (cover <= 0) continue;
+        const ring = Math.max(0, Math.min(1, d - (r - 2) + 0.5)); // тонкая светлая кайма
+        const i = (y * SIZE + x) * 4;
+        const color = [BADGE_RED[2], BADGE_RED[1], BADGE_RED[0]]; // B, G, R
+        for (let c = 0; c < 3; c += 1) {
+          const px = color[c] * (1 - ring) + 255 * ring;
+          buf[i + c] = Math.round(buf[i + c] * (1 - cover) + px * cover);
+        }
+        buf[i + 3] = Math.round(buf[i + 3] * (1 - cover) + 255 * cover);
+      }
     }
+  }
+  return nativeImage.createFromBitmap(buf, { width: SIZE, height: SIZE, scaleFactor: 2 });
+}
+
+let badgeCount = 0;
+
+function applyBadge() {
+  const n = badgeCount;
+  const win = mainWindowRef;
+  if (process.platform === 'win32' && win && !win.isDestroyed()) {
     try {
-      const win = await ensureBadgeWindow();
-      const label = n > 99 ? '99+' : String(n);
-      const fontSize = label.length > 2 ? 10 : label.length > 1 ? 13 : 16;
-      await win.webContents.executeJavaScript(
-        `document.getElementById('b').textContent = ${JSON.stringify(label)};` +
-        `document.getElementById('b').style.fontSize = '${fontSize}px';`
-      );
-      const image = await win.webContents.capturePage({ x: 0, y: 0, width: 32, height: 32 });
-      mainWindowRef.setOverlayIcon(image, `${n} непрочитанных чатов`);
+      if (n <= 0) win.setOverlayIcon(null, '');
+      else win.setOverlayIcon(renderBadgeImage(n > 99 ? '99+' : String(n)), `${n} непрочитанных чатов`);
     } catch (err) {
-      console.error('[badge] failed to render overlay icon:', err);
+      console.error('[badge] failed to set overlay icon:', err);
     }
-  }).catch((err) => console.error('[badge] queue error:', err));
+  }
+  if (tray && !tray.isDestroyed()) {
+    try {
+      tray.setImage(renderTrayIcon(n > 0));
+      tray.setToolTip(n > 0 ? `Shar OS — непрочитанных чатов: ${n}` : 'Shar OS');
+    } catch (err) {
+      console.error('[badge] failed to update tray icon:', err);
+    }
+  }
 }
 
-// The renderer's count (chats with unread, from the server) is the truth; it
-// supersedes anything the main-process socket added while the UI was idle.
-ipcMain.on('badge:set-count', (_event, count) => {
-  rendererBadgeCount = Number.isFinite(Number(count)) ? Math.max(0, Math.floor(Number(count))) : 0;
-  mainPendingUnreadChats.clear();
-  setBadgeCount(rendererBadgeCount);
+function setBadgeCount(count) {
+  const n = Number.isFinite(Number(count)) ? Math.max(0, Math.floor(Number(count))) : 0;
+  if (n === badgeCount) return;
+  badgeCount = n;
+  applyBadge();
+}
+
+// Кнопка панели задач пропадает, когда окно спрятано в трей, и создаётся заново
+// при показе — оверлей при этом сбрасывается Windows. Без повторной установки
+// число «терялось» после первого же сворачивания в трей и возвращалось только
+// когда менялось само.
+function reapplyBadgeSoon() {
+  if (badgeCount <= 0) return;
+  applyBadge();
+  setTimeout(() => { if (badgeCount > 0) applyBadge(); }, 600);
+}
+
+// Счёт чатов с непрочитанным присылает страница: она знает правду.
+ipcMain.on('badge:set-count', (_event, count) => setBadgeCount(count));
+
+// Чаты без уведомлений — для карточек главного процесса (см. mutedChatIds).
+ipcMain.on('realtime:muted', (_event, ids) => {
+  mutedChatIds = new Set(Array.isArray(ids) ? ids.map((id) => String(id)) : []);
 });
 
 // preload.cjs reads this synchronously at renderer-creation time — process.env set in the
@@ -1329,12 +1620,25 @@ ipcMain.on('realtime:avatars', (_event, avatars) => {
     if (id && value) authorAvatarCache.set(id, value);
   }
 });
+function dismissMessageCardsForChat(chatId) {
+  if (!chatId) return;
+  for (const card of [...activeNotifications]) {
+    if (card && !card.isDestroyed() && card.__isMessageCard && card.__chatId === chatId) closeNotification(card);
+  }
+}
+
 ipcMain.on('realtime:context', (_event, ctx) => {
   rendererContext = {
     activeChatId: String(ctx?.activeChatId || ''),
     focused: Boolean(ctx?.focused),
     lastInputAt: Number(ctx?.lastInputAt) || 0,
   };
+  // The user is looking at this chat: its toast has served its purpose.
+  if (rendererContext.focused) {
+    let activeId = rendererContext.activeChatId;
+    try { activeId = decodeURIComponent(activeId); } catch {}
+    dismissMessageCardsForChat(activeId);
+  }
 });
 
 // call.html asks to minimize itself
@@ -1465,7 +1769,7 @@ ipcMain.handle('photo:open', (_event, data) => {
 ipcMain.handle('window:get-attention', () => {
   if (!mainWindowRef || mainWindowRef.isDestroyed()) return { attending: false };
   return {
-    attending: mainWindowRef.isVisible() && !mainWindowRef.isMinimized() && mainWindowRef.isFocused(),
+    attending: isWindowAttended(mainWindowRef),
   };
 });
 
@@ -1521,7 +1825,9 @@ function createSplashWindow() {
 // there's one continuous splash from process start through "app is ready" instead
 // of a flash of nothing while this function's own startBundledFrontend() runs.
 async function createWindow(existingSplash) {
-  const remoteUrl = await startBundledFrontend() || resolveRemoteUrl();
+  // SHAR_DEV_URL (только в dev): интерфейс берётся с Vite dev-сервера, правки видны сразу (HMR).
+  const devUrl = isDev ? process.env.SHAR_DEV_URL : '';
+  const remoteUrl = devUrl || await startBundledFrontend() || resolveRemoteUrl();
   const appIconPath = path.join(__dirname, 'icon.png');
 
   const splashWindow = (existingSplash && !existingSplash.isDestroyed())
@@ -1578,6 +1884,24 @@ async function createWindow(existingSplash) {
   // Сохраняем ссылку на главное окно для уведомлений
   mainWindowRef = mainWindow;
 
+  // Заметки на рабочем столе: окна создаёт главный процесс; открытые в прошлый раз возвращаются на места,
+  // когда загрузился главный интерфейс (до этого им негде взять вход и адрес).
+  uiBaseUrl = remoteUrl;
+  if (!stickyNotes) {
+    stickyNotes = createStickyNotes({ baseUrl: () => uiBaseUrl, preload: path.join(__dirname, 'preload.cjs'), icon: appIconPath });
+    stickyNotes.install({
+      focusMain: (url) => {
+        const win = mainWindowRef;
+        if (!win || win.isDestroyed()) return;
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+        if (url) win.webContents.send('open-route', url);
+      },
+    });
+    mainWindow.webContents.once('did-finish-load', () => stickyNotes.restore());
+  }
+
   const sendWindowState = () => {
     if (!mainWindow.isDestroyed()) {
       mainWindow.webContents.send('window:maximized-changed', mainWindow.isMaximized());
@@ -1598,14 +1922,28 @@ async function createWindow(existingSplash) {
   const sendAttention = () => {
     if (mainWindow.isDestroyed()) return;
     mainWindow.webContents.send('window:attention', {
-      attending: mainWindow.isVisible() && !mainWindow.isMinimized() && mainWindow.isFocused(),
+      attending: isWindowAttended(mainWindow),
     });
   };
 
   for (const evt of ['focus', 'blur', 'show', 'hide', 'minimize', 'restore']) {
     mainWindow.on(evt, sendAttention);
   }
+  mainWindow.on('show', reapplyBadgeSoon);
+  mainWindow.on('restore', reapplyBadgeSoon);
+  mainWindow.webContents.on('did-finish-load', reapplyBadgeSoon);
   mainWindow.webContents.on('did-finish-load', sendAttention);
+
+  // Перекрытие окна меняется без событий окна (его закрыли другим окном), поэтому
+  // считаем раз в секунду — и только пока окно на экране и не в фокусе.
+  let lastAttending = null;
+  setInterval(() => {
+    if (mainWindow.isDestroyed()) return;
+    const needed = mainWindow.isVisible() && !mainWindow.isMinimized() && !mainWindow.isFocused();
+    visibleShare = needed ? visibleFraction(mainWindow, require('electron').screen) : null;
+    const attending = isWindowAttended(mainWindow);
+    if (attending !== lastAttending) { lastAttending = attending; sendAttention(); }
+  }, 1000);
 
   // Сворачиваем в трей вместо закрытия
   let forceQuit = false;
@@ -1663,8 +2001,19 @@ async function createWindow(existingSplash) {
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    shell.openExternal(toPublicUrl(url));
     return { action: 'deny' };
+  });
+
+  // Мышиная кнопка «назад»/«вперёд» и Alt+←/→: в окне без рамки и адресной
+  // строки других способов вернуться по истории нет.
+  const goHistory = (delta) => {
+    const nav = mainWindow.webContents.navigationHistory;
+    if (delta < 0 ? nav.canGoBack() : nav.canGoForward()) nav.goToOffset(delta);
+  };
+  mainWindow.on('app-command', (_event, command) => {
+    if (command === 'browser-backward') goHistory(-1);
+    else if (command === 'browser-forward') goHistory(1);
   });
 
   mainWindow.webContents.on('will-navigate', (event, url) => {
@@ -1702,7 +2051,7 @@ async function createWindow(existingSplash) {
     const sameOrigin = new URL(url).origin === new URL(remoteUrl).origin;
     if (!sameOrigin) {
       event.preventDefault();
-      shell.openExternal(url);
+      shell.openExternal(toPublicUrl(url));
     }
   });
 
@@ -1711,6 +2060,12 @@ async function createWindow(existingSplash) {
     const isDevTools = input.key === 'F12' || ((input.control || input.meta) && input.shift && input.key.toLowerCase() === 'i');
 
     if (input.type !== 'keyDown') return;
+
+    if (input.alt && (input.key === 'ArrowLeft' || input.key === 'ArrowRight')) {
+      event.preventDefault();
+      goHistory(input.key === 'ArrowLeft' ? -1 : 1);
+      return;
+    }
 
     if (isReload) {
       event.preventDefault();
@@ -1725,12 +2080,15 @@ async function createWindow(existingSplash) {
 
   // Инжектируем критический UI после загрузки страницы
   mainWindow.webContents.on('did-finish-load', () => {
+    // После тихого обновления окно остаётся в трее, как было до перезапуска.
+    const keepHidden = startHiddenAfterUpdate;
+    startHiddenAfterUpdate = false;
     setTimeout(() => {
       if (!splashWindow.isDestroyed()) splashWindow.close();
-      if (!mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      if (!keepHidden && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
         mainWindow.show();
       }
-    }, 3000);
+    }, keepHidden ? 0 : 3000);
 
     const logoDataUrl = getLogoDataUrl();
     mainWindow.webContents.executeJavaScript(`
@@ -2502,14 +2860,14 @@ async function createWindow(existingSplash) {
 }
 
 // Устанавливаем название приложения для уведомлений и других системных diалогов
-app.setName('Shar OS');
+app.setName(IS_BETA ? 'Shar OS Beta' : 'Shar OS');
 
 if (process.platform === 'win32') {
-  app.setAppUserModelId('ru.shar.os');
+  app.setAppUserModelId(IS_BETA ? 'ru.shar.os.beta' : 'ru.shar.os');
 }
 
 function ensureAutoLaunchEnabled() {
-  if (!app.isPackaged || process.platform !== 'win32') return;
+  if (IS_BETA || !app.isPackaged || process.platform !== 'win32') return;
 
   try {
     if (!getAutoLaunchPreference()) return;
@@ -2581,33 +2939,44 @@ if (!gotSingleInstanceLock) {
   });
 }
 
-// Discord-style: never open the main window on a version the user is about to be
-// upgraded out of. Shows the splash, checks for an update, and — if one downloads
-// — installs and relaunches (quitAndInstall) WITHOUT ever calling createWindow in
-// this process; the relaunched instance runs this same gate again, finds nothing
-// pending, and proceeds normally. Previously the update check fired 3s *after* the
-// main window was already up, so every update was seen only on the *next* cold
-// launch — this makes the currently-running instance never launch on stale code.
+// Проверка обновления при запуске, пока висит заставка. Ждём недолго: ответ
+// сервера — пара секунд, а скачивание — до полуминуты (дальше оно всё равно
+// продолжится в фоне, и зелёная кнопка «Обновить» появится сама).
+// Resolve(true) — обновление скачано, можно ставить прямо сейчас.
+const STARTUP_CHECK_TIMEOUT_MS = 5000;
+const STARTUP_DOWNLOAD_TIMEOUT_MS = 30000;
 function waitForUpdateOrProceed() {
   return new Promise((resolve) => {
-    if (!app.isPackaged) { resolve(); return; }
+    if (!app.isPackaged || IS_BETA) { resolve(false); return; }
 
     let settled = false;
-    const proceed = () => { if (!settled) { settled = true; resolve(); } };
+    let timer = null;
+    const finish = (downloaded) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      autoUpdater.removeListener('update-available', onAvailable);
+      autoUpdater.removeListener('update-not-available', onNone);
+      autoUpdater.removeListener('update-downloaded', onDownloaded);
+      autoUpdater.removeListener('error', onNone);
+      resolve(downloaded);
+    };
+    const onNone = () => finish(false);
+    const onDownloaded = () => finish(true);
+    const onAvailable = () => {
+      // Нашлось — даём скачаться, пока человек смотрит на заставку.
+      clearTimeout(timer);
+      timer = setTimeout(() => finish(false), STARTUP_DOWNLOAD_TIMEOUT_MS);
+    };
+    autoUpdater.on('update-available', onAvailable);
+    autoUpdater.on('update-not-available', onNone);
+    autoUpdater.on('update-downloaded', onDownloaded);
+    autoUpdater.on('error', onNone);
+    // The check itself shouldn't be able to strand someone on the splash
+    // indefinitely if the update server is unreachable.
+    timer = setTimeout(() => finish(false), STARTUP_CHECK_TIMEOUT_MS);
 
-    autoUpdater.once('update-not-available', proceed);
-    autoUpdater.once('error', proceed);
-    autoUpdater.once('update-downloaded', () => {
-      // Downloading is not permission to silently replace the app at startup.
-      // Continue into the current version and offer a visible, explicit restart.
-      proceed();
-    });
-    // The check itself (not the download, which can legitimately take longer and
-    // is covered by its own progress UI) shouldn't be able to strand someone on
-    // the splash indefinitely if the update server is unreachable.
-    setTimeout(proceed, 20000);
-
-    autoUpdater.checkForUpdates().catch(proceed);
+    autoUpdater.checkForUpdates().catch(onNone);
   });
 }
 
@@ -2659,10 +3028,17 @@ app.whenReady().then(async () => {
     console.error('[ws-proxy] Failed to start:', err);
   }
 
-  const splash = app.isPackaged ? createSplashWindow() : null;
-    await waitForUpdateOrProceed();
+  // Запуск сразу после обновления: заставка не нужна, а если окно до обновления
+  // было спрятано в трее — оно и остаётся там.
+  const restart = consumeRestartMarker();
+  startHiddenAfterUpdate = Boolean(restart?.updated && restart.hidden);
+  const splash = app.isPackaged && !startHiddenAfterUpdate ? createSplashWindow() : null;
+
+  const startApp = async () => {
     await createWindow(splash);
-    if (downloadedUpdateVersion) {
+    if (restart?.updated) {
+      sendUpdaterStatus({ state: 'updated', version: restart.version });
+    } else if (downloadedUpdateVersion) {
       sendUpdaterStatus({ state: 'downloaded', version: downloadedUpdateVersion });
       createNotificationWindow({
         title: 'Доступно обновление',
@@ -2675,23 +3051,30 @@ app.whenReady().then(async () => {
       }, mainWindowRef);
     }
 
-  // Проверка обновлений была только здесь, при старте. Приложение, живущее в
-  // трее неделями, о новой версии так и не узнавало: спрашивать сервер было
-  // некому. Дальше опрашиваем регулярно, а установку берёт на себя
-    // Установка запускается только явным действием пользователя из интерфейса.
-  if (app.isPackaged) {
-    setInterval(() => {
-      autoUpdater.checkForUpdates().catch((err) => {
-        console.error('[updater] периодическая проверка не удалась:', err?.message || err);
-      });
-    }, UPDATE_CHECK_INTERVAL_MS);
-  }
+    // Приложение, живущее в трее неделями, о новой версии иначе не узнало бы:
+    // проверяем регулярно и при выходе компьютера из сна. Скачанное ставится
+    // само в тихий момент (startSilentUpdateWatcher) или по кнопке.
+    if (app.isPackaged && !IS_BETA) {
+      setInterval(checkForUpdatesQuietly, UPDATE_CHECK_INTERVAL_MS);
+      powerMonitor.on('resume', () => setTimeout(checkForUpdatesQuietly, 15000));
+      startSilentUpdateWatcher();
+    }
+  };
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       void createWindow();
     }
   });
+
+  // После обновления проверять нечего: мы уже на свежей версии.
+  const downloaded = restart?.updated ? false : await waitForUpdateOrProceed();
+  const canAutoInstall = downloaded && !(blockedSilentVersion && blockedSilentVersion === downloadedUpdateVersion);
+  if (canAutoInstall) {
+    installUpdateNow({ atStartup: true, onFail: () => { void startApp(); } });
+    return;
+  }
+  await startApp();
 });
 
 app.on('window-all-closed', () => {

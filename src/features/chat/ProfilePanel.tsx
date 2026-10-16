@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ChangeEvent, type CSSProperties } from 'react';
 import { lazyComponent } from '@/shared/ui/lazy';
 import {
-  Bell, BellOff, Camera, Check, Copy, Eye, Image as ImageIcon, Link as LinkIcon, Loader2, MessageCircle, Search, UserMinus, UserPlus, Video, X,
+  Bell, BellOff, Camera, Check, Copy, Eye, Image as ImageIcon, Link as LinkIcon, MessageCircle, Search, UserMinus, UserPlus, Video, X,
 } from 'lucide-react';
 import type { User } from '@/shared/types/chat';
 import LinkPreview from '@/features/chat/bubbles/LinkPreview';
@@ -20,6 +20,7 @@ import {
   chatTitle, displayName, isFavorites, isGroupChat, isMuted, isNotifications, loadChats, openChat, otherParticipant, setPanel,
   useChatStore,
 } from './store';
+import { Spinner } from '@/shared/ui/Spinner';
 
 const ImageViewer = lazyComponent(() => import('@/shared/ui/ImageViewer'));
 
@@ -237,7 +238,7 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
             </button>
             {canManage && (
               <label className="cxf-photo-edit" title="Сменить фото группы">
-                {busy === 'photo' ? <Loader2 size={16} className="nx-spin" /> : <Camera size={16} />}
+                {busy === 'photo' ? <Spinner size={16} /> : <Camera size={16} />}
                 <span className="nx-sr">Сменить фото группы</span>
                 <input type="file" accept="image/*" hidden disabled={busy === 'photo'} onChange={(e) => void changePhoto(e)} />
               </label>
@@ -393,7 +394,7 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
                     <button key={u.id} type="button" className="nx-pick" disabled={busy === `add:${u.id}`} onClick={() => void addMember(String(u.id))}>
                       <Avatar name={displayName(u)} seed={String(u.id)} src={u.avatar} person size={28} />
                       <span className="nx-pick-text"><span>{displayName(u)}</span></span>
-                      {busy === `add:${u.id}` ? <Loader2 size={14} className="nx-spin" /> : <UserPlus size={14} />}
+                      {busy === `add:${u.id}` ? <Spinner size={14} /> : <UserPlus size={14} />}
                     </button>
                   ))}
                 </div>
@@ -415,7 +416,7 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
                   </button>
                   {id !== uid && (
                     <button type="button" className="nx-icon-btn" disabled={busy === `write:${id}`} onClick={() => void writeTo(id)} aria-label={`Написать ${displayName(u)}`}>
-                      {busy === `write:${id}` ? <Loader2 size={16} className="nx-spin" /> : <MessageCircle size={16} />}
+                      {busy === `write:${id}` ? <Spinner size={16} /> : <MessageCircle size={16} />}
                     </button>
                   )}
                   {canManage && id !== uid && (

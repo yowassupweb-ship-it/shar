@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { BellRing, Copy, Download, Minus, MoreVertical, PhoneCall, RefreshCw, RotateCw, Square, X } from 'lucide-react';
+import { BellRing, Copy, Minus, MoreVertical, PhoneCall, RefreshCw, RotateCw, Search, Square, X } from 'lucide-react';
 import { isNotifications, useChatStore } from '@/features/chat';
+import { openSpotlight } from '@/features/spotlight';
 import { links } from '@/shared/navigation/routes';
+import { showToast } from '@/shared/ui/Toast';
+import type { UpdaterStatus } from '@/shared/types/electron';
+import { Spinner } from '@/shared/ui/Spinner';
 import './electron.css';
 
 /**
@@ -30,7 +34,7 @@ export default function ElectronTitlebar() {
   const [menu, setMenu] = useState(false);
   const [zoom, setZoom] = useState(100);
   const [call, setCall] = useState<CallIsland | null>(null);
-  const [update, setUpdate] = useState<{ state: 'downloading' | 'downloaded'; version?: string; percent?: number } | null>(null);
+  const [update, setUpdate] = useState<UpdaterStatus | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Высота шапки — переменной: корень .nx и шторки встают под неё.
@@ -48,7 +52,12 @@ export default function ElectronTitlebar() {
     const offs = [
       desk.windowControls.onMaximizedChanged((v) => setMaximized(Boolean(v))),
       desk.call?.onIslandUpdate?.((d) => setCall(d && d.state ? d : null)),
-      desk.updater?.onStatus((d) => setUpdate(d)),
+      desk.updater?.onStatus((d) => {
+        // Загрузка идёт тихо, без индикатора: о новой версии сообщает готовая кнопка.
+        if (d.state === 'updated') { showToast(`Шар обновлён${d.version ? ` до версии ${d.version}` : ''}`, 'success'); setUpdate(null); return; }
+        if (d.state === 'error') { showToast(d.message || 'Не удалось обновиться', 'error'); setUpdate((prev) => (prev?.state === 'installing' ? { state: 'downloaded', version: prev.version } : prev)); return; }
+        setUpdate((prev) => (d.state === 'downloading' && prev?.state === 'downloaded' ? prev : d));
+      }),
     ];
     return () => offs.forEach((off) => { if (typeof off === 'function') off(); });
   }, [desk]);
@@ -79,6 +88,12 @@ export default function ElectronTitlebar() {
         {connection && <span className="ntb-conn" data-state={status}>{connection}</span>}
       </div>
 
+      <button type="button" className="ntb-search" onClick={openSpotlight} title="Поиск по всему Шару — чаты, люди, документы, задачи, файлы, история (Ctrl+K)" aria-label="Поиск по Шару">
+        <Search size={13} aria-hidden="true" />
+        <span>Поиск по Шару</span>
+        <kbd>Ctrl K</kbd>
+      </button>
+
       {call ? (
         <div className="ntb-island ntb-call" role="group" aria-label="Звонок">
           <button type="button" className="ntb-call-main" title="Вернуться к звонку" onClick={() => desk.call?.islandAction('restore')}>
@@ -97,11 +112,13 @@ export default function ElectronTitlebar() {
       ) : null}
 
       <div className="ntb-right">
-        {update && (
-          <button type="button" className="ntb-update" data-state={update.state} disabled={update.state === 'downloading'}
-            title={update.state === 'downloaded' ? 'Установить обновление и перезапустить' : `Загрузка обновления ${update.percent ?? 0}%`}
-            onClick={() => { if (update.state === 'downloaded') void desk.updater?.install(); }}>
-            {update.state === 'downloaded' ? <><RefreshCw size={11} aria-hidden="true" /> Обновить{update.version ? ` v${update.version}` : ''}</> : <><Download size={11} aria-hidden="true" /> {update.percent ?? 0}%</>}
+        {(update?.state === 'downloaded' || update?.state === 'installing') && (
+          <button type="button" className="ntb-update" data-state={update.state} disabled={update.state === 'installing'}
+            title={update.state === 'downloaded' ? 'Установить обновление и перезапустить — это займёт меньше минуты' : 'Обновляю и перезапускаю…'}
+            onClick={() => { setUpdate({ state: 'installing', version: update.version }); void desk.updater?.install(); }}>
+            {update.state === 'downloaded'
+              ? <><RefreshCw size={11} aria-hidden="true" /> Обновить{update.version ? ` v${update.version}` : ''}</>
+              : <><Spinner size={11} /> Обновляю…</>}
           </button>
         )}
 

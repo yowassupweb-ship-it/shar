@@ -4,18 +4,21 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import {
-  ArrowRight, Bell, Calendar, CheckSquare, File as FileIcon, FileText, Folder, FolderOpen, Image as ImageIcon, MessageSquare, Mic,
-  PhoneMissed, PhoneOff, Video,
+  ArrowRight, Bell, Calendar, CheckSquare, Eye, File as FileIcon, FileText, Folder, FolderOpen, Image as ImageIcon, MessageSquare, Mic,
+  PenLine, PhoneMissed, PhoneOff, Video,
 } from 'lucide-react';
+import { canOpenInEditor, openInEditor, viewKindOf } from '@/features/workspace';
 import type { Message, User } from '@/shared/types/chat';
 import { renderTextWithEmoji } from '@/shared/emoji/emojiText';
 import { Avatar } from '@/shared/ui/Avatar';
 import { attachmentUrl, formatTime } from '@/shared/ui/format';
 import { knownRatio, rememberRatio, thumbUrl } from '@/shared/ui/media';
 import { computeAlbumLayout } from './album';
-import { releasePreview } from '../store';
+import { openDocument, releasePreview } from '../store';
 import { navigate } from '@/shared/navigation/navigate';
-import { links } from '@/shared/navigation/routes';
+import { internalPath, links } from '@/shared/navigation/routes';
+import { Spinner } from '@/shared/ui/Spinner';
+import { downloadOnClick } from '@/shared/platform/download';
 
 /**
  * Содержимое сообщения: разбор вложений и отрисовка каждого вида. Правила
@@ -109,6 +112,16 @@ function mapText(children: ReactNode, query: string, key: string): ReactNode {
   return children;
 }
 
+/** Ссылка на страницу самого Шара (документ, чат…) открывается внутри приложения, остальные — как обычно. */
+function openLink(e: React.MouseEvent, href?: string) {
+  e.stopPropagation();
+  const inside = href ? internalPath(href) : null;
+  if (inside && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) {
+    e.preventDefault();
+    navigate(inside);
+  }
+}
+
 function mdComponents(query: string, id: string): Components {
   const t = (tag: string) => function Wrapped({ children }: { children?: ReactNode }) {
     const Tag = tag as 'p';
@@ -118,7 +131,7 @@ function mdComponents(query: string, id: string): Components {
     p: t('p'), li: t('li'), strong: t('strong'), em: t('em'), del: t('del'), td: t('td'), th: t('th'),
     h1: t('h4'), h2: t('h4'), h3: t('h5'), h4: t('h5'), h5: t('h6'), h6: t('h6'),
     a: ({ href, children }) => (
-      <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>{children}</a>
+      <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => openLink(e, href)}>{children}</a>
     ),
     img: ({ src, alt }) => (
       <a href={typeof src === 'string' ? src : undefined} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>{alt || 'Картинка'}</a>
@@ -143,7 +156,7 @@ export const RichText = memo(function RichText({ text, query = '', id }: { text:
   return (
     <>
       {parts.map((p, i) => (i % 2 === 1
-        ? <a key={i} href={p} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>{p}</a>
+        ? <a key={i} href={p} target="_blank" rel="noopener noreferrer" onClick={(e) => openLink(e, p)}>{p}</a>
         : <Fragment key={i}>{highlight(p, query, `${id}-${i}`)}</Fragment>))}
     </>
   );
@@ -467,17 +480,47 @@ function fmtSize(b?: number): string {
   return `${(b / 1048576).toFixed(1).replace('.', ',')} МБ`;
 }
 
+/**
+ * Файл в переписке. Скачать — по карточке. У файлов, которые умеет показывать панель просмотра, в карточке справа
+ * кнопки-иконки: просмотр (в боковой панели) и — для Word, Excel, CSV, Markdown и текста — открыть в редакторе.
+ * PDF и HTML открываются только на просмотр.
+ */
 export function FileCard({ att }: { att: Att }) {
   const name = att.name || decodeURIComponent(att.url.split('/').pop() || 'Файл');
   const ext = (name.match(/\.([a-z0-9]{1,5})$/i)?.[1] || 'файл').toUpperCase();
-  return (
-    <a className="cxm-file" href={att.url} target="_blank" rel="noopener noreferrer" download={name} onClick={(e) => e.stopPropagation()}>
+  const viewable = viewKindOf(name) !== null;
+  const editable = viewable && canOpenInEditor(name);
+  const [opening, setOpening] = useState(false);
+  const card = (
+    <a className="cxm-file" href={att.url} target="_blank" rel="noopener noreferrer" download={name} onClick={downloadOnClick(att.url, name)}>
       <span className="cxm-file-ext" style={{ '--tint': tintForExt(ext) } as React.CSSProperties}>{ext.slice(0, 4)}</span>
       <span className="cxm-file-text">
         <b>{name}</b>
         <span>{[fmtSize(att.size), 'Скачать'].filter(Boolean).join(' · ')}</span>
       </span>
     </a>
+  );
+  if (!viewable) return card;
+  return (
+    <div className="cxm-file-wrap" style={{ '--file-actions': editable ? 2 : 1 } as React.CSSProperties}>
+      {card}
+      <div className="cxm-file-actions">
+        <button type="button" title="Просмотр" aria-label={`Просмотр: ${name}`} onClick={(e) => { e.stopPropagation(); openDocument({ url: att.url, name, size: att.size }); }}>
+          <Eye size={17} aria-hidden="true" />
+        </button>
+        {editable && (
+          <button
+            type="button"
+            title="Открыть в редакторе — копия, исходный файл не изменится"
+            aria-label={`Открыть в редакторе: ${name}`}
+            disabled={opening}
+            onClick={(e) => { e.stopPropagation(); setOpening(true); void openInEditor({ url: att.url, name, size: att.size }).finally(() => setOpening(false)); }}
+          >
+            {opening ? <Spinner size={16} label="Открываю" /> : <PenLine size={16} aria-hidden="true" />}
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 

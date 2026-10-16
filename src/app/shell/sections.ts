@@ -6,7 +6,7 @@ import { paths } from '@/shared/navigation/routes';
  * здесь (и маршрутом в app/routes.tsx), а не в каждой раскладке отдельно.
  */
 
-export type SectionId = 'chats' | 'tasks' | 'calendar' | 'contacts' | 'files' | 'mail' | 'more';
+export type SectionId = 'chats' | 'tasks' | 'calendar' | 'contacts' | 'files' | 'mail' | 'office' | 'more';
 
 export interface Section {
   id: SectionId;
@@ -23,6 +23,7 @@ export const SECTIONS: Section[] = [
   { id: 'contacts', label: 'Контакты', href: paths.contacts, icon: 'contacts' },
   { id: 'files', label: 'Файлы', href: paths.files, icon: 'files' },
   { id: 'mail', label: 'Почта', href: paths.mail, icon: 'mail' },
+  { id: 'office', label: 'Офис', href: paths.office, icon: 'office' },
   { id: 'more', label: 'Ещё', href: paths.more, icon: 'menu' },
 ];
 

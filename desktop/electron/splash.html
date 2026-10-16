@@ -27,38 +27,19 @@
       background: rgba(255, 255, 255, .97);
       box-shadow: 0 20px 60px rgba(15, 23, 42, .22), inset 0 1px 0 rgba(255,255,255,.8);
     }
-    /* 5-frame flipbook sprite, same asset/technique as SharLogoSpinner.tsx in the
-       chat header — layered frames cross-fading in a triangular pulse so exactly
-       two adjacent frames are visible at any instant (opacities sum to 1), giving
-       a continuous dissolve instead of a hard-stepped stutter across 5 frames. */
+    /* Знак — один кадр, мягко «дышит» (масштаб и свечение), пока приложение грузится. */
     .logo {
-      position: relative;
-      width: 66px;
-      height: 66px;
+      width: 72px;
+      height: 72px;
+      object-fit: contain;
+            animation: shar-logo-pulse 2200ms ease-in-out infinite;
     }
-    .logo span {
-      position: absolute;
-      inset: 0;
-      background-image: url(./shar-logo-anim.png);
-      background-repeat: no-repeat;
-      background-size: 330px 66px; /* 5 frames * 66px */
-      opacity: 0;
-      animation: shar-logo-xfade 2600ms linear infinite;
-    }
-    .logo span:nth-child(1) { background-position: 0 0; animation-delay: 0ms; }
-    .logo span:nth-child(2) { background-position: -66px 0; animation-delay: -520ms; }
-    .logo span:nth-child(3) { background-position: -132px 0; animation-delay: -1040ms; }
-    .logo span:nth-child(4) { background-position: -198px 0; animation-delay: -1560ms; }
-    .logo span:nth-child(5) { background-position: -264px 0; animation-delay: -2080ms; }
-    @keyframes shar-logo-xfade {
-      0%   { opacity: 1; }
-      20%  { opacity: 0; }
-      80%  { opacity: 0; }
-      100% { opacity: 1; }
+    @keyframes shar-logo-pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.06); }
     }
     @media (prefers-reduced-motion: reduce) {
-      .logo span { animation: none !important; opacity: 0 !important; }
-      .logo span:first-child { opacity: 1 !important; }
+      .logo { animation: none !important; }
     }
     .title { font-size: 19px; line-height: 1; font-weight: 700; letter-spacing: -.02em; }
     .status { min-height: 17px; color: #6b7280; font-size: 12px; }
@@ -91,9 +72,7 @@
 </head>
 <body>
   <main class="card">
-    <div class="logo" role="img" aria-label="Shar OS">
-      <span></span><span></span><span></span><span></span><span></span>
-    </div>
+    <img class="logo" src="./splash-logo.png" alt="Shar OS" width="72" height="72">
     <div class="title">Shar OS</div>
     <div class="status">Запуск рабочего пространства…</div>
     <div class="update-progress"><div class="update-progress-fill"></div></div>

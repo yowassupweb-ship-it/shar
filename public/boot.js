@@ -10,11 +10,12 @@
     if (pref === 'dark') pref = 'graphite';
     if (!pref) pref = localStorage.getItem('theme') === 'dark' ? 'graphite' : 'light';
     var last = localStorage.getItem('themeLastDark');
-    if (last !== 'gray' && last !== 'graphite' && last !== 'black') last = 'graphite';
+    if (last !== 'graphite' && last !== 'black') last = 'graphite';
     var sysDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
     var palette = pref === 'system' ? (sysDark ? last : 'light') : pref;
     if (['light', 'gray', 'graphite', 'black'].indexOf(palette) < 0) palette = 'light';
-    root.classList.toggle('dark', palette !== 'light');
+    // Серая — светлая тема (тёмный текст), тёмные — только Графит и Чёрная.
+    root.classList.toggle('dark', palette === 'graphite' || palette === 'black');
     root.setAttribute('data-theme', palette);
   } catch (e) {}
   try {

@@ -1,3 +1,5 @@
+import { PUBLIC_ORIGIN } from '@/shared/navigation/routes';
+
 /**
  * Текст инструкции — отдельно от вёрстки: правится без риска что-то сломать.
  * Картинки лежат в public/how-to.
@@ -111,4 +113,4 @@ export const HELP: HelpItem[] = [
   { title: 'Попробуйте браузер', text: 'Если приложение временно не открывается, войдите через браузер.' },
 ];
 
-export const PROD_URL = 'https://vokrug-sveta.shar-os.ru';
+export const PROD_URL = PUBLIC_ORIGIN;

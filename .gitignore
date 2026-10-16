@@ -2,3 +2,8 @@ node_modules
 dist
 .env.local
 *.local
+
+# Сборки Электрона (локальные тесты и установщики) — в репозиторий не кладём
+desktop/release/
+desktop/release-test/
+desktop/web/

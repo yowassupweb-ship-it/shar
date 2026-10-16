@@ -165,6 +165,11 @@
   background-size: cover;
   transition: box-shadow var(--duration-fast) var(--ease-out);
 }
+/* Превью фонов чата: тяжёлые картинки подгружаются, когда плитка подъезжает к экрану. */
+.nst-tile-asset { position: absolute; inset: 0; overflow: hidden; border-radius: inherit; pointer-events: none; }
+.nst-tile-asset img { width: 100%; height: 100%; object-fit: cover; }
+.nst-tile-asset[data-pattern="true"] img { width: 180%; max-width: none; transform: translate(-22%); }
+
 .nst-tile[aria-checked="true"] .nst-tile-swatch { box-shadow: 0 0 0 2px var(--accent-fill), 0 0 0 4px color-mix(in srgb, var(--accent-fill) 25%, transparent); }
 .nst-tile:focus-visible { outline: none; }
 .nst-tile:focus-visible .nst-tile-swatch { box-shadow: var(--focus-ring); }

@@ -49,13 +49,15 @@ function scrimDismiss(onClose: () => void) {
 export type MenuAnchor = { x: number; y: number } | { element: HTMLElement; align?: 'start' | 'end'; side?: 'below' | 'above' };
 
 /** Меню у точки (контекстное) или у кнопки. Пункты — `.nx-menu-item`. */
-export function Menu({ anchor, onClose, label, children, compact }: {
+export function Menu({ anchor, onClose, label, children, compact, minWidth }: {
   anchor: MenuAnchor; onClose: () => void; label: string; children: ReactNode;
   /** Короткое меню — по ширине содержимого. */
   compact?: boolean;
+  /** Не уже этой ширины (выпадающий список — не уже своей кнопки). */
+  minWidth?: number;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [style, setStyle] = useState<CSSProperties>({ visibility: 'hidden', top: 0, left: 0 });
+  const [style, setStyle] = useState<CSSProperties>({ visibility: 'hidden', top: 0, left: 0, ...(minWidth ? { minWidth } : {}) });
   useRestoreFocus();
   useEscape(onClose);
 
@@ -86,9 +88,14 @@ export function Menu({ anchor, onClose, label, children, compact }: {
     }
     x = Math.max(margin, Math.min(x, vw - width - margin));
     y = Math.max(box.top + margin, Math.min(y, vh - height - margin));
-    setStyle({ top: y, left: x, ['--origin' as string]: origin });
+    // Координаты — по целым физическим пикселям. Курсор и getBoundingClientRect дают
+    // дробные значения, а при масштабе экрана 125% / 150% меню с дробным сдвигом
+    // рисуется со сглаживанием: эмодзи реакций и текст получаются мыльными.
+    const dpr = window.devicePixelRatio || 1;
+    const snap = (v: number) => Math.round(v * dpr) / dpr;
+    setStyle({ top: snap(y), left: snap(x), ...(minWidth ? { minWidth } : {}), ['--origin' as string]: origin });
     el.querySelector<HTMLElement>('.nx-menu-item:not(:disabled)')?.focus({ preventScroll: true });
-  }, [anchor]);
+  }, [anchor, minWidth]);
 
   useEffect(() => {
     const onDown = (e: PointerEvent) => {

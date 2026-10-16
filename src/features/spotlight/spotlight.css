@@ -1,0 +1,117 @@
+/* Поиск «как Spotlight». Префикс nsp. Только токены. */
+.nsp-scrim { align-items: start; padding-top: min(14vh, 120px); }
+.nsp {
+  display: flex;
+  flex-direction: column;
+  width: min(660px, 100%);
+  max-height: min(620px, 78dvh);
+  overflow: hidden;
+  border-radius: var(--radius-xl);
+  background: var(--surface-panel);
+  box-shadow: var(--float);
+  animation: nx-pop var(--duration-base) var(--ease-spring);
+}
+.nsp-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  height: 56px;
+  flex: none;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-muted);
+}
+.nsp-field input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-main);
+  font: inherit;
+  font-size: var(--text-lg, 17px);
+}
+.nsp-field input::placeholder { color: var(--text-muted); }
+.nsp kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--text-main) 9%, transparent);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+}
+.nsp-list { flex: 1; min-height: 0; padding: var(--space-2); }
+.nsp-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: var(--space-2) var(--space-2) var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: .02em;
+  color: var(--text-muted);
+}
+.nsp-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+@media (hover: hover) { .nsp-clear:hover { color: var(--text-main); background: var(--surface-hover); } }
+.nsp-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 46px;
+  padding: 6px var(--space-3);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.nsp-row[aria-selected="true"] { background: var(--surface-selected); }
+.nsp-icon { flex: none; display: grid; place-items: center; width: 28px; height: 28px; color: var(--text-2); }
+.nsp-kind {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(160deg, var(--a), var(--b));
+  color: var(--on-media, #fff);
+}
+.nsp-text { display: grid; gap: 1px; min-width: 0; flex: 1; }
+.nsp-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-md); font-weight: var(--weight-medium); color: var(--text-main); }
+.nsp-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-xs); color: var(--text-muted); }
+.nsp mark { background: color-mix(in srgb, var(--accent-fill) 28%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
+.nsp-enter { flex: none; color: var(--text-muted); }
+.nsp-forget { flex: none; }
+.nsp-empty, .nsp-more { margin: var(--space-4) var(--space-3); color: var(--text-muted); font-size: var(--text-sm); line-height: var(--leading-normal); }
+.nsp-more { margin-top: var(--space-1); font-size: var(--text-xs); }
+.nsp-foot {
+  display: flex;
+  gap: var(--space-4);
+  flex: none;
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--border-color);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.nsp-foot span { display: inline-flex; align-items: center; gap: 4px; }
+@media (max-width: 640px) {
+  .nsp-scrim { padding-top: var(--space-4); }
+  .nsp-foot { display: none; }
+}
+.nsp-field input:focus-visible { outline: none; box-shadow: none; }

@@ -66,6 +66,50 @@ def _can_view_cloud(item: dict, me: Identity) -> bool:
     return bool(dept) and f"dept:{dept}" in shared
 
 
+# ── живое обновление: «в облаке что-то поменялось» ─────────────────────────────
+# Без этого человек, которому открыли папку, видел изменения только после ручного обновления страницы.
+# Событие крошечное (без имён и содержимого): клиент по нему сам перечитывает ту папку, что открыта.
+
+def _cloud_audience(folder_id: Optional[str], *items: Optional[dict]) -> set:
+    """Кто видит эту папку и эти файлы: владельцы и те, с кем поделились, — по самой папке и по всем её родителям."""
+    rows: list = [i for i in items if i]
+    seen: set = set()
+    fid = folder_id
+    for _ in range(16):
+        if not fid or fid in seen:
+            break
+        seen.add(fid)
+        folder = db.get_cloud_folder_by_id(fid)
+        if not folder:
+            break
+        rows.append(folder)
+        fid = folder.get('parent_id')
+    users: set = set()
+    for row in rows:
+        if row.get('owner_id'):
+            users.add(str(row['owner_id']))
+        for entry in (row.get('shared_with') or []):
+            entry = str(entry)
+            if entry.startswith('dept:'):
+                members = db.conn.fetch_all("SELECT id FROM users WHERE department = %s", (entry[5:],)) or []
+                users.update(str(m['id']) for m in members)
+            else:
+                users.add(entry)
+    return users
+
+
+def _cloud_changed(folder_id: Optional[str], *items: Optional[dict], extra_folders: tuple = ()) -> None:
+    """Сообщить заинтересованным, что содержимое папки изменилось. Никогда не ломает запрос."""
+    try:
+        audience = _cloud_audience(folder_id, *items)
+        for other in extra_folders:  # перенос: и откуда, и куда
+            audience |= _cloud_audience(other)
+        for uid in audience:
+            sse_manager.push(uid, {"type": "cloud_changed", "folderId": folder_id})
+    except Exception as exc:
+        logger.warning("[cloud] could not announce change: %s", exc)
+
+
 @router.get("/api/cloud/folders")
 def get_cloud_folders(parentId: Optional[str] = None, me: Identity = Depends(current_identity)):
     userId = me.user_id  # владелец — вошедший, не параметр запроса
@@ -86,6 +130,7 @@ def create_cloud_folder(body: CloudFolderCreate, me: Identity = Depends(current_
     })
     if not folder:
         raise HTTPException(status_code=500, detail="Failed to create folder")
+    _cloud_changed(body.parentId, folder)
     return snake_to_camel(folder)
 
 
@@ -152,13 +197,17 @@ def update_cloud_folder(folder_id: str, body: CloudFolderUpdate, me: Identity = 
         if r: result = dict(r)
     if not result:
         raise HTTPException(status_code=400, detail="Nothing to update or folder not found")
+    _cloud_changed(result.get('parent_id'), result, extra_folders=(body.parentId,) if body.parentId else ())
     return snake_to_camel(result)
 
 
 @router.delete("/api/cloud/folders/{folder_id}")
 def delete_cloud_folder(folder_id: str, me: Identity = Depends(current_identity)):
     userId = me.user_id  # владелец — вошедший, не параметр запроса
+    before = db.get_cloud_folder_by_id(folder_id)
     db.delete_cloud_folder(folder_id, userId)
+    if before:
+        _cloud_changed(before.get('parent_id'), before)
     return {"ok": True}
 
 
@@ -187,6 +236,7 @@ def update_cloud_folder_access(folder_id: str, body: CloudAccessUpdate, me: Iden
     newly_added = set(combined_shared) - old_shared
     if newly_added:
         _notify_access_granted(userId, result.get('name', ''), 'folder', newly_added, item_id=folder_id)
+    _cloud_changed(result.get('parent_id'), result, old)
     return snake_to_camel(result)
 
 
@@ -241,6 +291,7 @@ def create_cloud_file(body: CloudFileMeta, me: Identity = Depends(current_identi
     })
     if not file:
         raise HTTPException(status_code=500, detail="Failed to save file")
+    _cloud_changed(file.get('folder_id'), file)
     return snake_to_camel(file)
 
 
@@ -257,6 +308,7 @@ def update_cloud_file(file_id: str, body: CloudFileUpdate, me: Identity = Depend
         raise HTTPException(status_code=400, detail="Nothing to update")
     if not result:
         raise HTTPException(status_code=404, detail="File not found")
+    _cloud_changed(result.get('folder_id'), result, extra_folders=(body.folderId,) if body.folderId else ())
     return snake_to_camel(result)
 
 
@@ -343,6 +395,7 @@ def update_cloud_file_access(file_id: str, body: CloudAccessUpdate, me: Identity
     newly_added = set(combined_shared) - old_shared
     if newly_added:
         _notify_access_granted(userId, result.get('name', ''), 'file', newly_added, item_id=file_id)
+    _cloud_changed(result.get('folder_id'), result, old)
     return snake_to_camel(result)
 
 
@@ -352,6 +405,7 @@ def delete_cloud_file(file_id: str, me: Identity = Depends(current_identity)):
     deleted = db.delete_cloud_file(file_id, userId)
     if not deleted:
         raise HTTPException(status_code=404, detail="File not found")
+    _cloud_changed(deleted.get('folder_id'), deleted)
     if deleted.get('s3_key') and s3_storage.enabled:
         try:
             s3_storage.delete_object(deleted['s3_key'])

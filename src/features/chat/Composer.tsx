@@ -5,16 +5,19 @@ import {
 } from 'lucide-react';
 import { plural } from '@/shared/ui/format';
 import { askConfirm, Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
+import { showToast } from '@/shared/ui/Toast';
 import ForwardSheet from './ForwardSheet';
 import RichInput, { type RichInputHandle } from './RichInput';
 import { readDraft, writeDraft } from './drafts';
-import { deleteMessage, editMessage } from './messageActions';
+import { deleteMessage, editMessage, forwardMessages } from './messageActions';
 import {
-  displayName, isGroupChat, notifyTyping, previewText, sendFiles, sendPoll, sendText, setCompose, setPanel, setSelection,
+  displayName, isGroupChat, notifyTyping, previewText, sendFiles, sendPoll, sendText, setCompose, setForwardDraft, setPanel, setSelection,
   useChatStore, type Msg,
 } from './store';
 import TypingLine from './TypingLine';
 import VoiceRecorder from './VoiceRecorder';
+
+const MAX_FILES = 10;
 
 const PollCreatorModal = lazyComponent(() => import('@/features/chat/polls/PollCreatorModal'));
 
@@ -42,6 +45,7 @@ export default function Composer({ chatId, readOnly }: { chatId: string; readOnl
   const users = useChatStore((s) => s.users);
   const panel = useChatStore((s) => s.panel);
   const selection = useChatStore((s) => (s.selection?.chatId === chatId ? s.selection.ids : null));
+  const forwardDraft = useChatStore((s) => s.forwardDraft[chatId]);
   const [forwarding, setForwarding] = useState<Msg[] | null>(null);
   const [text, setText] = useState(() => readDraft(chatId));
   const [files, setFiles] = useState<File[]>([]);
@@ -94,11 +98,16 @@ export default function Composer({ chatId, readOnly }: { chatId: string; readOnl
   if (readOnly) return null;
 
   const hasText = text.trim().length > 0;
-  const canSend = hasText || files.length > 0;
+  const forwardCount = forwardDraft?.length ?? 0;
+  const canSend = hasText || files.length > 0 || forwardCount > 0;
   const cancel = () => setCompose(chatId, {});
   const addFiles = (list: FileList | File[] | null) => {
     const arr = Array.from(list || []).filter((f) => f.size > 0);
-    if (arr.length) setFiles((prev) => [...prev, ...arr].slice(0, 10));
+    if (!arr.length) return;
+    // Больше 10 файлов в сообщение не уходит — лишние не теряем молча, а говорим, что их нужно отправить отдельно.
+    const left = Math.max(0, MAX_FILES - files.length);
+    if (arr.length > left) showToast(left ? `В одно сообщение — до ${MAX_FILES} файлов. Прикреплены первые ${left}, остальные отправьте следующим сообщением` : `В одно сообщение — до ${MAX_FILES} файлов. Отправьте эти и прикрепите остальные`, 'info');
+    setFiles((prev) => [...prev, ...arr].slice(0, MAX_FILES));
   };
 
   const submit = () => {
@@ -108,14 +117,22 @@ export default function Composer({ chatId, readOnly }: { chatId: string; readOnl
       setText(readDraft(chatId));
       return;
     }
-    if (files.length) {
-      void sendFiles(chatId, files, text);
-      setFiles([]);
-    } else if (hasText) {
-      sendText(chatId, text);
+    if (!hasText && !files.length && !forwardCount) return;
+    // Свои слова и файлы уходят после пересылаемых — в том же порядке, как их видно в композере.
+    const ownText = text;
+    const ownFiles = files;
+    const sendOwn = () => {
+      if (ownFiles.length) void sendFiles(chatId, ownFiles, ownText);
+      else if (ownText.trim()) sendText(chatId, ownText);
+    };
+    if (forwardDraft?.length) {
+      const pending = forwardDraft;
+      setForwardDraft(chatId, null);
+      void forwardMessages(chatId, pending).then((ok) => { if (ok) sendOwn(); else setForwardDraft(chatId, pending); });
     } else {
-      return;
+      sendOwn();
     }
+    setFiles([]);
     setText('');
     writeDraft(chatId, '');
     notifyTyping(chatId, false);
@@ -135,6 +152,26 @@ export default function Composer({ chatId, readOnly }: { chatId: string; readOnl
     }
     return false;
   };
+
+  // Пересылаемые сообщения — вложением над полем: кто написал и о чём, каждое можно убрать.
+  const forwardTray = forwardCount > 0 ? (
+    <div className="cxc-forward" role="group" aria-label="Пересылаемые сообщения">
+      <div className="cxc-forward-head">
+        <Forward size={14} aria-hidden="true" />
+        <b>Пересылка: {forwardCount} {plural(forwardCount, ['сообщение', 'сообщения', 'сообщений'])}</b>
+        <span>добавьте комментарий и отправьте</span>
+        <button type="button" className="nx-icon-btn" onClick={() => setForwardDraft(chatId, null)} aria-label="Не пересылать"><X size={14} /></button>
+      </div>
+      <ul className="cxc-forward-list">
+        {forwardDraft!.map((m) => (
+          <li key={String(m.id)}>
+            <span><b>{displayName(users[String(m.authorId)]) || m.authorName || 'Сообщение'}: </b>{previewText(m) || 'Вложение'}</span>
+            <button type="button" className="nx-icon-btn" onClick={() => setForwardDraft(chatId, forwardDraft!.filter((x) => String(x.id) !== String(m.id)))} aria-label="Убрать из пересылки"><X size={12} /></button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  ) : null;
 
   const bar = editing ? (
     <div className="cxc-bar" data-kind="edit">
@@ -202,6 +239,7 @@ export default function Composer({ chatId, readOnly }: { chatId: string; readOnl
       onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
     >
       <TypingLine chatId={chatId} />
+      {forwardTray}
       {bar}
       {files.length > 0 && (
         <div className="cxc-files" aria-label="Вложения к отправке">
@@ -253,6 +291,7 @@ export default function Composer({ chatId, readOnly }: { chatId: string; readOnl
               }}
               onPasteFiles={addFiles}
               onKeyDown={(e) => {
+                if (e.key === 'Escape' && forwardCount && !editing) { e.preventDefault(); setForwardDraft(chatId, null); return; }
                 if (e.key === 'Escape' && (editing || replyTo)) { e.preventDefault(); cancel(); return; }
                 if (e.key === 'ArrowUp' && !text && !editing && !files.length && editLast()) { e.preventDefault(); return; }
                 if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.nativeEvent.isComposing || coarse) return;

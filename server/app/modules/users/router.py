@@ -54,6 +54,14 @@ def public_user(user: Any) -> Any:
     return user
 
 
+@router.post("/api/users/{user_id}/status")
+@router.post("/api/users/{user_id}/heartbeat")
+def legacy_presence_noop(user_id: str, me: Identity = Depends(current_identity)):
+    """Совместимость: старые клиенты (Electron ≤0.2.80, закэшированные вкладки) шлют присутствие
+    сюда. В v2 «в сети» считается по открытому сокету, поэтому запрос ничего не пишет."""
+    return {"success": True}
+
+
 class UserCreate(BaseModel):
     username: Optional[str] = None  # Логин пользователя
     name: str

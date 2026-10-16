@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Copy, Download, ExternalLink, MessageSquareText, X } from 'lucide-react';
 import { thumbUrl } from './media';
+import { downloadOnClick } from '@/shared/platform/download';
 
 /**
  * Просмотр фото на весь экран.
@@ -257,7 +258,7 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
               <Copy size={18} />
             </button>
           )}
-          <a className="nxv-btn" href={item.url} download={item.name || true} aria-label="Скачать" title="Скачать"><Download size={18} /></a>
+          <a className="nxv-btn" href={item.url} download={item.name || true} onClick={downloadOnClick(item.url, item.name)} aria-label="Скачать" title="Скачать"><Download size={18} /></a>
           <a className="nxv-btn" href={item.url} target="_blank" rel="noopener noreferrer" aria-label="Открыть оригинал" title="Открыть оригинал"><ExternalLink size={18} /></a>
           <button ref={closeRef} type="button" className="nxv-btn" onClick={onClose} aria-label="Закрыть" title="Закрыть (Esc)"><X size={20} /></button>
         </div>

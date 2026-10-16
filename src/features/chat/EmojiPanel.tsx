@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
-  Car, Cat, Clock, Dumbbell, Flag, GlassWater, Hand, Hash, Heart, Lightbulb, Loader2, Plane, Plus, Search, Smile, Trash2,
+  Car, Cat, Clock, Dumbbell, Flag, GlassWater, Hand, Hash, Heart, Lightbulb, Plane, Plus, Search, Smile, Trash2,
   Users, UtensilsCrossed, X,
 } from 'lucide-react';
 import AnimatedSticker from '@/features/chat/bubbles/AnimatedSticker';
@@ -8,6 +8,7 @@ import { getAppleEmojiUrl } from '@/shared/emoji/appleEmoji';
 import { EMOJI_CATEGORIES, QUICK_REACTIONS, searchEmoji, type EmojiItem } from '@/shared/emoji/emojiData';
 import { askConfirm } from '@/shared/ui/overlay';
 import { sendSticker, setPanel, useChatStore } from './store';
+import { Spinner } from '@/shared/ui/Spinner';
 
 /**
  * Эмодзи и стикеры — в боковой панели переписки (там же, где профиль).
@@ -212,7 +213,7 @@ function StickerTab({ chatId }: { chatId: string }) {
       )}
       <div className="cxe-scroll nx-scroll-y">
         {sets === null || (active && stickers === null) ? (
-          <div className="nx-state" aria-busy="true"><Loader2 size={20} className="nx-spin" aria-hidden="true" /></div>
+          <div className="nx-state" aria-busy="true"><Spinner size={20} /></div>
         ) : !sets.length ? (
           <div className="nx-state"><h2>Наборов пока нет</h2><p>Добавьте набор из Telegram по названию.</p>
             <button type="button" className="nx-ghost" onClick={() => setAdding(true)}><Plus size={14} /> Добавить набор</button></div>

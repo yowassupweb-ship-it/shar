@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { Eye, EyeOff, Loader2, TriangleAlert } from 'lucide-react';
+import { Eye, EyeOff, TriangleAlert } from 'lucide-react';
 import SharMark from '@/shared/ui/SharMark';
 import { login, LoginError } from '@/shared/session/session';
+import { Spinner } from '@/shared/ui/Spinner';
 import './login.css';
 
 /**
@@ -96,7 +97,7 @@ export default function LoginScreen() {
         {error && <p className="nx-error nx-login-error" role="alert">{error}</p>}
 
         <button type="submit" className="nx-primary nx-login-submit" disabled={busy}>
-          {busy ? <><Loader2 size={16} className="nx-spin" aria-hidden="true" /> Входим…</> : 'Войти'}
+          {busy ? <><Spinner size={16} /> Входим…</> : 'Войти'}
         </button>
         <p className="nx-login-foot">Забыли пароль? Попросите администратора выдать новый.</p>
       </form>

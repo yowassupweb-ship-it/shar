@@ -9,6 +9,7 @@ const TOGGLES: { key: TabKey; label: string; hint?: string }[] = [
   { key: 'calendar', label: 'Календарь' },
   { key: 'contacts', label: 'Контакты' },
   { key: 'files', label: 'Файлы' },
+  { key: 'office', label: 'Офис', hint: 'Заметки, документы, таблицы, презентации' },
   { key: 'mail', label: 'Почта', hint: 'Если подключён почтовый ящик' },
 ];
 

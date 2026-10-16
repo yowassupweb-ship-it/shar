@@ -7,6 +7,7 @@
 const LS_MSG_SOUNDS   = 'shar_message_sounds';   // 'on' | 'off'  (default on)
 const LS_RINGTONE     = 'shar_ringtone';         // builtin id | 'custom'
 const LS_RINGTONE_CUS = 'shar_ringtone_custom';  // data: URL of an uploaded file
+const LS_NOTIFY_VOLUME = 'shar_notification_volume'; // 0…2 (1 = как раньше), громкость сигналов сообщений и уведомлений
 
 let _ctx: AudioContext | null = null;
 function ctx(): AudioContext | null {
@@ -33,6 +34,21 @@ if (typeof window !== 'undefined') {
 
 // ── Message sounds ──────────────────────────────────────────────────────────
 
+/** Громкость сигналов уведомлений: 0 — тишина, 1 — как раньше, до 2 — вдвое громче. */
+export function getNotificationVolume(): number {
+  if (typeof window === 'undefined') return 1;
+  const stored = localStorage.getItem(LS_NOTIFY_VOLUME);
+  const raw = Number(stored);
+  return stored !== null && Number.isFinite(raw) ? Math.max(0, Math.min(2, raw)) : 1;
+}
+export function setNotificationVolume(volume: number): void {
+  if (typeof window === 'undefined') return;
+  const clamped = Math.max(0, Math.min(2, volume));
+  localStorage.setItem(LS_NOTIFY_VOLUME, String(clamped));
+  // Карточки уведомлений рисует главный процесс Electron — звук в них играет он, ему и сообщаем.
+  try { window.sharDesktop?.notifications?.setVolume(clamped); } catch { /* не Electron */ }
+}
+
 export function messageSoundsEnabled(): boolean {
   if (typeof window === 'undefined') return true;
   return localStorage.getItem(LS_MSG_SOUNDS) !== 'off';
@@ -49,7 +65,8 @@ function chime(freqs: number[], opts: { gain?: number; dur?: number; type?: Osci
   if (!ac) return;
   const now = ac.currentTime;
   const dur = opts.dur ?? 0.12;
-  const peak = opts.gain ?? 0.09;
+  const peak = Math.min(0.9, (opts.gain ?? 0.09) * getNotificationVolume());
+  if (peak <= 0.0002) return;
   freqs.forEach((f, i) => {
     const t0 = now + i * (dur * 0.8);
     const osc = ac.createOscillator();
@@ -72,7 +89,8 @@ function glide(fFrom: number, fTo: number, opts: { gain?: number; dur?: number; 
   if (!ac) return;
   const now = ac.currentTime;
   const dur = opts.dur ?? 0.15;
-  const peak = opts.gain ?? 0.06;
+  const peak = Math.min(0.9, (opts.gain ?? 0.06) * getNotificationVolume());
+  if (peak <= 0.0002) return;
   const osc = ac.createOscillator();
   const g = ac.createGain();
   osc.type = opts.type ?? 'triangle';
@@ -104,6 +122,8 @@ export function playBellStrike(): void {
   const nowMs = Date.now();
   if (nowMs - _lastBellAt < 800) return;
   _lastBellAt = nowMs;
+  const volume = getNotificationVolume();
+  if (volume <= 0.01) return;
   const ac = ctx();
   if (!ac) return;
   const now = ac.currentTime;
@@ -123,7 +143,7 @@ export function playBellStrike(): void {
     osc.type = 'sine';
     osc.frequency.setValueAtTime(fundamental * p.mult, now);
     g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(p.gain, now + 0.004); // sharp metallic strike
+    g.gain.exponentialRampToValueAtTime(Math.min(0.9, p.gain * volume), now + 0.004); // sharp metallic strike
     g.gain.exponentialRampToValueAtTime(0.0001, now + p.dur); // long ring-out
     osc.connect(g); g.connect(ac.destination);
     osc.start(now); osc.stop(now + p.dur + 0.05);

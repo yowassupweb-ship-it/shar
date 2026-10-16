@@ -46,16 +46,22 @@ class MessagesRepo:
         """Return the last non-deleted message for each chat in ONE query."""
         if not chat_ids:
             return {}
+        # По одной строке на чат через индекс (chat_id, created_at DESC) WHERE NOT is_deleted.
+        # Прежний DISTINCT ON сортировал ВСЕ сообщения всех чатов пользователя (десятки
+        # тысяч широких строк с metadata/attachments, со сбросом на диск) ради одной строки.
         query = """
-            SELECT DISTINCT ON (chat_id)
-                chat_id, id, content, author_id, author_name,
-                created_at, attachments, metadata, is_system_message,
-                notification_type, linked_task_id, linked_post_id
-            FROM messages
-            WHERE chat_id = ANY(%s) AND is_deleted = false
-            ORDER BY chat_id, created_at DESC
+            SELECT m.chat_id, m.id, m.content, m.author_id, m.author_name,
+                   m.created_at, m.attachments, m.metadata, m.is_system_message,
+                   m.notification_type, m.linked_task_id, m.linked_post_id
+            FROM unnest(%s::text[]) AS c(chat_id)
+            CROSS JOIN LATERAL (
+                SELECT * FROM messages
+                WHERE chat_id = c.chat_id AND is_deleted = false
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) m
         """
-        rows = self.conn.fetch_all(query, (chat_ids,))
+        rows = self.conn.fetch_all(query, (list(chat_ids),))
         return {str(row['chat_id']): dict(row) for row in rows}
 
     def get_unread_counts_bulk(self, chat_ids: List[str], user_id: str,

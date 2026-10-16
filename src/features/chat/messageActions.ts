@@ -2,7 +2,7 @@ import type { Message } from '@/shared/types/chat';
 import { showToast } from '@/shared/ui/Toast';
 import { isRetryableStatus } from './api';
 import { writeDraft } from './drafts';
-import { internals, setCompose, type Thread } from './store';
+import { internals, loadChats, markMessageDeleted, setCompose, type Thread } from './store';
 import { sendMessage } from './transport';
 
 /**
@@ -142,6 +142,15 @@ export async function editMessage(chatId: string, messageId: string, content: st
   showToast('Правка не сохранилась — текст вернули в поле ввода', 'error');
 }
 
+let chatsReloadTimer: number | null = null;
+/** Список чатов после удаления: превью в нём остаётся прежним, пока его не перечитать.
+ *  Другим участникам это делает событие message_deleted, самому удаляющему — только здесь.
+ *  Пакетное удаление (несколько сообщений подряд) даёт один запрос. */
+function reloadChatsAfterDelete() {
+  if (chatsReloadTimer !== null) window.clearTimeout(chatsReloadTimer);
+  chatsReloadTimer = window.setTimeout(() => { chatsReloadTimer = null; void loadChats(); }, 400);
+}
+
 /** Удаление: сначала анимация исчезновения (data-leaving), потом из ленты. */
 export async function deleteMessage(chatId: string, messageId: string) {
   const uid = myId();
@@ -160,6 +169,7 @@ export async function deleteMessage(chatId: string, messageId: string) {
       );
       return;
     }
+    markMessageDeleted(messageId, chatId);
     patchMsg(chatId, messageId, (m) => ({ ...m, _leaving: true } as Message));
     window.setTimeout(() => {
       patchThread(chatId, (t: Thread) => {
@@ -169,6 +179,7 @@ export async function deleteMessage(chatId: string, messageId: string) {
         return { ...t, byId, ids: t.ids.filter((x) => x !== messageId) };
       });
     }, 220);
+    reloadChatsAfterDelete();
   } catch {
     showToast('Не удалось удалить — нет связи с сервером. Попробуйте ещё раз', 'error');
   }

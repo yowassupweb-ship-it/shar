@@ -23,7 +23,7 @@ if (!existsSync(path.join(dist, 'index.html'))) throw new Error(`Vite build not 
 
 rmSync(outputDir, { recursive: true, force: true });
 mkdirSync(outputDir, { recursive: true });
-// Картинки эмодзи (~100 МБ) в установщик не кладём: их отдаёт прод-сервер, а локальный
+// Картинки эмодзи (~26 МБ) в установщик не кладём: их отдаёт прод-сервер, а локальный
 // сервер проксирует /emojis туда же (см. server.js).
 cpSync(dist, path.join(outputDir, 'dist'), { recursive: true, filter: (src) => !src.includes(`${path.sep}emojis${path.sep}`) });
 cpSync(path.join(__dirname, 'web-server.cjs'), path.join(outputDir, 'server.js'));

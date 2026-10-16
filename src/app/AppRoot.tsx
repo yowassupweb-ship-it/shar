@@ -1,7 +1,7 @@
 import { Suspense, useEffect, useLayoutEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import type { User } from '@/shared/types/chat';
-import { boot, shutdown, unreadChatsTotal, useChatStore } from '@/features/chat';
+import { boot, isMuted, shutdown, unreadChatsTotal, useChatStore } from '@/features/chat';
 import { EventEditorHost } from '@/features/calendar';
 import { BrowserPushService } from '@/shared/platform/push/browserPushService';
 import { OverlayHost } from '@/shared/ui/overlay';
@@ -13,6 +13,8 @@ import { sectionFor } from './shell/sections';
 import { useSession, verifySession } from '@/shared/session/session';
 import LoginScreen from './LoginScreen';
 import ElectronTitlebar from './electron/ElectronTitlebar';
+import { startWorkspaceToasts } from '@/features/workspace/live';
+import { SpotlightHost, useVisitTracker } from '@/features/spotlight';
 
 /**
  * Корень Шара v2 — живёт над всеми разделами и не пересоздаётся при переходе
@@ -68,6 +70,35 @@ function Workspace({ me }: { me: User }) {
 
   useTitleBlink(unread);
 
+  // Значок на кнопке приложения (панель задач, трей): число чатов с непрочитанным
+  // берём прямо из стора, а не через опрос — иначе значок появлялся не сразу или
+  // не появлялся вовсе. Сбрасываем при выходе из аккаунта.
+  useEffect(() => { window.sharDesktop?.setBadgeCount?.(unread); }, [unread]);
+  useEffect(() => () => { window.sharDesktop?.setBadgeCount?.(0); }, []);
+
+  // «Вам открыли документ» — тост в любом разделе; сам список «Офиса» обновляется отдельно.
+  useEffect(() => startWorkspaceToasts(), []);
+  // История посещений для поиска (Ctrl+K).
+  useVisitTracker();
+
+  // Главный процесс сам показывает карточки о сообщениях и о мьюте ничего не
+  // знает — передаём ему список чатов с выключенными уведомлениями.
+  useEffect(() => {
+    const push = window.sharDesktop?.realtime?.setMutedChats;
+    if (!push) return undefined;
+    const uid = String(me.id);
+    let last: string | null = null;
+    const sync = () => {
+      const ids = Object.values(useChatStore.getState().chats).filter((c) => isMuted(c, uid)).map((c) => String(c.id)).sort();
+      const key = ids.join('|');
+      if (key === last) return;
+      last = key;
+      push(ids);
+    };
+    sync();
+    return useChatStore.subscribe(sync);
+  }, [me]);
+
   // Сервис уведомлений: в Electron включает карточки о сообщениях в главном
   // процессе и сообщает, какой чат открыт; плюс напоминания о событиях.
   useEffect(() => {
@@ -93,6 +124,8 @@ function Workspace({ me }: { me: User }) {
     const offRoute = desk.onOpenRoute?.((url) => {
       const chat = (() => { try { return new URL(url, window.location.origin).searchParams.get('chat'); } catch { return null; } })();
       if (chat) { openChat(chat, go); return; }
+      // Свой адрес (/office?…, например из окна заметки на столе) открываем как есть.
+      if (url.startsWith('/')) { go(url); return; }
       const target = fromLegacyUrl(url);
       if (target) go(target);
     });
@@ -133,6 +166,7 @@ function Workspace({ me }: { me: User }) {
         </div>
       </AppShell>
       <OverlayHost />
+      <SpotlightHost />
       <EventEditorHost />
     </ShellContext.Provider>
   );

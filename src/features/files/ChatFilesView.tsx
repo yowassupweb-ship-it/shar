@@ -7,6 +7,9 @@ import { Avatar } from '@/shared/ui/Avatar';
 import { thumbUrl } from '@/shared/ui/media';
 import { cachedChatFiles, cachedChatFolders, fileUrl, fmtBytes, fmtDate, kindOf, loadChatFiles, loadChatFolders, type ChatAttachment, type ChatFolder } from './api';
 import { FileGlyph } from './FileGlyph';
+import { downloadOnClick } from '@/shared/platform/download';
+import { viewKindOf, type FileRef } from '@/features/workspace';
+import { DocOverlay } from './DocOverlay';
 
 const ImageViewer = lazyComponent(() => import('@/shared/ui/ImageViewer'));
 
@@ -87,6 +90,8 @@ export function ChatFiles({ lead, chat, onBack }: { lead?: ReactNode; chat: { ch
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
   const [viewer, setViewer] = useState<{ items: ViewerItem[]; start: number } | null>(null);
+  /** Документ во встроенном просмотре (PDF, Word, Excel, CSV, текст, HTML). */
+  const [doc, setDoc] = useState<FileRef | null>(null);
 
   const load = useCallback(async () => {
     try { setList(await loadChatFiles(chat.chatId)); setPhase('ready'); } catch { setPhase((p) => (p === 'ready' ? p : 'error')); }
@@ -176,12 +181,22 @@ export function ChatFiles({ lead, chat, onBack }: { lead?: ReactNode; chat: { ch
                   {docs.map((a) => (
                     <div key={a.messageId + a.url} className="nf-row">
                       <FileGlyph name={a.filename} kind={kindOf(a.filename, a.fileType, a.mimeType)} size="sm" />
-                      <a className="nf-text" href={fileUrl(a.url)} target="_blank" rel="noopener noreferrer">
+                      <a
+                        className="nf-text"
+                        href={fileUrl(a.url)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => {
+                          // Документ — во встроенном просмотре, остальное — скачать через приложение (не внешний браузер).
+                          if (viewKindOf(a.filename)) { e.preventDefault(); setDoc({ url: fileUrl(a.url), name: a.filename, size: a.size ?? undefined }); return; }
+                          downloadOnClick(fileUrl(a.url), a.filename)(e);
+                        }}
+                      >
                         <span className="nf-name">{a.filename}</span>
                         <span className="nf-meta">{[a.authorName, fmtBytes(a.size), fmtDate(a.createdAt)].filter(Boolean).join(' · ')}</span>
                       </a>
                       <button type="button" className="nx-icon-btn" onClick={jump} aria-label="Показать в чате" title="Показать в чате"><MessageSquareText size={16} /></button>
-                      <a className="nx-icon-btn" href={fileUrl(a.url)} download={a.filename} aria-label="Скачать" title="Скачать"><Download size={16} /></a>
+                      <a className="nx-icon-btn" href={fileUrl(a.url)} download={a.filename} onClick={downloadOnClick(fileUrl(a.url), a.filename)} aria-label="Скачать" title="Скачать"><Download size={16} /></a>
                     </div>
                   ))}
                 </div>
@@ -191,6 +206,7 @@ export function ChatFiles({ lead, chat, onBack }: { lead?: ReactNode; chat: { ch
         )}
       </div>
       {viewer && <ImageViewer items={viewer.items} start={viewer.start} onClose={() => setViewer(null)} onJump={() => { setViewer(null); jump(); }} />}
+      {doc && <DocOverlay file={doc} onClose={() => setDoc(null)} />}
     </section>
   );
 }

@@ -34,7 +34,7 @@ function loadThemePref(): ThemePref {
 function loadLastDark(): Palette {
   try {
     const p = localStorage.getItem('themeLastDark');
-    return p === 'gray' || p === 'graphite' || p === 'black' ? p : 'graphite';
+    return p === 'graphite' || p === 'black' ? p : 'graphite';
   } catch { return 'graphite'; }
 }
 
@@ -42,7 +42,9 @@ function resolve(pref: ThemePref): Palette {
   return pref === 'system' ? (systemPrefersDark() ? loadLastDark() : 'light') : pref;
 }
 
-const familyOf = (p: Palette): Theme => (p === 'light' ? 'light' : 'dark');
+/** Тёмные палитры — Графит и Чёрная; Серая — светлая (тёмный текст на мягком сером). */
+export const isDarkPalette = (p: string): boolean => p === 'graphite' || p === 'black';
+const familyOf = (p: Palette): Theme => (isDarkPalette(p) ? 'dark' : 'light');
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
@@ -82,11 +84,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const root = document.documentElement;
     root.setAttribute('data-theme', palette);
-    root.classList.toggle('dark', palette !== 'light');
+    root.classList.toggle('dark', isDarkPalette(palette));
     try {
       localStorage.setItem('theme', familyOf(palette));
       localStorage.setItem('themePref', themePref);
-      if (palette !== 'light') localStorage.setItem('themeLastDark', palette);
+      if (isDarkPalette(palette)) localStorage.setItem('themeLastDark', palette);
     } catch { /* нет хранилища — тема на сессию */ }
   }, [palette, themePref]);
 
@@ -106,7 +108,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setThemePrefState(pref);
     setPalette(resolve(pref));
   };
-  const toggleTheme = () => setThemePref(palette === 'light' ? loadLastDark() : 'light');
+  const toggleTheme = () => {
+    const index = PALETTES.indexOf(palette);
+    setThemePref(PALETTES[(index + 1) % PALETTES.length]);
+  };
   const setTheme = (t: Theme) => setThemePref(t === 'light' ? 'light' : loadLastDark());
   const theme = familyOf(palette);
 

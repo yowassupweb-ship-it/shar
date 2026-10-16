@@ -127,15 +127,19 @@ export const sendTestPush = () =>
 
 // ── Фоны и узоры переписки (картинки лежат на сервере) ─────────────────────
 
-export interface ChatAsset { name: string; url: string }
+export interface ChatAsset { name: string; url: string; thumbnailUrl?: string }
 export type ChatAssets = Record<'light' | 'dark', { backgrounds: ChatAsset[]; overlays: ChatAsset[] }>;
 
 const assetName = (file: string) => file.replace(/\.[a-z0-9]+$/i, '').replace(/^(Gradient|Theme)=/i, '').trim();
 
 export async function loadChatAssets(): Promise<ChatAssets> {
-  const raw = await call<Partial<Record<'light' | 'dark', { backgrounds?: { name: string; url: string }[]; overlays?: { name: string; url: string }[] }>>>('/api/chat-backgrounds');
-  const pick = (list?: { name: string; url: string }[]) =>
-    (Array.isArray(list) ? list : []).filter((a) => a?.url).map((a) => ({ name: assetName(a.name || ''), url: a.url }));
+  const raw = await call<Partial<Record<'light' | 'dark', { backgrounds?: ChatAsset[]; overlays?: ChatAsset[] }>>>('/api/chat-backgrounds');
+  const pick = (list?: ChatAsset[]) =>
+    (Array.isArray(list) ? list : []).filter((a) => a?.url).map((a) => ({
+      name: assetName(a.name || ''),
+      url: a.url,
+      thumbnailUrl: a.thumbnailUrl,
+    }));
   return {
     light: { backgrounds: pick(raw.light?.backgrounds), overlays: pick(raw.light?.overlays) },
     dark: { backgrounds: pick(raw.dark?.backgrounds), overlays: pick(raw.dark?.overlays) },

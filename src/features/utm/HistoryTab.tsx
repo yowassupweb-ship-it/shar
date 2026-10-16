@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Select } from '@/shared/ui/Select';
 import { Copy, ExternalLink, History, RotateCw, Trash2 } from 'lucide-react';
 import { SearchField } from '@/shared/ui/SearchField';
 import { askConfirm } from '@/shared/ui/overlay';
@@ -14,10 +15,8 @@ function Filter({ label, value, options, onChange, all }: { label: string; value
   return (
     <label className="nx-label nutm-filter">
       {label}
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">{all}</option>
-        {options.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-      </select>
+      <Select label={label} value={value} onChange={onChange}
+        groups={[{ options: [{ value: '', label: all }, ...options.map((o) => ({ value: o.id, label: o.name }))] }]} />
     </label>
   );
 }

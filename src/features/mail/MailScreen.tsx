@@ -18,6 +18,8 @@ import {
 import AccountSheet from './AccountSheet';
 import Compose, { type ComposeMode } from './Compose';
 import { fileSize, fmtFullDate, fmtListDate } from './format';
+import { Spinner } from '@/shared/ui/Spinner';
+import { downloadOnClick } from '@/shared/platform/download';
 
 /**
  * Раздел «Почта» нового Шара — как Mail.app: слева ящики, в середине список,
@@ -132,12 +134,12 @@ function Reader({ msg, onCompose, onBack, dark, face }: {
         {(images.length > 0 || files.length > 0) && (
           <section className="nmr-atts" aria-label="Вложения">
             {images.map((a) => (
-              <a key={a.url} className="nmr-att-img" href={a.url} download={a.filename} title={`${a.filename} · ${fileSize(a.size)}`}>
+              <a key={a.url} className="nmr-att-img" href={a.url} download={a.filename} onClick={downloadOnClick(a.url || '', a.filename)} title={`${a.filename} · ${fileSize(a.size)}`}>
                 <img src={a.url} alt={a.filename} loading="lazy" />
               </a>
             ))}
             {files.map((a) => (
-              <a key={a.url} className="nmr-att" href={a.url} download={a.filename} title="Скачать">
+              <a key={a.url} className="nmr-att" href={a.url} download={a.filename} onClick={downloadOnClick(a.url || '', a.filename)} title="Скачать">
                 <span className="nmr-att-ico"><FileIcon size={18} aria-hidden="true" /></span>
                 <span className="nmr-att-text"><b>{a.filename}</b><span>{fileSize(a.size)}</span></span>
                 <Download size={15} aria-hidden="true" />
@@ -152,6 +154,13 @@ function Reader({ msg, onCompose, onBack, dark, face }: {
       </div>
     </article>
   );
+}
+
+function readMailLink(): { id: string; account: string | null; folder: string | null } | null {
+  if (typeof window === 'undefined') return null;
+  const p = new URLSearchParams(window.location.search);
+  const id = p.get('message');
+  return id ? { id, account: p.get('account'), folder: p.get('folder') } : null;
 }
 
 export default function MailScreen() {
@@ -169,6 +178,9 @@ export default function MailScreen() {
   const found = useMail((s) => s.found);
   const [query, setQuery] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
+  /** Письмо из ссылки (поиск): его может не быть в загруженной части папки, и это не «письмо ушло». */
+  const [linkedId, setLinkedId] = useState<string | null>(null);
+  const mailLink = useRef(readMailLink());
   const [msg, setMsg] = useState<MailFull | null>(null);
   const [msgPhase, setMsgPhase] = useState<'idle' | 'loading' | 'error'>('idle');
   const [compose, setCompose] = useState<ComposeMode | null>(null);
@@ -210,10 +222,21 @@ export default function MailScreen() {
     if (full) { setMsg(full); setMsgPhase('idle'); } else setMsgPhase('error');
   }, []);
 
+  // Письмо из ссылки: переключаем ящик и папку, потом открываем само письмо — один раз.
+  useEffect(() => {
+    const link = mailLink.current;
+    if (!link || !accountId) return;
+    if (link.account && link.account !== accountId && accounts.some((a) => String(a.id) === link.account)) { selectAccount(link.account); return; }
+    mailLink.current = null;
+    setLinkedId(link.id);
+    if (link.folder && link.folder !== 'INBOX') openFolder(link.folder);
+    void open(link.id);
+  }, [accountId, accounts, open]);
+
   // Письмо обновилось в сторе (звезда, прочтение) — показываем свежее.
   const fullFromStore = useMail((s) => (openId ? s.full[openId] : undefined));
   // Письмо ушло из папки (перенесли, удалили) — больше его не показываем.
-  const gone = Boolean(openId && list && !found && phase === 'ready' && !list.some((r) => r.id === openId));
+  const gone = Boolean(openId && openId !== linkedId && list && !found && phase === 'ready' && !list.some((r) => r.id === openId));
   const shown = gone ? null : fullFromStore || msg;
 
   const pickFolder = (f: string) => {
@@ -342,7 +365,7 @@ export default function MailScreen() {
       {shown ? (
         <Reader msg={shown} dark={theme === 'dark'} face={faceOf(shown.fromAddr, shown.fromName)} onCompose={setCompose} onBack={narrow ? () => setPane('list') : undefined} />
       ) : msgPhase === 'loading' ? (
-        <div className="nx-state"><span className="nx-spin" aria-hidden="true" /><p>Открываю письмо…</p></div>
+        <div className="nx-state"><Spinner size={22} label="Открываю письмо" /></div>
       ) : msgPhase === 'error' ? (
         <div className="nx-state" data-tone="danger"><AlertCircle size={24} aria-hidden="true" /><p>Письмо не открылось.</p></div>
       ) : (

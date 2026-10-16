@@ -2,15 +2,18 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, Play, Square, Upload } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
 import {
-  BUILTIN_RINGTONES, getCustomRingtone, getRingtoneId, messageSoundsEnabled, playMessageSound,
-  previewRingtone, setCustomRingtone, setMessageSoundsEnabled, setRingtoneId,
+  BUILTIN_RINGTONES, getCustomRingtone, getNotificationVolume, getRingtoneId, messageSoundsEnabled, playMessageSound,
+  previewRingtone, setCustomRingtone, setMessageSoundsEnabled, setNotificationVolume, setRingtoneId,
 } from '@/shared/platform/push/sounds';
-import { Group, Row, Switch } from '@/shared/ui/controls';
+import { Group, Row, Slider, Switch } from '@/shared/ui/controls';
 
 const MAX_RINGTONE = 2 * 1024 * 1024;
 
 export default function SoundsSection() {
   const [messages, setMessages] = useState(messageSoundsEnabled);
+  const [volume, setVolume] = useState(() => Math.round(getNotificationVolume() * 100));
+  const desktop = typeof window !== 'undefined' && Boolean(window.sharDesktop);
+  const previewTimer = useRef(0);
   const [ringtone, setRingtone] = useState(getRingtoneId);
   const [hasCustom, setHasCustom] = useState(() => Boolean(getCustomRingtone()));
   const [playing, setPlaying] = useState<string | null>(null);
@@ -26,6 +29,14 @@ export default function SoundsSection() {
   };
 
   const choose = (id: string) => { setRingtone(id); setRingtoneId(id); };
+
+  // Громкость применяется сразу; после паузы в движении ползунка проигрываем сигнал — слышно, что получилось.
+  const changeVolume = (percent: number) => {
+    setVolume(percent);
+    setNotificationVolume(percent / 100);
+    window.clearTimeout(previewTimer.current);
+    previewTimer.current = window.setTimeout(() => { if (percent > 0) playMessageSound('in'); }, 220);
+  };
 
   const preview = (id: string) => {
     stopRef.current?.();
@@ -58,6 +69,11 @@ export default function SoundsSection() {
         <Row label="Звук сообщений" hint="Тихий сигнал при отправке и получении">
           <Switch checked={messages} onChange={toggleMessages} label="Звук сообщений" />
         </Row>
+        {desktop && (
+          <Row label="Громкость уведомлений" hint="Сигнал карточек в углу экрана и сообщений. 0% — без звука, до 200% — громче обычного">
+            <Slider id="notify-volume" value={volume} min={0} max={200} step={5} label="Громкость уведомлений" format={(v) => `${v}%`} onChange={changeVolume} />
+          </Row>
+        )}
       </Group>
 
       <Group title="Рингтон звонка" note="Хранится на этом устройстве. MP3 или M4A, до 2 МБ.">

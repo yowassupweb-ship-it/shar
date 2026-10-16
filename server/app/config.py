@@ -37,6 +37,7 @@ class Settings:
 
     # --- сессии и доступ ---
     enforce_auth: bool = True
+    cookie_secure: bool = True
     session_cache_ttl: float = 15.0
     # Обмен старой localStorage-«авторизации» на серверную сессию. Нужен только
     # на время перехода: открытая дверь для любого, кто знает логин.
@@ -63,6 +64,10 @@ class Settings:
     # --- фоновые задачи ---
     mail_watch: bool = True
     auto_migrate: bool = True
+    # Disable these on a blue/green candidate while the old backend is still
+    # running. Two schedulers must not act on the same database at once.
+    startup_maintenance: bool = True
+    scheduled_jobs: bool = True
 
     # --- лимиты ---
     max_upload_bytes: int = 200 * 1024 * 1024
@@ -78,6 +83,7 @@ class Settings:
             port=int(os.getenv("SHAR_V2_PORT", "8100")),
             cors_origins=_csv("CORS_ORIGINS", ""),
             enforce_auth=_flag("SHAR_ENFORCE_AUTH", True),
+            cookie_secure=_flag("SHAR_COOKIE_SECURE", True),
             session_cache_ttl=float(os.getenv("SHAR_SESSION_CACHE_TTL", "15")),
             legacy_adopt=_flag("SHAR_LEGACY_ADOPT", False),
             internal_push_key=os.getenv("SHAR_INTERNAL_PUSH_KEY", "").strip(),
@@ -93,6 +99,8 @@ class Settings:
             vapid_subject=os.getenv("WEB_PUSH_SUBJECT", "mailto:admin@shar-os.local").strip(),
             mail_watch=_flag("SHAR_MAIL_WATCH", True),
             auto_migrate=_flag("SHAR_AUTO_MIGRATE", True),
+            startup_maintenance=_flag("SHAR_STARTUP_MAINTENANCE", True),
+            scheduled_jobs=_flag("SHAR_SCHEDULED_JOBS", True),
             max_upload_bytes=int(os.getenv("SHAR_MAX_UPLOAD_BYTES", str(200 * 1024 * 1024))),
         )
 

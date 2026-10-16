@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { realtime } from '@/shared/realtime/realtime';
 import { lazyComponent } from '@/shared/ui/lazy';
 import {
   AlertCircle, ChevronRight, Copy, Download, ExternalLink, Folder, FolderInput, FolderPlus, LayoutGrid, Link2, List,
@@ -19,6 +20,9 @@ import { FileGlyph } from './FileGlyph';
 import { FolderTile } from './FolderTile';
 import { AccessSheet, MoveSheet, SendSheet } from './sheets';
 import { absolute, links } from '@/shared/navigation/routes';
+import { downloadFile } from '@/shared/platform/download';
+import { viewKindOf, type FileRef } from '@/features/workspace';
+import { DocOverlay } from './DocOverlay';
 
 const ImageViewer = lazyComponent(() => import('@/shared/ui/ImageViewer'));
 
@@ -66,6 +70,8 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
   const [dragging, setDragging] = useState(false);
   const [sheet, setSheet] = useState<{ type: 'move' | 'access' | 'send'; target: Target } | null>(null);
   const [viewer, setViewer] = useState<{ items: ViewerItem[]; start: number } | null>(null);
+  /** Документ во встроенном просмотре (PDF, Word, Excel, CSV, текст, HTML). */
+  const [doc, setDoc] = useState<FileRef | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const users = useChatStore((s) => s.users);
 
@@ -85,6 +91,20 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
     setQuery('');
     void refresh();
   }, [folderId, refresh]);
+
+  // Живое обновление: другой человек (или другое устройство) добавил, переименовал, перенёс или удалил файл —
+  // открытая папка перечитывается сама, без ручного обновления страницы. Событие приходит без данных.
+  useEffect(() => {
+    let timer = 0;
+    const off = realtime.subscribe((event) => {
+      if (event.type !== 'cloud_changed') return;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => void refresh(), 350);
+    });
+    const onFocus = () => { if (document.visibilityState === 'visible') void refresh(); };
+    window.addEventListener('focus', onFocus);
+    return () => { off(); window.clearTimeout(timer); window.removeEventListener('focus', onFocus); };
+  }, [refresh]);
 
   useEffect(() => { try { localStorage.setItem(MODE_KEY, mode); } catch { /* ignore */ } }, [mode]);
 
@@ -196,7 +216,9 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
       setViewer({ items, start: Math.max(0, images.findIndex((x) => x.id === f.id)) });
       return;
     }
-    window.open(fileUrl(f.url), '_blank', 'noopener');
+    // Документы — во встроенном просмотре, остальное — скачать (не внешний браузер с адресом 127.0.0.1).
+    if (viewKindOf(f.name)) { setDoc({ url: fileUrl(f.url), name: f.name, size: f.size }); return; }
+    downloadFile(fileUrl(f.url), f.name);
   };
 
   const copyLink = async (t: Target) => {
@@ -419,7 +441,7 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
           ) : (
             <>
               <MenuItem icon={<ExternalLink size={16} />} onSelect={() => { setMenu(null); openFile(t.item); }}>Открыть</MenuItem>
-              <MenuItem icon={<Download size={16} />} onSelect={() => { setMenu(null); const a = document.createElement('a'); a.href = fileUrl(t.item.url); a.download = t.item.name; a.click(); }}>Скачать</MenuItem>
+              <MenuItem icon={<Download size={16} />} onSelect={() => { setMenu(null); downloadFile(fileUrl(t.item.url), t.item.name); }}>Скачать</MenuItem>
             </>
           )}
           <MenuItem icon={<Send size={16} />} onSelect={() => { setMenu(null); setSheet({ type: 'send', target: t }); }}>Отправить в чат</MenuItem>
@@ -464,6 +486,7 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
         />
       )}
       {viewer && <ImageViewer items={viewer.items} start={viewer.start} onClose={() => setViewer(null)} />}
+      {doc && <DocOverlay file={doc} onClose={() => setDoc(null)} />}
     </section>
   );
 }
