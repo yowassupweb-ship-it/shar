@@ -10,8 +10,6 @@
   /* Сверху бывают чужие полосы: заголовок окна Electron и баннер установки
      приложения (PwaEnhancements публикует его высоту). Встаём под них. */
   inset: calc(var(--electron-titlebar-height, 0px) + var(--pwa-banner-h, 0px)) 0 0 0;
-  /* iPhone: если окно страницы короче экрана, viewport.ts продлевает корень вниз. */
-  bottom: calc(var(--nx-fill, 0px) * -1);
   z-index: 30;
   overflow: hidden;
   background: var(--bg-color);
@@ -38,6 +36,12 @@
   }
 }
 .nx[data-kb="open"] { --nx-safe-bottom: 0px; }
+/* Установленное приложение на iPhone: корень — во весь экран от верха, а не до
+   низа области fixed-элементов: iOS порой её укорачивает (viewport.ts). */
+.nx:not([data-kb="open"])[style*="--nx-full-h"] {
+  bottom: auto;
+  height: calc(var(--nx-full-h) - var(--electron-titlebar-height, 0px) - var(--pwa-banner-h, 0px));
+}
 
 /* Телефон: документ заперт (viewport.ts ставит класс). Прокручиваются только
    ленты внутри .nx; сама страница не может уехать к полю ввода. */
