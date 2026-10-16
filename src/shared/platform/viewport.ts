@@ -63,6 +63,18 @@ function standaloneHeight(editing: boolean): number {
   return gap > 0 && gap <= 140 ? full : 0;
 }
 
+/**
+ * Увеличена ли страница щипком. Сравниваем с масштабом при запуске, а не с 1: при увеличенном
+ * масштабе отображения (115% и т.п.) iOS отдаёт visualViewport.scale ≠ 1 постоянно — проверка
+ * «scale ≠ 1» считала это щипком и выключала всю подгонку под экран и клавиатуру (полоса снизу,
+ * шапка уезжала вверх). Щипок в приложении и так запрещён (user-scalable=no).
+ */
+let baseScale: number | null = null;
+function pinched(vv: VisualViewport): boolean {
+  if (baseScale === null || !(baseScale > 0)) baseScale = vv.scale || 1;
+  return Math.abs(vv.scale / baseScale - 1) > 0.01;
+}
+
 function isEditable(el: Element | null): boolean {
   if (!el) return false;
   if (el instanceof HTMLTextAreaElement) return true;
@@ -117,7 +129,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     const apply = () => {
       raf = 0;
       // Щипок-увеличение тоже меняет visualViewport — это не клавиатура.
-      if (Math.abs(vv.scale - 1) > 0.01) return;
+      if (pinched(vv)) return;
       // Safari сдвигает видимую область к полю ввода — возвращаем (scrollTo).
       // Пока она не вернулась, корень следует за её верхом (offsetTop), иначе
       // шапка уезжает за верх экрана. offsetTop после scrollTo обновится
@@ -214,7 +226,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
         vv: `${Math.round(vv.width)}x${Math.round(vv.height)}@${Math.round(vv.offsetTop)}`,
         html: document.documentElement.clientHeight, rootTop: Math.round(box.top), rootBottom: Math.round(box.bottom),
         full: document.documentElement.classList.contains('nx-full'), safe,
-        navStandalone: (navigator as Navigator & { standalone?: boolean }).standalone ?? null, fullH: standaloneHeight(false),
+        navStandalone: (navigator as Navigator & { standalone?: boolean }).standalone ?? null, fullH: standaloneHeight(false), scale: vv.scale, baseScale,
       });
     }, 3600) : 0;
     vv.addEventListener('resize', schedule);
@@ -252,6 +264,6 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
 /** Видимая часть экрана в координатах fixed-позиционирования — для меню и подсказок. */
 export function visibleBox(): { top: number; bottom: number; width: number } {
   const vv = typeof window !== 'undefined' ? window.visualViewport : null;
-  if (!vv || Math.abs(vv.scale - 1) > 0.01) return { top: 0, bottom: window.innerHeight, width: window.innerWidth };
+  if (!vv || pinched(vv)) return { top: 0, bottom: window.innerHeight, width: window.innerWidth };
   return { top: vv.offsetTop, bottom: vv.offsetTop + vv.height, width: vv.width };
 }
