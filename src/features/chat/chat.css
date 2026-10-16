@@ -388,7 +388,7 @@
     /* Без клавиатуры — поуже и над скруглением углов iPhone, чтобы они не срезали поле. */
     padding-left: max(14px, env(safe-area-inset-left));
     padding-right: max(14px, env(safe-area-inset-right));
-    padding-bottom: max(12px, calc(var(--nx-safe-bottom) - 20px));
+    padding-bottom: max(17px, calc(var(--nx-safe-bottom) - 15px));
     transition: padding var(--duration-base) var(--ease-out);
   }
   .nx[data-kb="open"] .cxn-composer-wrap { padding: 4px 4px 0; }

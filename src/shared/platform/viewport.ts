@@ -40,18 +40,6 @@ export function isEdgeSwipeStart(x: number): boolean {
 }
 
 /**
- * Увеличена ли страница щипком. Сравниваем с масштабом при запуске, а не с 1: при увеличенном
- * масштабе отображения (115% и т.п.) iOS отдаёт visualViewport.scale ≠ 1 постоянно — проверка
- * «scale ≠ 1» считала это щипком и выключала всю подгонку под экран и клавиатуру (полоса снизу,
- * шапка уезжала вверх). Щипок в приложении и так запрещён (user-scalable=no).
- */
-let baseScale: number | null = null;
-function pinched(vv: VisualViewport): boolean {
-  if (baseScale === null || !(baseScale > 0)) baseScale = vv.scale || 1;
-  return Math.abs(vv.scale / baseScale - 1) > 0.01;
-}
-
-/**
  * Высота экрана в CSS-пикселях для установленного на iPhone приложения (портрет), иначе 0.
  * iPad не трогаем: там окно бывает меньше экрана (Split View).
  */
@@ -119,7 +107,6 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
 
     let raf = 0;
     let lastKb = 0;
-    let settleTimer = 0;
     // Высота экрана без клавиатуры. В установленном PWA iOS сжимает не только
     // visualViewport, но порой и innerHeight — разница innerHeight − vv.height
     // тогда ≈ 0, и интерфейс «не видел» клавиатуру: оставлял под полем отступ
@@ -129,7 +116,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     const apply = () => {
       raf = 0;
       // Щипок-увеличение тоже меняет visualViewport — это не клавиатура.
-      if (pinched(vv)) return;
+      if (Math.abs(vv.scale - 1) > 0.01) return;
       // Safari сдвигает видимую область к полю ввода — возвращаем (scrollTo).
       // Пока она не вернулась, корень следует за её верхом (offsetTop), иначе
       // шапка уезжает за верх экрана. offsetTop после scrollTo обновится
@@ -145,13 +132,6 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       const open = kb > KB_MIN && editing;
       root.style.setProperty('--nx-vv-top', open ? `${Math.max(0, Math.round(vv.offsetTop))}px` : '0px');
       if (open) {
-        // Пока клавиатура выезжает, iOS двигает видимую область, и шапка дёргалась вверх-вниз.
-        // На это время её прячем (data-kb-settling, base.css) и показываем, когда всё встало.
-        if (root.dataset.kb !== 'open' || root.dataset.kbSettling) {
-          root.dataset.kbSettling = 'true';
-          window.clearTimeout(settleTimer);
-          settleTimer = window.setTimeout(() => { delete root.dataset.kbSettling; }, 260);
-        }
         root.dataset.kb = 'open';
         if (Math.abs(kb - lastKb) > 4) {
           lastKb = kb;
@@ -215,7 +195,6 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     document.addEventListener('touchmove', onTouchMove, { passive: false });
     return () => {
       cancelAnimationFrame(raf);
-      window.clearTimeout(settleTimer);
       settle.forEach((t) => window.clearTimeout(t));
       document.removeEventListener('visibilitychange', onShow);
       window.removeEventListener('pageshow', onShow);
@@ -229,7 +208,6 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       document.removeEventListener('touchstart', onTouchStart, { capture: true });
       document.removeEventListener('touchmove', onTouchMove);
       delete root.dataset.kb;
-      delete root.dataset.kbSettling;
       document.documentElement.classList.remove('nx-locked', 'nx-ios-app');
       document.documentElement.style.removeProperty('--nx-screen-h');
       ['--nx-vvh', '--nx-vv-top'].forEach((p) => root.style.removeProperty(p));    };
@@ -239,6 +217,6 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
 /** Видимая часть экрана в координатах fixed-позиционирования — для меню и подсказок. */
 export function visibleBox(): { top: number; bottom: number; width: number } {
   const vv = typeof window !== 'undefined' ? window.visualViewport : null;
-  if (!vv || pinched(vv)) return { top: 0, bottom: window.innerHeight, width: window.innerWidth };
+  if (!vv || Math.abs(vv.scale - 1) > 0.01) return { top: 0, bottom: window.innerHeight, width: window.innerWidth };
   return { top: vv.offsetTop, bottom: vv.offsetTop + vv.height, width: vv.width };
 }
