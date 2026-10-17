@@ -109,6 +109,11 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       html.classList.add('nx-ios-app');
       html.style.setProperty('--nx-screen-h', `${screenH}px`);
     }
+    // Пока в поле фокус, документ — обычной высоты окна. Документ высотой с экран при клавиатуре
+    // (окно iOS тогда 471 из 832) Safari прокручивал к полю: шапка уезжала за верх, поправки за ней
+    // не поспевали. Без запаса высоты прокручивать нечего — шапка стоит, корень (fixed) сам встаёт
+    // над клавиатурой. После клавиатуры высота с экран возвращается (полоса снизу).
+    const typing = (on: boolean) => { if (screenH) html.classList.toggle('nx-typing', on); };
 
     let raf = 0;
     let lastKb = 0;
@@ -128,22 +133,6 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     // широким (data-kb, CSS), а шапка смещается на сдвиг Safari (--nx-pan) и остаётся наверху.
     const native = isIosStandalone();
     if (native) root.dataset.kbNative = 'true';
-    // Пока Safari двигает страницу (выезжает или уезжает клавиатура), шапка скрыта: события сдвига
-    // приходят с опозданием, и шапка, догонявшая их, «клевала» вниз. Когда сдвиг затих — шапка
-    // проявляется уже на месте (data-panning, base.css). Не дольше 1,2 с на случай тишины событий.
-    let panTimer = 0;
-    let lastPan = 0;
-    let lastHeight = 0;
-    let panStart = 0;
-    const panning = (start = false) => {
-      if (!native) return;
-      const now = Date.now();
-      if (start) panStart = now;
-      else if (!root.dataset.panning || now - panStart > 1200) return;
-      root.dataset.panning = 'true';
-      window.clearTimeout(panTimer);
-      panTimer = window.setTimeout(() => { delete root.dataset.panning; }, 200);
-    };
     const apply = () => {
       raf = 0;
       if (pinched(vv)) return;
@@ -162,11 +151,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       const open = kb > KB_MIN && editing;
       root.style.setProperty('--nx-vv-top', open && !native ? `${Math.max(0, Math.round(vv.offsetTop))}px` : '0px');
       if (native) {
-        const pan = open ? Math.max(0, Math.round(vv.offsetTop)) : 0;
-        if (pan !== lastPan || height !== lastHeight) panning(); // страница ещё едет
-        lastPan = pan;
-        lastHeight = height;
-        root.style.setProperty('--nx-pan', `${pan}px`);
+        root.style.setProperty('--nx-pan', `${open ? Math.max(0, Math.round(vv.offsetTop)) : 0}px`);
       }
       if (open) {
         root.dataset.kb = 'open';
@@ -196,7 +181,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       const id = window.setInterval(() => {
         const head = document.querySelector('.cxv-head')?.getBoundingClientRect();
         frames.push([Math.round(performance.now() - t0), Math.round(vv.offsetTop), Math.round(vv.height), window.innerHeight, window.scrollY,
-          head ? Math.round(head.top) : '-', root.style.getPropertyValue('--nx-pan'), root.dataset.panning ? 'H' : 'v', root.dataset.kb || '-'].join(' '));
+          head ? Math.round(head.top) : '-', root.style.getPropertyValue('--nx-pan'), html.classList.contains('nx-typing') ? 'T' : '-', root.dataset.kb || '-'].join(' '));
         if (performance.now() - t0 > 1500) {
           window.clearInterval(id);
           reportClientError('manual', new Error(`ios-film ${kind}`), { frames: frames.join(' | ') });
@@ -205,16 +190,14 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     };
 
     const onFocus = (e: FocusEvent) => {
-      if (isEditable(e.target as Element | null)) film('open');
-      if (isEditable(e.target as Element | null)) panning(true);
+      if (isEditable(e.target as Element | null)) { film('open'); typing(true); }
       schedule();
       let n = 0;
       window.clearInterval(poll);
       poll = window.setInterval(() => { schedule(); if (++n >= 8) window.clearInterval(poll); }, 125);
     };
     const onBlur = (e: FocusEvent) => {
-      if (isEditable(e.target as Element | null)) film('close');
-      if (isEditable(e.target as Element | null)) panning(true);
+      if (isEditable(e.target as Element | null)) { film('close'); typing(false); }
       window.setTimeout(schedule, 50);
     };
 
@@ -271,11 +254,9 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       document.removeEventListener('touchstart', onTouchStart, { capture: true });
       document.removeEventListener('touchmove', onTouchMove);
       delete root.dataset.kb;
-      document.documentElement.classList.remove('nx-locked', 'nx-ios-app');
+      document.documentElement.classList.remove('nx-locked', 'nx-ios-app', 'nx-typing');
       document.documentElement.style.removeProperty('--nx-screen-h');
-      window.clearTimeout(panTimer);
       delete root.dataset.kbNative;
-      delete root.dataset.panning;
       ['--nx-vvh', '--nx-vv-top', '--nx-pan'].forEach((p) => root.style.removeProperty(p));    };
   }, [rootRef]);
 }
