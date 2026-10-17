@@ -1,4 +1,5 @@
 import { useEffect, type RefObject } from 'react';
+import { reportClientError } from './telemetry';
 
 /**
  * Видимая область телефона и клавиатура — один механизм на весь новый шар.
@@ -184,7 +185,27 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     // Первый показ клавиатуры после запуска iOS иногда не присылает resize
     // вовремя — после фокуса сверяемся с visualViewport ещё секунду.
     let poll = 0;
+    // ВРЕМЕННО: «киноплёнка» для отладки шапки при клавиатуре на iPhone — каждые 50 мс 1,5 с:
+    // время, сдвиг Safari (offsetTop), высота видимой области, верх шапки, поправка, скрыта ли шапка.
+    let filming = 0;
+    const film = (kind: string) => {
+      if (!native || filming >= 4) return;
+      filming += 1;
+      const t0 = performance.now();
+      const frames: string[] = [];
+      const id = window.setInterval(() => {
+        const head = document.querySelector('.cxv-head')?.getBoundingClientRect();
+        frames.push([Math.round(performance.now() - t0), Math.round(vv.offsetTop), Math.round(vv.height), window.innerHeight, window.scrollY,
+          head ? Math.round(head.top) : '-', root.style.getPropertyValue('--nx-pan'), root.dataset.panning ? 'H' : 'v', root.dataset.kb || '-'].join(' '));
+        if (performance.now() - t0 > 1500) {
+          window.clearInterval(id);
+          reportClientError('manual', new Error(`ios-film ${kind}`), { frames: frames.join(' | ') });
+        }
+      }, 50);
+    };
+
     const onFocus = (e: FocusEvent) => {
+      if (isEditable(e.target as Element | null)) film('open');
       if (isEditable(e.target as Element | null)) panning(true);
       schedule();
       let n = 0;
@@ -192,6 +213,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       poll = window.setInterval(() => { schedule(); if (++n >= 8) window.clearInterval(poll); }, 125);
     };
     const onBlur = (e: FocusEvent) => {
+      if (isEditable(e.target as Element | null)) film('close');
       if (isEditable(e.target as Element | null)) panning(true);
       window.setTimeout(schedule, 50);
     };
