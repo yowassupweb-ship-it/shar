@@ -127,6 +127,22 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     // широким (data-kb, CSS), а шапка смещается на сдвиг Safari (--nx-pan) и остаётся наверху.
     const native = isIosStandalone();
     if (native) root.dataset.kbNative = 'true';
+    // Пока Safari двигает страницу (выезжает или уезжает клавиатура), шапка скрыта: события сдвига
+    // приходят с опозданием, и шапка, догонявшая их, «клевала» вниз. Когда сдвиг затих — шапка
+    // проявляется уже на месте (data-panning, base.css). Не дольше 1,2 с на случай тишины событий.
+    let panTimer = 0;
+    let lastPan = 0;
+    let lastHeight = 0;
+    let panStart = 0;
+    const panning = (start = false) => {
+      if (!native) return;
+      const now = Date.now();
+      if (start) panStart = now;
+      else if (!root.dataset.panning || now - panStart > 1200) return;
+      root.dataset.panning = 'true';
+      window.clearTimeout(panTimer);
+      panTimer = window.setTimeout(() => { delete root.dataset.panning; }, 200);
+    };
     const apply = () => {
       raf = 0;
       if (pinched(vv)) return;
@@ -144,7 +160,13 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       root.style.setProperty('--nx-vvh', `${height}px`);
       const open = kb > KB_MIN && editing;
       root.style.setProperty('--nx-vv-top', open && !native ? `${Math.max(0, Math.round(vv.offsetTop))}px` : '0px');
-      if (native) root.style.setProperty('--nx-pan', open ? `${Math.max(0, Math.round(vv.offsetTop))}px` : '0px');
+      if (native) {
+        const pan = open ? Math.max(0, Math.round(vv.offsetTop)) : 0;
+        if (pan !== lastPan || height !== lastHeight) panning(); // страница ещё едет
+        lastPan = pan;
+        lastHeight = height;
+        root.style.setProperty('--nx-pan', `${pan}px`);
+      }
       if (open) {
         root.dataset.kb = 'open';
         if (Math.abs(kb - lastKb) > 4) {
@@ -162,13 +184,17 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     // Первый показ клавиатуры после запуска iOS иногда не присылает resize
     // вовремя — после фокуса сверяемся с visualViewport ещё секунду.
     let poll = 0;
-    const onFocus = () => {
+    const onFocus = (e: FocusEvent) => {
+      if (isEditable(e.target as Element | null)) panning(true);
       schedule();
       let n = 0;
       window.clearInterval(poll);
       poll = window.setInterval(() => { schedule(); if (++n >= 8) window.clearInterval(poll); }, 125);
     };
-    const onBlur = () => { window.setTimeout(schedule, 50); };
+    const onBlur = (e: FocusEvent) => {
+      if (isEditable(e.target as Element | null)) panning(true);
+      window.setTimeout(schedule, 50);
+    };
 
 
     // Страница не должна ездить за пальцем. При открытой клавиатуре видимая
@@ -225,7 +251,9 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       delete root.dataset.kb;
       document.documentElement.classList.remove('nx-locked', 'nx-ios-app');
       document.documentElement.style.removeProperty('--nx-screen-h');
+      window.clearTimeout(panTimer);
       delete root.dataset.kbNative;
+      delete root.dataset.panning;
       ['--nx-vvh', '--nx-vv-top', '--nx-pan'].forEach((p) => root.style.removeProperty(p));    };
   }, [rootRef]);
 }
