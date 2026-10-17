@@ -145,7 +145,11 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
         window.clearTimeout(preTimer);
         preTimer = 0;
       }
-      root.style.setProperty('--nx-vv-top', open ? `${Math.max(0, Math.round(vv.offsetTop))}px` : '0px');
+      // В установленном на iPhone приложении корень за сдвигом видимой области не следует: Safari
+      // сдвигает её на кадр и сразу возвращает (scrollTo выше), а корень, догонявший устаревший
+      // offsetTop, съезжал вниз — сверху чёрная полоса, всё дёргалось.
+      const follow = open && !isIosStandalone();
+      root.style.setProperty('--nx-vv-top', follow ? `${Math.max(0, Math.round(vv.offsetTop))}px` : '0px');
       if (open) {
         root.dataset.kb = 'open';
         if (Math.abs(kb - lastKb) > 4) {
