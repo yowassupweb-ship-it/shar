@@ -36,7 +36,7 @@
     height: calc(var(--nx-vvh, 100dvh) - var(--electron-titlebar-height, 0px) - var(--pwa-banner-h, 0px));
   }
 }
-.nx[data-kb="open"] { --nx-safe-bottom: 0px; }
+.nx[data-kb="open"]:not([data-kb-native]) { --nx-safe-bottom: 0px; }
 /* Приложение с главного экрана на iPhone (viewport.ts): документ — высотой с экран, тогда iOS 26 не
    укорачивает окно и снизу нет чёрной полосы. Корень по-прежнему fixed от окна. */
 html.nx-locked.nx-ios-app,

@@ -391,7 +391,11 @@
     padding-bottom: max(17px, calc(var(--nx-safe-bottom) - 15px));
     transition: padding var(--duration-base) var(--ease-out);
   }
-  .nx[data-kb="open"] .cxn-composer-wrap { padding: 4px 4px 0; }
+  .nx[data-kb="open"]:not([data-kb-native]) .cxn-composer-wrap { padding: 4px 4px 0; }
+  /* iPhone-приложение: страницу двигает Safari, и любая смена высоты блока ввода перестраивала ленту —
+     пузыри дёргались. Поле только шире, а к клавиатуре опускается сдвигом, не меняя раскладку. */
+  .nx[data-kb-native][data-kb="open"] .cxn-composer-wrap { padding-left: 4px; padding-right: 4px; }
+  .nx[data-kb-native][data-kb="open"] .cxn-composer { transform: translateY(max(17px, calc(var(--nx-safe-bottom) - 15px))); }
   .nx .cxc-row { gap: 6px; }
   .nx .cxc-row .cxn-field { min-height: 40px; }
   .nx .cxc-row .cxn-field .cxn-input { padding-top: 9px; padding-bottom: 9px; }
