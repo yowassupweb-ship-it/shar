@@ -37,17 +37,11 @@
   }
 }
 .nx[data-kb="open"] { --nx-safe-bottom: 0px; }
-/* iPhone-приложение: Safari сдвигает страницу к полю — шапку чата сдвигаем обратно, она остаётся наверху. */
-.nx[data-kb-native][data-kb="open"] .cxv-head { transform: translateY(var(--nx-pan, 0px)); }
 /* Приложение с главного экрана на iPhone (viewport.ts): документ — высотой с экран, тогда iOS 26 не
    укорачивает окно и снизу нет чёрной полосы. Корень по-прежнему fixed от окна. */
-html.nx-locked.nx-ios-app:not(.nx-typing),
-html.nx-locked.nx-ios-app:not(.nx-typing) body { height: var(--nx-screen-h, 100%); }
-html.nx-locked.nx-ios-app:not(.nx-typing) body { bottom: auto; }
-/* Пока в поле фокус — документ высотой будущей видимой области: Safari нечего прокручивать к полю. */
-html.nx-locked.nx-ios-app.nx-typing,
-html.nx-locked.nx-ios-app.nx-typing body { height: var(--nx-typing-h, 100%); }
-html.nx-locked.nx-ios-app.nx-typing body { bottom: auto; }
+html.nx-locked.nx-ios-app,
+html.nx-locked.nx-ios-app body { height: var(--nx-screen-h, 100%); }
+html.nx-locked.nx-ios-app body { bottom: auto; }
 
 /* Телефон: документ заперт (viewport.ts ставит класс). Прокручиваются только
    ленты внутри .nx; сама страница не может уехать к полю ввода. */

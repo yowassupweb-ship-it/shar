@@ -1,5 +1,4 @@
 import { useEffect, type RefObject } from 'react';
-import { reportClientError } from './telemetry';
 
 /**
  * Видимая область телефона и клавиатура — один механизм на весь новый шар.
@@ -109,21 +108,6 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       html.classList.add('nx-ios-app');
       html.style.setProperty('--nx-screen-h', `${screenH}px`);
     }
-    // Пока в поле фокус, документ — обычной высоты окна. Документ высотой с экран при клавиатуре
-    // (окно iOS тогда 471 из 832) Safari прокручивал к полю: шапка уезжала за верх, поправки за ней
-    // не поспевали. Без запаса высоты прокручивать нечего — шапка стоит, корень (fixed) сам встаёт
-    // над клавиатурой. После клавиатуры высота с экран возвращается (полоса снизу).
-    // Высота — сразу будущей видимой области (окно минус прошлая клавиатура): обычной высоты окна
-    // (778 при видимых 471) Safari тоже хватало, чтобы прокрутить документ на 307 px. Документ под
-    // фиксированным корнем не виден — смена его высоты на экране незаметна.
-    const typing = (on: boolean) => {
-      if (!screenH) return;
-      html.classList.toggle('nx-typing', on);
-      if (!on) { html.style.removeProperty('--nx-typing-h'); return; }
-      let kb = 0;
-      try { kb = Number(localStorage.getItem(KB_KEY)) || 0; } catch { /* ignore */ }
-      if (kb > KB_MIN) html.style.setProperty('--nx-typing-h', `${Math.max(200, window.innerHeight - kb)}px`);
-    };
 
     let raf = 0;
     let lastKb = 0;
@@ -140,7 +124,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     // Установленное на iPhone приложение: страницу к полю ввода двигает сам Safari — плавно, вместе
     // с клавиатурой. Любая своя подгонка (сжать корень, вернуть сдвиг, сжать заранее) за ним не
     // поспевала, и всё мигало. Здесь раскладка не меняется: поле при клавиатуре только становится
-    // широким (data-kb, CSS), а шапка смещается на сдвиг Safari (--nx-pan) и остаётся наверху.
+    // широким (data-kb, CSS); шапка уезжает вверх вместе со страницей.
     const native = isIosStandalone();
     if (native) root.dataset.kbNative = 'true';
     const apply = () => {
@@ -160,9 +144,6 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       root.style.setProperty('--nx-vvh', `${height}px`);
       const open = kb > KB_MIN && editing;
       root.style.setProperty('--nx-vv-top', open && !native ? `${Math.max(0, Math.round(vv.offsetTop))}px` : '0px');
-      if (native) {
-        root.style.setProperty('--nx-pan', `${open ? Math.max(0, Math.round(vv.offsetTop)) : 0}px`);
-      }
       if (open) {
         root.dataset.kb = 'open';
         if (Math.abs(kb - lastKb) > 4) {
@@ -180,41 +161,13 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     // Первый показ клавиатуры после запуска iOS иногда не присылает resize
     // вовремя — после фокуса сверяемся с visualViewport ещё секунду.
     let poll = 0;
-    // ВРЕМЕННО: «киноплёнка» для отладки шапки при клавиатуре на iPhone — каждые 50 мс 1,5 с:
-    // время, сдвиг Safari (offsetTop), высота видимой области, верх шапки, поправка, скрыта ли шапка.
-    let filming = 0;
-    const film = (kind: string) => {
-      if (!native || filming >= 4) return;
-      filming += 1;
-      const t0 = performance.now();
-      const frames: string[] = [];
-      const id = window.setInterval(() => {
-        const head = document.querySelector('.cxv-head')?.getBoundingClientRect();
-        frames.push([Math.round(performance.now() - t0), Math.round(vv.offsetTop), Math.round(vv.height), window.innerHeight, window.scrollY,
-          head ? Math.round(head.top) : '-', root.style.getPropertyValue('--nx-pan'), html.classList.contains('nx-typing') ? 'T' : '-', root.dataset.kb || '-'].join(' '));
-        if (performance.now() - t0 > 1500) {
-          window.clearInterval(id);
-          reportClientError('manual', new Error(`ios-film ${kind}`), { frames: frames.join(' | ') });
-        }
-      }, 50);
-    };
-
-    const onFocus = (e: FocusEvent) => {
-      if (isEditable(e.target as Element | null)) { film('open'); typing(true); }
+    const onFocus = () => {
       schedule();
       let n = 0;
       window.clearInterval(poll);
       poll = window.setInterval(() => { schedule(); if (++n >= 8) window.clearInterval(poll); }, 125);
     };
-    const onBlur = (e: FocusEvent) => {
-      if (isEditable(e.target as Element | null)) {
-        film('close');
-        typing(false);
-        root.style.setProperty('--nx-pan', '0px'); // сразу: шапка не должна висеть сдвинутой, пока iOS шлёт события
-      }
-      window.setTimeout(schedule, 50);
-    };
-
+    const onBlur = () => { window.setTimeout(schedule, 50); };
 
     // Страница не должна ездить за пальцем. При открытой клавиатуре видимая
     // область iOS меньше окна, и «лишнее» движение — там, где нечего
@@ -268,11 +221,10 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       document.removeEventListener('touchstart', onTouchStart, { capture: true });
       document.removeEventListener('touchmove', onTouchMove);
       delete root.dataset.kb;
-      document.documentElement.classList.remove('nx-locked', 'nx-ios-app', 'nx-typing');
+      document.documentElement.classList.remove('nx-locked', 'nx-ios-app');
       document.documentElement.style.removeProperty('--nx-screen-h');
-      document.documentElement.style.removeProperty('--nx-typing-h');
       delete root.dataset.kbNative;
-      ['--nx-vvh', '--nx-vv-top', '--nx-pan'].forEach((p) => root.style.removeProperty(p));    };
+      ['--nx-vvh', '--nx-vv-top'].forEach((p) => root.style.removeProperty(p));    };
   }, [rootRef]);
 }
 
