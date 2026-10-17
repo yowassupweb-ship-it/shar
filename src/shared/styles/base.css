@@ -29,13 +29,16 @@
 @media (pointer: coarse) {
   /* Без клавиатуры корень занимает весь экран (inset: 0 у .nx) — вместе с
      полосой «домой»: высота из visualViewport срезала низ у iPhone. */
-  .nx[data-kb="open"] {
+  /* Установленное на iPhone приложение (data-kb-native) раскладку не сжимает — страницу двигает Safari. */
+  .nx[data-kb="open"]:not([data-kb-native]) {
     top: calc(var(--electron-titlebar-height, 0px) + var(--pwa-banner-h, 0px) + var(--nx-vv-top, 0px));
     bottom: auto;
     height: calc(var(--nx-vvh, 100dvh) - var(--electron-titlebar-height, 0px) - var(--pwa-banner-h, 0px));
   }
 }
 .nx[data-kb="open"] { --nx-safe-bottom: 0px; }
+/* iPhone-приложение: Safari сдвигает страницу к полю — шапку чата сдвигаем обратно, она остаётся наверху. */
+.nx[data-kb-native][data-kb="open"] .cxv-head { transform: translateY(var(--nx-pan, 0px)); }
 /* Приложение с главного экрана на iPhone (viewport.ts): документ — высотой с экран, тогда iOS 26 не
    укорачивает окно и снизу нет чёрной полосы. Корень по-прежнему fixed от окна. */
 html.nx-locked.nx-ios-app,

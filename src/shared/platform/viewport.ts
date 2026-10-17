@@ -89,10 +89,9 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     const vv = window.visualViewport;
     if (!root || !vv || !isCoarse()) return undefined;
 
-    let savedKb = 0;
     try {
       const saved = Number(localStorage.getItem(KB_KEY));
-      if (saved > KB_MIN) { savedKb = saved; root.style.setProperty('--nx-kb-last', `${saved}px`); }
+      if (saved > KB_MIN) root.style.setProperty('--nx-kb-last', `${saved}px`);
     } catch { /* нет хранилища — панель эмодзи возьмёт высоту по умолчанию */ }
 
     // Документ заперт: iOS не может прокрутить страницу к полю ввода — только
@@ -122,8 +121,12 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     // запуске, а не с 1: при увеличенном масштабе отображения (115%) iOS отдаёт scale ≠ 1 всегда,
     // и подгонка под клавиатуру не работала вовсе.
     launchScale = vv.scale || 1;
-    // Поле ввода «заранее» в положении над клавиатурой (см. preopen): пока ждём саму клавиатуру.
-    let preTimer = 0;
+    // Установленное на iPhone приложение: страницу к полю ввода двигает сам Safari — плавно, вместе
+    // с клавиатурой. Любая своя подгонка (сжать корень, вернуть сдвиг, сжать заранее) за ним не
+    // поспевала, и всё мигало. Здесь раскладка не меняется: поле при клавиатуре только становится
+    // широким (data-kb, CSS), а шапка смещается на сдвиг Safari (--nx-pan) и остаётся наверху.
+    const native = isIosStandalone();
+    if (native) root.dataset.kbNative = 'true';
     const apply = () => {
       raf = 0;
       if (pinched(vv)) return;
@@ -132,7 +135,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       // шапка уезжает за верх экрана. offsetTop после scrollTo обновится
       // событием scroll у visualViewport — apply пересчитается сам.
       const shifted = window.scrollY !== 0 || window.scrollX !== 0 || vv.offsetTop > 0;
-      if (shifted) window.scrollTo(0, 0);
+      if (shifted && !native) window.scrollTo(0, 0);
       const height = Math.round(vv.height);
       const editing = isEditable(document.activeElement);
       if (!editing) baseline = Math.max(Math.round(window.innerHeight), height);
@@ -140,16 +143,8 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       const kb = Math.max(0, baseline - height);
       root.style.setProperty('--nx-vvh', `${height}px`);
       const open = kb > KB_MIN && editing;
-      if (preTimer) {
-        if (!open) return; // клавиатура ещё выезжает — держим раскладку, выставленную заранее
-        window.clearTimeout(preTimer);
-        preTimer = 0;
-      }
-      // В установленном на iPhone приложении корень за сдвигом видимой области не следует: Safari
-      // сдвигает её на кадр и сразу возвращает (scrollTo выше), а корень, догонявший устаревший
-      // offsetTop, съезжал вниз — сверху чёрная полоса, всё дёргалось.
-      const follow = open && !isIosStandalone();
-      root.style.setProperty('--nx-vv-top', follow ? `${Math.max(0, Math.round(vv.offsetTop))}px` : '0px');
+      root.style.setProperty('--nx-vv-top', open && !native ? `${Math.max(0, Math.round(vv.offsetTop))}px` : '0px');
+      if (native) root.style.setProperty('--nx-pan', open ? `${Math.max(0, Math.round(vv.offsetTop))}px` : '0px');
       if (open) {
         root.dataset.kb = 'open';
         if (Math.abs(kb - lastKb) > 4) {
@@ -175,41 +170,6 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     };
     const onBlur = () => { window.setTimeout(schedule, 50); };
 
-    // Касание поля ввода: раскладка сразу переходит в «клавиатура открыта» с высотой прошлой
-    // клавиатуры — поле уже стоит там, где окажется над ней. Safari видит его на экране и не
-    // прокручивает страницу к нему: шапка остаётся на месте, без рывка вверх и обратно. Если
-    // касание не закончилось фокусом (прокрутили), через 700 мс раскладка вернётся.
-    const preopen = (): boolean => {
-      const guess = lastKb || savedKb;
-      if (guess <= KB_MIN || pinched(vv)) return false;
-      root.style.setProperty('--nx-vvh', `${Math.max(0, baseline - guess)}px`);
-      root.style.setProperty('--nx-vv-top', '0px');
-      root.dataset.kb = 'open';
-      window.clearTimeout(preTimer);
-      preTimer = window.setTimeout(() => { preTimer = 0; schedule(); }, 700);
-      return true;
-    };
-    let tapStartY = 0;
-    const onTouchEnd = (e: TouchEvent) => {
-      const target = (e.target as Element | null)?.closest?.('[contenteditable="true"], textarea, input');
-      if (!target || !isEditable(target) || document.activeElement === target || !root.contains(target)) return;
-      const y = e.changedTouches[0]?.clientY ?? tapStartY;
-      if (Math.abs(y - tapStartY) > 10) return; // это была прокрутка, а не касание
-      if (!preopen()) return;
-      // Поле уже уехало вверх из-под пальца — «клик» пришёлся бы мимо, фокуса и клавиатуры не было бы.
-      // Фокус ставим сами, прямо в касании (iOS открывает клавиатуру только так), курсор — в конец.
-      e.preventDefault();
-      const field = target as HTMLElement;
-      field.focus({ preventScroll: true });
-      if (field.isContentEditable) {
-        const range = document.createRange();
-        range.selectNodeContents(field);
-        range.collapse(false);
-        const sel = window.getSelection();
-        sel?.removeAllRanges();
-        sel?.addRange(range);
-      }
-    };
 
     // Страница не должна ездить за пальцем. При открытой клавиатуре видимая
     // область iOS меньше окна, и «лишнее» движение — там, где нечего
@@ -220,7 +180,6 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     const onTouchStart = (e: TouchEvent) => {
       scroller = scrollerFrom(e.target as Element | null, root);
       lastY = e.touches[0]?.clientY ?? 0;
-      tapStartY = lastY;
     };
     const onTouchMove = (e: TouchEvent) => {
       if (e.touches.length !== 1 || !e.cancelable || scroller === 'free') return;
@@ -249,11 +208,8 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     document.addEventListener('focusout', onBlur);
     document.addEventListener('touchstart', onTouchStart, { passive: true, capture: true });
     document.addEventListener('touchmove', onTouchMove, { passive: false });
-    document.addEventListener('touchend', onTouchEnd, { passive: false, capture: true });
     return () => {
       cancelAnimationFrame(raf);
-      window.clearTimeout(preTimer);
-      document.removeEventListener('touchend', onTouchEnd, { capture: true });
       settle.forEach((t) => window.clearTimeout(t));
       document.removeEventListener('visibilitychange', onShow);
       window.removeEventListener('pageshow', onShow);
@@ -269,7 +225,8 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       delete root.dataset.kb;
       document.documentElement.classList.remove('nx-locked', 'nx-ios-app');
       document.documentElement.style.removeProperty('--nx-screen-h');
-      ['--nx-vvh', '--nx-vv-top'].forEach((p) => root.style.removeProperty(p));    };
+      delete root.dataset.kbNative;
+      ['--nx-vvh', '--nx-vv-top', '--nx-pan'].forEach((p) => root.style.removeProperty(p));    };
   }, [rootRef]);
 }
 
