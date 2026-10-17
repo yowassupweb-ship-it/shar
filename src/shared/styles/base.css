@@ -44,6 +44,10 @@
 html.nx-locked.nx-ios-app:not(.nx-typing),
 html.nx-locked.nx-ios-app:not(.nx-typing) body { height: var(--nx-screen-h, 100%); }
 html.nx-locked.nx-ios-app:not(.nx-typing) body { bottom: auto; }
+/* Пока в поле фокус — документ высотой будущей видимой области: Safari нечего прокручивать к полю. */
+html.nx-locked.nx-ios-app.nx-typing,
+html.nx-locked.nx-ios-app.nx-typing body { height: var(--nx-typing-h, 100%); }
+html.nx-locked.nx-ios-app.nx-typing body { bottom: auto; }
 
 /* Телефон: документ заперт (viewport.ts ставит класс). Прокручиваются только
    ленты внутри .nx; сама страница не может уехать к полю ввода. */

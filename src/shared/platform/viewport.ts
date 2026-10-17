@@ -113,7 +113,17 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
     // (окно iOS тогда 471 из 832) Safari прокручивал к полю: шапка уезжала за верх, поправки за ней
     // не поспевали. Без запаса высоты прокручивать нечего — шапка стоит, корень (fixed) сам встаёт
     // над клавиатурой. После клавиатуры высота с экран возвращается (полоса снизу).
-    const typing = (on: boolean) => { if (screenH) html.classList.toggle('nx-typing', on); };
+    // Высота — сразу будущей видимой области (окно минус прошлая клавиатура): обычной высоты окна
+    // (778 при видимых 471) Safari тоже хватало, чтобы прокрутить документ на 307 px. Документ под
+    // фиксированным корнем не виден — смена его высоты на экране незаметна.
+    const typing = (on: boolean) => {
+      if (!screenH) return;
+      html.classList.toggle('nx-typing', on);
+      if (!on) { html.style.removeProperty('--nx-typing-h'); return; }
+      let kb = 0;
+      try { kb = Number(localStorage.getItem(KB_KEY)) || 0; } catch { /* ignore */ }
+      if (kb > KB_MIN) html.style.setProperty('--nx-typing-h', `${Math.max(200, window.innerHeight - kb)}px`);
+    };
 
     let raf = 0;
     let lastKb = 0;
@@ -197,7 +207,11 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       poll = window.setInterval(() => { schedule(); if (++n >= 8) window.clearInterval(poll); }, 125);
     };
     const onBlur = (e: FocusEvent) => {
-      if (isEditable(e.target as Element | null)) { film('close'); typing(false); }
+      if (isEditable(e.target as Element | null)) {
+        film('close');
+        typing(false);
+        root.style.setProperty('--nx-pan', '0px'); // сразу: шапка не должна висеть сдвинутой, пока iOS шлёт события
+      }
       window.setTimeout(schedule, 50);
     };
 
@@ -256,6 +270,7 @@ export function useViewportSync(rootRef: RefObject<HTMLElement | null>) {
       delete root.dataset.kb;
       document.documentElement.classList.remove('nx-locked', 'nx-ios-app', 'nx-typing');
       document.documentElement.style.removeProperty('--nx-screen-h');
+      document.documentElement.style.removeProperty('--nx-typing-h');
       delete root.dataset.kbNative;
       ['--nx-vvh', '--nx-vv-top', '--nx-pan'].forEach((p) => root.style.removeProperty(p));    };
   }, [rootRef]);
