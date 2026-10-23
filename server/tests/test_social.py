@@ -128,3 +128,46 @@ def test_reply_goes_to_client(monkeypatch, client, admin, anna, clara, account, 
     monkeypatch.setattr(P, "tg_reply", boom)
     r = anna.post(f"/api/social/items/{item_id}/reply", json={"text": "ещё"})
     assert r.status_code == 502 and "blocked" in r.json()["detail"]
+
+
+def test_max_channel_comments(monkeypatch, client, admin):
+    """MAX: комментарий под постом канала — ветка «автор под постом», ответ — комментарием-ответом;
+    пост самого канала диалогом не становится."""
+    calls = []
+
+    def fake_max(token, method, path, *, params=None, body=None):
+        calls.append((method, path, body))
+        if path == "/me":
+            return {"name": "ВС бот", "username": "vs_bot"}
+        if path.startswith("/chats/"):
+            return {"title": "Вокруг света"}
+        if path.startswith("/messages/") and method == "GET":
+            return {"body": {"text": "Новый тур в Карелию"}}
+        if path.endswith("/comments"):
+            return {"message": {"body": {"mid": "c-reply"}}}
+        return {}
+
+    monkeypatch.setattr(P, "max_call", fake_max)
+    r = admin.post("/api/social/accounts", json={"platform": "max", "token": "max-token"})
+    assert r.status_code == 200, r.text
+    acc = r.json()["account"]
+    sub = next(b for m, p, b in calls if p == "/subscriptions")
+    assert "comment_created" in sub["update_types"]
+    from app.core.db import db
+
+    secret = db.conn.fetch_one("SELECT secret FROM social_accounts WHERE id = %s", (acc["id"],))["secret"]
+    hook = f"/api/social/hook/{acc['id']}/{secret}"
+    post = {"update_type": "message_created", "message": {"sender": {"user_id": 1, "name": "Админ"}, "recipient": {"chat_id": -50, "chat_type": "channel"}, "body": {"mid": f"post-{next(_ids)}", "text": "Пост"}}}
+    assert client.post(hook, json=post).status_code == 200
+    cid = f"mid.{next(_ids)}"
+    comment = {"update_type": "comment_created", "message": {"sender": {"user_id": 77, "name": "Ирина"}, "recipient": {"chat_id": -50, "chat_type": "channel", "post_id": "post-1"}, "timestamp": 1, "body": {"mid": cid, "seq": 1, "text": "Сколько стоит?"}}}
+    assert client.post(hook, json=comment).status_code == 200
+
+    dialogs = admin.get("/api/social/dialogs?kind=comments&platform=max").json()["dialogs"]
+    d = next(x for x in dialogs if x["lastText"] == "Сколько стоит?")
+    assert d["title"] == "Ирина" and d["sourceTitle"] == "Вокруг света" and d["context"] == "Новый тур в Карелию"
+    assert not [x for x in admin.get("/api/social/dialogs?platform=max").json()["dialogs"] if x["lastText"] == "Пост"]
+    r = admin.post(f"/api/social/dialogs/{d['id']}/messages", json={"text": "От 25 000 ₽"})
+    assert r.status_code == 200, r.text
+    m, p, b = calls[-1]
+    assert (m, p) == ("POST", "/messages/post-1/comments") and b == {"text": "От 25 000 ₽", "link": {"type": "reply", "mid": cid}}

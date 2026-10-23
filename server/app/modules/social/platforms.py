@@ -19,8 +19,10 @@ Telegram — Bot API. Что видит бот:
 Запросы к api.telegram.org идут через прокси из админки (telegramProxy), если он задан: с
 российского сервера Telegram доступен не всегда.
 
-MAX — Bot API (platform-api2.max.ru, токен в заголовке Authorization): сообщения боту, в чатах и
-каналах, где бот добавлен; событие message_created."""
+MAX — Bot API (platform-api2.max.ru, токен в заголовке Authorization): сообщения боту и в чатах,
+где бот добавлен (message_created), и комментарии под постами канала, где бот — администратор
+с правом read_all_messages (comment_created; в канале должны быть включены комментарии).
+Личные сообщения на аккаунт человека Bot API не отдаёт — только диалоги с самим ботом."""
 
 from __future__ import annotations
 
@@ -220,9 +222,12 @@ def max_call(token: str, method: str, path: str, *, params: Optional[dict] = Non
     return data
 
 
+MAX_UPDATES = ["message_created", "comment_created"]
+
+
 def max_connect(token: str, hook_url: str) -> Dict[str, Any]:
     me = max_call(token, "GET", "/me")
-    max_call(token, "POST", "/subscriptions", body={"url": hook_url, "update_types": ["message_created"]})
+    max_call(token, "POST", "/subscriptions", body={"url": hook_url, "update_types": MAX_UPDATES})
     return {"botUsername": me.get("username") or "", "botName": me.get("name") or me.get("first_name") or ""}
 
 
@@ -230,7 +235,33 @@ def max_disconnect(token: str, hook_url: str) -> None:
     max_call(token, "DELETE", "/subscriptions", params={"url": hook_url})
 
 
+def _max_name(sender: dict) -> str:
+    return sender.get("name") or " ".join(x for x in (sender.get("first_name"), sender.get("last_name")) if x) or sender.get("username") or ""
+
+
+def _max_comment(update: dict) -> Optional[Incoming]:
+    """Комментарий под постом канала. Пост — recipient.post_id, сам комментарий — body.mid; диалог —
+    автор под этим постом, ответ — комментарием-ответом на его последний комментарий."""
+    msg = update.get("message") or {}
+    sender = msg.get("sender") or {}
+    if not sender or sender.get("is_bot"):
+        return None  # от имени канала или бот — не входящее
+    recipient = msg.get("recipient") or {}
+    body = msg.get("body") or {}
+    post_id, mid, text = str(recipient.get("post_id") or ""), str(body.get("mid") or ""), body.get("text") or ""
+    if not post_id or not mid or not text:
+        return None
+    name = _max_name(sender)
+    return Incoming(
+        ext_chat_id=str(recipient.get("chat_id") or ""), ext_message_id=mid, chat_title="", chat_type="comments",
+        author_id=str(sender.get("user_id") or ""), author_name=name or "Без имени", author_username=sender.get("username") or "",
+        text=text, link=None, thread=post_id, reply={"kind": "comment", "post_id": post_id, "mid": mid},
+    )
+
+
 def max_parse(update: dict) -> Optional[Incoming]:
+    if update.get("update_type") == "comment_created":
+        return _max_comment(update)
     if update.get("update_type") != "message_created":
         return None
     msg = update.get("message") or {}
@@ -238,6 +269,8 @@ def max_parse(update: dict) -> Optional[Incoming]:
     if sender.get("is_bot"):
         return None
     recipient = msg.get("recipient") or {}
+    if recipient.get("chat_type") == "channel":
+        return None  # пост самого канала, а не сообщение клиента
     body = msg.get("body") or {}
     text = body.get("text") or ""
     labels = {"image": "Фото", "video": "Видео", "audio": "Аудио", "file": "Файл", "sticker": "Стикер", "location": "Геопозиция", "contact": "Контакт"}
@@ -245,7 +278,7 @@ def max_parse(update: dict) -> Optional[Incoming]:
     if not text and not media:
         return None
     chat_type = recipient.get("chat_type")
-    name = sender.get("name") or " ".join(x for x in (sender.get("first_name"), sender.get("last_name")) if x) or sender.get("username") or ""
+    name = _max_name(sender)
     kind = "private" if chat_type == "dialog" else "group"
     return Incoming(
         ext_chat_id=str(recipient.get("chat_id") or ""), ext_message_id=str(body.get("mid") or ""),
@@ -262,17 +295,33 @@ def max_chat_title(token: str, chat_id: str) -> str:
         return ""
 
 
-def max_reply(token: str, ext_chat_id: str, ext_message_id: str, text: str) -> str:
+def max_post_text(token: str, post_id: str) -> str:
+    """Текст поста — подпись к ветке комментариев (не вышло — без неё)."""
+    try:
+        got = max_call(token, "GET", f"/messages/{post_id}") or {}
+        return str(((got.get("message") or got).get("body") or {}).get("text") or "").strip()[:300]
+    except PlatformError:
+        return ""
+
+
+def max_reply(token: str, ext_chat_id: str, ext_message_id: str, text: str, target: Optional[Dict[str, Any]] = None) -> str:
+    if (target or {}).get("kind") == "comment":
+        sent = max_call(token, "POST", f"/messages/{target['post_id']}/comments",
+                        body={"text": text, "link": {"type": "reply", "mid": target["mid"]}})
+        return str(((sent or {}).get("message") or {}).get("body", {}).get("mid") or "")
     sent = max_call(token, "POST", "/messages", params={"chat_id": ext_chat_id},
                     body={"text": text, "link": {"type": "reply", "mid": ext_message_id}})
     return str(((sent or {}).get("message") or {}).get("body", {}).get("mid") or "")
 
 
-def max_send_files(token: str, ext_chat_id: str, ext_message_id: str, text: str, files: List[tuple]) -> str:
+def max_send_files(token: str, ext_chat_id: str, ext_message_id: str, text: str, files: List[tuple],
+                   target: Optional[Dict[str, Any]] = None) -> str:
     """Ответ с вложениями в MAX: файл грузится по выданному адресу, в сообщение идёт его токен.
     Только что загруженный файл MAX может ещё обрабатывать (attachment.not.ready) — повторяем."""
     import time  # noqa: PLC0415
 
+    if (target or {}).get("kind") == "comment":
+        raise PlatformError("В комментарии MAX файлы не прикрепить — только текст")
     attachments = []
     for name, data, content_type in files:
         kind = "image" if (content_type or "").startswith("image/") else "file"

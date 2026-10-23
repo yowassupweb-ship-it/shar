@@ -294,9 +294,12 @@ def _summary(account: dict, inc: P.Incoming) -> str:
 
 def receive(account: dict, inc: P.Incoming) -> Optional[str]:
     """Сохранить событие, поставить карточку в чат источника. Возвращает id сообщения-карточки."""
-    if account["platform"] == "max" and inc.chat_type == "group" and not inc.chat_title:
+    if account["platform"] == "max" and inc.chat_type in ("group", "comments") and not inc.chat_title:
         known = db.conn.fetch_one("SELECT title FROM social_sources WHERE account_id = %s AND ext_chat_id = %s", (account["id"], inc.ext_chat_id))
-        inc.chat_title = (known or {}).get("title") or P.max_chat_title(_decrypt(account["token_enc"]), inc.ext_chat_id) or "Чат MAX"
+        inc.chat_title = (known or {}).get("title") or P.max_chat_title(_decrypt(account["token_enc"]), inc.ext_chat_id) or (
+            "Канал MAX" if inc.chat_type == "comments" else "Чат MAX")
+    if account["platform"] == "max" and inc.chat_type == "comments" and not inc.context:
+        inc.context = P.max_post_text(_decrypt(account["token_enc"]), inc.thread)
     source = db.conn.fetch_one(
         "INSERT INTO social_sources (account_id, ext_chat_id, title, chat_type) VALUES (%s,%s,%s,%s) "
         "ON CONFLICT (account_id, ext_chat_id) DO UPDATE SET last_seen = now(), title = EXCLUDED.title RETURNING chat_id",
@@ -409,13 +412,13 @@ def _send(account: dict, row: dict, text: str, files: Optional[list] = None) -> 
         if account["platform"] == "vk":
             return vk.send_files(token, (row.get("data") or {}).get("reply") or {}, text, files)
         if account["platform"] == "max":
-            return P.max_send_files(token, row["ext_chat_id"], row["ext_message_id"], text, files)
+            return P.max_send_files(token, row["ext_chat_id"], row["ext_message_id"], text, files, (row.get("data") or {}).get("reply"))
         raise P.PlatformError("Файлы из Шара в эту площадку пока не отправляются")
     if account["platform"] == "vk":
         return vk.reply(token, (row.get("data") or {}).get("reply") or {}, text)
     if account["platform"] == "telegram":
         return P.tg_reply(token, row["ext_chat_id"], row["ext_message_id"], text, row.get("business_connection_id"))
-    return P.max_reply(token, row["ext_chat_id"], row["ext_message_id"], text)
+    return P.max_reply(token, row["ext_chat_id"], row["ext_message_id"], text, (row.get("data") or {}).get("reply"))
 
 
 MAX_FILES = 10
