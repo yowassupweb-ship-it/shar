@@ -6,12 +6,15 @@ import {
 import { plural } from '@/shared/ui/format';
 import { askConfirm, Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
+import { useLongPress } from '@/shared/ui/useLongPress';
 import ForwardSheet from './ForwardSheet';
 import RichInput, { type RichInputHandle } from './RichInput';
 import { readDraft, writeDraft } from './drafts';
+import { scheduleMessage, whenLabel } from './scheduled';
+import { ScheduledBar, ScheduleMenu, SchedulePicker } from './ScheduledUi';
 import { deleteMessage, editMessage, forwardMessages } from './messageActions';
 import {
-  displayName, isGroupChat, notifyTyping, previewText, sendFiles, sendPoll, sendText, setCompose, setForwardDraft, setPanel, setSelection,
+  displayName, isGroupChat, notifyTyping, previewText, sendFiles, sendPoll, sendText, setCompose, uploadForLater, setForwardDraft, setPanel, setSelection,
   useChatStore, type Msg,
 } from './store';
 import TypingLine from './TypingLine';
@@ -53,6 +56,9 @@ export default function Composer({ chatId, readOnly }: { chatId: string; readOnl
   const [plusAnchor, setPlusAnchor] = useState<MenuAnchor | null>(null);
   const [pollOpen, setPollOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [laterMenu, setLaterMenu] = useState<MenuAnchor | null>(null);
+  const [laterPick, setLaterPick] = useState(false);
+  const sendHold = useLongPress((x, y) => openLater({ x, y }));
   const ref = useRef<RichInputHandle>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const coarse = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
@@ -137,6 +143,33 @@ export default function Composer({ chatId, readOnly }: { chatId: string; readOnl
     writeDraft(chatId, '');
     notifyTyping(chatId, false);
   };
+
+  // ── Отправить позже: правый щелчок / долгое нажатие на стрелке. Пересылку и правку не планируем. ──
+  const canLater = canSend && !editing && !forwardCount;
+  function openLater(anchor: MenuAnchor) { if (canLater) setLaterMenu(anchor); }
+  async function scheduleAt(at: Date) {
+    const ownText = text.trim();
+    const ownFiles = files;
+    const replyToId = compose?.replyToId;
+    if (!ownText && !ownFiles.length) return;
+    // Поле очищается сразу, как при обычной отправке; не вышло — текст и файлы возвращаются.
+    setFiles([]);
+    setText('');
+    writeDraft(chatId, '');
+    setCompose(chatId, {});
+    notifyTyping(chatId, false);
+    try {
+      if (ownFiles.length) showToast('Загружаю файлы…', 'info');
+      const attachments = ownFiles.length ? await uploadForLater(ownFiles) : undefined;
+      const item = await scheduleMessage(chatId, at, { content: ownText, replyToId, attachments });
+      showToast(`Сообщение уйдёт ${whenLabel(item.sendAt)}`, 'success');
+    } catch (cause) {
+      setText((cur) => cur || ownText);
+      setFiles((cur) => (cur.length ? cur : ownFiles));
+      showToast(cause instanceof Error && cause.message ? cause.message : 'Не удалось запланировать', 'error');
+      throw cause;
+    }
+  }
 
   const editLast = () => {
     const st = useChatStore.getState();
@@ -239,6 +272,7 @@ export default function Composer({ chatId, readOnly }: { chatId: string; readOnl
       onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
     >
       <TypingLine chatId={chatId} />
+      <ScheduledBar chatId={chatId} />
       {forwardTray}
       {bar}
       {files.length > 0 && (
@@ -328,7 +362,10 @@ export default function Composer({ chatId, readOnly }: { chatId: string; readOnl
               className="cxn-send"
               disabled={!canSend}
               aria-label={editing ? 'Сохранить изменение' : 'Отправить'}
+              title={canLater && !coarse ? 'Правый щелчок — отправить позже' : undefined}
               onPointerDown={(e) => e.preventDefault()}
+              onContextMenu={(e) => { if (!canLater) return; e.preventDefault(); openLater({ element: e.currentTarget, align: 'end', side: 'above' }); }}
+              {...sendHold}
             >
               <ArrowUp size={18} strokeWidth={2.6} aria-hidden="true" />
             </button>
@@ -356,6 +393,16 @@ export default function Composer({ chatId, readOnly }: { chatId: string; readOnl
           )}
         </Menu>
       )}
+
+      {laterMenu && (
+        <ScheduleMenu
+          anchor={laterMenu}
+          onClose={() => setLaterMenu(null)}
+          onPick={(at) => { void scheduleAt(at).catch(() => {}); }}
+          onCustom={() => setLaterPick(true)}
+        />
+      )}
+      {laterPick && <SchedulePicker title="Отправить позже" onClose={() => setLaterPick(false)} onPick={scheduleAt} />}
 
       {pollOpen && (
         <PollCreatorModal

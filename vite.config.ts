@@ -20,6 +20,15 @@ export default defineConfig(({ mode }) => {
     secure: true,
     // Кука сессии, выданная удалённым хостом, должна лечь на localhost.
     cookieDomainRewrite: '',
+    // changeOrigin меняет только Host, а Origin остаётся локальным (http://127.0.0.1:3005). Сервер сверяет
+    // Origin сокета с хостом и закрывает чужой кодом 1008 — dev-окно против прода молча оставалось без
+    // событий: ни новых сообщений в открытом чате, ни «прочитано». Как локальный сервер Shar OS
+    // (desktop/scripts/web-server.cjs), выдаём себя за сам сервер.
+    configure: (proxy) => {
+      const origin = new URL(target).origin;
+      proxy.on('proxyReqWs', (proxyReq) => { proxyReq.setHeader('origin', origin); });
+      proxy.on('proxyReq', (proxyReq) => { if (proxyReq.getHeader('origin')) proxyReq.setHeader('origin', origin); });
+    },
   });
   const proxy = { '/api': { ...http(apiTarget), ws: true } };
 

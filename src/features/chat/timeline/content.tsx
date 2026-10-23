@@ -1,3 +1,4 @@
+import { ScrollTable } from '@/shared/ui/ScrollTable';
 import { openEventById } from '@/features/calendar';
 import { Fragment, memo, useEffect, useState, type ComponentType, type ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
@@ -136,7 +137,7 @@ function mdComponents(query: string, id: string): Components {
     img: ({ src, alt }) => (
       <a href={typeof src === 'string' ? src : undefined} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>{alt || 'Картинка'}</a>
     ),
-    table: ({ children }) => <div className="cxm-md-table"><table>{children}</table></div>,
+    table: ({ children }) => <ScrollTable className="cxm-md-table"><table>{children}</table></ScrollTable>,
     pre: ({ children }) => <pre className="cxm-md-pre">{children}</pre>,
     input: ({ checked }) => <input type="checkbox" checked={Boolean(checked)} disabled readOnly />,
   };

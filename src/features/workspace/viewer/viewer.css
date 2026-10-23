@@ -51,6 +51,10 @@
 .npv-prose img { max-width: 100%; height: auto; }
 .npv-prose a { color: var(--accent-color); }
 .npv-prose table { border-collapse: collapse; max-width: 100%; }
+/* Широкая таблица прокручивается вбок, слова в ячейках не рвутся по буквам. */
+.npv-md-table { max-width: 100%; margin: 0 0 .8em; overflow-x: auto; }
+.npv-md-table > table { max-width: none; margin: 0; }
+.npv-md-table th, .npv-md-table td { min-width: 7em; overflow-wrap: normal; word-break: normal; }
 .npv-prose th, .npv-prose td { padding: 4px 8px; border: 1px solid var(--border-color); vertical-align: top; }
 .npv-prose code { padding: 1px 5px; border-radius: 5px; background: var(--surface-hover); font-family: var(--font-mono); font-size: .9em; }
 .npv-prose pre { padding: var(--space-3); border-radius: var(--radius-md); background: var(--surface-hover); overflow-x: auto; }
@@ -62,9 +66,12 @@
 .npv-sheet { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .npv-table { border-collapse: separate; border-spacing: 0; font-size: var(--text-sm); color: var(--text-main); }
 .npv-table th, .npv-table td { padding: 3px 8px; border-right: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color); white-space: pre; max-width: 320px; overflow: hidden; text-overflow: ellipsis; background: var(--surface-panel); }
-.npv-table thead th { position: sticky; top: 0; z-index: 2; background: var(--surface-hover); color: var(--text-2); font-weight: var(--weight-medium); }
-.npv-table tbody th { position: sticky; left: 0; z-index: 1; background: var(--surface-hover); color: var(--text-2); font-weight: var(--weight-medium); text-align: right; }
+/* Закреплённые буквы столбцов и номера строк: --surface-hover полупрозрачный, под ним — сплошной фон панели,
+   иначе при прокрутке сквозь заголовки просвечивали ячейки. */
+.npv-table thead th, .npv-table tbody th { background-color: var(--surface-panel); background-image: linear-gradient(var(--surface-hover), var(--surface-hover)); color: var(--text-2); font-weight: var(--weight-medium); }
+.npv-table thead th { position: sticky; top: 0; z-index: 2; }
 .npv-table thead th:first-child { left: 0; z-index: 3; }
+.npv-table tbody th { position: sticky; left: 0; z-index: 1; text-align: right; }
 .npv-tabs { display: flex; gap: 2px; flex: none; overflow-x: auto; padding: var(--space-1) var(--space-2); border-top: 1px solid var(--border-color); background: var(--surface-panel); }
 .npv-tabs button { flex: none; height: 28px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--text-2); font-size: var(--text-xs); cursor: pointer; }
 .npv-tabs button[aria-selected="true"] { background: var(--surface-selected); color: var(--accent-color); font-weight: var(--weight-semibold); }

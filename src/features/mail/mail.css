@@ -49,6 +49,13 @@
 @media (hover: hover) { .nmb-item:hover { background: var(--surface-hover); } }
 .nmb-item[aria-current="true"] { background: var(--surface-selected); font-weight: var(--weight-medium); }
 .nmb-count { font-size: var(--text-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+/* Свои папки — после спецпапок, отдельной группой и с отступом по вложенности. */
+.nmb-item[data-custom] { padding-left: calc(var(--space-2) + var(--depth, 0) * 14px); }
+.nmb-item[data-custom] svg { color: var(--text-muted); }
+.nmb-item:not([data-custom]) + .nmb-item[data-custom] { margin-top: var(--space-3); }
+.nmb-error { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: color-mix(in srgb, var(--state-danger) 9%, transparent); font-size: var(--text-xs); color: var(--text-main); }
+.nmb-error svg { flex: none; color: var(--state-danger); }
+.nmb-error span { flex: 1 1 140px; }
 
 /* ── Список ───────────────────────────────────────────────────────────── */
 .nml { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface-panel); border-right: 1px solid var(--border-color); }
@@ -159,6 +166,8 @@
 .nmr-att-img { display: block; overflow: hidden; width: 120px; height: 90px; border-radius: var(--radius-md); border: 1px solid var(--border-color); background: var(--surface-hover); }
 .nmr-att-img img { width: 100%; height: 100%; object-fit: cover; }
 .nmr-body { padding-top: var(--space-4); }
+/* HTML-письмо — белый лист со своими цветами; в тёмной теме у него скруглённый край, а не голый прямоугольник. */
+.nmr-body .nx-mail-paper { border-radius: var(--radius-lg); box-shadow: 0 0 0 1px var(--border-color); }
 .nmr-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: var(--text-reading); line-height: 1.55; }
 
 /* ── Новое письмо ─────────────────────────────────────────────────────── */

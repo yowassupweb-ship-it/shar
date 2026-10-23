@@ -93,19 +93,35 @@
   padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2);
   border: 0;
   border-radius: var(--radius-lg);
-  background: var(--surface-panel);
+  background: transparent;
   text-align: left;
   cursor: pointer;
   user-select: none;
   -webkit-touch-callout: none;
-  /* Вдавливание строки — мягче кнопок: 2%. */
-  --press: scale(.98);
-  --btn-transition: background var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+  --row-bg: var(--surface-panel);
+  /* Вдавливание — мягче кнопок, 2%, — но сжимаются только подложка и аватар. Сжатие всей строки сводило
+     заголовок и превью к центру: на экране с масштабом 125% строки сходились на целый пиксель и расходились. */
+  --press: none;
+  --btn-transition: transform var(--duration-fast) var(--ease-out); /* доводка свайпа */
 }
-@media (hover: hover) { .cxl-row:hover { background: color-mix(in srgb, var(--text-main) 5%, var(--surface-panel)); } }
-.cxl-row:active { background: color-mix(in srgb, var(--text-main) 8%, var(--surface-panel)); }
-.cxl-row[aria-current="true"] { background: color-mix(in srgb, var(--accent-fill) 17%, var(--surface-panel)); }
+.cxl-row::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--row-bg);
+  transition: background var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+}
+/* Аватар сжимается чуть заметнее подложки — коротко и без пружины: с перелётом он ощущался тяжёлым. */
+.cxl-row > .nx-avatar { transition: transform .12s var(--ease-out); }
+.cxl-row:active::before { transform: scale(.98); }
+.cxl-row:active > .nx-avatar { transform: scale(.95); transition-duration: .05s; }
+@media (hover: hover) { .cxl-row:hover { --row-bg: color-mix(in srgb, var(--text-main) 5%, var(--surface-panel)); } }
+.cxl-row:active { --row-bg: color-mix(in srgb, var(--text-main) 8%, var(--surface-panel)); }
+.cxl-row[aria-current="true"] { --row-bg: color-mix(in srgb, var(--accent-fill) 17%, var(--surface-panel)); }
 .cxl-row[data-swiping="true"] { --btn-transition: none; }
+.cxl-row[data-swiping="true"]::before { transform: none; }
 .cxl-row:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent-color) 55%, transparent); }
 .cxl-row > .nx-avatar {
   --size: var(--cxl-avatar);
@@ -178,11 +194,9 @@
 }
 .cxl-read[data-read="true"] .cxl-read-dot { background: var(--accent-color); }
 .cxl-readers {
-  position: absolute;
-  top: calc(100% + var(--space-2));
-  right: 0;
-  z-index: 100;
-  display: none;
+  position: fixed;
+  z-index: 1000;
+  display: flex;
   flex-direction: column;
   gap: var(--space-1);
   min-width: 140px;
@@ -193,7 +207,6 @@
   box-shadow: 0 0 0 1px var(--glass-brd), var(--glass-shadow);
   pointer-events: none;
 }
-@media (hover: hover) { .cxl-read:hover .cxl-readers { display: flex; } }
 .cxl-readers-title { font-size: var(--text-2xs); font-weight: var(--weight-medium); color: var(--text-muted); }
 .cxl-reader { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--text-xs); color: var(--text-main); }
 .cxl-reader > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

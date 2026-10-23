@@ -13,38 +13,78 @@ interface LinkPreviewProps {
   isMyMessage?: boolean;
 }
 
-// Module-level cache: persists across component mounts
+// Кэш на модуль: живёт между монтированиями. Запрос в полёте — общий: одна ссылка в ленте и в профиле
+// (или в нескольких сообщениях) — один поход сервера на чужой сайт.
 const previewCache = new Map<string, PreviewData | false>();
+const inflight = new Map<string, Promise<PreviewData | false>>();
+
+function loadPreview(url: string): Promise<PreviewData | false> {
+  const cached = previewCache.get(url);
+  if (cached !== undefined) return Promise.resolve(cached);
+  let job = inflight.get(url);
+  if (!job) {
+    job = fetch(`/api/preview?url=${encodeURIComponent(url)}`)
+      .then((r) => r.json())
+      .then((d: PreviewData) => (d?.title ? d : false) as PreviewData | false)
+      .catch(() => false as const)
+      .then((result) => { previewCache.set(url, result); inflight.delete(url); return result; });
+    inflight.set(url, job);
+  }
+  return job;
+}
+
+// Один наблюдатель на всё приложение: превью запрашиваем, когда ссылка подошла к экрану (с запасом),
+// а не все сразу — во вкладке «Ссылки» и в длинной ленте их сотни.
+const waiting = new Map<Element, () => void>();
+let observer: IntersectionObserver | null = null;
+function whenNear(el: Element, fn: () => void): () => void {
+  if (typeof IntersectionObserver === 'undefined') { fn(); return () => {}; }
+  observer ??= new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      const cb = waiting.get(e.target);
+      waiting.delete(e.target);
+      observer?.unobserve(e.target);
+      cb?.();
+    }
+  }, { rootMargin: '600px 0px' });
+  waiting.set(el, fn);
+  observer.observe(el);
+  return () => { waiting.delete(el); observer?.unobserve(el); };
+}
+
+/** Ссылка на сам Шар: страница — приложение с заголовком «Шар» без описания, карточка ничего не добавляет к тексту. */
+function isOwnLink(url: string) {
+  try {
+    const host = new URL(url).hostname;
+    return host === window.location.hostname || host.endsWith('.shar-os.ru');
+  } catch {
+    return false;
+  }
+}
 
 export default function LinkPreview({ url, isMyMessage }: LinkPreviewProps) {
-  const [data, setData] = useState<PreviewData | false | undefined>(() =>
-    previewCache.has(url) ? previewCache.get(url) : undefined
-  );
-  const fetching = useRef(false);
+  if (isOwnLink(url)) return null;
+  return <ExternalPreview url={url} isMyMessage={isMyMessage} />;
+}
+
+function ExternalPreview({ url, isMyMessage }: LinkPreviewProps) {
+  const [data, setData] = useState<PreviewData | false | undefined>(() => previewCache.get(url));
+  const probe = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
-    if (previewCache.has(url)) {
-      setData(previewCache.get(url));
-      return;
-    }
-    if (fetching.current) return;
-    fetching.current = true;
-    const ctrl = new AbortController();
-    fetch(`/api/preview?url=${encodeURIComponent(url)}`, { signal: ctrl.signal })
-      .then(r => r.json())
-      .then((d: PreviewData) => {
-        const result = d?.title ? d : false;
-        previewCache.set(url, result);
-        setData(result);
-      })
-      .catch(() => {
-        previewCache.set(url, false);
-        setData(false);
-      });
-    return () => ctrl.abort();
+    const known = previewCache.get(url);
+    if (known !== undefined) { setData(known); return undefined; }
+    let alive = true;
+    const el = probe.current;
+    const start = () => { void loadPreview(url).then((d) => { if (alive) setData(d); }); };
+    const stop = el ? whenNear(el, start) : (start(), () => {});
+    return () => { alive = false; stop(); };
   }, [url]);
 
-  // Show nothing while loading or when fetch failed / no OG data
+  // Пока не знаем — пустая метка для наблюдателя (места не занимает).
+  if (data === undefined) return <span ref={probe} className="nx-lp-probe" aria-hidden="true" />;
+  // Нет данных (у страницы нет Open Graph или не загрузилась) — ничего не показываем.
   if (!data) return null;
 
   const hostname = (() => {

@@ -21,6 +21,7 @@ import {
   useChatStore,
 } from './store';
 import { Spinner } from '@/shared/ui/Spinner';
+import { useProgressive } from '@/shared/ui/useProgressive';
 
 const ImageViewer = lazyComponent(() => import('@/shared/ui/ImageViewer'));
 
@@ -198,6 +199,11 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
     catch { showToast('Не удалось скопировать ссылку', 'error'); }
   };
 
+  // Открытая вкладка рисуется частями (useProgressive): в большом чате это сотни фото, файлов и ссылок.
+  const tabTotal = tab === 'media' ? media?.length ?? 0 : tab === 'files' ? shownFiles.length : tab === 'links' ? shownLinks.length : shownMembers.length;
+  const part = useProgressive(tabTotal, `${chatId}|${tab}|${q}|${memberQuery}`);
+  const moreMark = part.more ? <div ref={part.sentinel} className="cxf-more" aria-hidden="true" /> : null;
+
   const dept = other?.department;
   const deptColor = dept ? getDepartmentColor(dept) : undefined;
   const n = members.length;
@@ -297,7 +303,7 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
             : !media.length ? <div className="nx-state"><ImageIcon size={28} /><p>Фото и видео пока нет</p></div>
               : (
                 <div className="cxf-media">
-                  {media.map((m, i) => (
+                  {media.slice(0, part.count).map((m, i) => (
                     <div key={`${m.messageId}-${i}`} className="cxf-media-cell">
                       {m.fileType === 'image' ? (
                         <MediaThumb src={thumbUrl(m.url, 160)} onOpen={() => {
@@ -313,6 +319,7 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
                       <button type="button" className="cxf-jump" onClick={() => jump(m.messageId)} aria-label="Перейти к сообщению"><Eye size={13} /></button>
                     </div>
                   ))}
+                  {moreMark}
                 </div>
               )
         )}
@@ -328,12 +335,13 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
         {tab === 'files' && (
           !shownFiles.length ? <div className="nx-state"><p>{q ? 'Ничего не найдено' : 'Файлов пока нет'}</p></div> : (
             <div className="cxf-list">
-              {shownFiles.map((f, i) => (
+              {shownFiles.slice(0, part.count).map((f, i) => (
                 <div key={`${f.messageId}-${i}`} className="cxf-file">
                   <FileCard att={{ url: f.url, name: f.filename, size: f.size }} />
                   <button type="button" className="nx-icon-btn" onClick={() => jump(f.messageId)} aria-label="Перейти к сообщению"><Eye size={16} /></button>
                 </div>
               ))}
+              {moreMark}
             </div>
           )
         )}
@@ -342,7 +350,7 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
           <>
             {!shownLinks.length ? <div className="nx-state"><LinkIcon size={28} /><p>{q ? 'Ничего не найдено' : 'Ссылок пока нет'}</p></div> : (
               <div className="cxf-list">
-                {shownLinks.map((l, i) => (
+                {shownLinks.slice(0, part.count).map((l, i) => (
                   <div key={`${l.messageId}-${i}`} className="cxf-link">
                     <div className="cxf-link-row">
                       <a href={l.url} target="_blank" rel="noopener noreferrer"><LinkIcon size={16} /><span>{l.url}</span></a>
@@ -352,6 +360,7 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
                     <LinkPreview url={l.url} />
                   </div>
                 ))}
+                {moreMark}
               </div>
             )}
           </>
@@ -400,7 +409,7 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
                 </div>
               </div>
             )}
-            {shownMembers.map((u) => {
+            {shownMembers.slice(0, part.count).map((u) => {
               const id = String(u.id);
               const color = u.department ? getDepartmentColor(u.department) : undefined;
               return (
@@ -427,6 +436,7 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
                 </div>
               );
             })}
+            {moreMark}
           </section>
         )}
       </div>

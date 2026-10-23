@@ -1044,6 +1044,15 @@ export function sendFiles(chatId: string, files: File[], caption = '') {
   void uploadAndSend(nonce, job);
 }
 
+/** Загрузить файлы для отложенного сообщения: без черновика в ленте — сообщение появится, когда уйдёт. */
+export async function uploadForLater(files: File[]): Promise<OutAttachment[]> {
+  const { uploadFileWithProgress } = await import('@/shared/api/uploadFile');
+  return Promise.all(files.map(async (file) => {
+    const [res, size] = await Promise.all([uploadFileWithProgress(file, () => {}), imageSize(file)]);
+    return { type: kindOf(file), url: res.url, name: file.name, size: file.size, mimeType: file.type, ...size };
+  }));
+}
+
 export function sendVoice(chatId: string, file: File, duration: number, peaks?: number[]) {
   const me = get().me;
   if (!me) return;
@@ -1217,6 +1226,15 @@ function onEvent(e: RealtimeEvent) {
     case 'message_edited': {
       const id = String(e.messageId || '');
       patchThread(chatId, (t) => (t.byId[id] ? { ...t, byId: { ...t.byId, [id]: { ...t.byId[id], content: String(e.content ?? ''), isEdited: true } } } : t));
+      return;
+    }
+    case 'card_updated': {
+      // Карточка из внешней системы (заявка с сайта) поменяла состояние: взяли, закрыли.
+      const id = String(e.messageId || '');
+      patchThread(chatId, (t) => {
+        const m = t.byId[id];
+        return m ? { ...t, byId: { ...t.byId, [id]: { ...m, metadata: { ...(m.metadata || {}), card: e.card as Record<string, unknown> } } } } : t;
+      });
       return;
     }
     case 'message_deleted': {

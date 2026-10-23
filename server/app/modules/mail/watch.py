@@ -8,7 +8,7 @@ from app.core.db import db
 from app.core.realtime import sse_manager
 from app.modules.mail import idle as mail_realtime
 from app.modules.mail.crypto import _deobfuscate_pw
-from app.modules.mail.imap import _imap_connect, _mail_account_by_id
+from app.modules.mail.imap import _imap_connect, _mail_account_by_id, _wire
 from app.modules.mail.service import _route_emails_to_chats, _sync_folder_imap
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ def _refresh_mail_flags(acc: dict, folder: str = 'INBOX', window: int = 300) -> 
         return 0
     conn = _imap_connect(acc)
     try:
-        typ, _ = conn.select(folder, readonly=True)
+        typ, _ = conn.select(_wire(folder), readonly=True)
         if typ != 'OK':
             return 0
         typ, data = conn.uid('FETCH', ','.join(str(r['uid']) for r in rows), '(FLAGS)')

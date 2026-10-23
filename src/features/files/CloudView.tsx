@@ -398,6 +398,7 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
       onDrop={(e) => { e.preventDefault(); setDragging(false); void upload(e.dataTransfer.files); }}
     >
       <header className="nf-bar">
+        <div className="nf-left">
         {lead}
         <nav className="nf-crumbs" aria-label="Путь">
           {trail.length > 0 && <button type="button" className="nf-crumb" onClick={() => onCrumb(-1)}>Мои файлы</button>}
@@ -408,8 +409,9 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
             </span>
           ))}
         </nav>
+        </div>
+        <SearchField className="nf-search" value={query} onChange={setQuery} placeholder="Поиск в папке" />
         <div className="nf-tools">
-          <SearchField className="nf-search" value={query} onChange={setQuery} placeholder="Поиск в папке" />
           <div className="nx-segment" role="group" aria-label="Тип файлов">
             {([['all', 'Все'], ['image', 'Фото'], ['video', 'Видео'], ['doc', 'Документы']] as [Filter, string][]).map(([id, label]) => (
               <button key={id} type="button" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}</button>

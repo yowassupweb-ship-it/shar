@@ -1,5 +1,11 @@
 /* Поиск «как Spotlight». Префикс nsp. Только токены. */
-.nsp-scrim { align-items: start; padding-top: min(14vh, 120px); }
+.nsp-scrim {
+  align-items: start;
+  padding-top: min(14vh, 120px);
+  /* Фон под поиском размыт — окно читается, а не сливается с тем, что под ним. */
+  -webkit-backdrop-filter: blur(10px) saturate(1.1);
+  backdrop-filter: blur(10px) saturate(1.1);
+}
 .nsp {
   display: flex;
   flex-direction: column;

@@ -269,7 +269,7 @@ export default function Compose({ mode, me, signature, onClose }: { mode: Compos
               <span>Подпись</span>
               <button type="button" onClick={() => setWithSig((v) => !v)}>{withSig ? 'Без подписи' : 'Добавить подпись'}</button>
             </div>
-            {withSig && <EmailHtmlView html={sigHtml} cacheKey="compose-signature" />}
+            {withSig && <EmailHtmlView html={sigHtml} cacheKey="compose-signature" bare />}
           </div>
         )}
         {init.quote && <pre className="ncm-quote">{init.quote}</pre>}

@@ -2,6 +2,7 @@ import { Suspense, useEffect, useLayoutEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import type { User } from '@/shared/types/chat';
 import { boot, isMuted, shutdown, unreadChatsTotal, useChatStore } from '@/features/chat';
+import { startSocialWaiting, useSocialWaiting } from '@/features/social/waiting';
 import { EventEditorHost } from '@/features/calendar';
 import { BrowserPushService } from '@/shared/platform/push/browserPushService';
 import { OverlayHost } from '@/shared/ui/overlay';
@@ -56,7 +57,10 @@ function Workspace({ me }: { me: User }) {
   const navigate = useNavigate();
   const section = sectionFor(pathname);
   const [opts, setOpts] = useState<ShellOptions>({});
-  const unread = useChatStore((s) => unreadChatsTotal(s.chats));
+  const unreadChats = useChatStore((s) => unreadChatsTotal(s.chats));
+  // Диалоги «Соцсетей», ждущие ответа, — тоже непрочитанное: на логотипе вместе с чатами, в меню — на «Ещё».
+  const socialWaiting = useSocialWaiting((s) => s.total);
+  const unread = unreadChats + socialWaiting;
   const meFull = useChatStore((s) => s.users[String(me.id)]) as
     (User & { position?: string; visibleTabs?: Record<string, boolean> }) | undefined;
 
@@ -67,6 +71,7 @@ function Workspace({ me }: { me: User }) {
     boot(me);
     return () => shutdown();
   }, [me]);
+  useEffect(() => startSocialWaiting(), [me]);
 
   useTitleBlink(unread);
 
@@ -147,7 +152,7 @@ function Workspace({ me }: { me: User }) {
     <ShellContext.Provider value={setOpts}>
       <AppShell
         section={section.id}
-        badges={{ chats: unread }}
+        badges={{ chats: unreadChats, more: socialWaiting }}
         visibleTabs={meFull?.visibleTabs}
         navHidden={opts.navHidden}
         onReselect={opts.onReselect}

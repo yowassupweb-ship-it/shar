@@ -39,6 +39,7 @@ PUBLIC_PREFIXES: tuple[str, ...] = (
     "/api/auth/telegram/",
     "/api/integrations/",   # внешние системы: свой ключ X-Shar-Api-Key
     "/api/telegram/",       # вебхук Telegram: свой секрет
+    "/api/social/hook/",    # события ботов Telegram и MAX («Соцсети»): секрет подключения в адресе
     "/api/v2/health",
     "/api/uploads/",        # вложения и аватарки — по прямой ссылке (имена непредсказуемы)
     "/api/thumbs/",         # уменьшенные копии тех же вложений

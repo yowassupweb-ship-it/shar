@@ -34,7 +34,7 @@
   transform: translateX(calc(var(--swipe) + var(--reply)));
 }
 /* Возврат после жеста — плавно; во время жеста — за пальцем, без задержки. */
-.cxm-list:not([data-gesture]) .cxm-line { transition: transform var(--duration-base) var(--ease-out); }
+.cxm-list:not([data-gesture]) .cxm-row:not([data-replying]) .cxm-line { transition: transform var(--duration-base) var(--ease-out); }
 
 .cxm-avatar-col {
   flex: none;
@@ -146,6 +146,8 @@
   overflow: hidden;
   border-radius: var(--bubble-radius) var(--bubble-radius) 4px 4px;
 }
+/* Над фото имя автора, «Переслано» или цитата — к верхнему краю пузыря не прижимаем, иначе фото наезжает на них. */
+.cxm-media-top:not(:first-child) { margin-top: 4px; border-radius: 4px; }
 /* Фото с подписью: по ширине пузыря, высота — по настоящим пропорциям.
    Раньше max-height 480 + cover срезали высокие снимки сверху и снизу, даже
    когда места хватало. */
@@ -371,6 +373,35 @@ html.dark .cxm-emoji { filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .35)); }
 .cxm-reaction-people .nx-avatar { box-shadow: 0 0 0 1px var(--element-bg); }
 .cxm-reaction-people .nx-avatar + .nx-avatar { margin-left: -5px; }
 .cxm-reaction-more { cursor: default; padding: 0 8px; }
+/* Кто поставил реакцию (ReactionTip) — как список «Прочитали» в чатах. */
+.cxm-rtip {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 150px;
+  max-width: 240px;
+  max-height: min(360px, 70vh);
+  overflow: hidden;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--glass);
+  box-shadow: 0 0 0 1px var(--glass-brd), var(--glass-shadow);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  backdrop-filter: blur(16px) saturate(1.4);
+  pointer-events: none;
+  animation: cxm-rtip-in var(--duration-fast) var(--ease-out);
+}
+@keyframes cxm-rtip-in { from { opacity: 0; transform: translateY(3px); } }
+@media (prefers-reduced-motion: reduce) { .cxm-rtip { animation: none; } }
+.cxm-rtip-group { display: flex; flex-direction: column; gap: 5px; }
+.cxm-rtip-group + .cxm-rtip-group { padding-top: var(--space-2); border-top: 1px solid var(--border-color); }
+.cxm-rtip-head { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; }
+.cxm-rtip-head > img { width: 18px; height: 18px; object-fit: contain; }
+.cxm-rtip-person { display: flex; align-items: center; gap: var(--space-2); min-width: 0; color: var(--text-main); font-size: var(--text-sm); }
+.cxm-rtip-person > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cxm-rtip-more { color: var(--text-muted); font-size: var(--text-xs); }
 @media (max-width: 640px) {
   .cxm-line { flex-wrap: wrap; }
   .cxm-row .cxm-reactions { width: 100%; padding-left: 36px; }
@@ -485,11 +516,9 @@ html.dark .cxm-emoji { filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .35)); }
 }
 /* Прилипшая к верху дата видна только во время прокрутки (как в Telegram): в покое она лежала поверх
    сообщений и «рассекала» их текст — особенно на крупном масштабе, где лента уже. На своём месте между днями
-   дата видна всегда. «Прилипла» — scroll-state container query (Chromium 133+); где его нет — как раньше. */
-.cxm-day { container-type: scroll-state; }
-@container scroll-state(stuck: top) {
-  .cxn-scroll:not([data-scrolling]) .cxm-day span { opacity: 0; transition-duration: .4s; }
-}
+   дата видна всегда. «Прилипла» отмечает лента (data-stuck) один раз, когда прокрутка остановилась:
+   scroll-state container query пересчитывался на главном потоке каждый кадр и делал прокрутку рывками. */
+.cxn-scroll:not([data-scrolling]) .cxm-day[data-stuck] span { opacity: 0; transition-duration: .4s; }
 .cxm-system {
   display: flex;
   align-items: center;
@@ -928,27 +957,10 @@ button.cxm-status { cursor: pointer; }
 /* Якорение прокрутки браузера оставляем: оно держит взгляд на месте, когда
    выше догружаются фото и история. «Держаться внизу» решает лента сама —
    см. userScrollAt в Timeline. */
-/* Дни за пределами экрана браузер не раскладывает и не рисует: в длинной переписке (сотни сообщений,
-   тысячи узлов) вход в чат и прокрутка иначе пересчитывали всю ленту. Высоту невидимого дня браузер
-   запоминает после первого показа (auto), 800px — оценка до него.
-   content-visibility включает и обрезку по краю дня: хвостики пузырей и тени выступают за него на
-   несколько пикселей и срезались («сдвинутые» пузыри). Запас по краям — внутренний отступ, который
-   отрицательное поле возвращает обратно: раскладка ленты прежняя, а выступающее остаётся внутри. */
-.cxm-daygroup {
-  position: relative;
-  content-visibility: auto;
-  contain-intrinsic-size: auto 800px;
-  padding: 12px 16px;
-  margin: -12px -16px;
-  /* Запас соседних дней перекрывается — он не должен перехватывать клики по краю чужого сообщения. */
-  pointer-events: none;
-}
-/* Телефон: Safari при резкой смене высоты ленты (выезжает клавиатура) на кадр сбрасывал отрисовку
-   пропущенных дней — пузыри мигали. Там ленты короче, обходимся без пропуска. */
-@media (pointer: coarse) {
-  .cxm-daygroup { content-visibility: visible; contain-intrinsic-size: none; }
-}
-.cxm-daygroup > :not(.cxm-day) { pointer-events: auto; }
+/* День — своя группа: плашка даты прилипает к верху только в пределах своего дня. Пропуск невидимых дней
+   (content-visibility) убран: лента держит в DOM не больше окна сообщений (Timeline, MAX), а пропуск в
+   замерах удваивал отрисовку и принудительные раскладки при входе в чат и сдвиге окна. */
+.cxm-daygroup { position: relative; }
 
 /* ── Эмодзи и стикеры ──────────────────────────────────────────────────── */
 .cxp-spacer { flex: 1; }
@@ -1135,8 +1147,14 @@ button.cxm-status { cursor: pointer; }
   color: inherit;
   text-align: left;
   cursor: pointer;
-  --press: scale(.98);
+  /* Сжатие всей кнопки сводило заголовок и подпись к центру (строки сходились на пиксель). Нажатие — аватаром
+     и подсветкой капсулы, текст стоит на месте. */
+  --press: none;
 }
+.cxh-who > .nx-avatar { transition: transform .16s var(--ease-spring); }
+.cxh-who:active > .nx-avatar { transform: scale(.9); transition-duration: .08s; }
+.cxh-id { transition: background var(--duration-fast) var(--ease-out); }
+.cxh-id:has(> .cxh-who:active) { background: color-mix(in srgb, var(--text-main) 7%, var(--glass)); }
 .cxh-text { display: grid; min-width: 0; }
 .cxh-title {
   overflow: hidden;
@@ -1740,7 +1758,7 @@ button.cxm-status { cursor: pointer; }
 .cxm-md-pre code { padding: 0; background: none; font-size: inherit; }
 .cxm-md-table { margin: .35em 0 .45em; overflow-x: auto; }
 .cxm-md table { border-collapse: collapse; font-size: .92em; }
-.cxm-md th, .cxm-md td { padding: .25em .6em; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); text-align: left; }
+.cxm-md th, .cxm-md td { min-width: 5em; overflow-wrap: normal; padding: .25em .6em; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); text-align: left; }
 .cxm-md th { font-weight: var(--weight-semibold); background: color-mix(in srgb, currentColor 8%, transparent); }
 .cxm-md hr { margin: .5em 0; border: 0; border-top: 1px solid color-mix(in srgb, currentColor 25%, transparent); }
 .cxm-md del { opacity: .75; }
@@ -1885,3 +1903,51 @@ button.cxm-status { cursor: pointer; }
   .cxm-focus-scrim, .cxm-focus-lift { animation: none; }
   .cxm-focus-shot { transition: none; }
 }
+
+/* ── Отложенная отправка (ScheduledUi) ─────────────────────────────────── */
+.cxs-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: calc(100% - 88px);
+  margin: 0 auto 6px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--glass);
+  box-shadow: 0 0 0 1px var(--glass-brd);
+  color: var(--accent-color);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  animation: nx-rise var(--duration-fast) var(--ease-out);
+}
+.cxs-bar > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (hover: hover) { .cxs-bar:hover { background: color-mix(in srgb, var(--accent-fill) 10%, var(--glass)); } }
+.cxs-list { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.cxs-item {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-fill) 10%, var(--element-bg));
+  color: var(--text-main);
+  text-align: left;
+  cursor: pointer;
+}
+@media (hover: hover) { .cxs-item:hover { background: color-mix(in srgb, var(--accent-fill) 16%, var(--element-bg)); } }
+.cxs-when { display: inline-flex; align-items: center; gap: 5px; color: var(--accent-color); font-size: var(--text-xs); font-weight: var(--weight-semibold); }
+.cxs-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; line-clamp: 4; overflow: hidden; overflow-wrap: anywhere; white-space: pre-wrap; font-size: var(--text-sm); }
+.cxs-files { display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; color: var(--text-2); }
+.cxs-pick { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+.cxs-pick input { color-scheme: light dark; }
+.cxs-pick-hint { margin: var(--space-2) 2px 0; color: var(--text-muted); font-size: var(--text-sm); }
+
+/* Метка «превью ссылки ещё не запрошено» — наблюдатель запрашивает его у края экрана (LinkPreview). */
+.nx-lp-probe { display: block; height: 1px; margin-top: -1px; }
+
+/* Метка конца части списка во вкладке профиля (useProgressive): подошла к экрану — дорисовываем следующую. */
+.cxf-more { grid-column: 1 / -1; height: 1px; }

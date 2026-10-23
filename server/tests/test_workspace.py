@@ -344,3 +344,82 @@ def test_presence_and_live_content_events(anna, boris, users):
     only_view = boris.post(f"{url}/presence", json={"state": "beat", "editing": True}).json()["viewers"]
     assert only_view[0]["editing"] is False
     boris.post(f"{url}/presence", json={"state": "leave"})
+
+
+def test_cursor_relay_over_socket(anna, boris, clara, users):
+    """Курсор коллеги: кадр cursor из сокета доходит до тех, кто в материале; посторонний не может слать."""
+    import json
+
+    item = _create(anna, "note", title="Курсоры", content="текст")
+    url = f"/api/workspace/items/{item['id']}"
+    anna.put(f"{url}/shares", json={"userId": users.ids["boris"], "role": "edit"})
+
+    def wait_for(ws, kind, limit=14):
+        for _ in range(limit):
+            ev = json.loads(ws.receive_text())
+            if ev["type"] == kind:
+                return ev
+        return None
+
+    with boris.websocket_connect(f"/api/ws/{users.ids['boris']}") as ws_b, anna.websocket_connect(f"/api/ws/{users.ids['anna']}") as ws_a, \
+            clara.websocket_connect(f"/api/ws/{users.ids['clara']}") as ws_c:
+        assert "cursor" in json.loads(ws_a.receive_text())["features"]
+        ws_b.receive_text()
+        ws_c.receive_text()
+        boris.post(f"{url}/presence", json={"state": "join", "editing": False})
+        anna.post(f"{url}/presence", json={"state": "join", "editing": False})
+        # Клара в материал не входила (и доступа нет) — её кадр отбрасывается, до Бориса доходит только Аннин.
+        ws_c.send_text(json.dumps({"type": "cursor", "itemId": item["id"], "cursor": {"s": 99, "e": 99}}))
+        ws_a.send_text(json.dumps({"type": "cursor", "itemId": item["id"], "cursor": {"s": 3, "e": 7, "b": 0}}))
+        ev = wait_for(ws_b, "workspace_cursor")
+        assert ev and ev["userId"] == users.ids["anna"] and ev["cursor"] == {"s": 3, "e": 7, "b": 0}
+        # Слишком большой кадр не пересылается, null — «курсор убран».
+        ws_a.send_text(json.dumps({"type": "cursor", "itemId": item["id"], "cursor": {"x": "y" * 2000}}))
+        ws_a.send_text(json.dumps({"type": "cursor", "itemId": item["id"], "cursor": None}))
+        ev = wait_for(ws_b, "workspace_cursor")
+        assert ev and ev["cursor"] is None
+    anna.post(f"{url}/presence", json={"state": "leave"})
+    boris.post(f"{url}/presence", json={"state": "leave"})
+
+
+def test_new_badge_for_shared_items(anna, boris, users):
+    """Мне открыли доступ — материал «Новое» и первым в списке, пока я его не открою; свой — никогда не новый."""
+    def listed(c):
+        return c.get("/api/workspace/items").json()["items"]
+
+    boris.get("/api/workspace/items")  # отсчёт «нового» начинается с первого обращения
+    mine = _create(anna, "note", title="Своё", content="x")
+    assert next(i for i in listed(anna) if i["id"] == mine["id"])["isNew"] is False
+    shared = _create(anna, "note", title="Для Бориса", content="y")
+    url = f"/api/workspace/items/{shared['id']}"
+    anna.put(f"{url}/shares", json={"userId": users.ids["boris"], "role": "view"})
+    items = listed(boris)
+    assert items[0]["id"] == shared["id"] and items[0]["isNew"] is True
+    boris.get(url)  # открыл — больше не новое
+    assert next(i for i in listed(boris) if i["id"] == shared["id"])["isNew"] is False
+    # Открыли всем — новое для всех, кроме владельца.
+    everyone = _create(anna, "note", title="Всем", content="z")
+    anna.patch(f"/api/workspace/items/{everyone['id']}", json={"accessLevel": "all"})
+    assert next(i for i in listed(boris) if i["id"] == everyone["id"])["isNew"] is True
+    assert next(i for i in listed(anna) if i["id"] == everyone["id"])["isNew"] is False
+
+
+
+def test_personal_folders(anna, boris, users):
+    """Папки личные: свои и чужие материалы раскладываются по своим папкам, чужие папки недоступны."""
+    folder = anna.post("/api/workspace/folders", json={"title": "Проекты"}).json()["folder"]
+    note = _create(anna, "note", title="В папке", content="x")
+    assert anna.put(f"/api/workspace/items/{note['id']}/folder", json={"folderId": folder["id"]}).status_code == 200
+    row = next(i for i in anna.get("/api/workspace/items").json()["items"] if i["id"] == note["id"])
+    assert row["folderId"] == folder["id"]
+    # Борис не может положить в чужую папку и не видит раскладку Анны.
+    anna.put(f"/api/workspace/items/{note['id']}/shares", json={"userId": users.ids["boris"], "role": "view"})
+    assert boris.put(f"/api/workspace/items/{note['id']}/folder", json={"folderId": folder["id"]}).status_code == 404
+    assert next(i for i in boris.get("/api/workspace/items").json()["items"] if i["id"] == note["id"])["folderId"] is None
+    assert boris.patch(f"/api/workspace/folders/{folder['id']}", json={"title": "Моё"}).status_code == 404
+    # Переименование и удаление: материал остаётся, просто без папки.
+    titles = [f["title"] for f in anna.patch(f"/api/workspace/folders/{folder['id']}", json={"title": "Архив"}).json()["folders"]]
+    assert "Архив" in titles
+    assert anna.delete(f"/api/workspace/folders/{folder['id']}").status_code == 200
+    row = next(i for i in anna.get("/api/workspace/items").json()["items"] if i["id"] == note["id"])
+    assert row["folderId"] is None

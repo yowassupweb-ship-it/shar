@@ -71,29 +71,48 @@ export function Menu({ anchor, onClose, label, children, compact, minWidth }: {
     const box = visibleBox();
     const vw = box.width;
     const vh = box.bottom;
+    // Сверху окно закрывает шапка Electron (и баннер PWA): меню у верхнего края уезжало под неё —
+    // так у напоминания из чата терялись «Сегодня» и начало календаря.
+    const root = getComputedStyle(document.documentElement);
+    const chrome = (parseFloat(root.getPropertyValue('--electron-titlebar-height')) || 0) + (parseFloat(root.getPropertyValue('--pwa-banner-h')) || 0);
+    const top = box.top + chrome + margin;
     let x: number;
     let y: number;
+    let maxHeight: number | undefined;
     let origin = 'top left';
     if ('element' in anchor) {
       const r = anchor.element.getBoundingClientRect();
       x = anchor.align === 'end' ? r.right - width : r.left;
-      const above = anchor.side === 'above' || r.bottom + 6 + height > vh - margin;
-      y = above ? r.top - 6 - height : r.bottom + 6;
+      const below = vh - margin - (r.bottom + 6);
+      const aboveSpace = r.top - 6 - top;
+      // Сторона, где меню помещается; не помещается нигде — где места больше, со своей прокруткой.
+      const above = anchor.side === 'above'
+        ? aboveSpace >= height || aboveSpace > below
+        : height > below && aboveSpace > below;
+      const room = above ? aboveSpace : below;
+      if (height > room) maxHeight = Math.max(160, room);
+      const h = Math.min(height, maxHeight ?? height);
+      y = above ? r.top - 6 - h : r.bottom + 6;
       origin = `${above ? 'bottom' : 'top'} ${anchor.align === 'end' ? 'right' : 'left'}`;
     } else {
       x = anchor.x;
       y = anchor.y;
       if (x + width > vw - margin) { x -= width; origin = 'top right'; }
       if (y + height > vh - margin) { y -= height; origin = origin.replace('top', 'bottom'); }
+      if (height > vh - margin - top) maxHeight = vh - margin - top;
     }
+    const h = Math.min(height, maxHeight ?? height);
     x = Math.max(margin, Math.min(x, vw - width - margin));
-    y = Math.max(box.top + margin, Math.min(y, vh - height - margin));
+    y = Math.max(top, Math.min(y, vh - h - margin));
     // Координаты — по целым физическим пикселям. Курсор и getBoundingClientRect дают
     // дробные значения, а при масштабе экрана 125% / 150% меню с дробным сдвигом
     // рисуется со сглаживанием: эмодзи реакций и текст получаются мыльными.
     const dpr = window.devicePixelRatio || 1;
     const snap = (v: number) => Math.round(v * dpr) / dpr;
-    setStyle({ top: snap(y), left: snap(x), ...(minWidth ? { minWidth } : {}), ['--origin' as string]: origin });
+    setStyle({
+      top: snap(y), left: snap(x), ...(minWidth ? { minWidth } : {}), ['--origin' as string]: origin,
+      ...(maxHeight !== undefined ? { maxHeight: Math.floor(maxHeight), overflowY: 'auto' } : {}),
+    });
     el.querySelector<HTMLElement>('.nx-menu-item:not(:disabled)')?.focus({ preventScroll: true });
   }, [anchor, minWidth]);
 

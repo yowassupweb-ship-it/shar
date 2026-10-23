@@ -7,6 +7,7 @@ import { deleteEvent, isMine, leaveEvent, loadRange, myId, reload, updateEvent, 
 import EventEditor, { askScope, newDraft, type EditorState } from './EventEditor';
 import { DayAgenda, MiniMonth, MonthView } from './MonthViews';
 import TimeGrid from './TimeGrid';
+import { birthdayEvents, isBirthdayEvent, loadBirthdays, useBirthdays } from '@/features/birthdays/store';
 import {
   addDays, addMinutes, COLORS, colorVar, dayIso, localIso, monthGrid, MONTHS, MONTHS_GEN, parseLocal, sameDay, startOfDay,
   startOfMonth, startOfWeek, weekdayIndex, WEEKDAYS_FULL, type CalEvent,
@@ -77,8 +78,10 @@ export default function CalendarScreen() {
   const [miniMonth, setMiniMonth] = useState(() => startOfMonth(startDay()));
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [evMenu, setEvMenu] = useState<{ event: CalEvent; anchor: MenuAnchor } | null>(null);
-  const showMenu = useCallback((event: CalEvent, at: { x: number; y: number }) => setEvMenu({ event, anchor: at }), []);
-  const events = useCalendar((s) => s.events);
+  const showMenu = useCallback((event: CalEvent, at: { x: number; y: number }) => { if (!isBirthdayEvent(event.id)) setEvMenu({ event, anchor: at }); }, []);
+  const stored = useCalendar((s) => s.events);
+  const birthdays = useBirthdays((s) => s.items);
+  useEffect(() => { void loadBirthdays(); }, []);
   const phase = useCalendar((s) => s.phase);
 
   const setView = useCallback((v: View) => {
@@ -89,6 +92,8 @@ export default function CalendarScreen() {
   const range = useMemo(() => rangeOf(view, anchor), [view, anchor]);
   const fromIso = localIso(range.from);
   const toIso = localIso(range.to);
+  // Дни рождения коллег — ежегодные события на весь день поверх своих.
+  const events = useMemo(() => (birthdays.length ? [...stored, ...birthdayEvents(birthdays, range.from, range.to)] : stored), [stored, birthdays, range]);
   useEffect(() => { void loadRange(fromIso, toIso); }, [fromIso, toIso]);
 
   const goToday = useCallback(() => {
@@ -128,7 +133,10 @@ export default function CalendarScreen() {
     createAt(start, addMinutes(start, 60));
   }, [selected, createAt]);
 
-  const openEvent = useCallback((e: CalEvent) => setEditor({ mode: 'edit', event: e }), []);
+  const openEvent = useCallback((e: CalEvent) => {
+    if (isBirthdayEvent(e.id)) { showToast(`${e.title}. ${e.description}`, 'info'); return; }
+    setEditor({ mode: 'edit', event: e });
+  }, []);
 
   // Событие из ссылки (поиск): ждём, пока загрузится нужный период, и открываем его один раз.
   useEffect(() => {

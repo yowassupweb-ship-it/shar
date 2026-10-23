@@ -117,7 +117,9 @@ export function useItemSession(source: Source) {
       if (content !== null) savedContent.current = content;
       if (pendingContent.current === content) pendingContent.current = null;
       if (pendingTitle.current === title) pendingTitle.current = null;
-      setItem((cur) => (cur ? { ...cur, updatedAt, ...(title !== null ? { title } : {}), ...(content !== null ? { content } : {}) } : cur));
+      // Название в поле не трогаем: оно и так свежее. Подстановка отправленного затирала буквы, набранные,
+      // пока шёл запрос, — при медленном наборе «пропадала буква-две».
+      setItem((cur) => (cur ? { ...cur, updatedAt, ...(content !== null ? { content } : {}) } : cur));
       setError('');
       setState(pendingContent.current !== null || pendingTitle.current !== null ? 'pending' : 'saved');
     } catch (cause) {

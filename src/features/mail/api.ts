@@ -18,7 +18,8 @@ export interface AccountForm {
   name: string; email: string; username: string; password: string;
   imapHost: string; imapPort: number; smtpHost: string; smtpPort: number; useSsl: boolean; signature: string;
 }
-export interface Box { role: 'inbox' | 'drafts' | 'sent' | 'junk' | 'trash' | 'archive'; folder: string; title: string; unread: number }
+/** Спецпапка (входящие, отправленные…) или папка, которую человек завёл сам (`folder`, с уровнем вложенности). */
+export interface Box { role: 'inbox' | 'drafts' | 'sent' | 'junk' | 'trash' | 'archive' | 'folder'; folder: string; title: string; unread: number; depth?: number }
 export interface Addr { addr: string; name?: string }
 export interface MailAttachment { filename: string; contentType?: string; content_type?: string; size: number; url?: string }
 
@@ -47,6 +48,8 @@ interface State {
   accountsPhase: Phase;
   accountId: string | null;
   boxes: Box[];
+  /** Список папок не пришёл: без этого экран молча показывал одни «Входящие». */
+  boxesError: boolean;
   folder: string;
   lists: Record<string, MailRow[]>;
   listPhase: Record<string, Phase>;
@@ -57,7 +60,7 @@ interface State {
 }
 
 export const useMail = create<State>(() => ({
-  accounts: [], accountsPhase: 'idle', accountId: null, boxes: [], folder: 'INBOX',
+  accounts: [], accountsPhase: 'idle', accountId: null, boxes: [], boxesError: false, folder: 'INBOX',
   lists: {}, listPhase: {}, syncing: {}, full: {}, search: '', found: null,
 }));
 const set = useMail.setState;
@@ -122,16 +125,19 @@ export async function removeAccount(id: string): Promise<void> {
 
 export function selectAccount(id: string) {
   try { localStorage.setItem('nxmail:account', id); } catch { /* ignore */ }
-  set({ accountId: id, boxes: [], lists: {}, listPhase: {}, full: {}, folder: 'INBOX', found: null, search: '' });
+  set({ accountId: id, boxes: [], boxesError: false, lists: {}, listPhase: {}, full: {}, folder: 'INBOX', found: null, search: '' });
 }
 
-export async function loadBoxes(): Promise<void> {
+export async function loadBoxes(refresh = false): Promise<void> {
   const acc = get().accountId;
   if (!acc) return;
   try {
-    const boxes = await call<Box[]>(`/api/mail/mailboxes?accountId=${encodeURIComponent(acc)}&userId=${encodeURIComponent(myId())}`);
-    if (get().accountId === acc) set({ boxes });
-  } catch { /* останутся прежние */ }
+    const qs = new URLSearchParams({ accountId: acc, userId: myId(), ...(refresh ? { refresh: 'true' } : {}) });
+    const boxes = await call<Box[]>(`/api/mail/mailboxes?${qs}`);
+    if (get().accountId === acc) set({ boxes, boxesError: false });
+  } catch {
+    if (get().accountId === acc) set({ boxesError: true }); // прежний список, если был, остаётся
+  }
 }
 
 export async function loadFolder(folder: string): Promise<void> {
@@ -181,7 +187,8 @@ export async function openMessage(id: string): Promise<MailFull | null> {
       return null;
     }
   }
-  if (!full.isRead) void setFlags(id, { isRead: true });
+  // Отметка «прочитано» откатится сама, если сервер не ответил; открытие письма от неё не зависит.
+  if (!full.isRead) setFlags(id, { isRead: true }).catch(() => {});
   return full;
 }
 

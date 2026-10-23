@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import {
-  AlertCircle, Archive, ArrowLeft, Download, File as FileIcon, FileEdit, Forward, Inbox, Mail, MailOpen, Paperclip,
+  AlertCircle, Archive, ArrowLeft, Download, File as FileIcon, FileEdit, Folder, Forward, Inbox, Mail, MailOpen, Paperclip,
   PenSquare, Reply, ReplyAll, RotateCw, Send, ShieldAlert, Star, Trash2, Settings2,
 } from 'lucide-react';
 import { EmailHtmlView } from '@/features/mail/html/EmailHtmlView';
@@ -38,7 +38,7 @@ const subscribeMedia = (cb: () => void) => {
 const subscribeNoop = () => () => {};
 
 const BOX_ICON: Record<Box['role'], typeof Inbox> = {
-  inbox: Inbox, drafts: FileEdit, sent: Send, junk: ShieldAlert, trash: Trash2, archive: Archive,
+  inbox: Inbox, drafts: FileEdit, sent: Send, junk: ShieldAlert, trash: Trash2, archive: Archive, folder: Folder,
 };
 
 type Face = { seed: string; src?: string; name?: string };
@@ -171,6 +171,7 @@ export default function MailScreen() {
   const accountsPhase = useMail((s) => s.accountsPhase);
   const accountId = useMail((s) => s.accountId);
   const boxes = useMail((s) => s.boxes);
+  const boxesError = useMail((s) => s.boxesError);
   const folder = useMail((s) => s.folder);
   const list = useMail((s) => s.lists[s.folder]);
   const phase = useMail((s) => s.listPhase[s.folder]);
@@ -312,7 +313,9 @@ export default function MailScreen() {
         {(boxes.length ? boxes : [{ role: 'inbox', folder: 'INBOX', title: 'Входящие', unread: 0 } as Box]).map((b) => {
           const Icon = BOX_ICON[b.role] || Inbox;
           return (
-            <button key={b.folder} type="button" className="nmb-item" aria-current={b.folder === folder ? 'true' : undefined} onClick={() => pickFolder(b.folder)}>
+            <button key={b.folder} type="button" className="nmb-item" data-custom={b.role === 'folder' ? 'true' : undefined}
+              style={b.depth ? { '--depth': b.depth } as CSSProperties : undefined}
+              aria-current={b.folder === folder ? 'true' : undefined} onClick={() => pickFolder(b.folder)} title={b.folder}>
               <Icon size={16} aria-hidden="true" />
               <span>{b.title}</span>
               {b.unread > 0 && b.role !== 'sent' && b.role !== 'trash' && <span className="nmb-count">{b.unread}</span>}
@@ -320,6 +323,13 @@ export default function MailScreen() {
           );
         })}
       </nav>
+      {boxesError && (
+        <div className="nmb-error" role="alert">
+          <AlertCircle size={14} aria-hidden="true" />
+          <span>Не получил список папок с почтового сервера.</span>
+          <button type="button" className="nx-ghost" onClick={() => void loadBoxes(true)}>Повторить</button>
+        </div>
+      )}
     </aside>
   );
 

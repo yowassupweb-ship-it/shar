@@ -1,10 +1,12 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Camera, Trash2 } from 'lucide-react';
 import { Avatar } from '@/shared/ui/Avatar';
 import { askConfirm } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
 import { removeAvatar, saveProfile, uploadAvatar, type Profile, type ProfileFields } from '../api';
 import { Group, Row } from '@/shared/ui/controls';
+import { BirthdaySheet } from '@/features/birthdays/BirthdaySheet';
+import { formatBirthday, loadBirthdays, useBirthdays } from '@/features/birthdays/store';
 
 const FIELDS: { key: keyof ProfileFields; label: string; type: string; autoComplete?: string }[] = [
   { key: 'position', label: 'Должность', type: 'text', autoComplete: 'organization-title' },
@@ -13,6 +15,20 @@ const FIELDS: { key: keyof ProfileFields; label: string; type: string; autoCompl
   { key: 'personalPhone', label: 'Личный телефон', type: 'tel', autoComplete: 'tel' },
   { key: 'workSchedule', label: 'График работы', type: 'text' },
 ];
+
+/** День рождения — отдельной записью (не поле профиля): правится в своём окне, видят все в календаре. */
+function BirthdayRow() {
+  const { mine, unsupported } = useBirthdays();
+  const [open, setOpen] = useState(false);
+  useEffect(() => { void loadBirthdays(); }, []);
+  if (unsupported) return null;
+  return (
+    <Row label="День рождения">
+      <button type="button" className="nx-ghost" onClick={() => setOpen(true)}>{mine ? formatBirthday(mine) : 'Указать'}</button>
+      {open && <BirthdaySheet onClose={() => setOpen(false)} />}
+    </Row>
+  );
+}
 
 const MAX_AVATAR = 5 * 1024 * 1024;
 
@@ -109,6 +125,7 @@ export default function ProfileSection({ profile, onChange }: { profile: Profile
           {FIELDS.map((f) => (
             <Row key={f.key} label={f.label}><span className="nx-value">{profile[f.key] || '—'}</span></Row>
           ))}
+          <BirthdayRow />
           <div className="nx-row nx-row-end">
             <button type="button" className="nx-ghost" onClick={() => setEditing(true)}>Изменить</button>
           </div>

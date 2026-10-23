@@ -23,6 +23,10 @@ export interface Item {
   updatedAt: string;
   sizeBytes: number;
   snippet: string;
+  /** Мне открыли доступ, а я ещё не открывал (свой материал новым не бывает). */
+  isNew?: boolean;
+  /** В какой моей папке лежит (папки личные). */
+  folderId?: string | null;
   /** Права текущего человека (считает сервер). */
   isOwner: boolean;
   canEdit: boolean;
@@ -58,3 +62,6 @@ export interface VersionsState {
   current: { updatedAt: string; title: string; savedBy: string; savedByName: string };
   canRestore: boolean;
 }
+
+/** Личная папка «Офиса»: раскладка своя у каждого, коллеги её не видят. */
+export interface Folder { id: string; title: string; createdAt: string }

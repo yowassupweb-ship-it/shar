@@ -44,6 +44,20 @@ button.nf-crumb { cursor: pointer; }
 
 .nf-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2); min-width: 0; }
 .nf-search { width: 200px; }
+.nf-left { display: flex; align-items: center; gap: var(--space-2) var(--space-3); min-width: 0; }
+/* Компьютер: три колонки — путь, поиск, инструменты. Боковые колонки равной ширины, поэтому поиск стоит ровно
+   по центру шапки, сколько бы ни занимали путь и кнопки. */
+@media (min-width: 641px) {
+  .nf-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+  .nf-left .nf-crumbs { flex: 1 1 auto; }
+  .nf-search { width: min(320px, 28vw); }
+  .nf-tools { flex-wrap: nowrap; }
+}
+/* Средняя ширина: справа не хватает места на подписи — у «Новой папки» и «Загрузить» остаются значки (подсказка — aria-label). */
+@media (min-width: 641px) and (max-width: 1599px) {
+  .nf-act { width: var(--control-h); min-width: var(--control-h); padding: 0; justify-content: center; }
+  .nf-btn-label { display: none; }
+}
 .nf-clear { width: 22px; height: 22px; margin-right: -6px; }
 
 .nf-scroll { flex: 1; min-height: 0; padding: var(--space-2) var(--space-4) calc(var(--space-6) + var(--nx-nav-space)); }
@@ -362,7 +376,7 @@ button.nf-row { cursor: pointer; }
    (значками) сверху, путь, поиск, затем фильтры. */
 @media (max-width: 640px) {
   .nf-bar { gap: var(--space-2); }
-  .nf-tools { display: contents; }
+  .nf-tools, .nf-left { display: contents; }
   .nf-switch { order: 1; flex: 1 1 0; }
   .nf-act { order: 2; flex: none; width: var(--control-h); min-width: var(--control-h); padding: 0; justify-content: center; }
   .nf-btn-label { display: none; }
@@ -373,7 +387,8 @@ button.nf-row { cursor: pointer; }
 }
 
 /* Просмотр документа поверх раздела (DocOverlay): панель справа, свои стили — CSS чата здесь может быть не загружен. */
-.nf-doc { position: fixed; inset: 0; z-index: 300; display: flex; justify-content: flex-end; background: var(--scrim, rgba(0, 0, 0, .36)); animation: nx-fade var(--duration-base) var(--ease-out); }
+/* Сверху — под заголовком окна десктопа: он рисуется поверх страницы и закрывал имя файла и крестик. */
+.nf-doc { position: fixed; inset: calc(var(--electron-titlebar-height, 0px) + var(--pwa-banner-h, 0px)) 0 0 0; z-index: 300; display: flex; justify-content: flex-end; background: var(--scrim, rgba(0, 0, 0, .36)); animation: nx-fade var(--duration-base) var(--ease-out); }
 .nf-doc .npv-panel { display: flex; flex-direction: column; width: min(900px, 94vw); height: 100%; min-height: 0; background: var(--surface-panel); box-shadow: var(--float); animation: nx-rise var(--duration-base) var(--ease-out); }
 .nf-doc .cxp-head { display: flex; align-items: center; gap: var(--space-2); flex: none; min-height: 56px; padding: 0 var(--space-2) 0 var(--space-4); border-bottom: 1px solid var(--border-color); }
 .nf-doc .cxp-body { flex: 1; min-height: 0; overflow: hidden; }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useSearchParams } from 'react-router';
-import { Globe2, LayoutGrid, Lock, MonitorUp, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
+import { Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, Globe2, LayoutGrid, Lock, MonitorUp, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
 import { useShellOptions } from '@/shared/shell/ShellContext';
 import { realtime } from '@/shared/realtime/realtime';
 import { SearchField } from '@/shared/ui/SearchField';
@@ -17,7 +17,16 @@ import { IMPORT_RULES, importFile } from './lib/importFile';
 import { isWorkspaceEvent } from './live';
 import { readPlace, writePlace } from './lib/officeMemory';
 import { canSticky, dragNoteOut, forgetSticky, openSticky } from './lib/sticky';
-import type { Item, Kind } from './types';
+import type { Folder, Item, Kind } from './types';
+import { FolderRow, isItemDrag, ITEM_DRAG } from './Folders';
+
+const OPEN_FOLDERS_KEY = 'shar.office.open-folders';
+function readOpenFolders(): Set<string> {
+  try { return new Set(JSON.parse(localStorage.getItem(OPEN_FOLDERS_KEY) || '[]') as string[]); } catch { return new Set(); }
+}
+function writeOpenFolders(ids: Set<string>) {
+  try { localStorage.setItem(OPEN_FOLDERS_KEY, JSON.stringify([...ids])); } catch { /* приватный режим */ }
+}
 import { Spinner } from '@/shared/ui/Spinner';
 import './workspace.css';
 
@@ -45,6 +54,24 @@ function since(iso: string): string {
   return new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
 }
 
+/** Строка списка — без Markdown-разметки: сервер отдаёт начало текста заметки как есть, с #, **, | и ссылками. */
+function plainSnippet(text: string) {
+  return text
+    .replace(/<!-- shar-tab: (.*?) -->/g, ' $1: ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/(^|\s)(?:[-*+] \[[ xX]\]|#{1,6}|>|[-*+]|\d+[.)])\s+/g, '$1')
+    .replace(/\|?\s*:?-{3,}:?\s*(?=\||$)/g, ' ')
+    .replace(/\s*\|\s*/g, ' · ')
+    .replace(/(\*\*|__|~~|`+)/g, '')
+    .replace(/(^|[\s(])[*_](\S)/g, '$1$2')
+    .replace(/(\S)[*_](?=[\s.,;:!?)]|$)/g, '$1')
+    .replace(/(?:\s*·\s*)+/g, ' · ')
+    .replace(/^\s*·\s*|\s*·\s*$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function ItemRow({ item, active, onOpen, onMenu }: { item: Item; active: boolean; onOpen: () => void; onMenu: (anchor: MenuAnchor) => void }) {
   const info = KINDS[item.kind];
   const press = useLongPress((x, y) => onMenu({ x, y }));
@@ -58,16 +85,17 @@ function ItemRow({ item, active, onOpen, onMenu }: { item: Item; active: boolean
       data-color={item.kind === 'note' ? item.meta.color || undefined : undefined}
       onClick={onOpen}
       // Заметку можно вытащить за пределы окна — она станет окном на рабочем столе (только в приложении для компьютера).
-      draggable={canSticky(item.kind)}
-      onDragStart={(e) => { e.dataTransfer.setData('text/plain', item.title || info.untitled); e.dataTransfer.effectAllowed = 'copyMove'; }}
-      onDragEnd={(e) => dragNoteOut(e, item.id)}
+      // Строку можно перетащить в папку; заметку — ещё и за пределы окна: она станет окном на рабочем столе.
+      draggable
+      onDragStart={(e) => { e.dataTransfer.setData(ITEM_DRAG, item.id); e.dataTransfer.setData('text/plain', item.title || info.untitled); e.dataTransfer.effectAllowed = 'copyMove'; }}
+      onDragEnd={(e) => { if (canSticky(item.kind)) dragNoteOut(e, item.id); }}
       onContextMenu={(e) => { e.preventDefault(); onMenu({ x: e.clientX, y: e.clientY }); }}
       {...press}
     >
       <span className="nws-kind-icon" style={{ '--a': info.tint[0], '--b': info.tint[1] } as React.CSSProperties} aria-hidden="true"><info.icon size={16} /></span>
       <span className="nws-row-text">
-        <span className="nws-row-title">{item.title || info.untitled}</span>
-        <span className="nws-row-snippet">{item.snippet}</span>
+        <span className="nws-row-title">{item.isNew && <span className="nws-new">Новое</span>}{item.title || info.untitled}</span>
+        <span className="nws-row-snippet">{item.kind === 'note' ? plainSnippet(item.snippet) : item.snippet}</span>
       </span>
       <span className="nws-row-meta">
         <span>{since(item.updatedAt)}</span>
@@ -96,6 +124,13 @@ export default function OfficeScreen() {
   const [busy, setBusy] = useState('');
   const [create, setCreate] = useState<MenuAnchor | null>(null);
   const [rowMenu, setRowMenu] = useState<{ item: Item; anchor: MenuAnchor } | null>(null);
+  // Папки — личные. Какие раскрыты, помним на этом устройстве.
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [openFolders, setOpenFolders] = useState<Set<string>>(readOpenFolders);
+  const [editingFolder, setEditingFolder] = useState<string | null>(null);
+  const [folderMenu, setFolderMenu] = useState<{ folder: Folder; anchor: MenuAnchor } | null>(null);
+  const [moveMenu, setMoveMenu] = useState<{ item: Item; anchor: MenuAnchor } | null>(null);
+  const [rootOver, setRootOver] = useState(false);
   const [sendItem, setSendItem] = useState<Item | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const reqId = useRef(0);
@@ -133,9 +168,11 @@ export default function OfficeScreen() {
   const load = useCallback(async () => {
     const mine = ++reqId.current;
     try {
-      const list = await workspaceApi.list(filter === 'all' ? null : filter, query);
+      // Папки грузим вместе со списком; старый сервер без папок — просто без них.
+      const [list, folderList] = await Promise.all([workspaceApi.list(filter === 'all' ? null : filter, query), workspaceApi.folders().catch(() => null)]);
       if (mine !== reqId.current) return;
       setItems(list);
+      if (folderList) setFolders(folderList);
       setError('');
     } catch (cause) {
       if (mine === reqId.current) setError(cause instanceof Error ? cause.message : 'Не удалось загрузить');
@@ -215,8 +252,66 @@ export default function OfficeScreen() {
     } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось удалить', 'error'); }
   }
 
-  const pinned = useMemo(() => (items || []).filter((i) => i.pinned), [items]);
-  const rest = useMemo(() => (items || []).filter((i) => !i.pinned), [items]);
+  // Открыл новое — бейдж снимается сразу (сервер отметил это при открытии), строка встанет на место при обновлении.
+  useEffect(() => {
+    if (openId) setItems((cur) => (cur?.some((i) => i.id === openId && i.isNew) ? cur.map((i) => (i.id === openId ? { ...i, isNew: false } : i)) : cur));
+  }, [openId, items]);
+  // В поиске список плоский; иначе материал из папки показывается только в своей папке (новое — ещё и сверху).
+  const foldered = useMemo(() => {
+    const known = new Set(folders.map((f) => f.id));
+    return (i: Item) => !query && Boolean(i.folderId && known.has(i.folderId));
+  }, [folders, query]);
+  const fresh = useMemo(() => (items || []).filter((i) => i.isNew), [items]);
+  const pinned = useMemo(() => (items || []).filter((i) => i.pinned && !i.isNew && !foldered(i)), [items, foldered]);
+  const rest = useMemo(() => (items || []).filter((i) => !i.pinned && !i.isNew && !foldered(i)), [items, foldered]);
+  const byFolder = useMemo(() => {
+    const map = new Map<string, Item[]>();
+    for (const i of items || []) if (foldered(i) && !i.isNew) map.set(i.folderId!, [...(map.get(i.folderId!) || []), i]);
+    return map;
+  }, [items, foldered]);
+
+  const toggleFolder = (id: string, open?: boolean) => setOpenFolders((cur) => {
+    const next = new Set(cur);
+    if (open ?? !next.has(id)) next.add(id); else next.delete(id);
+    writeOpenFolders(next);
+    return next;
+  });
+
+  /** Положить в папку (или вынуть — null): сразу в списке, потом на сервер; не вышло — перечитываем. */
+  async function moveToFolder(itemId: string, folderId: string | null) {
+    const item = items?.find((i) => i.id === itemId);
+    if (!item || (item.folderId || null) === folderId) return;
+    setItems((cur) => cur?.map((i) => (i.id === itemId ? { ...i, folderId } : i)) ?? cur);
+    if (folderId) toggleFolder(folderId, true);
+    try { await workspaceApi.placeItem(itemId, folderId); } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось переместить', 'error'); void load(); }
+  }
+
+  async function newFolder(thenPlace?: Item) {
+    try {
+      const { folder, folders: list } = await workspaceApi.createFolder('Новая папка');
+      setFolders(list);
+      setEditingFolder(folder.id);
+      toggleFolder(folder.id, true);
+      if (thenPlace) void moveToFolder(thenPlace.id, folder.id);
+    } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось создать папку', 'error'); }
+  }
+
+  async function renameFolder(folder: Folder, title: string | null) {
+    setEditingFolder(null);
+    if (!title) return;
+    setFolders((cur) => cur.map((f) => (f.id === folder.id ? { ...f, title } : f)));
+    try { setFolders(await workspaceApi.renameFolder(folder.id, title)); } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось переименовать', 'error'); }
+  }
+
+  async function removeFolder(folder: Folder) {
+    const n = byFolder.get(folder.id)?.length ?? 0;
+    const ok = await askConfirm({ title: `Удалить папку «${folder.title}»?`, text: n ? 'Материалы из неё останутся в общем списке.' : undefined, confirm: 'Удалить', tone: 'danger' });
+    if (!ok) return;
+    try {
+      setFolders(await workspaceApi.deleteFolder(folder.id));
+      setItems((cur) => cur?.map((i) => (i.folderId === folder.id ? { ...i, folderId: null } : i)) ?? cur);
+    } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось удалить папку', 'error'); }
+  }
   const importing = busy.startsWith('import');
   const importRule = IMPORT_RULES[filter];
 
@@ -255,12 +350,44 @@ export default function OfficeScreen() {
         <SearchField value={query} onChange={setQuery} placeholder="Найти по названию и тексту" />
         {importing && <p className="nws-hint" role="status">{busy.includes('/') ? `Читаю PDF: ${busy.split(':')[1]}` : 'Импортирую…'}</p>}
 
-        <div className="nws-rows nx-scroll-y" ref={rowsRef}>
+        <div
+          className="nws-rows nx-scroll-y"
+          ref={rowsRef}
+          data-over={rootOver || undefined}
+          // Отпустили строку мимо папок — материал выходит из своей папки.
+          onDragOver={(e) => { if (!isItemDrag(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setRootOver(true); }}
+          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setRootOver(false); }}
+          onDrop={(e) => {
+            if (!isItemDrag(e)) return;
+            e.preventDefault();
+            setRootOver(false);
+            const id = e.dataTransfer.getData(ITEM_DRAG);
+            if (id) void moveToFolder(id, null);
+          }}
+        >
           {items === null && !error && <div className="nws-loading"><Spinner size={22} label="Загружаю" /></div>}
           {error && <p className="nws-hint nws-error" role="alert">{error} <button type="button" className="nx-ghost" onClick={() => void load()}>Повторить</button></p>}
+          {fresh.length > 0 && <h2 className="nws-group">Новые для вас</h2>}
+          {fresh.map(renderRow)}
           {pinned.length > 0 && <h2 className="nws-group">Закреплённые</h2>}
           {pinned.map(renderRow)}
-          {pinned.length > 0 && rest.length > 0 && <h2 className="nws-group">Остальные</h2>}
+          {!query && folders.length > 0 && <h2 className="nws-group">Папки</h2>}
+          {!query && folders.map((f) => (
+            <FolderRow
+              key={f.id}
+              folder={f}
+              count={byFolder.get(f.id)?.length ?? 0}
+              open={openFolders.has(f.id)}
+              editing={editingFolder === f.id}
+              onToggle={() => toggleFolder(f.id)}
+              onDropItem={(id) => void moveToFolder(id, f.id)}
+              onMenu={(anchor) => setFolderMenu({ folder: f, anchor })}
+              onRename={(title) => void renameFolder(f, title)}
+            >
+              {(byFolder.get(f.id) || []).map(renderRow)}
+            </FolderRow>
+          ))}
+          {(pinned.length > 0 || fresh.length > 0 || (!query && folders.length > 0)) && rest.length > 0 && <h2 className="nws-group">Остальные</h2>}
           {rest.map(renderRow)}
           {items !== null && !items.length && !error && (
             <div className="nws-empty-list">
@@ -308,12 +435,30 @@ export default function OfficeScreen() {
       {create && (
         <Menu anchor={create} label="Создать" onClose={() => setCreate(null)}>
           {KIND_LIST.map((k) => <MenuItem key={k.kind} icon={<k.icon size={16} />} onSelect={() => void createItem(k.kind)}>{k.newLabel}</MenuItem>)}
+          <div className="nx-menu-sep" />
+          <MenuItem icon={<FolderPlus size={16} />} onSelect={() => { setCreate(null); void newFolder(); }}>Папку</MenuItem>
+        </Menu>
+      )}
+      {folderMenu && (
+        <Menu anchor={folderMenu.anchor} label="Папка" onClose={() => setFolderMenu(null)}>
+          <MenuItem icon={<Pencil size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); setEditingFolder(f.id); }}>Переименовать</MenuItem>
+          <MenuItem icon={<Trash2 size={15} />} tone="danger" onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void removeFolder(f); }}>Удалить папку</MenuItem>
+        </Menu>
+      )}
+      {moveMenu && (
+        <Menu anchor={moveMenu.anchor} label="В папку" onClose={() => setMoveMenu(null)}>
+          {folders.map((f) => (
+            <MenuItem key={f.id} icon={<FolderIcon size={15} />} disabled={moveMenu.item.folderId === f.id} onSelect={() => { const i = moveMenu.item; setMoveMenu(null); void moveToFolder(i.id, f.id); }}>{f.title}</MenuItem>
+          ))}
+          {moveMenu.item.folderId && <MenuItem icon={<FolderMinus size={15} />} onSelect={() => { const i = moveMenu.item; setMoveMenu(null); void moveToFolder(i.id, null); }}>Вынуть из папки</MenuItem>}
+          <MenuItem icon={<FolderPlus size={15} />} onSelect={() => { const i = moveMenu.item; setMoveMenu(null); void newFolder(i); }}>Новая папка…</MenuItem>
         </Menu>
       )}
       {rowMenu && (
         <Menu anchor={rowMenu.anchor} label="Действия" onClose={() => setRowMenu(null)}>
           <MenuItem onSelect={() => { const i = rowMenu.item; setRowMenu(null); select(i.id, filter === 'all' ? 'all' : i.kind); }}>Открыть</MenuItem>
           <MenuItem icon={<Send size={15} />} onSelect={() => { const i = rowMenu.item; setRowMenu(null); setSendItem(i); }}>Отправить в чат</MenuItem>
+          <MenuItem icon={<FolderInput size={15} />} onSelect={() => { const { item, anchor } = rowMenu; setRowMenu(null); setMoveMenu({ item, anchor }); }}>Переместить в папку…</MenuItem>
           {canSticky(rowMenu.item.kind) && (
             <MenuItem icon={<MonitorUp size={15} />} onSelect={() => { const i = rowMenu.item; setRowMenu(null); void openSticky(i.id); }}>На рабочий стол</MenuItem>
           )}

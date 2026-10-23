@@ -10,10 +10,85 @@ import UniverPresetSheetsHyperLinkRuRU from '@univerjs/preset-sheets-hyper-link/
 import '@univerjs/preset-sheets-hyper-link/lib/index.css';
 import '@univerjs/preset-sheets-core/lib/index.css';
 import '@univerjs/preset-sheets-find-replace/lib/index.css';
-import { hideMissingFonts, isDarkTheme, univerTheme, useUniverTheme } from '../lib/univerTheme';
+import { IRenderManagerService } from '@univerjs/engine-render';
+import { SheetSkeletonManagerService } from '@univerjs/sheets-ui';
+import { hideMissingFonts, isDarkTheme, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
 import { applySnapshot, bookFromBase64, bookToBase64, excelToUniver } from '../lib/workbook';
 import type { EditorProps } from './types';
+import type { CursorPos, RemoteCursor } from '../useCursors';
 import { Spinner } from '@/shared/ui/Spinner';
+
+/** Курсор в таблице: лист и выделенный диапазон (строки и столбцы с нуля). */
+type SheetCursor = { sh: string; r1: number; c1: number; r2: number; c2: number };
+
+type Injector = { get: <T>(token: unknown) => T };
+
+/** Рамка коллеги в точках слоя (слой — область ячеек без заголовков строк и столбцов). */
+interface CellShape { userId: string; name: string; color: string; movedAt: number; x: number; y: number; w: number; h: number }
+
+type Bounds = { left: number; top: number; right: number; bottom: number };
+type Viewport = { viewportScrollX: number; viewportScrollY: number };
+type RenderUnit = {
+  scene: { getAncestorScale: () => { scaleX: number; scaleY: number }; getViewport: (key: string) => Viewport | undefined };
+  engine: { getCanvasElement: () => HTMLCanvasElement | null };
+  with: <T>(token: unknown) => T;
+};
+type Skeleton = {
+  rowHeaderWidthAndMarginLeft: number;
+  columnHeaderHeightAndMarginTop: number;
+  getCellWithCoordByIndex: (row: number, col: number) => { startX: number; startY: number; endX: number; endY: number; isMergedMainCell?: boolean; mergeInfo?: { startX: number; startY: number; endX: number; endY: number } };
+};
+
+/**
+ * Чужие выделения → рамки поверх холста. Формула та же, что у всплывашек Univer (SheetCanvasPopManagerService):
+ * координаты ячейки в листе минус прокрутка своей области (закреплённые строки/столбцы не прокручиваются), с учётом
+ * масштаба листа и масштаба холста.
+ */
+function measureCells(injector: Injector, unitId: string, sheetId: string, freeze: { startRow: number; startColumn: number } | null, host: HTMLElement, cursors: RemoteCursor[]) {
+  const render = injector.get<{ getRenderUnitById: (id: string) => RenderUnit | null }>(IRenderManagerService).getRenderUnitById(unitId);
+  const canvas = render?.engine.getCanvasElement();
+  const skeleton = render?.with<{ getSkeletonParam: (id: string) => { skeleton: Skeleton } | undefined }>(SheetSkeletonManagerService).getSkeletonParam(sheetId)?.skeleton;
+  if (!render || !canvas || !skeleton) return null;
+  const { scaleX, scaleY } = render.scene.getAncestorScale();
+  const box = canvas.getBoundingClientRect();
+  const adjust = box.width / (parseFloat(canvas.style.width) || box.width);
+  const viewportOf = (row: number, col: number) => {
+    const fr = freeze && (freeze.startRow > 0 || freeze.startColumn > 0) ? freeze : null;
+    const top = fr && row < fr.startRow;
+    const left = fr && col < fr.startColumn;
+    return render.scene.getViewport(top && left ? 'viewMainLeftTop' : top ? 'viewMainTop' : left ? 'viewMainLeft' : 'viewMain');
+  };
+  const at = (row: number, col: number): Bounds | null => {
+    const vp = viewportOf(row, col);
+    if (!vp) return null;
+    const cell = skeleton.getCellWithCoordByIndex(row, col);
+    const c = cell.isMergedMainCell && cell.mergeInfo ? cell.mergeInfo : cell;
+    return {
+      left: (c.startX - vp.viewportScrollX) * adjust * scaleX + box.left,
+      right: (c.endX - vp.viewportScrollX) * adjust * scaleX + box.left,
+      top: (c.startY - vp.viewportScrollY) * adjust * scaleY + box.top,
+      bottom: (c.endY - vp.viewportScrollY) * adjust * scaleY + box.top,
+    };
+  };
+  // Слой начинается под заголовками: рамка ячейки, уехавшей под них при прокрутке, обрезается.
+  const frame = {
+    left: box.left + skeleton.rowHeaderWidthAndMarginLeft * adjust * scaleX,
+    top: box.top + skeleton.columnHeaderHeightAndMarginTop * adjust * scaleY,
+    right: box.right,
+    bottom: box.bottom,
+  };
+  const shapes: CellShape[] = [];
+  for (const c of cursors) {
+    const p = c.pos as SheetCursor;
+    if (p.sh !== sheetId || ![p.r1, p.c1, p.r2, p.c2].every((n) => Number.isInteger(n) && n >= 0)) continue;
+    const a = at(Math.min(p.r1, p.r2), Math.min(p.c1, p.c2));
+    const b = at(Math.max(p.r1, p.r2), Math.max(p.c1, p.c2));
+    if (!a || !b) continue;
+    shapes.push({ userId: c.userId, name: c.name, color: c.color, movedAt: c.movedAt, x: a.left - frame.left, y: a.top - frame.top, w: b.right - a.left, h: b.bottom - a.top });
+  }
+  const hostBox = host.getBoundingClientRect();
+  return { shapes, frame: { left: frame.left - hostBox.left, top: frame.top - hostBox.top, width: frame.right - frame.left, height: frame.bottom - frame.top } };
+}
 
 /** Адрес ссылки в ячейке: гиперссылка (своя или из Excel) или сам текст ячейки, если это адрес. */
 function cellUrl(cell: ICellData | null | undefined): string | null {
@@ -31,7 +106,7 @@ function cellUrl(cell: ICellData | null | undefined): string | null {
  * Правки складываются в книгу и уходят на сервер файлом xlsx. По ссылке «только просмотр» вместо
  * ленты и строки формул — чистый лист с вкладками.
  */
-export default function SheetEditor({ content, onContent, readOnly, loadKey, visible = true }: EditorProps) {
+export default function SheetEditor({ content, onContent, readOnly, loadKey, visible = true, cursors = [], onCursor }: EditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const theme = useUniverTheme();
   const [book, setBook] = useState<ExcelWorkbook | null>(null);
@@ -41,6 +116,10 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
   onContentRef.current = onContent;
   const contentRef = useRef(content);
   contentRef.current = content;
+  const onCursorRef = useRef(onCursor);
+  onCursorRef.current = onCursor;
+  const engine = useRef<{ injector: Injector; unitId: string; active: () => { sheetId: string; freeze: { startRow: number; startColumn: number } | null } } | null>(null);
+  const [overlay, setOverlay] = useState<ReturnType<typeof measureCells>>(null);
 
   // Книга собирается из xlsx при открытии и при каждой подмене с сервера.
   useEffect(() => {
@@ -72,6 +151,7 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
     univerAPI.setTheme(univerTheme(theme));
     const workbook = univerAPI.createWorkbook(excelToUniver(book));
     hideMissingFonts(univer);
+    const untagFind = tagFindDialog();
     workbook.setEditable(!readOnly);
 
     // Ctrl+клик по ячейке со ссылкой (или просто с адресом) — открыть в браузере, как в Excel и Google Таблицах.
@@ -86,6 +166,27 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
     });
     const initial = sheetName.current ? workbook.getSheetByName(sheetName.current) : null;
     if (initial) workbook.setActiveSheet(initial);
+
+    // Своё выделение — коллегам (useCursors), как рамка ячейки в Google Таблицах. Смена листа — тоже выделение.
+    const injector = (univer as unknown as { __getInjector: () => Injector }).__getInjector();
+    engine.current = {
+      injector,
+      unitId: workbook.getId(),
+      active: () => {
+        const sheet = workbook.getActiveSheet();
+        const freeze = sheet.getFreeze() as { startRow: number; startColumn: number } | null;
+        return { sheetId: sheet.getSheetId(), freeze };
+      },
+    };
+    // Фасадное событие SelectionChanged в этой сборке не приходит — слушаем саму операцию выделения (мышь, клавиши, смена листа).
+    const selections = workbook.onCommandExecuted((command) => {
+      if (command.id !== 'sheet.operation.set-selections') return;
+      const params = command.params as { unitId?: string; subUnitId?: string; selections?: Array<{ range: { startRow: number; startColumn: number; endRow: number; endColumn: number } }> } | undefined;
+      if (!params || params.unitId !== workbook.getId() || !params.subUnitId) return;
+      const r = params.selections?.[params.selections.length - 1]?.range;
+      const pos: SheetCursor | null = r ? { sh: params.subUnitId, r1: r.startRow, c1: r.startColumn, r2: r.endRow, c2: r.endColumn } : null;
+      onCursorRef.current?.(pos as CursorPos | null);
+    });
 
     let ready = false;
     const readyTimer = window.setTimeout(() => { ready = true; }, 250);
@@ -116,18 +217,54 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
       window.clearTimeout(syncTimer);
       listener.dispose();
       clicks.dispose();
+      selections.dispose();
+      engine.current = null;
       el.removeEventListener('pointerdown', onPointer, true);
       // Univer снимает свои React-деревья синхронно; внутри фазы рендера нашего компонента React на это жалуется.
+      untagFind();
       window.setTimeout(() => { univer.dispose(); mount.remove(); }, 0);
     };
   }, [book, readOnly, theme]);
 
   useEffect(() => { if (visible) window.dispatchEvent(new Event('resize')); }, [visible]);
 
+  // Рамки коллег следят за прокруткой, масштабом и шириной столбцов: пересчёт каждый кадр, пока они есть
+  // (как в документе), состояние — только если что-то сдвинулось.
+  const cursorsRef = useRef(cursors);
+  cursorsRef.current = cursors;
+  const hasCursors = cursors.length > 0;
+  useEffect(() => {
+    if (!hasCursors) { setOverlay(null); return undefined; }
+    let raf = 0;
+    let last = '';
+    const tick = () => {
+      raf = requestAnimationFrame(tick);
+      if (document.hidden || !engine.current || !host.current) return;
+      let next: ReturnType<typeof measureCells> = null;
+      try {
+        const { sheetId, freeze } = engine.current.active();
+        next = measureCells(engine.current.injector, engine.current.unitId, sheetId, freeze, host.current, cursorsRef.current);
+      } catch { return; /* редактор пересоздаётся — сервисов между dispose и новым экземпляром нет */ }
+      const key = JSON.stringify(next);
+      if (key !== last) { last = key; setOverlay(next); }
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [hasCursors]);
+
   if (error) return <div className="nws-missing" role="alert">{error}</div>;
   return (
     <div className="nws-univer nws-univer-sheet" ref={host} aria-label="Редактор таблицы">
       {!book && <div className="nws-loading"><Spinner size={24} label="Открываю таблицу" /></div>}
+      {overlay && overlay.shapes.length > 0 && (
+        <div className="nws-cursors" style={overlay.frame} aria-hidden="true">
+          {overlay.shapes.map((s) => (
+            <span key={s.userId} className="nws-cell-cursor" data-below={s.y < 18 || undefined} style={{ '--c': s.color, left: s.x, top: s.y, width: s.w, height: s.h } as React.CSSProperties}>
+              <span key={s.movedAt} className="nws-cursor-flag">{s.name}</span>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

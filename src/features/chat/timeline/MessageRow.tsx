@@ -1,10 +1,15 @@
-import { memo, type CSSProperties } from 'react';
-import { Bell, Check, CornerUpLeft, Forward } from 'lucide-react';
+import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
+import { Bell, Check, CornerUpLeft, Forward, Globe } from 'lucide-react';
 import type { Message, User } from '@/shared/types/chat';
 import LinkPreview from '@/features/chat/bubbles/LinkPreview';
 import StickerBubble from '@/features/chat/bubbles/StickerBubble';
 import VoiceMessagePlayer from '@/features/chat/bubbles/VoiceMessagePlayer';
 import PollBubble, { type PollData } from '@/features/chat/polls/PollBubble';
+import { LeadCard } from '@/features/leads/LeadCard';
+import type { LeadCardData } from '@/features/leads/api';
+import { SocialCard } from '@/features/social/SocialCard';
+import type { SocialCardData } from '@/features/social/api';
 import { getAppleEmojiUrl } from '@/shared/emoji/appleEmoji';
 import { renderTextWithEmoji } from '@/shared/emoji/emojiText';
 import { Avatar } from '@/shared/ui/Avatar';
@@ -50,25 +55,85 @@ function Tail() {
   );
 }
 
+type ReactionEntry = [emoji: string, ids: Array<string | number>];
+
+/**
+ * Кто поставил реакцию — своя всплывашка вместо системной подсказки: эмодзи, число и люди с аватарками
+ * («Вы» — первым). Рисуется поверх окна (портал), над пилюлей; не влезает сверху — под ней, у краёв окна
+ * прижимается внутрь. Только мышь: на телефоне долгое нажатие уже занято меню сообщения.
+ */
+function ReactionTip({ anchor, entries, ctx }: { anchor: DOMRect; entries: ReactionEntry[]; ctx: RowCtx }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const { width, height } = el.getBoundingClientRect();
+    const left = Math.min(Math.max(8, anchor.left + anchor.width / 2 - width / 2), window.innerWidth - width - 8);
+    const above = anchor.top - height - 6;
+    setPos({ left, top: above >= 8 ? above : anchor.bottom + 6 });
+  }, [anchor]);
+  return createPortal(
+    <div ref={ref} className="cxm-rtip" role="tooltip" style={pos ? { left: pos.left, top: pos.top } : { left: -9999, top: 0 }}>
+      {entries.map(([emoji, ids]) => {
+        const sorted = [...ids.map(String)].sort((a, b) => Number(b === ctx.myId) - Number(a === ctx.myId));
+        return (
+          <div key={emoji} className="cxm-rtip-group">
+            <div className="cxm-rtip-head">
+              <img src={getAppleEmojiUrl(emoji)} alt={emoji} draggable={false} />
+              <span>{ids.length}</span>
+            </div>
+            {sorted.slice(0, 12).map((id) => {
+              const u = ctx.users[id];
+              const name = id === ctx.myId ? 'Вы' : readerName(u, 'Сотрудник');
+              return (
+                <div key={id} className="cxm-rtip-person">
+                  <Avatar name={readerName(u, name)} seed={id} src={u?.avatar} person size={22} />
+                  <span>{name}</span>
+                </div>
+              );
+            })}
+            {sorted.length > 12 && <div className="cxm-rtip-more">и ещё {sorted.length - 12}</div>}
+          </div>
+        );
+      })}
+    </div>,
+    document.querySelector<HTMLElement>('.nx') || document.body,
+  );
+}
+
 function Reactions({ m, ctx }: { m: Message; ctx: RowCtx }) {
-  const entries = Object.entries(m.metadata?.reactions || {}).filter(([, ids]) => Array.isArray(ids) && ids.length);
+  const [tip, setTip] = useState<{ anchor: DOMRect; entries: ReactionEntry[] } | null>(null);
+  const timer = useRef(0);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const entries = Object.entries(m.metadata?.reactions || {}).filter(([, ids]) => Array.isArray(ids) && ids.length) as ReactionEntry[];
   if (!entries.length) return null;
   const shown = entries.slice(0, 3);
+  // Небольшая задержка — список не мелькает, когда мышь просто проходит над лентой.
+  const hover = (list: ReactionEntry[]) => ({
+    onPointerEnter: (e: React.PointerEvent<HTMLElement>) => {
+      if (e.pointerType !== 'mouse') return;
+      const anchor = e.currentTarget.getBoundingClientRect();
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => setTip({ anchor, entries: list }), tip ? 0 : 250);
+    },
+    onPointerLeave: () => { window.clearTimeout(timer.current); setTip(null); },
+  });
   return (
     <div className="cxm-reactions" onClick={(e) => e.stopPropagation()}>
+      {tip && <ReactionTip anchor={tip.anchor} entries={tip.entries} ctx={ctx} />}
       {shown.map(([emoji, ids]) => {
         const mine = ids.map(String).includes(ctx.myId);
         const people = ids.map((id) => ctx.users[String(id)]).filter(Boolean) as User[];
-        const names = people.map((u) => readerName(u)).join(', ');
         return (
           <button
             key={emoji}
             type="button"
             className="cxm-reaction"
             data-mine={mine ? 'true' : undefined}
-            title={names ? `${emoji} — ${names}` : emoji}
             aria-label={`${emoji}: ${ids.length}${mine ? ', вы тоже' : ''}`}
-            onClick={() => ctx.onReact(m, emoji)}
+            onClick={() => { setTip(null); ctx.onReact(m, emoji); }}
+            {...hover([[emoji, ids]])}
           >
             <span className="cxm-reaction-people">
               {people.slice(0, 3).map((u) => (
@@ -80,7 +145,7 @@ function Reactions({ m, ctx }: { m: Message; ctx: RowCtx }) {
           </button>
         );
       })}
-      {entries.length > 3 && <span className="cxm-reaction cxm-reaction-more">+{entries.length - 3}</span>}
+      {entries.length > 3 && <span className="cxm-reaction cxm-reaction-more" {...hover(entries.slice(3))}>+{entries.length - 3}</span>}
     </div>
   );
 }
@@ -104,6 +169,10 @@ export const MessageRow = memo(function MessageRow({
   const mine = String(m.authorId) === ctx.myId && !notification;
   const author = ctx.users[String(m.authorId)];
   const p = classify(m);
+  // Карточка из внешней системы (заявка с сайта, сообщение из соцсети): автор — источник `integration:*`, а не сотрудник.
+  const cardKind = (md.card as { kind?: string } | undefined)?.kind;
+  const card = cardKind === 'lead' || cardKind === 'social' ? md.card as Record<string, unknown> : null;
+  const integration = String(m.authorId).startsWith('integration:');
   const gap = 5 * 60 * 1000;
   const sameAuthor = (o?: Msg) => Boolean(o) && String(o!.authorId) === String(m.authorId)
     && !o!.isSystemMessage && Math.abs(new Date(o!.createdAt).getTime() - new Date(m.createdAt).getTime()) < gap;
@@ -120,7 +189,7 @@ export const MessageRow = memo(function MessageRow({
   const fromSystem = notification && (!actor || String(actor.id) === ctx.myId);
   const avatarUser = notification ? actor : author;
   const senderName = readerName(author, m.authorName || '');
-  const showName = ctx.isGroup && !mine && !notification && !groupedPrev;
+  const showName = ctx.isGroup && !mine && !notification && !groupedPrev && !card;
 
   const forwardedFrom = String(md.source || '') === 'manager'
     ? 'Менеджерская программа'
@@ -135,7 +204,7 @@ export const MessageRow = memo(function MessageRow({
   const singleH = ctx.mobile ? 420 : 480;
   const hasReactions = Object.values(m.metadata?.reactions || {}).some((ids) => Array.isArray(ids) && ids.length);
   const bubbleless = p.emojiCount > 0 || Boolean(p.sticker);
-  const tail = last && !notification && !bubbleless && !p.mediaOnly && !p.voiceOnly;
+  const tail = last && !notification && !bubbleless && !p.mediaOnly && !p.voiceOnly && !card;
   const allUrls = p.images.map((i) => i.url);
   const url = p.hasText && !p.images.length && !bubbleless && !notification ? firstUrl(m.content) : null;
 
@@ -154,7 +223,16 @@ export const MessageRow = memo(function MessageRow({
   const inlineMeta = !notification && !inBubbleReactions && textLast;
 
   let body;
-  if (p.mediaOnly) {
+  if (card) {
+    body = (
+      <>
+        {cardKind === 'lead'
+          ? <LeadCard card={card as unknown as LeadCardData} time={time} createdAt={m.createdAt} />
+          : <SocialCard card={card as unknown as SocialCardData} time={time} createdAt={m.createdAt} />}
+        {inBubbleReactions && <div className="cxm-foot"><Reactions m={m} ctx={ctx} /></div>}
+      </>
+    );
+  } else if (p.mediaOnly) {
     body = (
       <div className="cxm-media-only">
         {forwardedFrom && <span className="cxm-overlay-pill" data-pos="top"><Forward size={12} /> От {forwardedFrom}</span>}
@@ -303,7 +381,11 @@ export const MessageRow = memo(function MessageRow({
         )}
         {!mine && !notification && (
           <span className="cxm-avatar-col">
-            {last && (fromSystem ? (
+            {last && (integration ? (
+              <span className="nx-avatar cxm-system-avatar" data-kind="integration" style={{ '--size': '28px' } as CSSProperties} title={m.authorName || undefined}>
+                <Globe size={14} aria-hidden="true" />
+              </span>
+            ) : fromSystem ? (
               <span className="nx-avatar cxm-system-avatar" data-kind="notifications" style={{ '--size': '28px' } as CSSProperties} title="Система">
                 <Bell size={14} aria-hidden="true" />
               </span>
@@ -325,7 +407,7 @@ export const MessageRow = memo(function MessageRow({
         {mine && !inBubbleReactions && <Reactions m={m} ctx={ctx} />}
         <div
           className="cxn-bubble cxm-bubble"
-          data-kind={p.mediaOnly ? 'media' : p.voiceOnly ? 'voice' : bubbleless ? 'bare' : notification ? 'notice' : undefined}
+          data-kind={card ? 'notice' : p.mediaOnly ? 'media' : p.voiceOnly ? 'voice' : bubbleless ? 'bare' : notification ? 'notice' : undefined}
           style={{ '--tint': tintFor(String(m.authorId)) } as CSSProperties}
         >
           {body}

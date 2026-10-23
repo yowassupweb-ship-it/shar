@@ -1,3 +1,4 @@
+import { ScrollTable } from '@/shared/ui/ScrollTable';
 import { useEffect, useState } from 'react';
 import DOMPurify from 'dompurify';
 import Markdown from 'react-markdown';
@@ -57,7 +58,10 @@ export function MarkdownViewer({ url, name }: { url: string; name: string }) {
   return (
     <div className="npv-scroll nx-scroll-y">
       <article className="npv-prose npv-paper">
-        <Markdown remarkPlugins={[remarkGfm, remarkBreaks]} components={{ a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}>{data}</Markdown>
+        <Markdown remarkPlugins={[remarkGfm, remarkBreaks]} components={{
+          a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>,
+          table: ({ children }) => <ScrollTable className="npv-md-table"><table>{children}</table></ScrollTable>,
+        }}>{data}</Markdown>
       </article>
     </div>
   );

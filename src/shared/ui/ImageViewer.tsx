@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, ChevronRight, Copy, Download, ExternalLink, MessageSquareText, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Copy, Download, ExternalLink, MessageSquareText, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { thumbUrl } from './media';
 import { downloadOnClick } from '@/shared/platform/download';
 
@@ -23,7 +23,8 @@ export interface ViewerItem {
   name?: string;
 }
 
-const MIN = 1;
+// Меньше 100% — тоже можно: крупное фото иначе не разглядеть целиком, его закрывали панели.
+const MIN = 0.25;
 const MAX = 6;
 
 export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
@@ -114,9 +115,15 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
     v.x = px - (px - v.x) * k;
     v.y = py - (py - v.y) * k;
     v.scale = s;
-    if (s === 1) { v.x = 0; v.y = 0; }
+    // Не больше экрана — картинка по центру, двигать её незачем.
+    if (s <= 1) { v.x = 0; v.y = 0; }
     apply(animate);
   }, [apply]);
+
+  const zoomBy = useCallback((k: number) => {
+    const r = stageRef.current?.getBoundingClientRect();
+    if (r) zoomAt(view.current.scale * k, r.left + r.width / 2, r.top + r.height / 2, true);
+  }, [zoomAt]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -188,11 +195,11 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
       // Вниз — закрытие с затуханием фона; вбок — к соседнему фото.
       if (Math.abs(dy) > Math.abs(dx) && dy > 0) {
         img.style.transition = 'none';
-        img.style.transform = `translate3d(0, ${dy}px, 0) scale(${1 - Math.min(dy / 1600, 0.15)})`;
+        img.style.transform = `translate3d(0, ${dy}px, 0) scale(${view.current.scale * (1 - Math.min(dy / 1600, 0.15))})`;
         setBackdrop(Math.max(0.2, 1 - dy / 500));
       } else {
         img.style.transition = 'none';
-        img.style.transform = `translate3d(${dx}px, 0, 0)`;
+        img.style.transform = `translate3d(${dx}px, 0, 0) scale(${view.current.scale})`;
       }
     }
   };
@@ -201,7 +208,8 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
     const g = gesture.current;
     pts.current.delete(e.pointerId);
     if (g.mode === 'pinch') {
-      if (pts.current.size < 2) { g.mode = 'none'; if (view.current.scale <= 1.02) reset(); }
+      // Отпустили около 100% — ровно 100%; заметно меньше — оставляем, как просили.
+      if (pts.current.size < 2) { g.mode = 'none'; if (Math.abs(view.current.scale - 1) <= 0.05) reset(); }
       return;
     }
     const dx = e.clientX - g.sx;
@@ -214,7 +222,7 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
       const now = performance.now();
       if (now - g.tapAt < 300) {
         g.tapAt = 0;
-        if (view.current.scale > 1) reset(); else zoomAt(2.5, e.clientX, e.clientY, true);
+        if (view.current.scale !== 1) reset(); else zoomAt(2.5, e.clientX, e.clientY, true);
       } else {
         g.tapAt = now;
       }
@@ -229,7 +237,7 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
         const d = dx < 0 ? 1 : -1;
         if (items[index + d]) { go(d); return; }
       }
-      reset();
+      apply(true); // вернуть на место, сохранив масштаб (в том числе меньше 100%)
     }
     g.mode = 'none';
   };
@@ -258,6 +266,8 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
               <Copy size={18} />
             </button>
           )}
+          <button type="button" className="nxv-btn" onClick={() => zoomBy(1 / 1.4)} aria-label="Уменьшить" title="Уменьшить (−)"><ZoomOut size={18} /></button>
+          <button type="button" className="nxv-btn" onClick={() => zoomBy(1.4)} aria-label="Увеличить" title="Увеличить (+)"><ZoomIn size={18} /></button>
           <a className="nxv-btn" href={item.url} download={item.name || true} onClick={downloadOnClick(item.url, item.name)} aria-label="Скачать" title="Скачать"><Download size={18} /></a>
           <a className="nxv-btn" href={item.url} target="_blank" rel="noopener noreferrer" aria-label="Открыть оригинал" title="Открыть оригинал"><ExternalLink size={18} /></a>
           <button ref={closeRef} type="button" className="nxv-btn" onClick={onClose} aria-label="Закрыть" title="Закрыть (Esc)"><X size={20} /></button>
@@ -273,7 +283,7 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
         onPointerCancel={onUp}
         onClick={(e) => {
           if (suppressClick.current) { suppressClick.current = false; return; }
-          if (e.target === e.currentTarget && view.current.scale === 1) onClose();
+          if (e.target === e.currentTarget && view.current.scale <= 1) onClose();
         }}
       >
         <img

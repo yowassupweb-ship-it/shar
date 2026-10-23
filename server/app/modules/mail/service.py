@@ -25,7 +25,7 @@ from app.core.db import db
 from app.core.realtime import sse_manager
 from app.core.storage import UPLOAD_DIR, s3_storage
 from app.modules.mail.crypto import _deobfuscate_pw
-from app.modules.mail.imap import _imap_connect, _special_folders
+from app.modules.mail.imap import _imap_connect, _special_folders, _wire
 
 logger = logging.getLogger(__name__)
 
@@ -145,14 +145,10 @@ def _sync_folder_imap(account: dict, folder: str = 'INBOX', max_msgs: int = 100)
                 except Exception as fe:
                     logger.debug(f"[Mail] Could not list folders: {fe}")
 
-            # Try to select the requested folder; fall back to INBOX
+            # Папки нет — это ошибка, а не повод читать «Входящие»: раньше письма INBOX
+            # ложились в базу под именем «Отправленных» и показывались там.
             actual_folder = folder
-            try:
-                mb.folder.set(folder)
-            except Exception as fe:
-                logger.debug(f"[Mail] Folder '{folder}' not found ({fe}), trying INBOX")
-                actual_folder = 'INBOX'
-                mb.folder.set('INBOX')
+            mb.folder.set(folder)
 
             if is_incremental:
                 # Incremental: fetch only new UIDs — no limit, usually 0–few messages
@@ -284,7 +280,7 @@ def _set_imap_flags(account: dict, folder: str, uid: str, updates: dict) -> None
         if port != 993 and account.get('use_ssl', True):
             client.starttls()
         client.login(account['username'], _deobfuscate_pw(account['password_enc']))
-        status, _ = client.select(folder or 'INBOX')
+        status, _ = client.select(_wire(folder or 'INBOX'))
         if status != 'OK':
             raise RuntimeError(f"Cannot select IMAP folder {folder}")
         for field, flag in (('is_read', r'\Seen'), ('is_starred', r'\Flagged')):
@@ -336,7 +332,7 @@ def _append_to_sent(account: dict, raw: bytes) -> None:
             return
         conn = _imap_connect(account)
         try:
-            conn.append(sent, r'(\Seen)', imaplib.Time2Internaldate(time.time()), raw)
+            conn.append(_wire(sent), r'(\Seen)', imaplib.Time2Internaldate(time.time()), raw)
         finally:
             try:
                 conn.logout()

@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { DocSelectionManagerService } from '@univerjs/docs';
+import { DocCanvasPopManagerService } from '@univerjs/docs-ui';
+import { IRenderManagerService } from '@univerjs/engine-render';
 import { createUniver, IImageIoService, LocaleType, mergeLocales, type IDocumentData } from '@univerjs/presets';
 import { UniverDocsCorePreset } from '@univerjs/preset-docs-core';
 import UniverPresetDocsCoreRuRU from '@univerjs/preset-docs-core/locales/ru-RU';
@@ -16,15 +19,55 @@ import '@univerjs/find-replace/lib/index.css';
 import { UploadingImageIoService, uploadPastedImages } from '../lib/imageIo';
 import { SharEmojiPicker } from '@/shared/emoji/SharEmojiPicker';
 import { emptySnapshot, ensureDrawingResource, fingerprint, localizeImages, parseSnapshot, type DocSnapshot } from '../lib/docSnapshot';
-import { disableBlockHandle, hideMissingFonts, isDarkTheme, overrideComponent, styleDocSurface, univerTheme, useUniverTheme } from '../lib/univerTheme';
+import { disableBlockHandle, hideMissingFonts, isDarkTheme, overrideComponent, styleDocSurface, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
 import type { EditorProps } from './types';
+import { CursorLayer, type CursorShape } from '../CursorLayer';
+import type { CursorPos, RemoteCursor } from '../useCursors';
+
+/** Курсор в документе: смещения в тексте, раздел (основной текст или колонтитул) и направление выделения. */
+type DocCursor = { s: number; e: number; seg: string; pg: number; b: 0 | 1 };
+
+type Injector = { get: <T>(token: unknown) => T };
+
+/** Чужие курсоры → точки слоя поверх холста. Univer сам учитывает прокрутку и масштаб (getRangeBounds). */
+function measureCursors(injector: Injector, unitId: string, host: HTMLElement, cursors: RemoteCursor[]) {
+  const render = injector.get<{ getRenderUnitById: (id: string) => { engine: { getCanvasElement: () => HTMLCanvasElement | null } } | null }>(IRenderManagerService).getRenderUnitById(unitId);
+  const canvas = render?.engine.getCanvasElement();
+  if (!canvas) return null;
+  const pop = injector.get<{ getRangeBounds: (range: unknown, unitId: string) => Array<{ left: number; right: number; top: number; bottom: number }> | undefined }>(DocCanvasPopManagerService);
+  const hostBox = host.getBoundingClientRect();
+  const box = canvas.getBoundingClientRect();
+  const shapes: CursorShape[] = [];
+  for (const c of cursors) {
+    const p = c.pos as DocCursor;
+    if (typeof p.s !== 'number' || typeof p.e !== 'number') continue;
+    const collapsed = p.s === p.e;
+    let rects: Array<{ left: number; right: number; top: number; bottom: number }> | undefined;
+    let caretRects: typeof rects;
+    try {
+      const base = { segmentId: p.seg || '', segmentPage: p.pg >= 0 ? p.pg : undefined };
+      rects = collapsed ? undefined : pop.getRangeBounds({ ...base, startOffset: p.s, endOffset: p.e, collapsed: false }, unitId);
+      if (collapsed) caretRects = pop.getRangeBounds({ ...base, startOffset: p.s, endOffset: p.s, collapsed: true }, unitId);
+    } catch { continue; /* документ у нас короче — коллега печатает то, что ещё не сохранено */ }
+    // У выделения каретка — на его краю со стороны движения: свёрнутый курсор на границе абзаца Univer
+    // ставит уже на следующую строку.
+    const edge = rects?.length ? (p.b ? rects[0] : rects[rects.length - 1]) : undefined;
+    const caret = edge ? { ...edge, left: p.b ? edge.left : edge.right } : caretRects?.[0];
+    shapes.push({
+      userId: c.userId, name: c.name, color: c.color, movedAt: c.movedAt,
+      caret: caret ? { x: caret.left - box.left, y: caret.top - box.top, h: Math.max(12, caret.bottom - caret.top) } : null,
+      boxes: (rects ?? []).map((r) => ({ x: r.left - box.left, y: r.top - box.top, w: r.right - r.left, h: r.bottom - r.top })),
+    });
+  }
+  return { shapes, frame: { left: box.left - hostBox.left, top: box.top - hostBox.top, width: box.width, height: box.height } };
+}
 
 /**
  * Документ с листами A4: Univer Docs в «традиционной» раскладке (поля, разрывы страниц), как в Word и
  * Google Docs. Правка отдаёт снимок целиком, сервер хранит его как есть. Загружается отдельным куском —
  * Univer тяжёлый, и остальной Шар ради него не ждёт.
  */
-export default function DocEditor({ content, onContent, readOnly, loadKey, visible = true }: EditorProps) {
+export default function DocEditor({ content, onContent, readOnly, loadKey, visible = true, cursors = [], onCursor }: EditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const theme = useUniverTheme();
   const initial = useRef<DocSnapshot>(parseSnapshot(content) ?? emptySnapshot());
@@ -32,6 +75,10 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
   const onContentRef = useRef(onContent);
   onContentRef.current = onContent;
   const [broken, setBroken] = useState(false);
+  const onCursorRef = useRef(onCursor);
+  onCursorRef.current = onCursor;
+  const engine = useRef<{ injector: Injector; unitId: string } | null>(null);
+  const [overlay, setOverlay] = useState<ReturnType<typeof measureCursors>>(null);
 
   // Новая версия с сервера: пересобираем редактор из неё.
   useEffect(() => {
@@ -99,7 +146,20 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
     styleDocSurface(univer, doc.getId(), initial.current.documentStyle?.documentFlavor === 2);
     disableBlockHandle(univer, doc.getId());
     hideMissingFonts(univer);
+    const untagFind = tagFindDialog();
     if (readOnly) void doc.getPermission().setReadOnly();
+
+    // Своя позиция — коллегам (useCursors). Берём активный диапазон выделения.
+    const injector = (univer as unknown as { __getInjector: () => Injector }).__getInjector();
+    const unitId = doc.getId();
+    engine.current = { injector, unitId };
+    const selectionSub = injector.get<{ textSelection$: { subscribe: (fn: (p: { unitId: string; textRanges?: Array<{ startOffset: number; endOffset: number; segmentId?: string; segmentPage?: number; direction?: string; isActive?: boolean }> }) => void) => { unsubscribe: () => void } } }>(DocSelectionManagerService)
+      .textSelection$.subscribe((p) => {
+        if (p.unitId !== unitId) return;
+        const r = p.textRanges?.find((x) => x.isActive) ?? p.textRanges?.[0];
+        const pos: DocCursor | null = r ? { s: r.startOffset, e: r.endOffset, seg: r.segmentId || '', pg: r.segmentPage ?? -1, b: r.direction === 'backward' ? 1 : 0 } : null;
+        onCursorRef.current?.(pos as CursorPos | null);
+      });
 
     // Правки текста, форматирования и полей страницы идут мутациями; мутация без реальной разницы
     // (фокус, выделение) отсеивается сравнением с сохранённым отпечатком.
@@ -125,13 +185,42 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
       window.clearTimeout(readyTimer);
       window.clearTimeout(syncTimer);
       subscription.dispose();
+      selectionSub.unsubscribe();
+      engine.current = null;
       // Univer снимает свои React-деревья синхронно; внутри фазы рендера нашего компонента React на это жалуется.
+      untagFind();
       window.setTimeout(() => { univer.dispose(); mount.remove(); }, 0);
     };
   }, [loadKey, readOnly, theme]);
 
   useEffect(() => { if (visible) window.dispatchEvent(new Event('resize')); }, [visible]);
 
+  // Чужие курсоры следят за прокруткой, масштабом и раскладкой: пересчитываем каждый кадр, пока они есть,
+  // а состояние меняем, только если что-то сдвинулось.
+  const cursorsRef = useRef(cursors);
+  cursorsRef.current = cursors;
+  const hasCursors = cursors.length > 0;
+  useEffect(() => {
+    if (!hasCursors) { setOverlay(null); return undefined; }
+    let raf = 0;
+    let last = '';
+    const tick = () => {
+      raf = requestAnimationFrame(tick);
+      if (document.hidden || !engine.current || !host.current) return;
+      let next: ReturnType<typeof measureCursors> = null;
+      // Редактор пересоздаётся (новая версия, смена темы) — между dispose и новым экземпляром сервисов нет.
+      try { next = measureCursors(engine.current.injector, engine.current.unitId, host.current, cursorsRef.current); } catch { return; }
+      const key = JSON.stringify(next);
+      if (key !== last) { last = key; setOverlay(next); }
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [hasCursors]);
+
   if (broken) return <div className="nws-missing" role="alert">Не удалось прочитать содержимое документа: файл повреждён.</div>;
-  return <div className="nws-univer nws-univer-doc" ref={host} aria-label="Редактор документа" />;
+  return (
+    <div className="nws-univer nws-univer-doc" ref={host} aria-label="Редактор документа">
+      {overlay && <CursorLayer shapes={overlay.shapes} style={overlay.frame} />}
+    </div>
+  );
 }

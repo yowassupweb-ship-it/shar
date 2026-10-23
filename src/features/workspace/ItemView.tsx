@@ -12,11 +12,13 @@ import { NoteEditor } from './editors/NoteEditor';
 import type { EditorProps } from './editors/types';
 import { downloadBase64, downloadBlob, downloadText, markdownHtml, printHtml, safeFileName, workbookHtml, XLSX_MIME } from './lib/exportDoc';
 import { markdownToSnapshot, parseSnapshot, snapshotToMarkdown } from './lib/docSnapshot';
+import { tabsAsSections } from './lib/noteTabs';
 import { IMPORT_RULES, importFile } from './lib/importFile';
 import { canSticky, forgetSticky, openSticky } from './lib/sticky';
 import { PresenceStack } from './PresenceStack';
 import { SendToChatSheet } from './SendToChatSheet';
 import { usePresence } from './usePresence';
+import { useCursors } from './useCursors';
 import { VersionsSheet } from './VersionsSheet';
 import { ShareDialog } from './ShareDialog';
 import { useItemSession, type Source } from './useItemSession';
@@ -68,6 +70,8 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen }: {
   const shared = 'token' in source;
   // Присутствие: кто ещё в материале и кто печатает (по ссылке без входа — не показываем).
   const viewers = usePresence('token' in source ? null : String(source.id), state === 'pending' || state === 'saving');
+  // Курсоры коллег, как в Google Docs.
+  const { cursors, send: sendCursor } = useCursors('token' in source ? null : String(source.id), viewers);
 
   // История посещений для поиска: открытый материал попадает в «Недавние».
   const visitTitle = useRef('');
@@ -125,7 +129,7 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen }: {
   const name = safeFileName(item.title || info.untitled);
   const markdown = (withImages = false) => {
     const content = session.getContent();
-    if (item.kind === 'note') return content;
+    if (item.kind === 'note') return tabsAsSections(content); // вкладки — разделами с заголовком
     const snapshot = parseSnapshot(content);
     return snapshot ? snapshotToMarkdown(snapshot, { images: withImages }) : '';
   };
@@ -185,7 +189,8 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen }: {
     if (!file || !item) return;
     try {
       const imported = await importFile(file, undefined, item.kind);
-      const current = item.kind === 'table' ? session.getContent() : markdown();
+      // У заметки — исходная строка: markdown() превращает её вкладки в разделы, а дописать нужно в последнюю вкладку.
+      const current = item.kind === 'table' || item.kind === 'note' ? session.getContent() : markdown();
       const empty = item.kind !== 'table' && !current.trim();
       if (importMode.current === 'append' && item.kind !== 'table' && !empty) {
         const added = item.kind === 'note' ? imported.content : snapshotToMarkdown(parseSnapshot(imported.content) ?? { } as never);
@@ -210,7 +215,7 @@ ${added}`;
     if (state === 'error') return <span className="nws-save is-error" role="alert"><AlertCircle size={13} aria-hidden="true" /> {error || 'Не сохранилось'}</span>;
     if (state === 'saving') return <span className="nws-save is-busy">Сохраняю…</span>;
     if (state === 'pending') return <span className="nws-save is-busy">Есть несохранённые правки</span>;
-    return <span className="nws-save"><Check size={13} aria-hidden="true" /> Сохранено</span>;
+    return <span className="nws-save" title="Сохранено"><Check size={13} aria-hidden="true" /> <span className="nws-label">Сохранено</span></span>;
   })();
 
   return (
@@ -232,7 +237,7 @@ ${added}`;
         {status_}
         {!shared && item.isOwner && (
           <button type="button" className="nws-access" onClick={() => setShare(true)} title={accessLevel === 'all' ? 'Видят все в Шаре' : 'Видите только вы и те, кому выдан доступ'}>
-            <AccessIcon size={13} aria-hidden="true" /> {accessLevel === 'all' ? 'Все в Шаре' : 'Только я'}
+            <AccessIcon size={13} aria-hidden="true" /> <span className="nws-label">{accessLevel === 'all' ? 'Все в Шаре' : 'Только я'}</span>
           </button>
         )}
         {!shared && !item.isOwner && item.ownerName && <span className="nws-owner" title="Владелец"><Users size={13} aria-hidden="true" /> {item.ownerName}</span>}
@@ -252,7 +257,7 @@ ${added}`;
           </button>
         )}
         {!shared && (
-          <button type="button" className="nx-primary nws-share-btn" onClick={() => setShare(true)}><Share2 size={14} aria-hidden="true" /> Поделиться</button>
+          <button type="button" className="nx-primary nws-share-btn" onClick={() => setShare(true)} title="Поделиться"><Share2 size={14} aria-hidden="true" /> <span>Поделиться</span></button>
         )}
         {!shared && (
           <button type="button" className="nx-icon-btn" aria-label="Ещё" aria-haspopup="menu" aria-expanded={Boolean(menu)} onClick={(e) => setMenu({ element: e.currentTarget, align: 'end' })}>
@@ -271,7 +276,7 @@ ${added}`;
 
       <div className="nws-editor">
         <Suspense fallback={<div className="nws-loading"><Spinner size={24} label="Загружаю редактор" /></div>}>
-          <Editor content={item.content} onContent={session.setContent} readOnly={readOnly} loadKey={loadKey} title={item.title} visible />
+          <Editor content={item.content} onContent={session.setContent} readOnly={readOnly} loadKey={loadKey} title={item.title} visible cursors={cursors} onCursor={sendCursor} />
         </Suspense>
       </div>
 

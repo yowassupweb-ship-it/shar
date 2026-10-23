@@ -185,9 +185,14 @@ export class BrowserPushService {
 
         // Клик по уведомлению с разделом (не чатом): переход внутри приложения.
         // Чат открывает стор чатов — он сам слушает notification-navigate.
-        if (event.data?.type === 'notification-navigate' && !event.data?.chatId && event.data?.tab) {
-          const target = fromLegacyUrl(`/account?tab=${encodeURIComponent(String(event.data.tab))}`);
-          if (target) navigate(target);
+        if (event.data?.type === 'notification-navigate' && !event.data?.chatId) {
+          // Адрес нового Шара (/social?dialog=…) — как есть; ?tab= у него свой, не старый раздел.
+          const url = String(event.data?.url || '');
+          if (url.startsWith('/') && !url.startsWith('/account')) navigate(url);
+          else if (event.data?.tab) {
+            const target = fromLegacyUrl(`/account?tab=${encodeURIComponent(String(event.data.tab))}`);
+            if (target) navigate(target);
+          }
         }
 
         // SW pushed a web-push OS notification for this chat — suppress the next poll cycle
@@ -292,6 +297,7 @@ export class BrowserPushService {
     // is the one guaranteed mounted regardless of which tab is open. Without this,
     // a chat read on the phone left its desktop notification sitting there
     // whenever the desktop wasn't currently on the messages tab.
+    if (type === 'social_message') { void this.notifySocial(data); return; }
     if (type === 'notifications_read' && data?.chatId) {
       const chatId = String(data.chatId);
       // Бейдж гасим сразу: событие само по себе и есть подтверждение
@@ -416,6 +422,28 @@ export class BrowserPushService {
     });
   }
 
+  /** Сообщение клиента из ВКонтакте/MAX (модуль «Соцсети»). Сервер шлёт событие только тем, кому оно
+   *  положено по настройкам модуля; здесь — не показывать, если этот диалог и так открыт перед глазами. */
+  private async notifySocial(data: LooseRecord): Promise<void> {
+    if (!this.isPrimed) return;
+    const dialogId = String(data.dialogId || '');
+    const itemId = String(data.itemId || '');
+    const url = String(data.url || '/social');
+    if (!dialogId || !itemId) return;
+    if (isUserAttending() && typeof window !== 'undefined' && window.location.pathname === '/social'
+      && new URLSearchParams(window.location.search).get('dialog') === dialogId) return;
+    const platform = String(data.platform || '');
+    await this.showNotification(String(data.title || 'Соцсети'), String(data.body || ''), {
+      key: `social:${itemId}`,
+      tag: `social-${dialogId}`,
+      url,
+      subtitle: data.kind === 'comments' ? 'Соцсети · Комментарии' : 'Соцсети · Диалоги',
+      senderName: String(data.title || 'Соцсети'),
+      avatar: platform === 'vk' || platform === 'max' ? `/icons/social/${platform}.png` : undefined,
+      requireInteraction: true,
+    });
+  }
+
   // Coalesce a burst of WS events into a single refresh.
   private scheduleEventPoll(): void {
     if (!this.running || this.eventPollTimer !== null) return;
@@ -497,6 +525,9 @@ export class BrowserPushService {
       this.updateAppBadge(count);
     };
     window.addEventListener('shar-unread-changed', this.unreadHintHandler);
+    // Число диалогов «Соцсетей» поменялось — тот же значок, пересчитать с прежним числом чатов.
+    this.socialWaitingHandler = () => this.updateAppBadge(this.lastChatBadge);
+    window.addEventListener('shar-social-waiting', this.socialWaitingHandler);
     this.pageUnreadGoneHandler = () => { this.pageUnreadCount = null; };
     window.addEventListener('shar-unread-page-unmounted', this.pageUnreadGoneHandler);
 
@@ -554,6 +585,10 @@ export class BrowserPushService {
     if (this.unreadHintHandler) {
       window.removeEventListener('shar-unread-changed', this.unreadHintHandler);
       this.unreadHintHandler = null;
+    }
+    if (this.socialWaitingHandler) {
+      window.removeEventListener('shar-social-waiting', this.socialWaitingHandler);
+      this.socialWaitingHandler = null;
     }
     if (this.realtimePokeUnsubscribe) {
       this.realtimePokeUnsubscribe();
@@ -698,8 +733,16 @@ export class BrowserPushService {
     }
   }
 
-  private updateAppBadge(count: number): void {
+  private lastChatBadge = 0;
+  private socialWaitingHandler: (() => void) | null = null;
+
+  /** Значок PWA: чаты с непрочитанным + диалоги «Соцсетей», ждущие ответа (их число ведёт features/social/waiting). */
+  private updateAppBadge(chats: number): void {
     if (typeof navigator === 'undefined') return;
+    this.lastChatBadge = chats;
+    let social = 0;
+    try { social = Number(localStorage.getItem('shar_social_waiting')) || 0; } catch { /* ignore */ }
+    const count = chats + social;
     try {
       if (count > 0) {
         if ('setAppBadge' in navigator) (navigator as Navigator & { setAppBadge(n: number): Promise<void> }).setAppBadge(count).catch(() => {});

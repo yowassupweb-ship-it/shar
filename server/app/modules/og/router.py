@@ -40,6 +40,25 @@ def _og_fetch_is_safe_url(url: str) -> bool:
     return True
 
 
+def _charset(content_type: str, raw: bytes) -> str:
+    """Кодировка страницы: из заголовка, иначе из <meta charset>, иначе UTF-8. resp.encoding здесь не годится:
+    для text/html без charset requests подставляет ISO-8859-1, и русские заголовки приходили кракозябрами."""
+    import codecs
+    import re
+
+    found = re.search(r'charset=["\']?([\w.:-]+)', content_type, re.I)
+    name = found.group(1) if found else ''
+    if not name:
+        meta = re.search(rb'<meta[^>]+charset=["\']?([\w.:-]+)', raw[:4096], re.I)
+        name = meta.group(1).decode('ascii', 'ignore') if meta else ''
+    if name:
+        try:
+            return codecs.lookup(name).name
+        except LookupError:
+            pass
+    return 'utf-8'
+
+
 def _fetch_og(url: str) -> dict:
     """Fetch Open Graph / basic HTML metadata from a URL. Returns dict with title/description/image/favicon/siteName."""
     _empty = {'title': '', 'description': '', 'image': '', 'siteName': '', 'favicon': ''}
@@ -107,7 +126,7 @@ def _fetch_og(url: str) -> dict:
                 break
         resp.close()
         p = _P()
-        p.feed(raw.decode(resp.encoding or 'utf-8', 'replace')[:60000])
+        p.feed(raw.decode(_charset(resp.headers.get('Content-Type', ''), raw), 'replace')[:60000])
         fav = p.og.get('_favicon', '')
         if fav and not fav.startswith('http'):
             fav = _urljoin(current_url, fav)

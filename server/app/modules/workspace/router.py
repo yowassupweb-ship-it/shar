@@ -93,12 +93,15 @@ def list_items(kind: Optional[str] = None, q: str = "", templates: bool = False,
     if query:
         where.append("(i.title ILIKE %s OR i.text_content ILIKE %s)")
         params += [f"%{query}%", f"%{query}%"]
-    params.append(max(1, min(limit, 1000)))
-    rows = db.conn.fetch_all(
-        f"SELECT {store.LIST_COLUMNS} FROM workspace_items i WHERE {' AND '.join(where)} ORDER BY i.pinned DESC, i.updated_at DESC LIMIT %s",
-        tuple(params),
-    ) or []
     depts = params[2]  # visible_params уже посчитал отделы смотрящего
+    params.append(max(1, min(limit, 1000)))
+    # Новое (мне открыли доступ, а я ещё не открывал) — первым, выше закреплённого.
+    rows = db.conn.fetch_all(
+        f"SELECT {store.LIST_COLUMNS}, {store.is_new_sql('i')} AS is_new, "
+        "(SELECT f.folder_id::text FROM workspace_item_folder f WHERE f.item_id = i.id AND f.user_id = %s) AS folder_id "
+        f"FROM workspace_items i WHERE {' AND '.join(where)} ORDER BY is_new DESC, i.pinned DESC, i.updated_at DESC LIMIT %s",
+        tuple(store.is_new_params(me.user_id, depts) + [me.user_id] + params),
+    ) or []
     owner_ids = sorted({str(r["owner_id"]) for r in rows})
     owners = {str(u["id"]): u for u in (db.conn.fetch_all("SELECT id, name, username FROM users WHERE id = ANY(%s)", (owner_ids,)) or [])} if owner_ids else {}
     return {"items": [store.present(row, me.user_id, depts=depts, owners=owners) for row in rows]}
@@ -138,7 +141,10 @@ def create_item(body: ItemCreate, me: Identity = Depends(current_identity)):
 @router.get("/api/workspace/items/{item_id}")
 def get_item(item_id: str, me: Identity = Depends(current_identity)):
     try:
-        return {"item": store.present(store.get_visible(item_id, me.user_id), me.user_id, with_content=True)}
+        row = store.get_visible(item_id, me.user_id)
+        if str(row["owner_id"]) != me.user_id:
+            store.mark_seen(item_id, me.user_id)
+        return {"item": store.present(row, me.user_id, with_content=True)}
     except WorkspaceError as exc:
         raise _raise(exc) from exc
 
@@ -181,6 +187,9 @@ def patch_item(item_id: str, body: ItemPatch, me: Identity = Depends(current_ide
                 raise WorkspaceError(400, "Неизвестный уровень доступа")
             sets.append("access_level = %s")
             params.append(fields["accessLevel"])
+            if fields["accessLevel"] == "all":
+                # Открыли всем — для остальных это «новое» с этого момента, а не с даты создания.
+                sets.append("shared_all_at = CASE WHEN access_level = 'all' THEN shared_all_at ELSE now() END")
         if "accessMode" in fields and fields["accessMode"] is not None:
             if fields["accessMode"] not in ACCESS_MODES:
                 raise WorkspaceError(400, "Неизвестный режим доступа")

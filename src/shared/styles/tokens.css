@@ -10,8 +10,9 @@
 /* ── Токены: Графит (по умолчанию для тёмного) ─────────────────────────── */
 /* Univer-окна (поиск по документу) рисуются в body, вне .nx, — им нужны те же токены. */
 .nx,
+[data-u-comp="rect-popup"],
 .ntb,
-div:has(> .univer-contents > [data-u-comp="find-replace-dialog"]),
+.nx-univer-find,
 .nem-host {
   --space-1: 4px;
   --space-2: 8px;
@@ -122,7 +123,9 @@ div:has(> .univer-contents > [data-u-comp="find-replace-dialog"]),
 
 /* ── Светлая ──────────────────────────────────────────────────────────── */
 html:not(.dark) .nx,
-html:not(.dark) .ntb {
+html:not(.dark) [data-u-comp="rect-popup"],
+html:not(.dark) .ntb,
+html:not(.dark) .nx-univer-find {
   --bg-color: #f5f5f7;
   --container-bg: #ffffff;
   --element-bg: #ffffff;
@@ -156,8 +159,9 @@ html:not(.dark) .ntb {
    страница не белая, а нейтрально-серая (R ≈ G ≈ B), панели и поля — ступенями светлее, пузыри почти белые.
    Контраст (WCAG): основной текст ≥ 11:1 на всех поверхностях, приглушённый, акцент и состояния ≥ 4.5:1. */
 html[data-theme="gray"] .nx,
+html[data-theme="gray"] [data-u-comp="rect-popup"],
 html[data-theme="gray"] .ntb,
-html[data-theme="gray"] div:has(> .univer-contents > [data-u-comp="find-replace-dialog"]),
+html[data-theme="gray"] .nx-univer-find,
 html[data-theme="gray"] .nem-host {
   --bg-color: #e3e3e6;
   --bg-sunken: #d8d8dc;
@@ -189,8 +193,9 @@ html[data-theme="gray"] .nem-host {
 
 /* ── Чёрная (наследует Графит; чистый чёрный для OLED) ────────────────── */
 html[data-theme="black"] .nx,
+html[data-theme="black"] [data-u-comp="rect-popup"],
 html[data-theme="black"] .ntb,
-html[data-theme="black"] div:has(> .univer-contents > [data-u-comp="find-replace-dialog"]),
+html[data-theme="black"] .nx-univer-find,
 html[data-theme="black"] .nem-host {
   --bg-color: #000000;
   --container-bg: #08080a;

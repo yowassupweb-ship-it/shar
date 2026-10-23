@@ -16,6 +16,8 @@ export const paths = {
   // Адреса инструментов совпадают со старыми — закладки и ссылки продолжают работать.
   admin: '/admin',
   utm: '/utm-generator',
+  leads: '/site-leads',
+  social: '/social',
   guide: '/how-to-shar',
   login: '/login',
 } as const;

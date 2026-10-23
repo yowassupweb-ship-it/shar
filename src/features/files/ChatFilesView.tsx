@@ -41,11 +41,12 @@ export function ChatList({ lead, onOpen }: { lead?: ReactNode; onOpen: (c: ChatF
   return (
     <section className="nf-view">
       <header className="nf-bar">
-        {lead}
-        <span className="nf-crumbs" />
-        <div className="nf-tools">
-          <SearchField className="nf-search" value={query} onChange={setQuery} placeholder="Найти чат" />
+        <div className="nf-left">
+          {lead}
+          <span className="nf-crumbs" />
         </div>
+        <SearchField className="nf-search" value={query} onChange={setQuery} placeholder="Найти чат" />
+        <div className="nf-tools" />
       </header>
       <div className="nf-scroll nx-scroll-y">
         {!list && phase === 'loading' ? (
@@ -126,13 +127,15 @@ export function ChatFiles({ lead, chat, onBack }: { lead?: ReactNode; chat: { ch
   return (
     <section className="nf-view">
       <header className="nf-bar">
-        {lead}
-        <nav className="nf-crumbs" aria-label="Путь">
-          <button type="button" className="nf-crumb nf-crumb-back" onClick={onBack} aria-label="Все чаты"><ChevronLeft size={16} aria-hidden="true" /></button>
-          <span className="nf-crumb" aria-current="page">{chat.chatName}</span>
-        </nav>
+        <div className="nf-left">
+          {lead}
+          <nav className="nf-crumbs" aria-label="Путь">
+            <button type="button" className="nf-crumb nf-crumb-back" onClick={onBack} aria-label="Все чаты"><ChevronLeft size={16} aria-hidden="true" /></button>
+            <span className="nf-crumb" aria-current="page">{chat.chatName}</span>
+          </nav>
+        </div>
+        <SearchField className="nf-search" value={query} onChange={setQuery} placeholder="Имя файла или автор" label="Поиск по файлам" />
         <div className="nf-tools">
-          <SearchField className="nf-search" value={query} onChange={setQuery} placeholder="Имя файла или автор" label="Поиск по файлам" />
           <div className="nx-segment" role="group" aria-label="Тип">
             {([['all', 'Все'], ['media', 'Фото и видео'], ['docs', 'Документы']] as [Filter, string][]).map(([id, label]) => (
               <button key={id} type="button" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}</button>

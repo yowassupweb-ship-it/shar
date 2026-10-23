@@ -100,6 +100,14 @@ CREATE TABLE IF NOT EXISTS workspace_item_versions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_workspace_item_versions_item ON workspace_item_versions(item_id, id DESC);
+-- «Новое»: когда человек последний раз открывал чужой материал и когда материал открыли всем.
+CREATE TABLE IF NOT EXISTS workspace_item_seen (
+    item_id BIGINT NOT NULL REFERENCES workspace_items(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL,
+    seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (item_id, user_id)
+);
+ALTER TABLE workspace_items ADD COLUMN IF NOT EXISTS shared_all_at TIMESTAMPTZ;
 """)
 
 # В списке содержимого нет: снимок документа весит сотни килобайт, а списку нужны название, дата и фрагмент.
@@ -110,6 +118,7 @@ FULL_COLUMNS = LIST_COLUMNS + ", content, content_key, updated_by"
 
 _CONTROL = re.compile(r"[\u0000-\u0008\u000b\u000c\u000e-\u001f]")
 _TAGS = re.compile(r"<[^>]+>")
+_NOTE_TAB = re.compile(r"<!-- shar-tab: (.*?) -->")
 
 
 class WorkspaceError(Exception):
@@ -124,7 +133,8 @@ class WorkspaceError(Exception):
 def text_of(kind: str, content: str) -> str:
     """Текст для поиска и фрагмента в списке. Формат разбирается мягко: битый JSON — пустой текст."""
     if kind == "note":
-        return content
+        # Служебные строки вкладок заметки (см. клиент lib/noteTabs) — в тексте для поиска остаются их названия.
+        return _NOTE_TAB.sub(r"", content)
     try:
         if kind == "document":
             stream = str(((json.loads(content) or {}).get("body") or {}).get("dataStream") or "")
@@ -218,6 +228,44 @@ def visible_params(user_id: str) -> list[Any]:
     return [user_id, user_id, user_dept_ids(user_id)]
 
 
+NEW_SINCE_KEY = "workspace:new-since"
+
+
+def new_since() -> str:
+    """С какого момента считаем «новое»: с первого обращения после выкатки. Иначе все чужие материалы,
+    которые человек когда-то видел, но не открывал, разом стали бы «новыми»."""
+    from app.core import kv
+
+    value = kv.get(NEW_SINCE_KEY) or {}
+    if not value.get("at"):
+        now = db.conn.fetch_one("SELECT now()::text AS t")["t"]
+        value = kv.update(NEW_SINCE_KEY, {}, lambda cur: cur if (cur or {}).get("at") else {"at": now})
+    return str(value["at"])
+
+
+def is_new_sql(alias: str = "i") -> str:
+    """«Новое» для смотрящего: материал чужой, а доступ ему открыли (лично, его отделу или всем) позже, чем он
+    его последний раз открывал. Параметры — is_new_params(user_id, depts)."""
+    return (f"COALESCE({alias}.owner_id <> %s AND GREATEST("
+            f"(SELECT max(s.created_at) FROM workspace_item_shares s WHERE s.item_id = {alias}.id AND s.user_id = %s), "
+            f"(SELECT max(d.created_at) FROM workspace_item_dept_shares d WHERE d.item_id = {alias}.id AND d.department_id = ANY(%s)), "
+            f"CASE WHEN {alias}.access_level = 'all' THEN COALESCE({alias}.shared_all_at, {alias}.created_at) END"
+            f") > GREATEST(%s::timestamptz, COALESCE((SELECT seen_at FROM workspace_item_seen v WHERE v.item_id = {alias}.id AND v.user_id = %s), '-infinity')), false)")
+
+
+def is_new_params(user_id: str, depts: list[str]) -> list[Any]:
+    return [user_id, user_id, depts, new_since(), user_id]
+
+
+def mark_seen(item_id: str, user_id: str) -> None:
+    """Человек открыл чужой материал — бейдж «Новое» снимается."""
+    db.conn.execute_query(
+        "INSERT INTO workspace_item_seen (item_id, user_id, seen_at) VALUES (%s, %s, now()) "
+        "ON CONFLICT (item_id, user_id) DO UPDATE SET seen_at = now()",
+        (int(item_id), user_id),
+    )
+
+
 def permissions(row: dict[str, Any], user_id: str, depts: list[str] | None = None) -> dict[str, Any]:
     """Что может человек с этим материалом. Правка: владелец; выданное поимённо или его отделу (если есть
     право на правку хоть где — правит); остальные, кто видит материал по уровню доступа, — по режиму материала."""
@@ -249,6 +297,8 @@ def present(row: dict[str, Any], user_id: str | None = None, *, with_content: bo
         "accessLevel": row["access_level"], "accessMode": row["access_mode"],
         "createdAt": row["created_at"], "updatedAt": row["updated_at"],
         "sizeBytes": row.get("size_bytes") or 0, "snippet": row.get("snippet") or "",
+        "isNew": bool(row.get("is_new")),
+        "folderId": row.get("folder_id"),
     }
     if user_id is not None:
         out.update(permissions(row, user_id, depts))
@@ -510,6 +560,36 @@ def viewer_list(item_id: str) -> list[dict[str, Any]]:
         user = db.get_user_by_id(uid) or {}
         out.append({"userId": uid, "name": user.get("name") or user.get("username") or uid, "avatar": user.get("avatar") or "", "editing": editing})
     return out
+
+
+CURSOR_MAX_BYTES = 600
+
+
+def relay_cursor(user_id: str, frame: dict[str, Any]) -> None:
+    """Курсор и выделение коллеги, как в Google Docs: кадр из сокета раздаём остальным, кто сейчас в материале.
+
+    Ничего не храним. Доступ не перепроверяем каждый раз: в присутствие попадает только тот, кому материал виден
+    (set_presence), а кто не в материале — того кадр молча отбрасывается. Позицию понимает только редактор
+    того же вида, сервер её не разбирает — лишь ограничивает размер.
+    """
+    item_id = str(frame.get("itemId") or "")
+    if not item_id.isdigit():
+        return
+    cursor = frame.get("cursor")
+    if cursor is not None and (not isinstance(cursor, dict) or len(json.dumps(cursor)) > CURSOR_MAX_BYTES):
+        return
+    viewers = [uid for uid, _ in presence.viewers(item_id)]
+    if user_id not in viewers:
+        return
+    try:
+        from app.core.realtime import sse_manager
+
+        payload = {"type": "workspace_cursor", "itemId": item_id, "userId": user_id, "cursor": cursor}
+        for uid in viewers:
+            if uid != user_id:
+                sse_manager.push(uid, payload)
+    except Exception as exc:
+        log.debug("workspace: cursor relay failed: %s", exc)
 
 
 def push_to_viewers(item_id: str, payload: dict[str, Any], *, exclude: str = "") -> None:
