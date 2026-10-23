@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from app.core.db import db
+from app.modules.social.tls import ca_bundle
 
 log = logging.getLogger("shar.social")
 
@@ -207,7 +208,7 @@ def tg_reply(token: str, ext_chat_id: str, ext_message_id: str, text: str, busin
 
 def max_call(token: str, method: str, path: str, *, params: Optional[dict] = None, body: Optional[dict] = None) -> Any:
     try:
-        res = requests.request(method, MAX_API + path, params=params, json=body, headers={"Authorization": token}, timeout=TIMEOUT)
+        res = requests.request(method, MAX_API + path, params=params, json=body, headers={"Authorization": token}, timeout=TIMEOUT, verify=ca_bundle())
     except requests.RequestException as e:
         raise PlatformError(f"MAX не ответил ({type(e).__name__})") from None
     try:
@@ -278,7 +279,7 @@ def max_send_files(token: str, ext_chat_id: str, ext_message_id: str, text: str,
         slot = max_call(token, "POST", "/uploads", params={"type": kind})
         try:
             res = requests.post(slot["url"], files={"data": (name, data, content_type or "application/octet-stream")},
-                                headers={"Authorization": token}, timeout=120)
+                                headers={"Authorization": token}, timeout=120, verify=ca_bundle())
             up = res.json() if res.content else {}
         except (requests.RequestException, ValueError, KeyError) as e:
             raise PlatformError(f"MAX не принял файл «{name}» ({type(e).__name__})") from None

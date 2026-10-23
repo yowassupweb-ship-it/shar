@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from app.modules.social.platforms import TIMEOUT, Incoming, PlatformError
+from app.modules.social.tls import ca_bundle
 
 VK_API = "https://api.vk.com/method/"
 VK_VERSION = "5.199"
@@ -41,7 +42,7 @@ _ERRORS = {
 
 def call(token: str, method: str, **params: Any) -> Any:
     try:
-        res = requests.post(VK_API + method, data={**params, "access_token": token, "v": VK_VERSION}, timeout=TIMEOUT)
+        res = requests.post(VK_API + method, data={**params, "access_token": token, "v": VK_VERSION}, timeout=TIMEOUT, verify=ca_bundle())
         data = res.json()
     except (requests.RequestException, ValueError) as e:
         raise PlatformError(f"ВКонтакте не ответил ({type(e).__name__})") from None
@@ -192,7 +193,7 @@ IMAGE_TYPES = ("image/jpeg", "image/png", "image/gif", "image/webp")
 
 def _upload(url: str, field: str, name: str, data: bytes, content_type: str) -> dict:
     try:
-        res = requests.post(url, files={field: (name, data, content_type or "application/octet-stream")}, timeout=120)
+        res = requests.post(url, files={field: (name, data, content_type or "application/octet-stream")}, timeout=120, verify=ca_bundle())
         return res.json()
     except (requests.RequestException, ValueError) as e:
         raise PlatformError(f"ВКонтакте не принял файл «{name}» ({type(e).__name__})") from None
