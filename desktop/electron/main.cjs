@@ -357,8 +357,10 @@ require('electron').ipcMain.handle('updater:install', () => installUpdateNow());
 
 // Проверка при выходе из сна: машина могла проспать несколько выкладок.
 function checkForUpdatesQuietly() {
-  // Скачанное ждёт установки: повторная проверка только перекачивала бы тот же файл.
-  if (!app.isPackaged || downloadedUpdateVersion || isInstallingUpdate) return;
+  // Проверяем и когда версия уже скачана и ждёт установки: иначе, пока Шар не перезапускали,
+  // вышедшая следом версия не находилась вовсе, и «Обновить» ставило устаревшую (0.2.90 вместо
+  // 0.2.91). Ту же версию electron-updater не перекачивает — берёт уже скачанный файл.
+  if (!app.isPackaged || isInstallingUpdate) return;
   autoUpdater.checkForUpdates().catch((err) => {
     console.error('[updater] проверка не удалась:', err?.message || err);
   });
