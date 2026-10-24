@@ -6,6 +6,7 @@ from app.core.db import db
 from app.core.realtime import sse_manager
 from app.core.security import Identity, current_identity, require_admin
 from app.modules.mail import idle as mail_realtime
+from app.modules.mail.crypto import PASSWORD_HINT, MailPasswordUnavailable
 from app.modules.mail.imap import _imap_connect, _mail_folders, _owned_account, _special_folders, _wire
 from app.modules.mail.watch import _ROLE_TITLES
 
@@ -20,6 +21,8 @@ def get_mailboxes(accountId: str, refresh: bool = False, me: Identity = Depends(
     acc = _owned_account(accountId, userId)
     try:
         roles, others = _mail_folders(acc, force=refresh)
+    except MailPasswordUnavailable:
+        raise HTTPException(status_code=409, detail=PASSWORD_HINT) from None
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Почтовый сервер не ответил: {e}")
     unread = db.get_email_unread_counts(str(acc['id'])) or {}

@@ -1,8 +1,10 @@
-import { Suspense, useEffect, useLayoutEffect, useState } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import type { User } from '@/shared/types/chat';
 import { boot, isMuted, shutdown, unreadChatsTotal, useChatStore } from '@/features/chat';
-import { startSocialWaiting, useSocialWaiting } from '@/features/social/waiting';
+import { availableTools } from '@/features/more/tools';
+import { startToolBadges, toolBadgesTotal, useToolBadges } from '@/features/more/toolBadges';
+import { addNavTool, removeNavTool } from '@/features/more/navTools';
 import { EventEditorHost } from '@/features/calendar';
 import { BrowserPushService } from '@/shared/platform/push/browserPushService';
 import { OverlayHost } from '@/shared/ui/overlay';
@@ -58,11 +60,20 @@ function Workspace({ me }: { me: User }) {
   const section = sectionFor(pathname);
   const [opts, setOpts] = useState<ShellOptions>({});
   const unreadChats = useChatStore((s) => unreadChatsTotal(s.chats));
-  // Диалоги «Соцсетей», ждущие ответа, — тоже непрочитанное: на логотипе вместе с чатами, в меню — на «Ещё».
-  const socialWaiting = useSocialWaiting((s) => s.total);
-  const unread = unreadChats + socialWaiting;
+  // Невзятые заявки и диалоги «Соцсетей» без ответа — тоже непрочитанное: на логотипе вместе с чатами,
+  // каждое — на иконке своего инструмента; что не вынесено в нижнее меню — на «Ещё».
+  const toolCounts = useToolBadges((s) => s.counts);
+  const unread = unreadChats + toolBadgesTotal(toolCounts);
   const meFull = useChatStore((s) => s.users[String(me.id)]) as
-    (User & { position?: string; visibleTabs?: Record<string, boolean> }) | undefined;
+    (User & { position?: string; visibleTabs?: Record<string, boolean>; navTools?: string[]; enabledTools?: string[]; role?: string }) | undefined;
+  const navTools = useMemo(() => {
+    const tools = availableTools({ role: meFull?.role || me.role, enabledTools: meFull?.enabledTools });
+    return (meFull?.navTools || [])
+      .map((id) => tools.find((t) => t.id === id && !t.external && t.href.startsWith('/')))
+      .filter((t): t is NonNullable<typeof t> => Boolean(t))
+      .map((t) => ({ id: t.id, label: t.name, href: t.href, icon: t.icon, tint: t.tint, count: toolCounts[t.id] || 0 }));
+  }, [meFull?.navTools, meFull?.enabledTools, meFull?.role, me.role, toolCounts]);
+  const moreCount = Object.entries(toolCounts).reduce((sum, [id, n]) => sum + (navTools.some((t) => t.id === id) ? 0 : n || 0), 0);
 
   // Layout-эффект, а не обычный: эффекты родителя идут после эффектов детей, и
   // раздел «Чаты» открыл бы чат из адреса раньше, чем стор поднят, — а boot()
@@ -71,7 +82,7 @@ function Workspace({ me }: { me: User }) {
     boot(me);
     return () => shutdown();
   }, [me]);
-  useEffect(() => startSocialWaiting(), [me]);
+  useEffect(() => startToolBadges(), [me]);
 
   useTitleBlink(unread);
 
@@ -152,7 +163,10 @@ function Workspace({ me }: { me: User }) {
     <ShellContext.Provider value={setOpts}>
       <AppShell
         section={section.id}
-        badges={{ chats: unreadChats, more: socialWaiting }}
+        badges={{ chats: unreadChats, more: moreCount }}
+        navTools={navTools}
+        onNavToolDrop={(id) => void addNavTool(id)}
+        onNavToolRemove={(id) => void removeNavTool(id)}
         visibleTabs={meFull?.visibleTabs}
         navHidden={opts.navHidden}
         onReselect={opts.onReselect}

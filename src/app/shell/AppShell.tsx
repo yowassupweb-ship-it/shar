@@ -1,6 +1,6 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Link } from 'react-router';
-import { Palette as PaletteIcon, Settings } from 'lucide-react';
+import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Link, useLocation } from 'react-router';
+import { Palette as PaletteIcon, PinOff, Settings, type LucideIcon } from 'lucide-react';
 import { PALETTES, useTheme } from '@/shared/theme/ThemeContext';
 import { Avatar } from '@/shared/ui/Avatar';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
@@ -41,7 +41,18 @@ export interface AppShellProps {
   onReselect?: () => void;
   /** Кто вошёл — аватар в правом углу меню. */
   account?: { id: string; name: string; avatar?: string; subtitle?: string };
+  /** Инструменты, вынесенные в меню (из «Ещё»), — со своими единичками. */
+  navTools?: NavTool[];
+  /** Плитку инструмента перетащили из «Ещё» на меню. */
+  onNavToolDrop?: (id: string) => void;
+  /** «Убрать из меню» — правый щелчок по инструменту. */
+  onNavToolRemove?: (id: string) => void;
 }
+
+export interface NavTool { id: string; label: string; href: string; icon: LucideIcon; tint: [string, string]; count: number }
+
+/** Тот же тип данных, что кладёт плитка «Ещё» при перетаскивании (features/more/navTools). */
+const NAV_TOOL_DRAG = 'application/x-shar-tool';
 
 /** Аватар в углу меню и его всплывающее меню — как в старой нижней полосе. */
 function AccountButton({ account }: { account: NonNullable<AppShellProps['account']> }) {
@@ -91,8 +102,33 @@ function NavIcon({ icon }: { icon: string }) {
   );
 }
 
-const Nav = memo(function Nav({ section, badges, visibleTabs, onReselect, account }: Omit<AppShellProps, 'children' | 'navHidden'>) {
+const Nav = memo(function Nav({ section, badges, visibleTabs, onReselect, account, navTools, onNavToolDrop, onNavToolRemove }: Omit<AppShellProps, 'children' | 'navHidden'>) {
   const listRef = useRef<HTMLUListElement>(null);
+  // Подписи не влезают (узкое окно, много разделов) — только иконки, подпись у открытого раздела.
+  // Раньше полоса молча прокручивалась, и крайний пункт («Ещё») уезжал под аватар. Ширину полосы
+  // с подписями запоминаем, чтобы вернуть их, как только место появится, без дрожания туда-обратно.
+  const [compact, setCompact] = useState(false);
+  const fullWidth = useRef(0);
+  const [dropping, setDropping] = useState(false);
+  const [toolMenu, setToolMenu] = useState<{ id: string; anchor: MenuAnchor } | null>(null);
+  const { pathname } = useLocation();
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof ResizeObserver === 'undefined') return undefined;
+    const check = () => {
+      if (window.matchMedia('(max-width: 640px)').matches) { setCompact(false); return; } // телефон листает капсулу
+      setCompact((was) => {
+        if (!was && list.scrollWidth > list.clientWidth + 1) { fullWidth.current = list.scrollWidth; return true; }
+        if (was && list.clientWidth >= fullWidth.current) return false;
+        return was;
+      });
+    };
+    const ro = new ResizeObserver(check);
+    ro.observe(list);
+    check();
+    return () => ro.disconnect();
+  }, [visibleTabs, navTools?.length]);
 
   useEffect(() => {
     const list = listRef.current;
@@ -135,7 +171,19 @@ const Nav = memo(function Nav({ section, badges, visibleTabs, onReselect, accoun
   }, [section]);
 
   return (
-    <nav className="nx-nav" aria-label="Разделы">
+    <nav
+      className="nx-nav"
+      aria-label="Разделы"
+      data-compact={compact ? 'true' : undefined}
+      data-drop={dropping ? 'true' : undefined}
+      onDragOver={(e) => { if (onNavToolDrop && e.dataTransfer.types.includes(NAV_TOOL_DRAG)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDropping(true); } }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropping(false); }}
+      onDrop={(e) => {
+        setDropping(false);
+        const id = e.dataTransfer.getData(NAV_TOOL_DRAG);
+        if (id && onNavToolDrop) { e.preventDefault(); onNavToolDrop(id); }
+      }}
+    >
       <ul ref={listRef} className="nx-nav-list">
         {/* Открытый сейчас раздел виден, даже если скрыт, — иначе не понять, где ты. */}
         {SECTIONS.filter((s) => s.id === section || isTabVisible(visibleTabs, s.id)).map((s) => {
@@ -146,6 +194,8 @@ const Nav = memo(function Nav({ section, badges, visibleTabs, onReselect, accoun
               <Link
                 to={s.href}
                 className="nx-nav-item"
+                title={compact ? s.label : undefined}
+                aria-label={compact ? s.label : undefined}
                 aria-current={active ? 'page' : undefined}
                 onClick={(e) => {
                   // Повторное нажатие — только на самой странице раздела; из вложенной
@@ -166,19 +216,46 @@ const Nav = memo(function Nav({ section, badges, visibleTabs, onReselect, accoun
             </li>
           );
         })}
+        {(navTools || []).map((t) => {
+          const active = pathname === t.href;
+          return (
+            <li key={`tool-${t.id}`} data-tool={t.id}>
+              <Link
+                to={t.href}
+                className="nx-nav-item"
+                title={compact ? t.label : undefined}
+                aria-label={compact ? t.label : undefined}
+                aria-current={active ? 'page' : undefined}
+                onContextMenu={(e) => { if (!onNavToolRemove) return; e.preventDefault(); setToolMenu({ id: t.id, anchor: { x: e.clientX, y: e.clientY } }); }}
+              >
+                <span className="nx-nav-icon nx-nav-tool" style={{ '--a': t.tint[0], '--b': t.tint[1] } as CSSProperties} aria-hidden="true"><t.icon size={13} /></span>
+                <span className="nx-nav-label">{t.label}</span>
+                {t.count > 0 && (
+                  <span className="nx-count nx-nav-badge" aria-label={`Ждут внимания: ${t.count}`}>{t.count > 99 ? '99+' : t.count}</span>
+                )}
+              </Link>
+            </li>
+          );
+        })}
       </ul>
+      {toolMenu && (
+        <Menu anchor={toolMenu.anchor} label="Инструмент в меню" onClose={() => setToolMenu(null)}>
+          <MenuItem icon={<PinOff size={16} />} onSelect={() => { const id = toolMenu.id; setToolMenu(null); onNavToolRemove?.(id); }}>Убрать из меню</MenuItem>
+        </Menu>
+      )}
       {account && <AccountButton account={account} />}
     </nav>
   );
 });
 
-export default function AppShell({ section, children, badges, visibleTabs, navHidden, onReselect, account }: AppShellProps) {
+export default function AppShell({ section, children, badges, visibleTabs, navHidden, onReselect, account, navTools, onNavToolDrop, onNavToolRemove }: AppShellProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   useViewportSync(rootRef);
   return (
     <div ref={rootRef} className="nx nx-app" data-nav-hidden={navHidden ? 'true' : undefined}>
       <main className="nx-app-main">{children}</main>
-      <Nav section={section} badges={badges} visibleTabs={visibleTabs} onReselect={onReselect} account={account} />
+      <Nav section={section} badges={badges} visibleTabs={visibleTabs} onReselect={onReselect} account={account}
+        navTools={navTools} onNavToolDrop={onNavToolDrop} onNavToolRemove={onNavToolRemove} />
       {/* Внутри корня .nx — там живут токены, на которых держится Toast. */}
       <ToastContainer />
     </div>

@@ -258,7 +258,7 @@ function previewFromThread(chatId: string) {
     }
     return;
   }
-  if (ts(newest.createdAt) <= ts(chat.lastMessage?.createdAt)) return;
+  if (!isLocalDraft(chat.lastMessage) && ts(newest.createdAt) <= ts(chat.lastMessage?.createdAt)) return;
   const { _key, _status, ...message } = newest;
   touchPreview(chatId, message);
 }
@@ -542,12 +542,20 @@ export function lastActivity(c: ChatRow): number {
   return Math.max(ts(c.lastMessage?.createdAt), ts(c.preview?.at)) || ts(c.createdAt);
 }
 
+/** Черновик своей отправки: его время — часы этого компьютера, а не сервера. */
+const isLocalDraft = (m?: Message) => Boolean((m as Msg | undefined)?._status);
+
 function touchPreview(chatId: string, m: Message) {
-  patchChat(chatId, (c) => (ts(c.lastMessage?.createdAt) > ts(m.createdAt)
-    ? c
+  patchChat(chatId, (c) => {
+    // Время черновика (часы компьютера) с серверным не сравниваем: стоило часам спешить на секунду,
+    // и ответ, пришедший сразу после своей отправки, «проигрывал» черновику — в списке навсегда
+    // оставалось «Вы: …», хотя последним было сообщение собеседника. Своя новая отправка — всегда
+    // самое свежее; черновик уступает любому сообщению с сервера; серверные — по серверному времени.
+    const keep = !isLocalDraft(m) && !isLocalDraft(c.lastMessage) && ts(c.lastMessage?.createdAt) > ts(m.createdAt);
     // Новое сообщение снимает «X отреагировал(а)» — по факту прихода, а не по
     // времени: время реакции — часы клиента, сообщения — часы сервера.
-    : { ...c, lastMessage: m, preview: undefined }));
+    return keep ? c : { ...c, lastMessage: m, preview: undefined };
+  });
 }
 
 // ── Прочтение ───────────────────────────────────────────────────────────────

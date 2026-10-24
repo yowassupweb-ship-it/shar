@@ -48,8 +48,9 @@ interface State {
   accountsPhase: Phase;
   accountId: string | null;
   boxes: Box[];
-  /** Список папок не пришёл: без этого экран молча показывал одни «Входящие». */
-  boxesError: boolean;
+  /** Список папок не пришёл: без этого экран молча показывал одни «Входящие». 'password' — пароль
+   *  ящика нужно ввести заново (сервер не может его расшифровать), 'server' — почтовый сервер. */
+  boxesError: false | 'password' | 'server';
   folder: string;
   lists: Record<string, MailRow[]>;
   listPhase: Record<string, Phase>;
@@ -70,12 +71,17 @@ const get = useMail.getState;
 export { myId } from '@/shared/session/session';
 import { myId } from '@/shared/session/session';
 
+/** Ошибка запроса почты со статусом: 409 — пароль ящика нужно ввести заново. */
+export class MailError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { cache: 'no-store', ...init });
   if (!res.ok) {
     let detail = '';
     try { detail = (await res.json())?.detail || ''; } catch { /* не JSON */ }
-    throw new Error(detail || String(res.status));
+    throw new MailError(detail || String(res.status), res.status);
   }
   return (await res.json()) as T;
 }
@@ -114,6 +120,8 @@ export async function saveAccount(id: string | null, form: AccountForm): Promise
   const saved = await call<Account>(id ? `/api/mail/accounts/${encodeURIComponent(id)}` : '/api/mail/accounts', json(id ? 'PUT' : 'POST', body));
   await loadAccounts();
   if (!id) { selectAccount(String(saved.id)); void loadBoxes(); }
+  // Новый пароль (в том числе после «нужно ввести заново») — сразу перечитать папки и входящие.
+  else if (id === get().accountId) { set({ boxesError: false }); void loadBoxes(true); void syncFolder('INBOX'); }
   return saved;
 }
 
@@ -135,8 +143,9 @@ export async function loadBoxes(refresh = false): Promise<void> {
     const qs = new URLSearchParams({ accountId: acc, userId: myId(), ...(refresh ? { refresh: 'true' } : {}) });
     const boxes = await call<Box[]>(`/api/mail/mailboxes?${qs}`);
     if (get().accountId === acc) set({ boxes, boxesError: false });
-  } catch {
-    if (get().accountId === acc) set({ boxesError: true }); // прежний список, если был, остаётся
+  } catch (e) {
+    // прежний список, если был, остаётся
+    if (get().accountId === acc) set({ boxesError: e instanceof MailError && e.status === 409 ? 'password' : 'server' });
   }
 }
 

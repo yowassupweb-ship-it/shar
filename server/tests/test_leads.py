@@ -93,3 +93,23 @@ def test_site_without_chat_still_stored(client, admin, lead_chat):
     assert r.status_code == 200 and r.json()["chat"] is False
     found = [lead for lead in admin.get("/api/leads?site=school").json()["leads"] if lead["id"] == body["id"]]
     assert found and found[0]["kindLabel"] == "Вопрос" and found[0]["chatId"] is None
+
+
+def test_waiting_counts_for_involved(client, users, admin, anna, clara, lead_chat):
+    before_admin = admin.get("/api/leads/waiting").json()["total"]
+    before_anna = anna.get("/api/leads/waiting").json()["total"]
+    body = lead_payload()
+    assert client.post("/api/integrations/leads", json=body, headers=KEY).status_code == 200
+    # Админ (приложение) и Анна (участник чата заявок) видят единичку; Клара к заявкам не причастна.
+    assert admin.get("/api/leads/waiting").json()["total"] == before_admin + 1
+    assert anna.get("/api/leads/waiting").json()["total"] == before_anna + 1
+    assert clara.get("/api/leads/waiting").json()["total"] == 0
+    assert anna.patch(f"/api/leads/{body['id']}", json={"take": True}).status_code == 200
+    assert anna.get("/api/leads/waiting").json()["total"] == before_anna
+
+
+def test_nav_tools_saved_by_user(users, anna):
+    r = anna.put(f"/api/users/{users.ids['anna']}", json={"navTools": ["site-leads", "social"]})
+    assert r.status_code == 200, r.text
+    got = anna.get(f"/api/users/{users.ids['anna']}").json()
+    assert got.get("navTools") == ["site-leads", "social"]

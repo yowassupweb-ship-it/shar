@@ -100,3 +100,7 @@
   .nmo-icon { width: 56px; height: 56px; border-radius: 14px; }
   .nmo-row .nx-segment { width: 100%; grid-auto-columns: 1fr; }
 }
+
+/* Единичка инструмента (невзятые заявки, диалоги без ответа) — в углу плашки, как на иконке приложения. */
+.nmo-badge { position: absolute; top: -6px; right: -6px; min-width: 20px; height: 20px; padding: 0 6px; box-shadow: 0 0 0 2px var(--surface-app, var(--surface-panel)); }
+.nmo-tile[draggable="true"] { -webkit-user-drag: element; }

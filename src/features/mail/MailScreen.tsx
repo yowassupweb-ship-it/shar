@@ -326,8 +326,17 @@ export default function MailScreen() {
       {boxesError && (
         <div className="nmb-error" role="alert">
           <AlertCircle size={14} aria-hidden="true" />
-          <span>Не получил список папок с почтового сервера.</span>
-          <button type="button" className="nx-ghost" onClick={() => void loadBoxes(true)}>Повторить</button>
+          {boxesError === 'password' ? (
+            <>
+              <span>Шар не может войти в ящик: пароль нужно ввести заново.</span>
+              <button type="button" className="nx-ghost" onClick={() => setAccountsOpen(true)}>Ввести пароль</button>
+            </>
+          ) : (
+            <>
+              <span>Не получил список папок с почтового сервера.</span>
+              <button type="button" className="nx-ghost" onClick={() => void loadBoxes(true)}>Повторить</button>
+            </>
+          )}
         </div>
       )}
     </aside>

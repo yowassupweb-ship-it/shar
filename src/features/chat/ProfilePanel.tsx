@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState, type ChangeEvent, type CSSProperties } from 'react';
 import { lazyComponent } from '@/shared/ui/lazy';
 import {
-  Bell, BellOff, Camera, Check, Copy, Eye, Image as ImageIcon, Link as LinkIcon, MessageCircle, Search, UserMinus, UserPlus, Video, X,
+  Bell, BellOff, Camera, Check, Copy, Image as ImageIcon, Link as LinkIcon, MessageCircle, MessageSquareText, Search, UserMinus, UserPlus, Video, X,
 } from 'lucide-react';
 import type { User } from '@/shared/types/chat';
-import LinkPreview from '@/features/chat/bubbles/LinkPreview';
+import LinkPreview, { previewText, warmPreviews } from '@/features/chat/bubbles/LinkPreview';
 import type { ViewerItem } from '@/shared/ui/ImageViewer';
 import { thumbUrl } from '@/shared/ui/media';
 import { copyImage } from './messageActions';
@@ -118,7 +118,19 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [serverLinks, thread]);
   const q = query.trim().toLowerCase();
-  const shownLinks = useMemo(() => (q ? links.filter((l) => l.url.toLowerCase().includes(q)) : links), [links, q]);
+  // Поиск — и по адресу, и по тексту превью (заголовок, описание): превью при поиске догружаются.
+  const [previewTick, setPreviewTick] = useState(0);
+  useEffect(() => {
+    if (!q || tab !== 'links') return undefined;
+    let timer = 0;
+    const stop = warmPreviews(links.map((l) => l.url), () => { if (!timer) timer = window.setTimeout(() => { timer = 0; setPreviewTick((n) => n + 1); }, 150); });
+    return () => { stop(); window.clearTimeout(timer); };
+  }, [q, tab, links]);
+  const shownLinks = useMemo(
+    () => (q ? links.filter((l) => l.url.toLowerCase().includes(q) || previewText(l.url).includes(q)) : links),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [links, q, previewTick],
+  );
   const shownFiles = useMemo(() => (q ? files.filter((f) => String(f.filename || f.url).toLowerCase().includes(q)) : files), [files, q]);
 
   const members = useMemo(() => {
@@ -316,7 +328,7 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
                       ) : (
                         <button type="button" className="cxf-thumb" data-state="ok" onClick={() => jump(m.messageId)} aria-label="Видео — перейти к сообщению"><Video size={22} /></button>
                       )}
-                      <button type="button" className="cxf-jump" onClick={() => jump(m.messageId)} aria-label="Перейти к сообщению"><Eye size={13} /></button>
+                      <button type="button" className="cxf-jump" onClick={() => jump(m.messageId)} aria-label="Показать в переписке" title="Показать в переписке"><MessageSquareText size={13} /></button>
                     </div>
                   ))}
                   {moreMark}
@@ -338,7 +350,7 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
               {shownFiles.slice(0, part.count).map((f, i) => (
                 <div key={`${f.messageId}-${i}`} className="cxf-file">
                   <FileCard att={{ url: f.url, name: f.filename, size: f.size }} />
-                  <button type="button" className="nx-icon-btn" onClick={() => jump(f.messageId)} aria-label="Перейти к сообщению"><Eye size={16} /></button>
+                  <button type="button" className="nx-icon-btn" onClick={() => jump(f.messageId)} aria-label="Показать в переписке" title="Показать в переписке"><MessageSquareText size={16} /></button>
                 </div>
               ))}
               {moreMark}
@@ -354,7 +366,7 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
                   <div key={`${l.messageId}-${i}`} className="cxf-link">
                     <div className="cxf-link-row">
                       <a href={l.url} target="_blank" rel="noopener noreferrer"><LinkIcon size={16} /><span>{l.url}</span></a>
-                      <button type="button" className="nx-icon-btn" onClick={() => jump(l.messageId)} aria-label="Перейти к сообщению"><Eye size={16} /></button>
+                      <button type="button" className="nx-icon-btn" onClick={() => jump(l.messageId)} aria-label="Показать в переписке" title="Показать в переписке"><MessageSquareText size={16} /></button>
                     </div>
                     <span className="cxf-link-date">{new Date(l.createdAt).toLocaleDateString('ru-RU')}</span>
                     <LinkPreview url={l.url} />

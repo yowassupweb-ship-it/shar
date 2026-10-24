@@ -86,6 +86,14 @@
 .nx-nav-icon img { filter: var(--icon-shadow); }
 
 .nx-nav-badge { min-width: 18px; height: 18px; padding: 0 5px; }
+/* Инструмент в меню — плашка-иконка на его градиенте, как плитка в «Ещё». */
+.nx-nav-tool { display: inline-grid; place-items: center; border-radius: 7px; background: linear-gradient(145deg, var(--a), var(--b)); color: #fff; }
+.nx-nav-item:not([aria-current="page"]) .nx-nav-tool { opacity: .9; }
+/* Плитку из «Ещё» тянут на меню — подсветить, куда бросать. */
+.nx-nav[data-drop="true"] { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent-color) 55%, transparent); background: color-mix(in srgb, var(--accent-fill) 8%, var(--surface-chrome)); }
+/* Узкое окно: подписи не влезают — иконки, подпись только у открытого раздела (AppShell, data-compact). */
+.nx-nav[data-compact="true"] .nx-nav-item:not([aria-current="page"]) { padding: 0 8px; }
+.nx-nav[data-compact="true"] .nx-nav-item:not([aria-current="page"]) .nx-nav-label { display: none; }
 
 /* ── Телефон: парящая капсула (§12) ───────────────────────────────────── */
 @media (max-width: 640px) {

@@ -9,7 +9,7 @@
 .nf-crumb-back { display: grid; place-items: center; padding: 4px; }
 
 /* ── Содержимое ───────────────────────────────────────────────────────── */
-.nf-view { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.nf-view { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; container: nf-view / inline-size; }
 
 .nf-bar {
   display: flex;
@@ -52,6 +52,19 @@ button.nf-crumb { cursor: pointer; }
   .nf-left .nf-crumbs { flex: 1 1 auto; }
   .nf-search { width: min(320px, 28vw); }
   .nf-tools { flex-wrap: nowrap; }
+}
+/* Фильтр и вид не сжимаются: раньше при нехватке места кнопки «Фото Видео Документы» наезжали друг на друга,
+   а значки вида пропадали. */
+.nf-tools > .nx-segment, .nf-tools > .nf-act { flex: none; }
+/* Раздел уже, чем нужно для «поиск ровно по центру» (окно ~1300px и меньше): поиск занимает всё место
+   между переключателем и инструментами. Ещё уже — инструменты переходят на вторую строку. */
+@container nf-view (min-width: 641px) and (max-width: 1240px) {
+  .nf-bar { grid-template-columns: auto minmax(160px, 1fr) auto; }
+  .nf-search { width: 100%; }
+}
+@container nf-view (min-width: 641px) and (max-width: 900px) {
+  .nf-bar { grid-template-columns: auto minmax(160px, 1fr); }
+  .nf-tools { grid-column: 1 / -1; justify-content: flex-start; flex-wrap: wrap; }
 }
 /* Средняя ширина: справа не хватает места на подписи — у «Новой папки» и «Загрузить» остаются значки (подсказка — aria-label). */
 @media (min-width: 641px) and (max-width: 1599px) {

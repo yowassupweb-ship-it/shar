@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
-import { ArrowUpRight, Pin, PinOff, Search } from 'lucide-react';
+import { ArrowUpRight, PanelBottom, PanelBottomClose, Pin, PinOff, Search } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
 import { ThemePicker } from '@/shared/theme/ThemePicker';
 import { useChatStore } from '@/features/chat';
@@ -7,6 +7,8 @@ import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { SearchField } from '@/shared/ui/SearchField';
 import { useLongPress } from '@/shared/ui/useLongPress';
 import { availableTools, type Account, type Tool } from './tools';
+import { addNavTool, NAV_TOOL_DRAG, removeNavTool } from './navTools';
+import { useToolBadges } from './toolBadges';
 import { navigate } from '@/shared/navigation/navigate';
 import { openSpotlight } from '@/features/spotlight';
 import { myId } from '@/shared/session/session';
@@ -17,7 +19,9 @@ import { myId } from '@/shared/session/session';
  * Как Launchpad: иконки-плашки, закреплённые наверху, поиск сразу в фокусе
  * на компьютере (набрал — Enter — открыл первый найденный). Закрепить —
  * правым щелчком или долгим нажатием; закрепления те же, что в текущей
- * версии (user.pinnedTools на сервере).
+ * версии (user.pinnedTools на сервере). Инструмент можно вынести в нижнее
+ * меню — перетащить плитку на меню или пунктом «В нижнее меню» (user.navTools);
+ * там он висит со своей единичкой (невзятые заявки, диалоги без ответа).
  */
 
 const subscribeNoop = () => () => {};
@@ -36,9 +40,11 @@ function openTool(t: Tool) {
   navigate(t.href);
 }
 
-function ToolTile({ t, pinned, onMenu }: { t: Tool; pinned: boolean; onMenu: (t: Tool, at: MenuAnchor) => void }) {
+function ToolTile({ t, pinned, count, onMenu }: { t: Tool; pinned: boolean; count: number; onMenu: (t: Tool, at: MenuAnchor) => void }) {
   const Icon = t.icon;
   const press = useLongPress((x, y) => onMenu(t, { x, y }));
+  // Тянуть на нижнее меню можно только то, что открывается внутри Шара.
+  const draggable = !t.external && t.href.startsWith('/');
   return (
     <a
       className="nmo-tile"
@@ -52,11 +58,14 @@ function ToolTile({ t, pinned, onMenu }: { t: Tool; pinned: boolean; onMenu: (t:
       }}
       title={t.hint}
       data-pinned={pinned ? 'true' : undefined}
+      draggable={draggable}
+      onDragStart={draggable ? (e) => { e.dataTransfer.setData(NAV_TOOL_DRAG, t.id); e.dataTransfer.effectAllowed = 'copy'; } : undefined}
       {...press}
     >
       <span className="nmo-icon" style={{ '--a': t.tint[0], '--b': t.tint[1] } as CSSProperties} aria-hidden="true">
         <Icon size={30} strokeWidth={1.8} />
         {t.external && <ArrowUpRight className="nmo-ext" size={12} strokeWidth={2.6} />}
+        {count > 0 && <span className="nx-count nmo-badge" aria-label={`Ждут внимания: ${count}`}>{count > 99 ? '99+' : count}</span>}
       </span>
       <span className="nmo-name">{t.name}</span>
     </a>
@@ -87,6 +96,8 @@ export default function MoreScreen() {
   }, []);
 
   const user = account || cached || null;
+  const counts = useToolBadges((s) => s.counts);
+  const navIds = (cached as { navTools?: string[] } | undefined)?.navTools || [];
   const tools = useMemo(() => availableTools(user), [user]);
   const pinnedIds = useMemo(() => (user?.pinnedTools || []).filter((id) => tools.some((t) => t.id === id)), [user, tools]);
 
@@ -138,7 +149,7 @@ export default function MoreScreen() {
           <section className="nmo-section" aria-labelledby="nmo-pinned">
             <h2 id="nmo-pinned">Закреплённые</h2>
             <div className="nmo-grid">
-              {pinned.map((t) => <ToolTile key={t.id} t={t} pinned onMenu={(tool, anchor) => setMenu({ tool, anchor })} />)}
+              {pinned.map((t) => <ToolTile key={t.id} t={t} pinned count={counts[t.id] || 0} onMenu={(tool, anchor) => setMenu({ tool, anchor })} />)}
             </div>
           </section>
         )}
@@ -152,10 +163,10 @@ export default function MoreScreen() {
             </div>
           ) : (
             <div className="nmo-grid">
-              {rest.map((t) => <ToolTile key={t.id} t={t} pinned={pinnedIds.includes(t.id)} onMenu={(tool, anchor) => setMenu({ tool, anchor })} />)}
+              {rest.map((t) => <ToolTile key={t.id} t={t} pinned={pinnedIds.includes(t.id)} count={counts[t.id] || 0} onMenu={(tool, anchor) => setMenu({ tool, anchor })} />)}
             </div>
           )}
-          {!q && <p className="nmo-tip">Правый щелчок или долгое нажатие — закрепить наверху.</p>}
+          {!q && <p className="nmo-tip">Правый щелчок или долгое нажатие — закрепить наверху или вынести в нижнее меню. На компьютере плитку можно просто перетащить на меню.</p>}
         </section>
 
         {!q && (
@@ -185,6 +196,11 @@ export default function MoreScreen() {
           ) : (
             <MenuItem icon={<Pin size={16} />} onSelect={() => { setMenu(null); void setPinned([...pinnedIds, menu.tool.id]); }}>Закрепить наверху</MenuItem>
           )}
+          {!menu.tool.external && menu.tool.href.startsWith('/') && (navIds.includes(menu.tool.id) ? (
+            <MenuItem icon={<PanelBottomClose size={16} />} onSelect={() => { setMenu(null); void removeNavTool(menu.tool.id); }}>Убрать из нижнего меню</MenuItem>
+          ) : (
+            <MenuItem icon={<PanelBottom size={16} />} onSelect={() => { setMenu(null); void addNavTool(menu.tool.id); }}>В нижнее меню</MenuItem>
+          ))}
         </Menu>
       )}
     </div>

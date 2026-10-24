@@ -38,7 +38,7 @@ const EmojiCell = memo(function EmojiCell({ item, onPick }: { item: EmojiItem; o
   );
 });
 
-function EmojiTab() {
+export function EmojiTab() {
   const [recents, setRecents] = useState<string[]>(readRecents);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState('recent');

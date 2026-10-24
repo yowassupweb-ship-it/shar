@@ -189,6 +189,9 @@ export const MessageRow = memo(function MessageRow({
   const fromSystem = notification && (!actor || String(actor.id) === ctx.myId);
   const avatarUser = notification ? actor : author;
   const senderName = readerName(author, m.authorName || '');
+  // В личном чате аватарка у каждого сообщения ничего не говорит — собеседник один; колонка только в группах
+  // (и у карточек интеграций — им нужна их иконка).
+  const avatarCol = !mine && !notification && (ctx.isGroup || integration);
   const showName = ctx.isGroup && !mine && !notification && !groupedPrev && !card;
 
   const forwardedFrom = String(md.source || '') === 'manager'
@@ -201,7 +204,8 @@ export const MessageRow = memo(function MessageRow({
   const avail = ctx.columnWidth > 0 ? Math.max(140, ctx.columnWidth - 88) : 480;
   const mediaW = Math.min(companion ? (ctx.mobile ? 260 : 290) : (ctx.mobile ? 320 : 480), avail);
   const albumH = ctx.mobile ? 360 : 420;
-  const singleH = ctx.mobile ? 420 : 480;
+  // Вертикальные снимки не выше этого — иначе одно фото занимало полэкрана (как в Telegram).
+  const singleH = ctx.mobile ? 360 : 400;
   const hasReactions = Object.values(m.metadata?.reactions || {}).some((ids) => Array.isArray(ids) && ids.length);
   const bubbleless = p.emojiCount > 0 || Boolean(p.sticker);
   const tail = last && !notification && !bubbleless && !p.mediaOnly && !p.voiceOnly && !card;
@@ -293,7 +297,15 @@ export const MessageRow = memo(function MessageRow({
           </button>
         )}
         {(p.images.length > 0 || p.videos.length > 0) && (
-          <div className="cxm-media-top">
+          <div
+            className="cxm-media-top"
+            data-single={p.images.length === 1 && !p.videos.length ? 'true' : undefined}
+            style={{
+              '--photo-cap': `${singleH}px`,
+              // Вертикальное фото уже пузыря с подписью — по бокам размытая копия, а не пустые полосы.
+              ...(p.images.length === 1 ? { '--media-bg': `url("${p.images[0].url.replace(/"/g, '%22')}")` } : {}),
+            } as CSSProperties}
+          >
             <Media images={p.images} videos={p.videos} maxWidth={mediaW} maxHeight={p.images.length > 1 ? albumH : singleH} onOpen={ctx.onOpenImage} />
           </div>
         )}
@@ -365,6 +377,7 @@ export const MessageRow = memo(function MessageRow({
       className="cxm-row"
       data-msg-id={m.id}
       data-mine={mine ? 'true' : 'false'}
+      data-no-avatar={!mine && !avatarCol ? 'true' : undefined}
       data-grouped-prev={groupedPrev ? 'true' : undefined}
       data-grouped-next={groupedNext ? 'true' : undefined}
       data-notice={notification ? 'true' : undefined}
@@ -379,7 +392,7 @@ export const MessageRow = memo(function MessageRow({
             {ctx.selected.has(String(m.id)) && <Check size={13} strokeWidth={3} />}
           </span>
         )}
-        {!mine && !notification && (
+        {avatarCol && (
           <span className="cxm-avatar-col">
             {last && (integration ? (
               <span className="nx-avatar cxm-system-avatar" data-kind="integration" style={{ '--size': '28px' } as CSSProperties} title={m.authorName || undefined}>
@@ -399,9 +412,7 @@ export const MessageRow = memo(function MessageRow({
               >
                 <Avatar name={readerName(avatarUser, m.authorName)} seed={String(avatarUser?.id || m.authorId)} src={avatarUser?.avatar} person size={28} />
               </button>
-            ) : (
-              <Avatar name={readerName(avatarUser, m.authorName)} seed={String(avatarUser?.id || m.authorId)} src={avatarUser?.avatar} person size={28} />
-            ))}
+            ) : null)}
           </span>
         )}
         {mine && !inBubbleReactions && <Reactions m={m} ctx={ctx} />}

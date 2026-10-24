@@ -22,6 +22,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from app.core import kv, schema
 from app.core.db import db
+from app.core.realtime import sse_manager
 from app.core.security import Identity, current_identity, require_admin
 from app.modules.chats.access import participant_ids
 from app.modules.chats.cache import _get_chat_cached
@@ -180,6 +181,41 @@ def _card(lead: Dict[str, Any], status: str = "new", assignee: Optional[dict] = 
     }
 
 
+def _involved(chat_id: Optional[str]) -> set:
+    """Кому важны изменения заявок: у кого есть приложение (и админы) и участники чата, куда заявка пришла."""
+    ids = {str(u["id"]) for u in (db.get_users() or []) if u.get("id") and (
+        u.get("role") == "admin" or TOOL in (u.get("enabled_tools") or u.get("enabledTools") or []))}
+    chat = _get_chat_cached(chat_id) if chat_id else None
+    if chat:
+        ids |= set(participant_ids(chat))
+    return ids
+
+
+def _changed(chat_id: Optional[str]) -> None:
+    """Событие leads_changed: счётчики невзятых заявок на значке и на иконке приложения обновятся сразу."""
+    for uid in _involved(chat_id):
+        try:
+            sse_manager.push(uid, {"type": "leads_changed"})
+        except Exception:  # noqa: BLE001 — счётчик догонит при следующем запросе
+            pass
+
+
+@router.get("/api/leads/waiting")
+def leads_waiting(me: Identity = Depends(current_identity)):
+    """Невзятые заявки (статус «новая») — для единички на значке и на иконке «Заявки с сайта».
+    С приложением — все новые; без него — только пришедшие в чаты, где человек участник."""
+    if _has_tool(me):
+        row = db.conn.fetch_one("SELECT count(*) AS n FROM site_leads WHERE status = 'new'") or {}
+        return {"total": int(row.get("n") or 0)}
+    rows = db.conn.fetch_all("SELECT chat_id, count(*) AS n FROM site_leads WHERE status = 'new' AND chat_id IS NOT NULL GROUP BY chat_id") or []
+    total = 0
+    for r in rows:
+        chat = _get_chat_cached(str(r["chat_id"]))
+        if chat and me.user_id in participant_ids(chat):
+            total += int(r["n"])
+    return {"total": total}
+
+
 @router.post("/api/integrations/leads")
 def receive_lead(request: Request, payload: Dict[str, Any] = Body(...)):
     """Заявка с сайта. Ответ 200 и при повторе — сайт по нему понимает, что заявка дошла."""
@@ -204,6 +240,8 @@ def receive_lead(request: Request, payload: Dict[str, Any] = Body(...)):
         db.conn.execute_query("UPDATE site_leads SET chat_id = %s, message_id = %s WHERE id = %s", (chat_id, message_id, lead["id"]))
     elif chat_id:
         log.warning("lead %s: chat %s for site %s is gone", lead["id"], chat_id, lead["site"])
+    if created:
+        _changed(chat_id if message_id else None)
     return {"ok": True, "id": lead["id"], "duplicate": not created, "chat": bool(message_id)}
 
 
@@ -281,6 +319,7 @@ def change_lead(lead_id: str, body: Dict[str, Any] = Body(...), me: Identity = D
             "status": status, "assigneeId": assignee_id,
             "assigneeName": (assignee or {}).get("name") or (assignee or {}).get("username") if assignee else None,
         })
+    _changed(row.get("chat_id"))
     fresh = db.conn.fetch_one("SELECT * FROM site_leads WHERE id = %s", (lead_id,))
     return {"lead": _view(dict(fresh), _users_by_id())}
 

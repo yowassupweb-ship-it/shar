@@ -25,6 +25,14 @@ log = logging.getLogger("shar.mail.crypto")
 _PREFIX = "enc1:"
 _warned = False
 
+# Текст для человека: что делать, а не что сломалось. Отдаётся с кодом 409 (см. mailboxes, sync).
+PASSWORD_HINT = "Пароль ящика нужно ввести заново: «Ящики» → ящик → новый пароль"
+
+
+class MailPasswordUnavailable(RuntimeError):
+    """Пароль ящика в базе есть, но расшифровать его нечем (ключ сменился или не задан) — это
+    не сбой почтового сервера: нужно один раз ввести пароль заново."""
+
 
 def _fernet() -> Fernet | None:
     if not settings.secret_key:
@@ -53,11 +61,11 @@ def _deobfuscate_pw(pw_enc: str) -> str:
     if is_encrypted(pw_enc):
         f = _fernet()
         if f is None:
-            raise RuntimeError("Пароль ящика зашифрован, а SHAR_SECRET_KEY не задан")
+            raise MailPasswordUnavailable("Пароль ящика зашифрован, а SHAR_SECRET_KEY не задан")
         try:
             return f.decrypt(pw_enc[len(_PREFIX):].encode()).decode()
         except InvalidToken as exc:
-            raise RuntimeError("Не удалось расшифровать пароль ящика (другой SHAR_SECRET_KEY?)") from exc
+            raise MailPasswordUnavailable("Не удалось расшифровать пароль ящика (другой SHAR_SECRET_KEY?)") from exc
     try:
         return base64.b64decode(pw_enc.encode()).decode()
     except Exception:

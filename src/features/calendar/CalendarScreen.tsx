@@ -118,6 +118,19 @@ export default function CalendarScreen() {
     setMiniMonth(startOfMonth(day));
   }, []);
 
+  // Листание мини-календаря двигает и большой: «Месяц» — на тот же месяц, «Неделя» и «День» —
+  // на то же число в новом месяце (31-е в коротком месяце — его последний день).
+  const miniStep = useCallback((m: Date) => {
+    setMiniMonth(m);
+    if (view === 'month') { setAnchor(startOfMonth(m)); return; }
+    setAnchor((a) => {
+      const last = new Date(m.getFullYear(), m.getMonth() + 1, 0).getDate();
+      const next = new Date(m.getFullYear(), m.getMonth(), Math.min(a.getDate(), last));
+      setSelected(next);
+      return next;
+    });
+  }, [view]);
+
   const openDay = useCallback((d: Date) => { pickDay(d); setView('day'); }, [pickDay, setView]);
 
   const createAt = useCallback((start: Date, end?: Date, allDay = false) => {
@@ -230,7 +243,7 @@ export default function CalendarScreen() {
               <Plus size={15} aria-hidden="true" /> Событие
             </button>
           </div>
-          <MiniMonth month={miniMonth} selected={selected} events={events} onMonth={setMiniMonth} onPick={pickDay} />
+          <MiniMonth month={miniMonth} selected={selected} events={events} onMonth={miniStep} onPick={pickDay} />
           <div className="ncal-side-agenda nx-scroll-y">
             <DayAgenda day={selected} events={events} onOpen={openEvent} onCreate={createDefault} onMenu={showMenu} />
           </div>

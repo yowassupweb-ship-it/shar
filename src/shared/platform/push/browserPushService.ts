@@ -525,9 +525,9 @@ export class BrowserPushService {
       this.updateAppBadge(count);
     };
     window.addEventListener('shar-unread-changed', this.unreadHintHandler);
-    // Число диалогов «Соцсетей» поменялось — тот же значок, пересчитать с прежним числом чатов.
+    // Единички инструментов поменялись — тот же значок, пересчитать с прежним числом чатов.
     this.socialWaitingHandler = () => this.updateAppBadge(this.lastChatBadge);
-    window.addEventListener('shar-social-waiting', this.socialWaitingHandler);
+    window.addEventListener('shar-tool-badges', this.socialWaitingHandler);
     this.pageUnreadGoneHandler = () => { this.pageUnreadCount = null; };
     window.addEventListener('shar-unread-page-unmounted', this.pageUnreadGoneHandler);
 
@@ -587,7 +587,7 @@ export class BrowserPushService {
       this.unreadHintHandler = null;
     }
     if (this.socialWaitingHandler) {
-      window.removeEventListener('shar-social-waiting', this.socialWaitingHandler);
+      window.removeEventListener('shar-tool-badges', this.socialWaitingHandler);
       this.socialWaitingHandler = null;
     }
     if (this.realtimePokeUnsubscribe) {
@@ -736,12 +736,13 @@ export class BrowserPushService {
   private lastChatBadge = 0;
   private socialWaitingHandler: (() => void) | null = null;
 
-  /** Значок PWA: чаты с непрочитанным + диалоги «Соцсетей», ждущие ответа (их число ведёт features/social/waiting). */
+  /** Значок PWA: чаты с непрочитанным + единички инструментов (невзятые заявки, диалоги «Соцсетей» без ответа —
+   *  их ведёт features/more/toolBadges). */
   private updateAppBadge(chats: number): void {
     if (typeof navigator === 'undefined') return;
     this.lastChatBadge = chats;
     let social = 0;
-    try { social = Number(localStorage.getItem('shar_social_waiting')) || 0; } catch { /* ignore */ }
+    try { social = Number(localStorage.getItem('shar_tool_badges_total')) || 0; } catch { /* ignore */ }
     const count = chats + social;
     try {
       if (count > 0) {

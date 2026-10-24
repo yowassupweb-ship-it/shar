@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { AlertCircle, ArrowLeft, ArrowUpRight, CornerDownRight, MessageSquare, MessagesSquare, Paperclip, Send, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowUp, ArrowUpRight, CornerDownRight, MessageSquare, MessagesSquare, Paperclip, Plus, Smile, X } from 'lucide-react';
+import RichInput, { type RichInputHandle } from '@/features/chat/RichInput';
 import { uploadFileWithProgress } from '@/shared/api/uploadFile';
 import { links } from '@/shared/navigation/routes';
 import { realtime } from '@/shared/realtime/realtime';
@@ -9,6 +10,9 @@ import { Spinner } from '@/shared/ui/Spinner';
 import { showToast } from '@/shared/ui/Toast';
 import { listDialogs, loadDialog, sendToDialog, type DialogMessage, type OutFile, type Platform, type SocialDialog } from './api';
 import { PlatformMark } from './PlatformMark';
+
+// Панель эмодзи — та же, что в чате (без стикеров: их во ВКонтакте и MAX из Шара не отправить).
+const EmojiTab = lazy(() => import('@/features/chat/EmojiPanel').then((m) => ({ default: m.EmojiTab })));
 
 const NARROW = '(max-width: 760px)';
 const subscribeNarrow = (cb: () => void) => {
@@ -121,7 +125,10 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
-  const input = useRef<HTMLTextAreaElement>(null);
+  const input = useRef<RichInputHandle>(null);
+  const [emoji, setEmoji] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const coarse = window.matchMedia('(pointer: coarse)').matches;
   const picker = useRef<HTMLInputElement>(null);
   // Вложения: сначала грузятся в Шар (с прогрессом), в ответ уходят уже загруженные.
   const [files, setFiles] = useState<{ key: string; name: string; type: string; progress: number; file?: OutFile; error?: boolean }[]>([]);
@@ -135,15 +142,14 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [data?.messages.length]);
-  // Поле растёт под текст, до шести строк.
-  useLayoutEffect(() => {
-    const el = input.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-  }, [text]);
+  // Эмодзи из панели — в поле, в место курсора.
+  useEffect(() => {
+    const onEmoji = (e: Event) => input.current?.insertEmoji(String((e as CustomEvent).detail || ''));
+    window.addEventListener('nx:insert-emoji', onEmoji);
+    return () => window.removeEventListener('nx:insert-emoji', onEmoji);
+  }, []);
 
-  const pick = (list: FileList | null) => {
+  const pick = (list: FileList | File[] | null) => {
     const picked = Array.from(list || []).slice(0, Math.max(0, 10 - files.length));
     for (const f of picked) {
       const key = `${f.name}-${f.size}-${Math.random().toString(36).slice(2)}`;
@@ -161,7 +167,7 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
     if ((!body && !ready.length) || busy || uploading) return;
     setBusy(true);
     sendToDialog(id, body, ready)
-      .then(() => { setText(''); setFiles([]); onSent(); return loadDialog(id).then(setData); })
+      .then(() => { setText(''); setFiles([]); setEmoji(false); onSent(); return loadDialog(id).then(setData); })
       .catch((e: Error) => showToast(e.message, 'error'))
       .finally(() => setBusy(false));
   };
@@ -172,8 +178,16 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
   const group = d.kind === 'group';
   // Файлы — в личные и беседы: в комментарии ВКонтакте сообщество из Шара вложения не прикрепит.
   const canAttach = d.kind !== 'comments' && (d.platform === 'vk' || d.platform === 'max');
+  const canSend = !busy && !uploading && (Boolean(text.trim()) || files.some((f) => f.file));
+  const hasFiles = (e: React.DragEvent) => canAttach && data.canReply && Array.from(e.dataTransfer.types).includes('Files');
   return (
-    <section className="nsd-thread" aria-label={`Диалог: ${d.title}`}>
+    <section
+      className="nsd-thread"
+      aria-label={`Диалог: ${d.title}`}
+      onDragOver={(e) => { if (!hasFiles(e)) return; e.preventDefault(); setDragging(true); }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }}
+      onDrop={(e) => { if (!hasFiles(e)) return; e.preventDefault(); setDragging(false); pick(e.dataTransfer.files); }}
+    >
       <header className="nsd-head">
         {onBack && <button type="button" className="nx-icon-btn" onClick={onBack} aria-label="К списку диалогов"><ArrowLeft size={18} /></button>}
         <PlatformMark platform={d.platform} size={36} />
@@ -218,25 +232,46 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
             ))}
           </div>
         )}
-        <div className="nsd-composer">
+        {emoji && (
+          <div className="nsd-emoji cxe">
+            <Suspense fallback={<div className="nx-state"><Spinner size={18} label="Загружаю эмодзи" /></div>}><EmojiTab /></Suspense>
+          </div>
+        )}
+        <div className="nsd-composer cxc-row" data-dragging={dragging ? 'true' : undefined}>
           {canAttach && (
             <>
               <input ref={picker} type="file" multiple hidden onChange={(e) => pick(e.target.files)} />
-              <button type="button" className="nx-icon-btn" onClick={() => picker.current?.click()} disabled={files.length >= 10}
-                aria-label="Прикрепить фото или файл" title="Фото или файл — до 10 за раз"><Paperclip size={18} /></button>
+              <button type="button" className="cxc-plus" onClick={() => picker.current?.click()} disabled={files.length >= 10}
+                aria-label="Прикрепить фото или файл" title="Фото или файл — до 10 за раз"><Plus size={20} strokeWidth={2.4} aria-hidden="true" /></button>
             </>
           )}
-          <textarea
-            ref={input}
-            className="nx-field"
-            rows={1}
-            maxLength={4000}
-            value={text}
-            placeholder={`Ответ клиенту в ${d.platformLabel}`}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }}
-          />
-          <button type="button" className="nx-primary-round" onClick={send} disabled={busy || uploading || (!text.trim() && !files.some((f) => f.file))} aria-label="Отправить клиенту"><Send size={16} /></button>
+          <div className="cxn-field" data-has-text={canSend ? 'true' : undefined}>
+            <label className="nx-sr" htmlFor="nsd-input">Ответ клиенту</label>
+            <RichInput
+              id="nsd-input"
+              ref={input}
+              className="cxn-input"
+              value={text}
+              placeholder={files.length ? 'Подпись' : `Ответ в ${d.platformLabel}`}
+              enterKeyHint={coarse ? undefined : 'send'}
+              onChange={(value) => setText(value.slice(0, 4000))}
+              onPasteFiles={canAttach ? pick : undefined}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape' && emoji) { e.preventDefault(); setEmoji(false); return; }
+                if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.nativeEvent.isComposing || coarse) return;
+                e.preventDefault();
+                send();
+              }}
+            />
+            <button type="button" className="cxc-in-btn" aria-label="Эмодзи" aria-pressed={emoji}
+              onPointerDown={(e) => e.preventDefault()} onClick={() => setEmoji((v) => !v)}>
+              <Smile size={20} aria-hidden="true" />
+            </button>
+          </div>
+          <button type="button" className="cxn-send" onClick={send} disabled={!canSend} aria-label="Отправить клиенту"
+            onPointerDown={(e) => e.preventDefault()}>
+            {busy ? <Spinner size={16} label="Отправляю" /> : <ArrowUp size={18} strokeWidth={2.6} aria-hidden="true" />}
+          </button>
         </div>
         </div>
       ) : (

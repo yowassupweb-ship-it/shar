@@ -33,6 +33,29 @@ function loadPreview(url: string): Promise<PreviewData | false> {
   return job;
 }
 
+/** Текст превью из кэша (заголовок, описание, сайт) — для поиска по ссылкам; пусто, пока не загружено. */
+export function previewText(url: string): string {
+  const d = previewCache.get(url);
+  return d ? `${d.title} ${d.description} ${d.siteName}`.toLowerCase() : '';
+}
+
+/**
+ * Подгрузить превью списка ссылок (по шесть за раз) — для поиска по их тексту во вкладке «Ссылки».
+ * onLoaded зовётся после каждой новой; вернуть — отмена.
+ */
+export function warmPreviews(urls: string[], onLoaded: () => void): () => void {
+  let alive = true;
+  const queue = [...new Set(urls)].filter((u) => !isOwnLink(u) && !previewCache.has(u));
+  const worker = async () => {
+    while (alive && queue.length) {
+      const d = await loadPreview(queue.shift()!);
+      if (alive && d) onLoaded();
+    }
+  };
+  for (let i = 0; i < 6; i += 1) void worker();
+  return () => { alive = false; };
+}
+
 // Один наблюдатель на всё приложение: превью запрашиваем, когда ссылка подошла к экрану (с запасом),
 // а не все сразу — во вкладке «Ссылки» и в длинной ленте их сотни.
 const waiting = new Map<Element, () => void>();

@@ -143,6 +143,7 @@ class UsersRepo:
             'isActive': 'is_active',
             'isDisabled': 'is_disabled',
             'pinnedTools': 'pinned_tools',
+            'navTools': 'nav_tools',
             'chatSettings': 'chat_settings',
             'departmentIds': 'department_ids'
         }
@@ -187,7 +188,7 @@ class UsersRepo:
             if db_key == 'chat_settings':
                 set_clauses.append("chat_settings = COALESCE(chat_settings, '{}'::jsonb) || %s::jsonb")
                 params.append(Json(value or {}))
-            elif db_key in ['enabled_tools', 'metadata', 'visible_tabs', 'tools_order', 'pinned_tools']:
+            elif db_key in ['enabled_tools', 'metadata', 'visible_tabs', 'tools_order', 'pinned_tools', 'nav_tools']:
                 set_clauses.append(f"{db_key} = %s")
                 params.append(Json(value))
             elif db_key == 'password':
@@ -226,6 +227,8 @@ class UsersRepo:
             # the first of these as the "primary", so all existing code that reads
             # user.department keeps working.
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS department_ids TEXT[] DEFAULT '{}'::text[]",
+            # Инструменты, вынесенные в нижнее меню (Заявки с сайта, Соцсети…) — со своими кружками.
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS nav_tools JSONB DEFAULT '[]'::jsonb",
         ]
         for sql in ddl_statements:
             try:

@@ -6,6 +6,7 @@ import {
   chatTitle, isFavorites, isGroupChat, isNotifications, lastActivity, otherParticipant, requestJump, useChatStore,
 } from '@/features/chat';
 import { useTasks, loadTasks } from '@/features/tasks/api';
+import { availableTools, TOOLS, type Tool } from '@/features/more/tools';
 import { KIND_LIST, KINDS } from '@/features/workspace/kinds';
 import { workspaceApi } from '@/features/workspace/api';
 import { navigate } from '@/shared/navigation/navigate';
@@ -106,6 +107,11 @@ function kindIcon(kind: keyof typeof KINDS): ReactNode {
   return <span className="nsp-kind" style={{ '--a': info.tint[0], '--b': info.tint[1] } as React.CSSProperties}><info.icon size={15} /></span>;
 }
 
+/** Плашка инструмента — та же, что в «Ещё»: иконка на его градиенте. */
+function toolIcon(t: Tool): ReactNode {
+  return <span className="nsp-kind" style={{ '--a': t.tint[0], '--b': t.tint[1] } as React.CSSProperties}><t.icon size={15} /></span>;
+}
+
 interface Action { id: string; title: string; subtitle: string; words: string; icon: ReactNode; run: () => void }
 
 async function createOffice(kind: keyof typeof KINDS) {
@@ -116,7 +122,7 @@ async function createOffice(kind: keyof typeof KINDS) {
   } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось создать', 'error'); }
 }
 
-function buildActions(isAdmin: boolean): Action[] {
+function buildActions(isAdmin: boolean, tools: Tool[]): Action[] {
   const go = (path: string) => () => navigate(path);
   const sections: Action[] = [
     { id: 'go-chats', title: 'Чаты', subtitle: 'Перейти в раздел', words: 'chats messages сообщения переписка', icon: sec('chats'), run: go(paths.chats) },
@@ -133,9 +139,17 @@ function buildActions(isAdmin: boolean): Action[] {
   const create: Action[] = KIND_LIST.map((k) => ({
     id: `new-${k.kind}`, title: k.newLabel, subtitle: 'Создать и открыть в «Офисе»', words: `new create создать ${k.kind} ${k.plural}`, icon: kindIcon(k.kind), run: () => { void createOffice(k.kind); },
   }));
+  // Инструменты из «Ещё», доступные этому человеку (Заявки с сайта, Соцсети, Генератор UTM…). Поиск,
+  // настройки, инструкция и админка уже есть среди разделов выше.
+  const toolActions: Action[] = tools
+    .filter((t) => !['spotlight', 'settings', 'how-to-shar', 'admin'].includes(t.id))
+    .map((t) => ({
+      id: `tool-${t.id}`, title: t.name, subtitle: t.hint, words: `инструмент tool ${t.id} ${t.hint}`, icon: toolIcon(t),
+      run: t.external ? () => { window.open(t.href, '_blank', 'noopener'); } : go(t.href),
+    }));
   const desk = window.sharDesktop;
   const extra: Action[] = desk ? [{ id: 'reload', title: 'Перезагрузить окно', subtitle: 'Обновить интерфейс', words: 'reload refresh обновить перезапустить', icon: <RefreshCw size={16} />, run: () => desk.windowControls.reload?.() }] : [];
-  return [...create, ...sections, ...extra];
+  return [...create, ...sections, ...toolActions, ...extra];
 }
 
 export function SpotlightHost() {
@@ -173,8 +187,14 @@ function SpotlightDialog() {
   const listRef = useRef<HTMLDivElement>(null);
 
   const queries = useMemo(() => variants(query), [query]);
-  const isAdmin = me?.role === 'admin';
-  const actions = useMemo(() => buildActions(Boolean(isAdmin)), [isAdmin]);
+
+  // Роль и выданные инструменты — из справочника пользователей (как в «Ещё»): в me их может не быть.
+  const account = useChatStore((s) => s.users[myId()]) as { role?: string; enabledTools?: string[] } | undefined;
+  const role = account?.role || me?.role;
+  const enabledTools = account?.enabledTools;
+  const tools = useMemo(() => availableTools({ role, enabledTools }), [role, enabledTools]);
+  const isAdmin = role === 'admin';
+  const actions = useMemo(() => buildActions(isAdmin, tools), [isAdmin, tools]);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
   useEffect(() => onVisitsChanged(() => setVisits(getVisits())), []);
@@ -229,7 +249,8 @@ function SpotlightDialog() {
       for (const v of visits.slice(0, GROUP_LIMIT['Недавние'])) {
         out.push({
           key: v.key, group: 'Недавние', title: v.title, subtitle: `${v.subtitle ? `${v.subtitle} · ` : ''}${relativeTime(v.ts)}`, score: 1000 - out.length,
-          icon: v.kind === 'office' && v.sub && v.sub in KINDS ? kindIcon(v.sub as keyof typeof KINDS)
+          icon: v.kind === 'tool' ? (() => { const t = TOOLS.find((x) => x.id === v.sub); return t ? toolIcon(t) : VISIT_ICON.file; })()
+            : v.kind === 'office' && v.sub && v.sub in KINDS ? kindIcon(v.sub as keyof typeof KINDS)
             : v.kind === 'chat' ? chatIcon(v.key.slice(5)) ?? VISIT_ICON.chat
               : v.kind === 'person' ? personIcon(v.key.slice(7)) ?? VISIT_ICON.person : VISIT_ICON[v.kind],
           run: open(() => { if (v.kind === 'chat') goToChat(v.key.slice(5)); else navigate(v.path); }),
