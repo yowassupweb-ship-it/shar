@@ -25,7 +25,7 @@ const FIELD_LABEL: [keyof Lead['fields'], string][] = [
 
 const fmt = (iso: string) => new Date(iso).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
-/** Приложение «Заявки с сайта»: все заявки с corp и school, фильтр по статусу, поиск, «Беру»/«Готово».
+/** Приложение «Заявки»: все заявки с corp и school, фильтр по статусу, поиск, «Беру»/«Готово».
  *  Админ здесь же выбирает, в какой чат уходит карточка заявки каждого сайта. */
 export default function LeadsScreen() {
   const navigate = useNavigate();
@@ -66,7 +66,7 @@ export default function LeadsScreen() {
           <button type="button" className="nx-icon-btn nx-page-back" aria-label="Назад в «Ещё»" onClick={() => navigate(paths.more)}>
             <ChevronLeft size={20} />
           </button>
-          <h1>Заявки с сайта</h1>
+          <h1>Заявки</h1>
           {admin && (
             <button type="button" className="nx-ghost nx-page-tools" onClick={() => setSettingsOpen(true)}>
               <Settings2 size={14} aria-hidden="true" /> Куда приходят

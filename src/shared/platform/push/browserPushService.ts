@@ -57,8 +57,17 @@ type LooseRecord = Record<string, unknown>;
 // all server requests. The interval below is only a slow safety-net (visible tab only)
 // to reconcile anything a missed event dropped — and to cover tasks/calendar, which
 // have no WS event of their own.
-const SAFETY_POLL_INTERVAL_MS = 30000;
-const EVENT_POLL_DEBOUNCE_MS = 600;
+// Опрос перекачивает весь список чатов (сотни килобайт) — это была половина трафика сервера:
+// каждый «печатает», «в сети», курсор в документе у каждого открытого клиента дёргал его заново.
+// Уведомление и бейдж ставятся сразу из события, опрос только сверяет — поэтому он редкий:
+// после событий, меняющих непрочитанное, и раз в две минуты (без фокуса — раз в десять).
+const SAFETY_POLL_INTERVAL_MS = 120000;
+const UNFOCUSED_POLL_INTERVAL_MS = 600000;
+const EVENT_POLL_DEBOUNCE_MS = 3000;
+const EVENT_POLL_MAX_WAIT_MS = 15000;
+const AVATAR_REFRESH_MS = 30 * 60 * 1000;
+/** События, после которых непрочитанное могло разойтись со снимком. */
+const UNREAD_EVENTS = new Set(['new_message', 'read_receipt', 'notifications_read', 'message_deleted', 'chat_created', 'chat_deleted']);
 const SEEN_LIMIT = 300;
 const CALENDAR_REMINDER_WINDOW_MS = 60 * 60 * 1000; // 1 час (для пропущенных)
 const CALENDAR_EVENT_START_WINDOW_MS = 30 * 1000; // ± 30 секунд - напоминание РОВНО в момент начала события
@@ -116,11 +125,13 @@ export class BrowserPushService {
   private lastDesktopContext = '';
   private swMessageHandler: ((event: MessageEvent) => void) | null = null;
   private pollCycleCounter = 0;
+  private lastPollAt = 0;
   private avatarCacheRefreshTimer: number | null = null;
   // App-wide WebSocket (same /api/ws/{userId} channel the chat page uses) — the
   // primary trigger for refreshes now, replacing the old 1.5s poll timer.
   private realtimeOff: (() => void) | null = null;
   private eventPollTimer: number | null = null;
+  private eventPollFirstAt = 0;
 
   private seenTaskIds = new Set<string>();
   private chatSnapshots = new Map<string, ChatSnapshot>();
@@ -223,13 +234,15 @@ export class BrowserPushService {
     this.connectWs();
     this.timer = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      // Electron в трее или под другими окнами считается «видимым» — без фокуса сверяемся реже.
+      if (typeof document !== 'undefined' && !document.hasFocus() && Date.now() - this.lastPollAt < UNFOCUSED_POLL_INTERVAL_MS) return;
       void this.poll(false);
     }, SAFETY_POLL_INTERVAL_MS);
 
-    // Refresh avatar cache every 5 minutes (300000ms) to pick up profile updates
+    // Фото и имена сотрудников — для карточек уведомлений; меняются редко.
     this.avatarCacheRefreshTimer = window.setInterval(() => {
       void this.refreshUserAvatarCache();
-    }, 300000);
+    }, AVATAR_REFRESH_MS);
   }
 
   stop(): void {
@@ -327,8 +340,9 @@ export class BrowserPushService {
       if (!isOwn && !isOpenAndWatched) this.applyUnreadHint(chatId, true);
     }
 
-    // new_message / read_receipt / notifications_read / reaction / message_edited /
-    // chat_created all change unread/badge/notifications — refresh (debounced).
+    // Сверка — только после событий, которые меняют непрочитанное; чужие прочтения его не трогают.
+    if (!UNREAD_EVENTS.has(type)) return;
+    if (type === 'read_receipt' && !this.getUserIdentityAliases().has(this.normalizeIdentity(String(data.userId || '')))) return;
     this.scheduleEventPoll();
   }
 
@@ -445,12 +459,18 @@ export class BrowserPushService {
   }
 
   // Coalesce a burst of WS events into a single refresh.
+  // Скользящая задержка: в оживлённом чате сверка ждёт паузы, но не дольше EVENT_POLL_MAX_WAIT_MS.
   private scheduleEventPoll(): void {
-    if (!this.running || this.eventPollTimer !== null) return;
+    if (!this.running) return;
+    const now = Date.now();
+    if (!this.eventPollFirstAt) this.eventPollFirstAt = now;
+    if (this.eventPollTimer !== null) window.clearTimeout(this.eventPollTimer);
+    const wait = Math.max(0, Math.min(EVENT_POLL_DEBOUNCE_MS, this.eventPollFirstAt + EVENT_POLL_MAX_WAIT_MS - now));
     this.eventPollTimer = window.setTimeout(() => {
       this.eventPollTimer = null;
+      this.eventPollFirstAt = 0;
       void this.poll(false);
-    }, EVENT_POLL_DEBOUNCE_MS);
+    }, wait);
   }
 
   private async refreshUserAvatarCache(): Promise<void> {
@@ -852,6 +872,7 @@ export class BrowserPushService {
     if (this.inFlight) return;
 
     this.inFlight = true;
+    this.lastPollAt = Date.now();
     this.pollCycleCounter++;
     const isBackgroundCycle = isInitial || this.pollCycleCounter % 2 === 0;
 

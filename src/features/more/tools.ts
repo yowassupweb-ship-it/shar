@@ -28,7 +28,7 @@ export const TOOLS: Tool[] = [
   // Открывает окно поиска (Ctrl+K), а не страницу: на телефоне это единственный вход в него.
   { id: 'spotlight', name: 'Поиск', hint: 'Поиск по всему Шару: чаты, люди, файлы, история', href: '#search', icon: Search, tint: ['#7dd3fc', '#2563eb'], standard: true },
   { id: 'utm-generator', name: 'Генератор UTM', hint: 'Ссылки с метками для рекламы', href: paths.utm, icon: Hash, tint: ['#e879f9', '#db2777'] },
-  { id: 'site-leads', name: 'Заявки с сайта', hint: 'Заявки с corp и school.vs-travel.ru: кто взял, что закрыто', href: paths.leads, icon: Globe, tint: ['#5eead4', '#0f766e'] },
+  { id: 'site-leads', name: 'Заявки', hint: 'Заявки с corp и school.vs-travel.ru: кто взял, что закрыто', href: paths.leads, icon: Globe, tint: ['#5eead4', '#0f766e'] },
   { id: 'social', name: 'Соцсети', hint: 'Сообщения и комментарии из ВКонтакте и MAX — ответ из Шара', href: paths.social, icon: MessagesSquare, tint: ['#7dd3fc', '#0284c7'] },
   { id: 'how-to-shar', name: 'Инструкция', hint: 'Как работать в Шаре', href: paths.guide, icon: FileText, tint: ['#a3e635', '#059669'], standard: true },
   { id: 'admin', name: 'Админка', hint: 'Пользователи, права, система', href: paths.admin, icon: Shield, tint: ['#fbbf24', '#ea580c'], adminOnly: true },

@@ -201,6 +201,20 @@ export async function openMessage(id: string): Promise<MailFull | null> {
   return full;
 }
 
+/** Подгрузить письма заранее (соседей открытого) — без отметки «прочитано»: при листании
+ *  следующее письмо уже на месте и открывается без ожидания сервера. */
+const prefetching = new Set<string>();
+export function prefetchMessages(ids: string[]): void {
+  for (const id of ids) {
+    if (!id || get().full[id] || prefetching.has(id)) continue;
+    prefetching.add(id);
+    call<MailFull>(`/api/mail/messages/${encodeURIComponent(id)}`)
+      .then((full) => set((s) => (s.full[id] ? s : { full: { ...s.full, [id]: full } })))
+      .catch(() => { /* откроется обычным путём */ })
+      .finally(() => prefetching.delete(id));
+  }
+}
+
 export async function searchMail(q: string): Promise<void> {
   const acc = get().accountId;
   set({ search: q });

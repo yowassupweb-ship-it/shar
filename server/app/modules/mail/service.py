@@ -275,7 +275,8 @@ def _set_imap_flags(account: dict, folder: str, uid: str, updates: dict) -> None
     if not uid or not updates:
         return
     port = int(account.get('imap_port', 993))
-    client = imaplib.IMAP4_SSL(account['imap_host'], port) if port == 993 else imaplib.IMAP4(account['imap_host'], port)
+    # Без таймаута зависший почтовый сервер держал поток навсегда.
+    client = imaplib.IMAP4_SSL(account['imap_host'], port, timeout=20) if port == 993 else imaplib.IMAP4(account['imap_host'], port, timeout=20)
     try:
         if port != 993 and account.get('use_ssl', True):
             client.starttls()

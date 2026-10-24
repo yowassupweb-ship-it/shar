@@ -139,7 +139,7 @@ function buildActions(isAdmin: boolean, tools: Tool[]): Action[] {
   const create: Action[] = KIND_LIST.map((k) => ({
     id: `new-${k.kind}`, title: k.newLabel, subtitle: 'Создать и открыть в «Офисе»', words: `new create создать ${k.kind} ${k.plural}`, icon: kindIcon(k.kind), run: () => { void createOffice(k.kind); },
   }));
-  // Инструменты из «Ещё», доступные этому человеку (Заявки с сайта, Соцсети, Генератор UTM…). Поиск,
+  // Инструменты из «Ещё», доступные этому человеку (Заявки, Соцсети, Генератор UTM…). Поиск,
   // настройки, инструкция и админка уже есть среди разделов выше.
   const toolActions: Action[] = tools
     .filter((t) => !['spotlight', 'settings', 'how-to-shar', 'admin'].includes(t.id))

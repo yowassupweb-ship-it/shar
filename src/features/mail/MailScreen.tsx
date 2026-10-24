@@ -12,7 +12,7 @@ import { Avatar } from '@/shared/ui/Avatar';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { SearchField } from '@/shared/ui/SearchField';
 import {
-  loadAccounts, loadBoxes, moveMessage, onNewMail, openFolder, openMessage, searchMail, selectAccount, setFlags, syncFolder,
+  loadAccounts, loadBoxes, moveMessage, onNewMail, openFolder, openMessage, prefetchMessages, searchMail, selectAccount, setFlags, syncFolder,
   useMail, type Box, type MailFull, type MailRow,
 } from './api';
 import AccountSheet from './AccountSheet';
@@ -43,17 +43,21 @@ const BOX_ICON: Record<Box['role'], typeof Inbox> = {
 
 type Face = { seed: string; src?: string; name?: string };
 
-/** Лицо по адресу: сотрудник Шара выглядит как в чатах — его фото или тот же
- *  рисованный аватар (сид — id сотрудника), остальные — рисованный по адресу. */
+/** Лицо по адресу: у сотрудника Шара — его настоящее фото; у всех остальных (и у сотрудника без фото) —
+ *  буквы на цвете, как у групповых чатов. Рисованных DiceBear в почте нет: чужому адресу они
+ *  приписывали случайное «лицо». */
 function useFaceByEmail(): (email?: string, fallbackName?: string) => Face {
-  const users = useChatStore((s) => s.users);
+  // Сотрудники в сторе меняются на каждое «в сети / не в сети»; лица от этого не зависят —
+  // пересобираем карту только при смене почты, фото или имени (иначе перерисовывался весь список).
+  const sig = useChatStore((s) => Object.values(s.users).map((u) => `${u.id}${u.email || ''}${u.avatar || ''}${u.name || ''}`).join(''));
   const byEmail = useMemo(() => {
     const map = new Map<string, Face>();
-    for (const u of Object.values(users)) {
+    for (const u of Object.values(useChatStore.getState().users)) {
       if (u.email) map.set(u.email.toLowerCase(), { seed: String(u.id), src: u.avatar || undefined, name: u.name || undefined });
     }
     return map;
-  }, [users]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sig]);
   return useCallback((email?: string, fallbackName?: string) => (
     (email && byEmail.get(email.toLowerCase())) || { seed: email || fallbackName || '?', name: fallbackName }
   ), [byEmail]);
@@ -79,7 +83,7 @@ const Row = memo(function Row({ m, active, sentView, faceOf, onOpen, onMenu }: {
       onContextMenu={(e) => { e.preventDefault(); onMenu(m, { x: e.clientX, y: e.clientY }); }}
     >
       <span className="nml-face">
-        <Avatar name={face.name || addr?.name || addr?.addr || '?'} seed={face.seed} src={face.src} person size={40} />
+        <Avatar name={face.name || addr?.name || addr?.addr || '?'} seed={face.seed} src={face.src} size={40} />
         {!m.isRead && <span className="nml-dot" aria-label="Не прочитано" />}
       </span>
       <span className="nml-text">
@@ -122,7 +126,7 @@ function Reader({ msg, onCompose, onBack, dark, face }: {
       <div className="nmr-scroll nx-scroll-y">
         <h1 className="nmr-subject">{msg.subject || 'Без темы'}</h1>
         <header className="nmr-head">
-          <Avatar name={face.name || msg.fromName || msg.fromAddr || '?'} seed={face.seed} src={face.src} size={40} person />
+          <Avatar name={face.name || msg.fromName || msg.fromAddr || '?'} seed={face.seed} src={face.src} size={40} />
           <div className="nmr-who">
             <span className="nmr-from"><b>{msg.fromName || msg.fromAddr}</b>{msg.fromName && <span>{msg.fromAddr}</span>}</span>
             <span className="nmr-to">Кому: {(msg.toAddrs || []).map((a) => a.name || a.addr).join(', ') || '—'}</span>
@@ -212,9 +216,15 @@ export default function MailScreen() {
   const box = boxes.find((b) => b.folder === folder);
   const sentView = box?.role === 'sent' || box?.role === 'drafts';
 
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
   const open = useCallback(async (id: string) => {
     setOpenId(id);
     setPane('reader');
+    // Соседи — заранее: листают стрелками и подряд по списку.
+    const list = rowsRef.current;
+    const at = list.findIndex((r) => r.id === id);
+    if (at >= 0) prefetchMessages([list[at + 1]?.id, list[at + 2]?.id, list[at - 1]?.id].filter(Boolean) as string[]);
     const cached = useMail.getState().full[id];
     if (cached) { setMsg(cached); setMsgPhase('idle'); void openMessage(id); return; }
     setMsg(null);
@@ -222,6 +232,9 @@ export default function MailScreen() {
     const full = await openMessage(id);
     if (full) { setMsg(full); setMsgPhase('idle'); } else setMsgPhase('error');
   }, []);
+
+  // Стабильные обработчики — иначе memo у строк не срабатывал и на каждое письмо перерисовывался весь список.
+  const openMenu = useCallback((m: MailRow, anchor: MenuAnchor) => setMenu({ m, anchor }), []);
 
   // Письмо из ссылки: переключаем ящик и папку, потом открываем само письмо — один раз.
   useEffect(() => {
@@ -373,7 +386,7 @@ export default function MailScreen() {
         ) : !rows.length ? (
           <div className="nx-state"><MailOpen size={26} aria-hidden="true" /><p>{query ? 'Ничего не нашлось.' : 'Писем нет.'}</p></div>
         ) : (
-          rows.map((m) => <Row key={m.id} m={m} active={m.id === openId} sentView={sentView} faceOf={faceOf} onOpen={(id) => void open(id)} onMenu={(r, anchor) => setMenu({ m: r, anchor })} />)
+          rows.map((m) => <Row key={m.id} m={m} active={m.id === openId} sentView={sentView} faceOf={faceOf} onOpen={open} onMenu={openMenu} />)
         )}
       </div>
     </section>

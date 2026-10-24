@@ -324,11 +324,17 @@ function schedulePersistThread(chatId: string) {
   });
 }
 
+// Список чатов — сотни килобайт JSON; синхронная запись в localStorage на каждое новое сообщение
+// заметна на слабом ПК. Пишем реже и в простое.
 function schedulePersistChats() {
   debounce('chats', () => {
-    const { me, chats } = get();
-    if (me) lsSet(chatsKey(String(me.id)), Object.values(chats));
-  }, 800);
+    const write = () => {
+      const { me, chats } = get();
+      if (me) lsSet(chatsKey(String(me.id)), Object.values(chats));
+    };
+    if ('requestIdleCallback' in window) window.requestIdleCallback(write, { timeout: 5000 });
+    else write();
+  }, 3000);
 }
 
 function hydrateThread(chatId: string): Thread | null {
@@ -698,10 +704,14 @@ export function loadChats(): Promise<void> {
 }
 
 let statusTimer: number | null = null;
+let statusAt = 0;
 
-/** Лёгкая сверка «в сети»: события presence теряются при обрыве сокета, поэтому раз в минуту (пока вкладка на экране) сверяемся. */
+/** Лёгкая сверка «в сети»: события presence теряются при обрыве сокета, поэтому раз в минуту (пока вкладка на экране) сверяемся.
+ *  Без фокуса (Electron в трее тоже «на экране») — раз в десять минут: ночью приложения опрашивали сервер впустую. */
 function refreshStatuses() {
   if (document.visibilityState !== 'visible') return;
+  if (!document.hasFocus() && Date.now() - statusAt < 600000) return;
+  statusAt = Date.now();
   fetch('/api/users/statuses', { cache: 'no-store' })
     .then((r) => (r.ok ? r.json() : null))
     .then((rows: { id: string; isOnline?: boolean; lastSeen?: string }[] | null) => {
@@ -722,7 +732,11 @@ function refreshStatuses() {
     .catch(() => { /* следующая сверка догонит */ });
 }
 
+// Запуск и первый resync от сокета приходят почти разом — второй раз весь список сотрудников не качаем.
+let usersAt = 0;
 function loadUsers() {
+  if (Date.now() - usersAt < 10000) return;
+  usersAt = Date.now();
   api.users()
     .then((list) => {
       const users: Record<string, User> = {};
@@ -1467,6 +1481,7 @@ export function boot(me: User) {
 
 export function shutdown() {
   if (statusTimer !== null) { window.clearInterval(statusTimer); statusTimer = null; }
+  usersAt = 0;
   document.removeEventListener('visibilitychange', onVisible);
   navigator.serviceWorker?.removeEventListener('message', onServiceWorker);
   unsubscribe?.(); unsubscribe = null;

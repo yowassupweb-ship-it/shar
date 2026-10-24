@@ -227,7 +227,7 @@ class UsersRepo:
             # the first of these as the "primary", so all existing code that reads
             # user.department keeps working.
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS department_ids TEXT[] DEFAULT '{}'::text[]",
-            # Инструменты, вынесенные в нижнее меню (Заявки с сайта, Соцсети…) — со своими кружками.
+            # Инструменты, вынесенные в нижнее меню (Заявки, Соцсети…) — со своими кружками.
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS nav_tools JSONB DEFAULT '[]'::jsonb",
         ]
         for sql in ddl_statements:

@@ -1,4 +1,4 @@
-"""Заявки с сайтов (corp.vs-travel.ru и school.vs-travel.ru): приложение «Заявки с сайта».
+"""Заявки с сайтов (corp.vs-travel.ru и school.vs-travel.ru): приложение «Заявки».
 
 Сайт сохраняет заявку у себя, отправляет письмо менеджерам и передаёт её сюда служебным ключом
 интеграций (POST /api/integrations/leads, заголовок X-Shar-Api-Key). Заявка ложится в site_leads
@@ -34,7 +34,7 @@ log = logging.getLogger("shar.leads")
 
 TOOL = "site-leads"
 SOURCE = "leads"
-AUTHOR = "Заявки с сайта"
+AUTHOR = "Заявки"
 SETTINGS_KEY = "site_leads_settings"
 SITES = {"corp": "Корпоративный сайт", "school": "Школьный сайт"}
 SITE_URLS = {"corp": "https://corp.vs-travel.ru", "school": "https://school.vs-travel.ru"}
@@ -80,7 +80,7 @@ def _has_tool(me: Identity) -> bool:
 
 def require_tool(me: Identity = Depends(current_identity)) -> Identity:
     if not _has_tool(me):
-        raise HTTPException(status_code=403, detail="Нет доступа к заявкам с сайта")
+        raise HTTPException(status_code=403, detail="Нет доступа к заявкам")
     return me
 
 
@@ -202,7 +202,7 @@ def _changed(chat_id: Optional[str]) -> None:
 
 @router.get("/api/leads/waiting")
 def leads_waiting(me: Identity = Depends(current_identity)):
-    """Невзятые заявки (статус «новая») — для единички на значке и на иконке «Заявки с сайта».
+    """Невзятые заявки (статус «новая») — для единички на значке и на иконке «Заявки».
     С приложением — все новые; без него — только пришедшие в чаты, где человек участник."""
     if _has_tool(me):
         row = db.conn.fetch_one("SELECT count(*) AS n FROM site_leads WHERE status = 'new'") or {}

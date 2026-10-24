@@ -49,7 +49,7 @@ export function useVisitTracker() {
       };
       if (!write()) { const off = useChatStore.subscribe(() => { if (write()) off(); }); stop = off; }
     } else {
-      // Инструмент из «Ещё» (Заявки с сайта, Соцсети, Генератор UTM…): настройки и админка — не инструменты.
+      // Инструмент из «Ещё» (Заявки, Соцсети, Генератор UTM…): настройки и админка — не инструменты.
       const tool = TOOLS.find((t) => t.href === pathname && !t.external && !['settings', 'admin', 'how-to-shar'].includes(t.id));
       if (tool) recordVisit({ id: tool.id, kind: 'tool', title: tool.name, subtitle: tool.hint, sub: tool.id, path: tool.href });
     }

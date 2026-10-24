@@ -127,7 +127,7 @@ export function useContacts() {
   useEffect(() => {
     let timer = 0;
     const tick = async () => {
-      if (document.visibilityState !== 'visible') return;
+      if (document.visibilityState !== 'visible' || !document.hasFocus()) return;
       try {
         const res = await fetch('/api/users/statuses', { cache: 'no-store' });
         if (!res.ok) return;

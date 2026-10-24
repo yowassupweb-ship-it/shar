@@ -11,8 +11,26 @@ export function parseMailDate(value?: string): Date {
   return new Date(/[zZ]$|[+-]\d{2}:?\d{2}$/.test(s) ? s : `${s.replace(' ', 'T')}+03:00`);
 }
 
+// Строка списка перерисовывается часто, а дата у письма не меняется — помним готовую подпись
+// (сбрасываем со сменой дня: «сегодня» становится «вчера»).
+const listDates = new Map<string, string>();
+let listDay = '';
+
 /** В списке: сегодня — время, в этом году — «12 сент», раньше — дата. */
 export function fmtListDate(value?: string): string {
+  const today = new Date().toDateString();
+  if (today !== listDay) { listDay = today; listDates.clear(); }
+  const key = value || '';
+  let out = listDates.get(key);
+  if (out === undefined) {
+    out = listDate(value);
+    if (listDates.size > 5000) listDates.clear();
+    listDates.set(key, out);
+  }
+  return out;
+}
+
+function listDate(value?: string): string {
   const d = parseMailDate(value);
   if (Number.isNaN(d.getTime())) return '';
   const now = new Date();

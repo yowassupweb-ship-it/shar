@@ -1,4 +1,4 @@
-"""Заявки с сайта: приём по ключу, карточка в выбранный чат, повтор без дубля, права, «Беру»."""
+"""Заявки: приём по ключу, карточка в выбранный чат, повтор без дубля, права, «Беру»."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def test_lead_reaches_chat_once(client, users, anna, lead_chat):
     card = cards[0]["metadata"]["card"]
     assert card["kind"] == "lead" and card["status"] == "new" and card["phone"] == "+7 (916) 000-00-00"
     assert {"label": "Волгоград — город-герой (№ 3102)", "url": "https://corp.vs-travel.ru/tour/3102"} in card["links"]
-    assert cards[0]["authorName"] == "Заявки с сайта"
+    assert cards[0]["authorName"] == "Заявки"
     assert "Ольга" in cards[0]["content"]
 
 
