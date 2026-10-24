@@ -8,7 +8,7 @@ from app.core.camel import snake_to_camel, snake_to_camel_list
 from app.core.db import db
 from app.core.security import Identity, current_identity
 from app.modules.mail import idle as mail_realtime
-from app.modules.mail.crypto import _obfuscate_pw
+from app.modules.mail.crypto import _obfuscate_pw, mark_password, needs_password
 from app.modules.mail.imap import _special_cache
 
 router = APIRouter()
@@ -26,8 +26,10 @@ def get_mail_accounts(me: Identity = Depends(current_identity)):
     # empty string would then overwrite the real imap_host/smtp_host in the
     # DB on save, since the PUT route's data.get('imapHost', ...) sees the
     # key present (even if empty) and never falls back to the old value.
+    # needsPassword — Шар выбило из ящика (пароль нечем расшифровать или сервер его отверг):
+    # приложение показывает это сразу, а не плашкой в углу почты.
     return snake_to_camel_list([
-        {k: v for k, v in a.items() if k not in ('password_enc',)}
+        {**{k: v for k, v in a.items() if k not in ('password_enc',)}, 'needs_password': needs_password(a)}
         for a in accounts
     ])
 
@@ -82,6 +84,7 @@ def update_mail_account(account_id: str, data: dict = Body(...), me: Identity = 
     }
     if data.get('password') and not data.get('skipPassword'):
         updates['password_enc'] = _obfuscate_pw(data['password'])
+        mark_password(account_id, True)
     clauses = ', '.join(f"{k} = %s" for k in updates)
     params = tuple(updates.values()) + (account_id, user_id)
     row = db.conn.fetch_one(

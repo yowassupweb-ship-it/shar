@@ -292,3 +292,14 @@
   .ncm-hint { display: none; }
 }
 .nmb-manage { justify-self: start; margin: var(--space-2) var(--space-2) 0; font-size: var(--text-xs); }
+
+/* ── Шар вышел из ящика: вход заново на месте списка и письма ───────────── */
+.nml-relogin { grid-column: 2 / -1; display: grid; place-items: center; min-width: 0; min-height: 0; padding: var(--space-6) var(--space-4); background: var(--surface-panel); overflow-y: auto; }
+.nmail[data-narrow="true"] .nml-relogin { grid-column: 1 / -1; }
+.nml-relogin-card { display: grid; gap: var(--space-3); width: min(420px, 100%); text-align: left; }
+.nml-relogin-icon { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 16px; background: color-mix(in srgb, var(--state-danger) 14%, transparent); color: var(--state-danger); }
+.nml-relogin-card h2 { margin: 0; font-size: var(--text-xl); font-weight: var(--weight-semibold); }
+.nml-relogin-card p { margin: 0; color: var(--text-muted); line-height: 1.5; overflow-wrap: anywhere; }
+.nml-relogin-card p b { color: var(--text-main); }
+.nml-relogin-card .nx-primary { justify-self: start; min-width: 160px; }
+.nml-relogin-error { color: var(--state-danger) !important; }

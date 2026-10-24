@@ -12,6 +12,8 @@ import { realtime, type RealtimeEvent } from '@/shared/realtime/realtime';
 export interface Account {
   id: string; name: string; email: string; signature?: string;
   imapHost?: string; imapPort?: number; smtpHost?: string; smtpPort?: number; username?: string; useSsl?: boolean;
+  /** Шар выбило из ящика: пароль нечем расшифровать или почтовый сервер его не принял. */
+  needsPassword?: boolean;
 }
 
 export interface AccountForm {
@@ -113,6 +115,18 @@ export async function loadAccounts(): Promise<void> {
   }
 }
 
+/** Проверка при входе в Шар: не выбило ли из какого-то ящика. Только список ящиков (без почтового
+ *  сервера и без подписки на события почты) — отдаёт адреса ящиков, которым нужен пароль. */
+export async function checkMailAccess(): Promise<string[]> {
+  try {
+    const accounts = await call<Account[]>(`/api/mail/accounts?userId=${encodeURIComponent(myId())}`);
+    set({ accounts });
+    return accounts.filter((a) => a.needsPassword).map((a) => a.email);
+  } catch {
+    return [];
+  }
+}
+
 /** Подключить ящик (или обновить настройки). Пароль при правке пустой — не менять. */
 export async function saveAccount(id: string | null, form: AccountForm): Promise<Account> {
   const body: Record<string, unknown> = { ...form };
@@ -136,16 +150,42 @@ export function selectAccount(id: string) {
   set({ accountId: id, boxes: [], boxesError: false, lists: {}, listPhase: {}, full: {}, folder: 'INBOX', found: null, search: '' });
 }
 
+/** Отметить ящик «выбитым» (нужен пароль) или снова рабочим. */
+function setLocked(id: string, locked: boolean) {
+  if (Boolean(get().accounts.find((a) => String(a.id) === id)?.needsPassword) === locked) return;
+  set((s) => ({ accounts: s.accounts.map((a) => (String(a.id) === id ? { ...a, needsPassword: locked } : a)) }));
+}
+
+const isLocked = (id: string | null) => Boolean(id && get().accounts.find((a) => String(a.id) === id)?.needsPassword);
+
 export async function loadBoxes(refresh = false): Promise<void> {
   const acc = get().accountId;
-  if (!acc) return;
+  if (!acc || (isLocked(acc) && !refresh)) return;
   try {
     const qs = new URLSearchParams({ accountId: acc, userId: myId(), ...(refresh ? { refresh: 'true' } : {}) });
     const boxes = await call<Box[]>(`/api/mail/mailboxes?${qs}`);
-    if (get().accountId === acc) set({ boxes, boxesError: false });
+    if (get().accountId === acc) { set({ boxes, boxesError: false }); setLocked(acc, false); }
   } catch (e) {
     // прежний список, если был, остаётся
-    if (get().accountId === acc) set({ boxesError: e instanceof MailError && e.status === 409 ? 'password' : 'server' });
+    const password = e instanceof MailError && e.status === 409;
+    if (get().accountId === acc) set({ boxesError: password ? 'password' : 'server' });
+    if (password) setLocked(acc, true);
+  }
+}
+
+/** Войти в ящик заново: новый пароль → проверка входом (список папок). Ошибка — текстом для человека. */
+export async function relogin(id: string, password: string): Promise<void> {
+  await call(`/api/mail/accounts/${encodeURIComponent(id)}`, json('PUT', { password }));
+  const qs = new URLSearchParams({ accountId: id, userId: myId(), refresh: 'true' });
+  try {
+    const boxes = await call<Box[]>(`/api/mail/mailboxes?${qs}`);
+    setLocked(id, false);
+    if (get().accountId === id) { set({ boxes, boxesError: false }); void syncFolder(get().folder || 'INBOX'); }
+  } catch (e) {
+    if (e instanceof MailError && e.status === 409) throw new Error('Почтовый сервер не принял пароль. Проверьте его и попробуйте ещё раз.');
+    // Пароль сохранён, но почтовый сервер не ответил — вход проверим позже.
+    setLocked(id, false);
+    if (get().accountId === id) set({ boxesError: 'server' });
   }
 }
 
@@ -171,10 +211,13 @@ export async function loadFolder(folder: string): Promise<void> {
  *  их держит сервер сам. */
 export async function syncFolder(folder: string): Promise<void> {
   const acc = get().accountId;
-  if (!acc || get().syncing[folder]) return;
+  // Из ящика выбило — не долбим почтовый сервер, пока человек не введёт пароль.
+  if (!acc || get().syncing[folder] || isLocked(acc)) return;
   set((s) => ({ syncing: { ...s.syncing, [folder]: true } }));
   try {
-    await call('/api/mail/sync', json('POST', { accountId: acc, userId: myId(), folder })).catch(() => null);
+    await call('/api/mail/sync', json('POST', { accountId: acc, userId: myId(), folder }))
+      .then(() => setLocked(acc, false))
+      .catch((e) => { if (e instanceof MailError && e.status === 409) setLocked(acc, true); });
     await loadFolder(folder);
   } finally {
     set((s) => ({ syncing: { ...s.syncing, [folder]: false } }));

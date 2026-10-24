@@ -17,6 +17,8 @@ import { useSession, verifySession } from '@/shared/session/session';
 import LoginScreen from './LoginScreen';
 import ElectronTitlebar from './electron/ElectronTitlebar';
 import { startWorkspaceToasts } from '@/features/workspace/live';
+import { checkMailAccess, useMail } from '@/features/mail/api';
+import { showToast } from '@/shared/ui/Toast';
 import { SpotlightHost, useVisitTracker } from '@/features/spotlight';
 
 /**
@@ -83,6 +85,19 @@ function Workspace({ me }: { me: User }) {
     return () => shutdown();
   }, [me]);
   useEffect(() => startToolBadges(), [me]);
+
+  // Шар выбило из почтового ящика (пароль сменили или его нечем расшифровать) — сразу видно:
+  // красный «!» на «Почте» и предупреждение при входе, а не плашка, которую замечаешь через неделю.
+  const lockedMail = useMail((s) => s.accounts.filter((a) => a.needsPassword).map((a) => a.email).join(', '));
+  useEffect(() => {
+    let alive = true;
+    void checkMailAccess().then((emails) => {
+      if (!alive || !emails.length || sectionFor(window.location.pathname).id === 'mail') return;
+      showToast(`Шар вышел из ящика ${emails.join(', ')}: пароль больше не подходит. Откройте «Почту» и введите его заново.`, 'error');
+    });
+    return () => { alive = false; };
+  }, [me]);
+  const alerts = useMemo(() => (lockedMail ? { mail: `Нужно войти в ящик заново: ${lockedMail}` } : undefined), [lockedMail]);
 
   useTitleBlink(unread);
 
@@ -164,6 +179,7 @@ function Workspace({ me }: { me: User }) {
       <AppShell
         section={section.id}
         badges={{ chats: unreadChats, more: moreCount }}
+        alerts={alerts}
         navTools={navTools}
         onNavToolDrop={(id) => void addNavTool(id)}
         onNavToolRemove={(id) => void removeNavTool(id)}

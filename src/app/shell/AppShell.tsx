@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router';
 import { Palette as PaletteIcon, PinOff, Settings, type LucideIcon } from 'lucide-react';
 import { PALETTES, useTheme } from '@/shared/theme/ThemeContext';
@@ -33,6 +33,8 @@ export interface AppShellProps {
   children: ReactNode;
   /** Счётчики на пунктах меню (непрочитанные чаты, письма). */
   badges?: Partial<Record<SectionId, number>>;
+  /** Тревога на пункте меню — красный «!» с подсказкой (например, Шар выбило из почтового ящика). */
+  alerts?: Partial<Record<SectionId, string>>;
   /** Какие разделы пользователь показывает в меню (visibleTabs из профиля). */
   visibleTabs?: Record<string, boolean>;
   /** Спрятать капсулу на телефоне — раздел показывает деталь. */
@@ -102,8 +104,17 @@ function NavIcon({ icon }: { icon: string }) {
   );
 }
 
-const Nav = memo(function Nav({ section, badges, visibleTabs, onReselect, account, navTools, onNavToolDrop, onNavToolRemove }: Omit<AppShellProps, 'children' | 'navHidden'>) {
+const Nav = memo(function Nav({ section, badges, alerts: rawAlerts, visibleTabs, onReselect, account, navTools, onNavToolDrop, onNavToolRemove }: Omit<AppShellProps, 'children' | 'navHidden'>) {
   const listRef = useRef<HTMLUListElement>(null);
+  // Тревога у скрытого раздела иначе пропала бы — переносим её на «Ещё», откуда он открывается.
+  const alerts = useMemo(() => {
+    if (!rawAlerts) return rawAlerts;
+    const out = { ...rawAlerts };
+    for (const id of Object.keys(rawAlerts) as SectionId[]) {
+      if (id !== 'more' && id !== section && !isTabVisible(visibleTabs, id)) { out.more = out.more || rawAlerts[id]; delete out[id]; }
+    }
+    return out;
+  }, [rawAlerts, visibleTabs, section]);
   // Подписи не влезают (узкое окно, много разделов) — только иконки, подпись у открытого раздела.
   // Раньше полоса молча прокручивалась, и крайний пункт («Ещё») уезжал под аватар. Ширину полосы
   // с подписями запоминаем, чтобы вернуть их, как только место появится, без дрожания туда-обратно.
@@ -207,11 +218,14 @@ const Nav = memo(function Nav({ section, badges, visibleTabs, onReselect, accoun
               >
                 <NavIcon icon={s.icon} />
                 <span className="nx-nav-label">{s.label}</span>
-                {count > 0 && (
+                {/* Тревога важнее счётчика: её нужно разобрать, а не просто прочитать. */}
+                {alerts?.[s.id] ? (
+                  <span className="nx-count nx-nav-badge nx-nav-alert" role="img" aria-label={alerts[s.id]} title={alerts[s.id]}>!</span>
+                ) : count > 0 ? (
                   <span className="nx-count nx-nav-badge" aria-label={`Непрочитанных: ${count}`}>
                     {count > 99 ? '99+' : count}
                   </span>
-                )}
+                ) : null}
               </Link>
             </li>
           );
@@ -248,13 +262,13 @@ const Nav = memo(function Nav({ section, badges, visibleTabs, onReselect, accoun
   );
 });
 
-export default function AppShell({ section, children, badges, visibleTabs, navHidden, onReselect, account, navTools, onNavToolDrop, onNavToolRemove }: AppShellProps) {
+export default function AppShell({ section, children, badges, alerts, visibleTabs, navHidden, onReselect, account, navTools, onNavToolDrop, onNavToolRemove }: AppShellProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   useViewportSync(rootRef);
   return (
     <div ref={rootRef} className="nx nx-app" data-nav-hidden={navHidden ? 'true' : undefined}>
       <main className="nx-app-main">{children}</main>
-      <Nav section={section} badges={badges} visibleTabs={visibleTabs} onReselect={onReselect} account={account}
+      <Nav section={section} badges={badges} alerts={alerts} visibleTabs={visibleTabs} onReselect={onReselect} account={account}
         navTools={navTools} onNavToolDrop={onNavToolDrop} onNavToolRemove={onNavToolRemove} />
       {/* Внутри корня .nx — там живут токены, на которых держится Toast. */}
       <ToastContainer />

@@ -1,6 +1,6 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type FormEvent } from 'react';
 import {
-  AlertCircle, Archive, ArrowLeft, Download, File as FileIcon, FileEdit, Folder, Forward, Inbox, Mail, MailOpen, Paperclip,
+  AlertCircle, Archive, ArrowLeft, Download, File as FileIcon, FileEdit, Folder, Forward, Inbox, KeyRound, Mail, MailOpen, Paperclip,
   PenSquare, Reply, ReplyAll, RotateCw, Send, ShieldAlert, Star, Trash2, Settings2,
 } from 'lucide-react';
 import { EmailHtmlView } from '@/features/mail/html/EmailHtmlView';
@@ -12,8 +12,8 @@ import { Avatar } from '@/shared/ui/Avatar';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { SearchField } from '@/shared/ui/SearchField';
 import {
-  loadAccounts, loadBoxes, moveMessage, onNewMail, openFolder, openMessage, prefetchMessages, searchMail, selectAccount, setFlags, syncFolder,
-  useMail, type Box, type MailFull, type MailRow,
+  loadAccounts, loadBoxes, moveMessage, onNewMail, openFolder, openMessage, prefetchMessages, relogin, searchMail, selectAccount, setFlags, syncFolder,
+  useMail, type Account, type Box, type MailFull, type MailRow,
 } from './api';
 import AccountSheet from './AccountSheet';
 import Compose, { type ComposeMode } from './Compose';
@@ -157,6 +157,46 @@ function Reader({ msg, onCompose, onBack, dark, face }: {
         </div>
       </div>
     </article>
+  );
+}
+
+/** Шар выбило из ящика: вместо писем (старых, из кэша — по ним казалось, что всё работает) — вход заново. */
+function Relogin({ account }: { account: Account }) {
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!password || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await relogin(String(account.id), password);
+      showToast('Снова вошёл в ящик — почта приходит.', 'success');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не получилось войти.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="nml-relogin" aria-labelledby="nml-relogin-title">
+      <form className="nml-relogin-card nx-form" onSubmit={submit} noValidate>
+        <span className="nml-relogin-icon" aria-hidden="true"><KeyRound size={26} /></span>
+        <h2 id="nml-relogin-title">Шар вышел из ящика</h2>
+        <p>
+          <b>{account.email}</b>: сохранённый пароль больше не подходит. Пока его не ввести заново,
+          новые письма не приходят и отправить письмо нельзя.
+        </p>
+        <label className="nx-label">Пароль ящика
+          <span className="nx-field"><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" autoFocus /></span>
+        </label>
+        {error && <p className="nml-relogin-error" role="alert">{error}</p>}
+        <button type="submit" className="nx-primary" disabled={!password || busy}>
+          {busy ? <Spinner size={16} label="Проверяю пароль" /> : 'Войти в ящик'}
+        </button>
+      </form>
+    </section>
   );
 }
 
@@ -413,9 +453,18 @@ export default function MailScreen() {
 
   return (
     <div className="nmail" data-narrow={narrow ? 'true' : undefined} data-pane={pane}>
-      {(!narrow || pane === 'boxes') && sidebar}
-      {(!narrow || pane === 'list') && listPane}
-      {(!narrow || pane === 'reader') && readerPane}
+      {account?.needsPassword ? (
+        <>
+          {!narrow && sidebar}
+          <Relogin account={account} />
+        </>
+      ) : (
+        <>
+          {(!narrow || pane === 'boxes') && sidebar}
+          {(!narrow || pane === 'list') && listPane}
+          {(!narrow || pane === 'reader') && readerPane}
+        </>
+      )}
 
       {menu && (() => {
         const m = menu.m;
