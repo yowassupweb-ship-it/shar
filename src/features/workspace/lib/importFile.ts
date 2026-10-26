@@ -2,7 +2,7 @@ import { uploadFileWithProgress } from '@/shared/api/uploadFile';
 import { attachmentUrl } from '@/shared/ui/format';
 import type { Kind } from '../types';
 import { markdownToSnapshot } from './docSnapshot';
-import { htmlToMarkdown } from './htmlToMarkdown';
+import { escapePlainText, htmlToMarkdown } from './htmlToMarkdown';
 import { parseCsv, readText } from './text';
 import { bookFromBase64, bookToBase64, bytesToBase64, newBook } from './workbook';
 
@@ -87,7 +87,9 @@ export async function importFile(file: File, onProgress?: (done: number, total: 
     return asNote ? { kind: 'note', title, content: markdown } : { kind: 'document', title, content: JSON.stringify(markdownToSnapshot(title, markdown)) };
   }
   if (/\.(md|markdown|txt)$/.test(name)) {
-    const text = await readText(file);
+    // .txt — обычный текст: «3*» и «KZN_03» не должны стать разметкой; .md — как есть.
+    const raw = await readText(file);
+    const text = name.endsWith('.txt') ? escapePlainText(raw) : raw;
     return asNote ? { kind: 'note', title, content: text } : { kind: 'document', title, content: JSON.stringify(markdownToSnapshot(title, text)) };
   }
   if (/\.(xlsx|xlsm)$/.test(name)) {

@@ -99,28 +99,37 @@ export function emptySnapshot(title = ''): DocSnapshot {
 function parseInline(source: string): { text: string; runs: Run[] } {
   let text = '';
   const runs: Run[] = [];
-  const pattern = /\[([^\]\n]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)|\*\*([^*]+)\*\*|__([^_]+)__|\*([^*\n]+)\*|_([^_\n]+)_|`([^`\n]+)`/g;
+  // \X — экранированный символ, остаётся текстом (импорт экранирует «3*», «KZN_03» и т. п.).
+  const pattern = /\\([\\`*_[\]|#>+\-.)!])|\[((?:\\.|[^\]\n\\])+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)|\*\*((?:\\.|[^*\\])+)\*\*|__((?:\\.|[^_\\])+)__|\*((?:\\.|[^*\n\\])+)\*|_((?:\\.|[^_\n\\])+)_|`([^`\n]+)`/g;
   let last = 0;
   for (const match of source.matchAll(pattern)) {
     const index = match.index ?? 0;
     text += source.slice(last, index);
     last = index + match[0].length;
-    if (match[1] !== undefined) {
+    if (match[1] !== undefined) { text += match[1]; continue; }
+    if (match[2] !== undefined) {
       // Внутри текста ссылки разметку тоже понимаем: [**жирная ссылка**](…).
-      const inner = parseInline(match[1]);
+      const inner = parseInline(match[2]);
       const start = text.length;
       text += inner.text;
       runs.push(...inner.runs.map((run) => ({ ...run, start: run.start + start, end: run.end + start })));
-      runs.push({ start, end: text.length, bold: false, italic: false, code: false, link: match[2] });
+      runs.push({ start, end: text.length, bold: false, italic: false, code: false, link: match[3] });
       continue;
     }
-    const bold = match[3] ?? match[4];
-    const italic = match[5] ?? match[6];
-    const code = match[7];
-    const piece = bold ?? italic ?? code ?? '';
+    const code = match[8];
+    if (code !== undefined) {
+      const start = text.length;
+      text += code;
+      runs.push({ start, end: text.length, bold: false, italic: false, code: true });
+      continue;
+    }
+    // Жирный и курсив вкладываются друг в друга (_**жирный курсив**_): внутренность разбираем так же.
+    const bold = match[4] ?? match[5];
+    const inner = parseInline((bold ?? match[6] ?? match[7]) as string);
     const start = text.length;
-    text += piece;
-    runs.push({ start, end: text.length, bold: bold !== undefined, italic: italic !== undefined, code: code !== undefined });
+    text += inner.text;
+    runs.push(...inner.runs.map((run) => ({ ...run, start: run.start + start, end: run.end + start })));
+    runs.push({ start, end: text.length, bold: bold !== undefined, italic: bold === undefined, code: false });
   }
   return { text: text + source.slice(last), runs };
 }
@@ -148,7 +157,7 @@ export function parseMarkdown(markdown: string): Para[] {
       continue;
     }
     if (/^\s*\|.*\|\s*$/.test(line)) {
-      const cells = line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim());
+      const cells = line.trim().replace(/^\||\|$/g, '').split(/(?<!\\)\|/).map((cell) => cell.trim());
       paragraphs.push(parseInline(cells.join('  |  ')));
       continue;
     }
