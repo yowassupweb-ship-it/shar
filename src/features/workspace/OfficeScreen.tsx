@@ -72,7 +72,7 @@ function plainSnippet(text: string) {
     .trim();
 }
 
-function ItemRow({ item, active, onOpen, onMenu }: { item: Item; active: boolean; onOpen: () => void; onMenu: (anchor: MenuAnchor) => void }) {
+function ItemRow({ item, active, path, onOpen, onMenu }: { item: Item; active: boolean; path?: string; onOpen: () => void; onMenu: (anchor: MenuAnchor) => void }) {
   const info = KINDS[item.kind];
   const press = useLongPress((x, y) => onMenu({ x, y }));
   const AccessIcon = item.accessLevel === 'all' ? Globe2 : Lock;
@@ -95,6 +95,7 @@ function ItemRow({ item, active, onOpen, onMenu }: { item: Item; active: boolean
       <span className="nws-kind-icon" style={{ '--a': info.tint[0], '--b': info.tint[1] } as React.CSSProperties} aria-hidden="true"><info.icon size={16} /></span>
       <span className="nws-row-text">
         <span className="nws-row-title">{item.isNew && <span className="nws-new">Новое</span>}{item.title || info.untitled}</span>
+        {path && <span className="nws-row-path"><FolderIcon size={11} aria-hidden="true" />{path}</span>}
         <span className="nws-row-snippet">{item.kind === 'note' ? plainSnippet(item.snippet) : item.snippet}</span>
       </span>
       <span className="nws-row-meta">
@@ -289,6 +290,45 @@ export default function OfficeScreen() {
     };
     return new Map(folders.map((f) => [f.id, path(f)]));
   }, [folders]);
+  // Разделы — фильтры по одному дереву: в «Доках» видна папка, где (с вложенными) есть документы, а совсем пустая —
+  // во всех разделах, чтобы в неё было что положить. Свой вид считаем по загруженным строкам (переносы видны сразу),
+  // остальные виды — по счётчикам сервера.
+  const folderStats = useMemo(() => {
+    const stats = new Map<string, { here: number; total: number }>();
+    const walk = (f: Folder): { here: number; total: number } => {
+      const own = byFolder.get(f.id)?.length ?? 0;
+      const others = Object.entries(f.counts || {}).reduce((sum, [kind, n]) => sum + (filter === 'all' || kind === filter ? 0 : n || 0), 0);
+      const acc = { here: own, total: own + others };
+      for (const child of childFolders.get(f.id) || []) {
+        const c = walk(child);
+        acc.here += c.here;
+        acc.total += c.total;
+      }
+      stats.set(f.id, acc);
+      return acc;
+    };
+    for (const root of childFolders.get(null) || []) walk(root);
+    return stats;
+  }, [childFolders, byFolder, filter]);
+  const shownInSection = (f: Folder) => {
+    if (filter === 'all') return true;
+    const s = folderStats.get(f.id);
+    return !s || s.here > 0 || s.total === 0;
+  };
+  const visibleChildren = (parent: string | null) => (childFolders.get(parent) || []).filter(shownInSection);
+  // В поиске: папки, чьё название подходит (щелчок — открыть её на месте в дереве).
+  const matchedFolders = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q ? folders.filter((f) => f.title.toLowerCase().includes(q)) : [];
+  }, [folders, query]);
+  const revealFolder = (f: Folder) => {
+    const byId = new Map(folders.map((x) => [x.id, x]));
+    const chain: string[] = [];
+    for (let cur: Folder | undefined = f; cur && chain.length < 64; cur = cur.parentId ? byId.get(cur.parentId) : undefined) chain.push(cur.id);
+    setOpenFolders((cur) => { const next = new Set(cur); chain.forEach((id) => next.add(id)); writeOpenFolders(next); return next; });
+    setQuery('');
+  };
+
   /** Папка folderId — это ancestorId или лежит внутри неё (туда ancestorId класть нельзя). */
   const isWithin = (folderId: string, ancestorId: string) => {
     const byId = new Map(folders.map((f) => [f.id, f]));
@@ -356,11 +396,18 @@ export default function OfficeScreen() {
   const importRule = IMPORT_RULES[filter];
 
   const renderRow = (item: Item) => (
-    <ItemRow key={item.id} item={item} active={item.id === openId} onOpen={() => select(item.id, filter === 'all' ? 'all' : item.kind)} onMenu={(anchor) => setRowMenu({ item, anchor })} />
+    <ItemRow
+      key={item.id}
+      item={item}
+      active={item.id === openId}
+      path={query && item.folderId ? folderPath.get(item.folderId) : undefined}
+      onOpen={() => select(item.id, filter === 'all' ? 'all' : item.kind)}
+      onMenu={(anchor) => setRowMenu({ item, anchor })}
+    />
   );
 
   const renderFolder = (f: Folder): ReactNode => {
-    const subs = childFolders.get(f.id) || [];
+    const subs = visibleChildren(f.id);
     const own = byFolder.get(f.id) || [];
     return (
       <FolderRow
@@ -436,9 +483,19 @@ export default function OfficeScreen() {
           {fresh.map(renderRow)}
           {pinned.length > 0 && <h2 className="nws-group">Закреплённые</h2>}
           {pinned.map(renderRow)}
-          {!query && folders.length > 0 && <h2 className="nws-group">Папки</h2>}
-          {!query && (childFolders.get(null) || []).map(renderFolder)}
-          {(pinned.length > 0 || fresh.length > 0 || (!query && folders.length > 0)) && rest.length > 0 && <h2 className="nws-group">Остальные</h2>}
+          {!query && visibleChildren(null).length > 0 && <h2 className="nws-group">Папки</h2>}
+          {!query && visibleChildren(null).map(renderFolder)}
+          {matchedFolders.length > 0 && <h2 className="nws-group">Папки</h2>}
+          {matchedFolders.map((f) => (
+            <button key={f.id} type="button" className="nws-row nws-folder-hit" onClick={() => revealFolder(f)}>
+              <span className="nws-kind-icon nws-folder-hit-icon" aria-hidden="true"><FolderIcon size={16} /></span>
+              <span className="nws-row-text">
+                <span className="nws-row-title">{f.title}</span>
+                {f.parentId && <span className="nws-row-snippet">{folderPath.get(f.parentId)}</span>}
+              </span>
+            </button>
+          ))}
+          {(pinned.length > 0 || fresh.length > 0 || matchedFolders.length > 0 || (!query && visibleChildren(null).length > 0)) && rest.length > 0 && <h2 className="nws-group">{query ? 'Материалы' : 'Остальные'}</h2>}
           {rest.map(renderRow)}
           {items !== null && !items.length && !error && (
             <div className="nws-empty-list">

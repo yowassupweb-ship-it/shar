@@ -2,7 +2,7 @@
 поделились. Коллеги чужих папок не видят. Папки вкладываются друг в друга (parent_id); удаление папки материалы
 не трогает — её вложенные папки и материалы поднимаются на уровень выше (с верхнего уровня — в общий список).
 
-  GET    /api/workspace/folders                 мои папки (плоским списком, у каждой parentId)
+  GET    /api/workspace/folders                 мои папки (плоским списком, у каждой parentId и counts по видам)
   POST   /api/workspace/folders                 {title, parentId?}
   PATCH  /api/workspace/folders/{id}            {title?, parentId?} — переименовать / переложить (parentId: null — наверх)
   DELETE /api/workspace/folders/{id}
@@ -66,7 +66,17 @@ def _folders(user_id: str) -> list[dict]:
         "SELECT f.id::text AS id, f.parent_id::text AS parent_id, f.title, f.created_at::text AS created_at FROM workspace_folders f "
         "WHERE f.owner_id = %s ORDER BY lower(f.title), f.id", (user_id,),
     ) or []
-    return [{"id": r["id"], "parentId": r["parent_id"], "title": r["title"], "createdAt": r["created_at"]} for r in rows]
+    # Сколько своих разложенных материалов каждого вида лежит прямо в папке (видимых человеку): раздел «Доки»
+    # показывает папку, только если в ней (или во вложенных) есть документы; совсем пустая видна везде.
+    counts: dict[str, dict[str, int]] = {}
+    for c in db.conn.fetch_all(
+        "SELECT x.folder_id::text AS folder_id, i.kind, count(*) AS n FROM workspace_item_folder x "
+        f"JOIN workspace_items i ON i.id = x.item_id WHERE x.user_id = %s AND {store.visible_sql('i')} GROUP BY 1, 2",
+        (user_id, *store.visible_params(user_id)),
+    ) or []:
+        counts.setdefault(c["folder_id"], {})[c["kind"]] = int(c["n"])
+    return [{"id": r["id"], "parentId": r["parent_id"], "title": r["title"], "createdAt": r["created_at"],
+             "counts": counts.get(r["id"], {})} for r in rows]
 
 
 def _own(folder_id: Optional[str], user_id: str) -> dict:

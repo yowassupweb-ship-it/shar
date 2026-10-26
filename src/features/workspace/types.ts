@@ -36,7 +36,14 @@ export interface Item {
 }
 
 /** Папка «Офиса» — личная: раскладывает материалы только для её владельца. Папки вкладываются друг в друга. */
-export interface Folder { id: string; parentId: string | null; title: string; createdAt: string }
+export interface Folder {
+  id: string;
+  parentId: string | null;
+  title: string;
+  createdAt: string;
+  /** Сколько материалов каждого вида лежит прямо в папке (считает сервер, с учётом прав). */
+  counts?: Partial<Record<Kind, number>>;
+}
 
 export interface ShareEntry { userId: string; role: 'view' | 'edit'; name: string }
 /** Доступ, выданный отделу: его сотрудники (и подразделов) получают материал в свой «Офис» сразу. */

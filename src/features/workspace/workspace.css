@@ -644,3 +644,8 @@ html.dark .nws-note-syntax{--md-strong: #fdba74;--md-em: #d8b4fe;--md-code: #86e
 @media(hover:hover){.nws-note-tab-close:hover{background:color-mix(in srgb,var(--state-danger) 14%,transparent);color:var(--state-danger)}}
 .nws-note-tab-add{display:grid;place-items:center;flex:none;width:26px;border:0;border-radius:var(--radius-sm);background:transparent;color:var(--text-muted);cursor:pointer}
 @media(hover:hover){.nws-note-tab-add:hover{background:var(--surface-hover);color:var(--text-main)}}
+
+/* Путь к папке у результата поиска и найденная папка. */
+.nws-row-path { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; color: var(--text-muted); font-size: var(--text-xs); white-space: nowrap; text-overflow: ellipsis; }
+.nws-row-path svg { flex: none; color: #e8a33d; }
+.nws-folder-hit-icon { --a: #f5c26b; --b: #e8a33d; }
