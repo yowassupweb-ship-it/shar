@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
-import { Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, Globe2, LayoutGrid, Lock, MonitorUp, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
+import { Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, LayoutGrid, Lock, MonitorUp, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
 import { useShellOptions } from '@/shared/shell/ShellContext';
 import { realtime } from '@/shared/realtime/realtime';
 import { SearchField } from '@/shared/ui/SearchField';
@@ -18,7 +18,7 @@ import { isWorkspaceEvent } from './live';
 import { readPlace, writePlace } from './lib/officeMemory';
 import { canSticky, dragNoteOut, forgetSticky, openSticky } from './lib/sticky';
 import type { Folder, Item, Kind } from './types';
-import { FolderRow, isItemDrag, ITEM_DRAG } from './Folders';
+import { FOLDER_DRAG, FolderRow, isFolderDrag, isItemDrag, ITEM_DRAG } from './Folders';
 
 const OPEN_FOLDERS_KEY = 'shar.office.open-folders';
 function readOpenFolders(): Set<string> {
@@ -269,6 +269,34 @@ export default function OfficeScreen() {
     for (const i of items || []) if (foldered(i) && !i.isNew) map.set(i.folderId!, [...(map.get(i.folderId!) || []), i]);
     return map;
   }, [items, foldered]);
+  // Дерево папок: вложенные по родителю (родитель пропал — папка наверху) и путь «Родитель / Папка» для меню.
+  const childFolders = useMemo(() => {
+    const known = new Set(folders.map((f) => f.id));
+    const map = new Map<string | null, Folder[]>();
+    for (const f of folders) {
+      const parent = f.parentId && known.has(f.parentId) ? f.parentId : null;
+      map.set(parent, [...(map.get(parent) || []), f]);
+    }
+    return map;
+  }, [folders]);
+  const folderPath = useMemo(() => {
+    const byId = new Map(folders.map((f) => [f.id, f]));
+    const path = (f: Folder, seen = new Set<string>()): string => {
+      const parent = f.parentId ? byId.get(f.parentId) : undefined;
+      if (!parent || seen.has(parent.id)) return f.title;
+      seen.add(f.id);
+      return `${path(parent, seen)} / ${f.title}`;
+    };
+    return new Map(folders.map((f) => [f.id, path(f)]));
+  }, [folders]);
+  /** Папка folderId — это ancestorId или лежит внутри неё (туда ancestorId класть нельзя). */
+  const isWithin = (folderId: string, ancestorId: string) => {
+    const byId = new Map(folders.map((f) => [f.id, f]));
+    for (let cur: string | null | undefined = folderId, steps = 0; cur && steps < 64; cur = byId.get(cur)?.parentId, steps += 1) {
+      if (cur === ancestorId) return true;
+    }
+    return false;
+  };
 
   const toggleFolder = (id: string, open?: boolean) => setOpenFolders((cur) => {
     const next = new Set(cur);
@@ -286,11 +314,22 @@ export default function OfficeScreen() {
     try { await workspaceApi.placeItem(itemId, folderId); } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось переместить', 'error'); void load(); }
   }
 
-  async function newFolder(thenPlace?: Item) {
+  /** Переложить папку в другую (null — наверх): сразу в списке, потом на сервер. */
+  async function moveFolder(folderId: string, parentId: string | null) {
+    const folder = folders.find((f) => f.id === folderId);
+    if (!folder || (folder.parentId || null) === parentId) return;
+    if (parentId && isWithin(parentId, folderId)) { showToast('Папку нельзя положить в саму себя или во вложенную в неё', 'error'); return; }
+    setFolders((cur) => cur.map((f) => (f.id === folderId ? { ...f, parentId } : f)));
+    if (parentId) toggleFolder(parentId, true);
+    try { setFolders(await workspaceApi.moveFolder(folderId, parentId)); } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось переместить папку', 'error'); void load(); }
+  }
+
+  async function newFolder(thenPlace?: Item, parentId: string | null = null) {
     try {
-      const { folder, folders: list } = await workspaceApi.createFolder('Новая папка');
+      const { folder, folders: list } = await workspaceApi.createFolder('Новая папка', parentId);
       setFolders(list);
       setEditingFolder(folder.id);
+      if (parentId) toggleFolder(parentId, true);
       toggleFolder(folder.id, true);
       if (thenPlace) void moveToFolder(thenPlace.id, folder.id);
     } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось создать папку', 'error'); }
@@ -304,12 +343,13 @@ export default function OfficeScreen() {
   }
 
   async function removeFolder(folder: Folder) {
-    const n = byFolder.get(folder.id)?.length ?? 0;
-    const ok = await askConfirm({ title: `Удалить папку «${folder.title}»?`, text: n ? 'Материалы из неё останутся в общем списке.' : undefined, confirm: 'Удалить', tone: 'danger' });
+    const full = (byFolder.get(folder.id)?.length ?? 0) + (childFolders.get(folder.id)?.length ?? 0) > 0;
+    const where = folder.parentId ? 'в папку уровнем выше' : 'в общий список, вложенные папки — наверх';
+    const ok = await askConfirm({ title: `Удалить папку «${folder.title}»?`, text: full ? `Её содержимое переместится ${where}.` : undefined, confirm: 'Удалить', tone: 'danger' });
     if (!ok) return;
     try {
       setFolders(await workspaceApi.deleteFolder(folder.id));
-      setItems((cur) => cur?.map((i) => (i.folderId === folder.id ? { ...i, folderId: null } : i)) ?? cur);
+      setItems((cur) => cur?.map((i) => (i.folderId === folder.id ? { ...i, folderId: folder.parentId } : i)) ?? cur);
     } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось удалить папку', 'error'); }
   }
   const importing = busy.startsWith('import');
@@ -318,6 +358,29 @@ export default function OfficeScreen() {
   const renderRow = (item: Item) => (
     <ItemRow key={item.id} item={item} active={item.id === openId} onOpen={() => select(item.id, filter === 'all' ? 'all' : item.kind)} onMenu={(anchor) => setRowMenu({ item, anchor })} />
   );
+
+  const renderFolder = (f: Folder): ReactNode => {
+    const subs = childFolders.get(f.id) || [];
+    const own = byFolder.get(f.id) || [];
+    return (
+      <FolderRow
+        key={f.id}
+        folder={f}
+        count={own.length}
+        empty={!own.length && !subs.length}
+        open={openFolders.has(f.id)}
+        editing={editingFolder === f.id}
+        onToggle={() => toggleFolder(f.id)}
+        onDropItem={(id) => void moveToFolder(id, f.id)}
+        onDropFolder={(id) => void moveFolder(id, f.id)}
+        onMenu={(anchor) => setFolderMenu({ folder: f, anchor })}
+        onRename={(title) => void renameFolder(f, title)}
+      >
+        {subs.map(renderFolder)}
+        {own.map(renderRow)}
+      </FolderRow>
+    );
+  };
 
   return (
     <div className="nws" ref={layoutRef} data-open={openId ? 'true' : undefined}>
@@ -354,15 +417,17 @@ export default function OfficeScreen() {
           className="nws-rows nx-scroll-y"
           ref={rowsRef}
           data-over={rootOver || undefined}
-          // Отпустили строку мимо папок — материал выходит из своей папки.
-          onDragOver={(e) => { if (!isItemDrag(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setRootOver(true); }}
+          // Отпустили строку мимо папок — материал выходит из своей папки, папка — на верхний уровень.
+          onDragOver={(e) => { if (!isItemDrag(e) && !isFolderDrag(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setRootOver(true); }}
           onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setRootOver(false); }}
           onDrop={(e) => {
-            if (!isItemDrag(e)) return;
+            if (!isItemDrag(e) && !isFolderDrag(e)) return;
             e.preventDefault();
             setRootOver(false);
             const id = e.dataTransfer.getData(ITEM_DRAG);
+            const folderId = e.dataTransfer.getData(FOLDER_DRAG);
             if (id) void moveToFolder(id, null);
+            else if (folderId) void moveFolder(folderId, null);
           }}
         >
           {items === null && !error && <div className="nws-loading"><Spinner size={22} label="Загружаю" /></div>}
@@ -372,21 +437,7 @@ export default function OfficeScreen() {
           {pinned.length > 0 && <h2 className="nws-group">Закреплённые</h2>}
           {pinned.map(renderRow)}
           {!query && folders.length > 0 && <h2 className="nws-group">Папки</h2>}
-          {!query && folders.map((f) => (
-            <FolderRow
-              key={f.id}
-              folder={f}
-              count={byFolder.get(f.id)?.length ?? 0}
-              open={openFolders.has(f.id)}
-              editing={editingFolder === f.id}
-              onToggle={() => toggleFolder(f.id)}
-              onDropItem={(id) => void moveToFolder(id, f.id)}
-              onMenu={(anchor) => setFolderMenu({ folder: f, anchor })}
-              onRename={(title) => void renameFolder(f, title)}
-            >
-              {(byFolder.get(f.id) || []).map(renderRow)}
-            </FolderRow>
-          ))}
+          {!query && (childFolders.get(null) || []).map(renderFolder)}
           {(pinned.length > 0 || fresh.length > 0 || (!query && folders.length > 0)) && rest.length > 0 && <h2 className="nws-group">Остальные</h2>}
           {rest.map(renderRow)}
           {items !== null && !items.length && !error && (
@@ -442,13 +493,17 @@ export default function OfficeScreen() {
       {folderMenu && (
         <Menu anchor={folderMenu.anchor} label="Папка" onClose={() => setFolderMenu(null)}>
           <MenuItem icon={<Pencil size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); setEditingFolder(f.id); }}>Переименовать</MenuItem>
+          <MenuItem icon={<FolderPlus size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void newFolder(undefined, f.id); }}>Новая папка внутри</MenuItem>
+          {folderMenu.folder.parentId && (
+            <MenuItem icon={<FolderUp size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void moveFolder(f.id, null); }}>Вынести на верхний уровень</MenuItem>
+          )}
           <MenuItem icon={<Trash2 size={15} />} tone="danger" onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void removeFolder(f); }}>Удалить папку</MenuItem>
         </Menu>
       )}
       {moveMenu && (
         <Menu anchor={moveMenu.anchor} label="В папку" onClose={() => setMoveMenu(null)}>
-          {folders.map((f) => (
-            <MenuItem key={f.id} icon={<FolderIcon size={15} />} disabled={moveMenu.item.folderId === f.id} onSelect={() => { const i = moveMenu.item; setMoveMenu(null); void moveToFolder(i.id, f.id); }}>{f.title}</MenuItem>
+          {[...folders].sort((a, b) => (folderPath.get(a.id) || '').localeCompare(folderPath.get(b.id) || '', 'ru')).map((f) => (
+            <MenuItem key={f.id} icon={<FolderIcon size={15} />} disabled={moveMenu.item.folderId === f.id} onSelect={() => { const i = moveMenu.item; setMoveMenu(null); void moveToFolder(i.id, f.id); }}>{folderPath.get(f.id) || f.title}</MenuItem>
           ))}
           {moveMenu.item.folderId && <MenuItem icon={<FolderMinus size={15} />} onSelect={() => { const i = moveMenu.item; setMoveMenu(null); void moveToFolder(i.id, null); }}>Вынуть из папки</MenuItem>}
           <MenuItem icon={<FolderPlus size={15} />} onSelect={() => { const i = moveMenu.item; setMoveMenu(null); void newFolder(i); }}>Новая папка…</MenuItem>

@@ -69,3 +69,12 @@
 .npv-tabs button { flex: none; height: 28px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--text-2); font-size: var(--text-xs); cursor: pointer; }
 .npv-tabs button[aria-selected="true"] { background: var(--surface-selected); color: var(--accent-color); font-weight: var(--weight-semibold); }
 .npv-note { margin: var(--space-3); font-size: var(--text-xs); color: var(--text-muted); }
+
+/* Правила живой сборки, которых не было в git (восстановлены из прода 26.10.2026): таблицы в Markdown
+   и закреплённые шапки таблиц. Порядок — как в сборке прода. */
+.npv-md-table{max-width:100%;margin:0 0 .8em;overflow-x:auto}
+.npv-md-table>table{max-width:none;margin:0}
+.npv-md-table th,.npv-md-table td{min-width:7em;overflow-wrap:normal;word-break:normal}
+.npv-table thead th,.npv-table tbody th{background-color:var(--surface-panel);background-image:linear-gradient(var(--surface-hover),var(--surface-hover));color:var(--text-2);font-weight:var(--weight-medium)}
+.npv-table thead th{position:sticky;top:0;z-index:2}
+.npv-table tbody th{position:sticky;left:0;z-index:1;text-align:right}

@@ -35,8 +35,8 @@ export interface Item {
   folderId?: string | null;
 }
 
-/** Папка «Офиса» — личная: раскладывает материалы только для её владельца. */
-export interface Folder { id: string; title: string; createdAt: string }
+/** Папка «Офиса» — личная: раскладывает материалы только для её владельца. Папки вкладываются друг в друга. */
+export interface Folder { id: string; parentId: string | null; title: string; createdAt: string }
 
 export interface ShareEntry { userId: string; role: 'view' | 'edit'; name: string }
 /** Доступ, выданный отделу: его сотрудники (и подразделов) получают материал в свой «Офис» сразу. */

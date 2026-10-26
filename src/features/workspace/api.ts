@@ -52,9 +52,13 @@ export const workspaceApi = {
   remove: (id: string) => call<{ ok: boolean }>(`/api/workspace/items/${enc(id)}`, { method: 'DELETE' }),
 
   folders: () => call<{ folders: Folder[] }>('/api/workspace/folders').then((r) => r.folders),
-  createFolder: (title: string) => call<{ folder: Folder; folders: Folder[] }>('/api/workspace/folders', { method: 'POST', json: { title } }),
+  createFolder: (title: string, parentId: string | null = null) =>
+    call<{ folder: Folder; folders: Folder[] }>('/api/workspace/folders', { method: 'POST', json: { title, parentId } }),
   renameFolder: (id: string, title: string) =>
     call<{ folders: Folder[] }>(`/api/workspace/folders/${enc(id)}`, { method: 'PATCH', json: { title } }).then((r) => r.folders),
+  /** Переложить папку в другую (null — на верхний уровень). */
+  moveFolder: (id: string, parentId: string | null) =>
+    call<{ folders: Folder[] }>(`/api/workspace/folders/${enc(id)}`, { method: 'PATCH', json: { parentId } }).then((r) => r.folders),
   deleteFolder: (id: string) => call<{ folders: Folder[] }>(`/api/workspace/folders/${enc(id)}`, { method: 'DELETE' }).then((r) => r.folders),
   /** Положить материал в свою папку или вынуть (null). */
   placeItem: (id: string, folderId: string | null) =>
