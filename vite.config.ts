@@ -21,7 +21,16 @@ export default defineConfig(({ mode }) => {
     // Кука сессии, выданная удалённым хостом, должна лечь на localhost.
     cookieDomainRewrite: '',
   });
-  const proxy = { '/api': { ...http(apiTarget), ws: true } };
+  const proxy = {
+    '/api': {
+      ...http(apiTarget),
+      ws: true,
+      // The browser connects to Vite's origin in development, while the API
+      // validates WebSocket Origin against the proxied Host header. Keep both
+      // headers on the API target so the same-origin check remains meaningful.
+      rewriteWsOrigin: true,
+    },
+  };
 
   return {
     plugins: [react(), tailwindcss()],
