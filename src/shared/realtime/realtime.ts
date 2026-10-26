@@ -23,6 +23,8 @@ type StatusListener = (status: RealtimeStatus) => void;
 const SILENCE_LIMIT_MS = 45000;
 const STALE_ON_WAKE_MS = 30000;
 const BACKOFF_MAX_MS = 30000;
+/** Повтор после отказа сервера (1008) — не раньше, чем через столько: частый круг «отказ → переподключение» нагружал бы сервер. */
+const UNAUTHORIZED_RETRY_MS = 15000;
 
 function socketUrl(userId: string): string {
   const path = `/api/ws/${encodeURIComponent(userId)}`;
@@ -186,6 +188,12 @@ class RealtimeClient {
       // после восстановления придёт session-ready.
       if (e.code === 1008) {
         window.dispatchEvent(new Event('shar:ws-unauthorized'));
+        // Если вход на самом деле жив (сервер отказал по другой причине — например, по Origin
+        // за посредником), проверка сессии ничего не меняет, и сокет молчал до следующего фокуса
+        // окна: открытый чат не получал ни сообщений, ни «прочитано». Пробуем снова сами, но
+        // редко и всё реже — истёкший вход тем временем уведёт на экран входа и снимет подписку.
+        this.backoff = Math.max(this.backoff, UNAUTHORIZED_RETRY_MS);
+        if (this.refs > 0) this.scheduleReconnect();
         return;
       }
       if (this.refs > 0) this.scheduleReconnect();

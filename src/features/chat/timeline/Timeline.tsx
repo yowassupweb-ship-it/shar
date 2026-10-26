@@ -1,6 +1,6 @@
 import { openReminderFromText } from '@/features/calendar';
 import { plainFromMarkdown } from '@/features/chat/store';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { lazyComponent } from '@/shared/ui/lazy';
 import {
   BellPlus,
@@ -47,6 +47,21 @@ const PollCreatorModal = lazyComponent(() => import('@/features/chat/polls/PollC
 const EMPTY: Thread = { ids: [], byId: {}, hasMore: false, phase: 'idle', olderLoading: false };
 const NEAR_BOTTOM = 96;
 const LOAD_OLDER_AT = 320;
+/** Окно отрисовки. В DOM — не больше MAX сообщений вокруг того, что на экране: при входе в чат последние
+ *  WINDOW (или окрестность запомненного места), у края окна дорисовываем по STEP из памяти, с другого края
+ *  столько же убираем; за историей на сервер идём, только дойдя до начала загруженного. Раньше лента держала
+ *  в DOM всё загруженное — в большом чате вход в него и каждый кадр прокрутки дорожали с каждой страницей. */
+const WINDOW = 30;
+const STEP = 50;
+const MAX = 200;
+/** Окно сдвигаем заранее, за столько пикселей до его края, — чтобы дорисовка успевала до того, как край виден. */
+const EDGE = 1200;
+type Win = { start: string | null; end: string | null };
+/** Окно по индексам; null — край загруженного (у нижнего края в окно попадают и новые сообщения). */
+const span = (ids: string[], from: number, to: number): Win => ({
+  start: from > 0 ? ids[from] : null,
+  end: to < ids.length - 1 ? ids[Math.max(0, to)] : null,
+});
 const LONG_PRESS_MS = 450;
 const SWIPE_TIME_MAX = 56;
 const SWIPE_REPLY_MAX = 64;
@@ -94,6 +109,22 @@ function firstVisibleRow(scroller: HTMLElement): { id: string; offset: number } 
   }
   const row = rows[lo];
   return { id: row.dataset.msgId || '', offset: row.getBoundingClientRect().top - top };
+}
+
+/** Отметить плашку даты, прилипшую к верху ленты (data-stuck): её прячет CSS, пока ленту не крутят.
+ *  Прилипшая — та, что сдвинута со своего места в начале дня. */
+function markStuckDay(scroller: HTMLElement) {
+  let stuck: HTMLElement | null = null;
+  for (const day of scroller.querySelectorAll<HTMLElement>('.cxm-day')) {
+    const group = day.parentElement;
+    if (!group) continue;
+    // Плашка — первая в своём дне: на месте её верх = верх дня + её верхнее поле.
+    const natural = group.getBoundingClientRect().top + (parseFloat(getComputedStyle(day).marginTop) || 0);
+    const at = day.getBoundingClientRect().top;
+    if (at - natural > 1) stuck = day;
+    day.removeAttribute('data-stuck');
+  }
+  stuck?.setAttribute('data-stuck', '');
 }
 
 /** Для каждого собеседника — докуда он прочитал (время) и когда. */
@@ -144,11 +175,16 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
   // пока сообщение возвращается на место.
   const [focus, setFocus] = useState<{ shot: FocusShot; closing: boolean } | null>(null);
   useEffect(() => {
-    if (menu || !focus || focus.closing) return undefined;
-    setFocus({ ...focus, closing: true });
-    const t = window.setTimeout(() => setFocus(null), 230);
-    return () => window.clearTimeout(t);
+    if (!menu && focus && !focus.closing) setFocus({ ...focus, closing: true });
   }, [menu, focus]);
+  // Убираем копию отдельным эффектом: раньше таймер жил в том же эффекте, что ставит closing, — смена focus
+  // перезапускала эффект, очистка снимала таймер, и копия сообщения оставалась поверх ленты навсегда.
+  const focusClosing = Boolean(focus?.closing);
+  useEffect(() => {
+    if (!focusClosing) return undefined;
+    const t = window.setTimeout(() => setFocus((cur) => (cur?.closing ? null : cur)), 230);
+    return () => window.clearTimeout(t);
+  }, [focusClosing]);
   const [forwarding, setForwarding] = useState<Message[] | null>(null);
   const [pollEdit, setPollEdit] = useState<Msg | null>(null);
   const selection = useChatStore((s) => (s.selection?.chatId === chatId ? s.selection.ids : null));
@@ -156,7 +192,32 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
   const [viewer, setViewer] = useState<{ items: ViewerItem[]; start: number } | null>(null);
   const [readersOf, setReadersOf] = useState<string | null>(null);
 
-  const firstId = thread.ids[0];
+  const [win, setWin] = useState<Win>(() => {
+    const ids = thread.ids;
+    let at = -1;
+    try { const saved = readPosition(chatId); at = saved ? ids.indexOf(saved.id) : -1; } catch { /* нет сохранённого места */ }
+    return at >= 0 ? span(ids, at - 30, at + WINDOW) : span(ids, ids.length - WINDOW, ids.length - 1);
+  });
+  const range = useMemo(() => {
+    const n = thread.ids.length;
+    // Край окна пропал из загруженного (ленту перечитали) — встаём на последние сообщения.
+    let a = win.start ? thread.ids.indexOf(win.start) : 0;
+    let b = win.end ? thread.ids.indexOf(win.end) : n - 1;
+    if (a < 0 || b < 0 || b < a) { a = Math.max(0, n - WINDOW); b = n - 1; }
+    return { a, b, atEnd: b >= n - 1 };
+  }, [thread.ids, win]);
+  const shownIds = useMemo(() => (range.a === 0 && range.atEnd ? thread.ids : thread.ids.slice(range.a, range.b + 1)), [thread.ids, range]);
+  const rangeRef = useRef(range);
+  rangeRef.current = range;
+  // Сдвиг окна уже заказан (переход ещё не отрисован) — второй не заказываем. Положение на экране при сдвиге
+  // держит якорение прокрутки браузера: вставка и удаление строк выше видимой не сдвигают то, что видно.
+  const shifting = useRef(false);
+  useEffect(() => { shifting.current = false; }, [win]);
+  const pendingJump = useRef<string | null>(null);
+  /** После перерисовки окна — к низу (кнопка «вниз», своё новое сообщение при окне в истории). */
+  const bottomAfter = useRef(false);
+
+  const firstId = shownIds[0];
   const lastId = thread.ids[thread.ids.length - 1];
 
   // Ширина колонки: размеры фото считаются от неё, а не от окна. Меряем до
@@ -211,20 +272,29 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
       if (!restored) toBottom();
       seen.current = new Set(thread.ids.map((id) => thread.byId[id]._key));
     } else if (firstId !== prevFirst.current && topAnchor.current) {
-      // Подгрузили историю сверху — возвращаем верхнее видимое сообщение туда же.
+      // Дорисовали или убрали сверху (история, сдвиг окна) — верхнее видимое сообщение остаётся на месте.
       const a = topAnchor.current;
       const row = el.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(a.id)}"]`);
       if (row) el.scrollTop = topIn(el, row) - a.offset;
       topAnchor.current = null;
+      // Пришла страница истории — лишнее снизу (за экраном) убираем.
+      if (shownIds.length > MAX + STEP / 2) setWin((w) => ({ start: w.start, end: shownIds[MAX - 1] }));
+    } else if (bottomAfter.current) {
+      bottomAfter.current = false;
+      toBottom();
     } else if (lastId && lastId !== prevLast.current) {
       const last = thread.byId[lastId];
       const mineNew = last && String(last.authorId) === myId;
-      if (atBottom.current || mineNew) toBottom();
+      if (!range.atEnd) {
+        // Окно в истории: своё сообщение — переносимся к низу, чужое — только счётчик на кнопке «вниз».
+        if (mineNew) { bottomAfter.current = true; setWin(span(thread.ids, thread.ids.length - WINDOW, thread.ids.length - 1)); }
+        else if (prevLast.current) setMissed((n) => n + 1);
+      } else if (atBottom.current || mineNew) toBottom();
       else if (prevLast.current) setMissed((n) => n + 1);
     }
     prevFirst.current = firstId;
     prevLast.current = lastId;
-  }, [firstId, lastId, thread.ids, thread.byId, myId, chatId, toBottom]);
+  }, [firstId, lastId, thread.ids, thread.byId, myId, chatId, toBottom, shownIds, range.atEnd]);
 
   // Фото догружаются и меняют высоту — если были внизу, остаёмся внизу.
   useEffect(() => {
@@ -300,12 +370,14 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
     const el = scrollRef.current;
     if (!el) return;
     // Пока ленту крутят, прилипшая дата видна (CSS по data-scrolling); через секунду покоя гаснет.
-    el.dataset.scrolling = '';
+    // Атрибут ставим один раз за прокрутку, а не на каждое событие.
+    if (!('scrolling' in el.dataset)) el.dataset.scrolling = '';
     window.clearTimeout(scrollingTimer.current);
-    scrollingTimer.current = window.setTimeout(() => { delete el.dataset.scrolling; }, 1000);
+    scrollingTimer.current = window.setTimeout(() => { markStuckDay(el); delete el.dataset.scrolling; }, 1000);
     window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(rememberPosition, 150);
-    const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM;
+    const r = rangeRef.current;
+    const bottom = r.atEnd && el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM;
     const byUser = Date.now() - userScrollAt.current < 600;
     if (bottom !== atBottom.current && (bottom || byUser)) {
       atBottom.current = bottom;
@@ -314,6 +386,21 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
     }
     const t = useChatStore.getState().threads[chatId];
     const loading = Boolean(t?.olderLoading);
+    // У края окна сначала дорисовываем уже загруженное из памяти — мгновенно, без сети; с другого края
+    // столько же убираем. Верхнее видимое сообщение держим на месте (topAnchor).
+    // Дорисовка — переходом React: рендер режется на куски и не держит прокрутку одной длинной задачей.
+    if (t && el.scrollTop < EDGE && r.a > 0 && !shifting.current) {
+      shifting.current = true;
+      const from = r.a - STEP;
+      startTransition(() => setWin(span(t.ids, from, Math.min(r.b, Math.max(from, 0) + MAX - 1))));
+      return;
+    }
+    if (t && !r.atEnd && el.scrollHeight - el.scrollTop - el.clientHeight < EDGE && !shifting.current) {
+      shifting.current = true;
+      const to = r.b + STEP;
+      startTransition(() => setWin(span(t.ids, Math.max(r.a, to - MAX + 1), to)));
+      return;
+    }
     if ((el.scrollTop < LOAD_OLDER_AT && t?.hasMore && t.phase === 'ready') || loading) {
       // Пока грузится история, держим актуальным верхнее видимое сообщение.
       const first = firstVisibleRow(el);
@@ -324,11 +411,24 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
 
   const jumpTo = useCallback((messageId: string) => {
     const el = scrollRef.current?.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(messageId)}"]`);
-    if (!el) return;
+    if (!el) {
+      // Сообщение загружено, но за окном отрисовки — расширяем окно и прыгаем после кадра.
+      const ids = useChatStore.getState().threads[chatId]?.ids || [];
+      const at = ids.indexOf(messageId);
+      if (at >= 0) { pendingJump.current = messageId; setWin(span(ids, at - 30, at + 30)); }
+      return;
+    }
     el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     el.dataset.flash = 'true';
     window.setTimeout(() => { delete el.dataset.flash; }, 1400);
-  }, []);
+  }, [chatId]);
+
+  useEffect(() => {
+    const id = pendingJump.current;
+    if (!id || !scrollRef.current?.querySelector(`[data-msg-id="${CSS.escape(id)}"]`)) return;
+    pendingJump.current = null;
+    jumpTo(id);
+  }, [shownIds, jumpTo]);
 
   // Переход по запросу снаружи: поиск, закреплённое сообщение.
   useEffect(() => { if (jumpRequest) jumpTo(jumpRequest.id); }, [jumpRequest, jumpTo]);
@@ -380,7 +480,7 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
   // ── Жесты (делегирование на контейнер) ──────────────────────────────────
   const gesture = useRef({
     x: 0, y: 0, row: null as HTMLElement | null, msgId: '', mode: 'idle' as 'idle' | 'deciding' | 'time' | 'reply' | 'none',
-    timer: 0, fired: false, dir: 1,
+    timer: 0, fired: false, dir: 1, ox: 0,
   });
 
   const msgFrom = (el: EventTarget | null): Msg | null => {
@@ -430,8 +530,9 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
       // как в WhatsApp. Раньше работал только вправо, и привычный жест «не работал».
       g.mode = horizontal && g.row && !notificationsChat ? 'reply' : 'none';
       g.dir = dx > 0 ? 1 : -1;
-      if (g.mode === 'reply' && g.row) g.row.dataset.dir = g.dir > 0 ? 'right' : 'left';
-      if (g.mode !== 'none') listRef.current?.setAttribute('data-gesture', g.mode);
+      // Отсчёт — от точки, где жест распознан: иначе пузырь сразу прыгал на «мёртвую зону» в 10px.
+      g.ox = t.clientX;
+      if (g.mode === 'reply' && g.row) { g.row.dataset.dir = g.dir > 0 ? 'right' : 'left'; g.row.dataset.replying = 'true'; }
     }
     // Решили, что это ответ, — ленту больше не прокручиваем: иначе iOS
     // забирает жест себе, и пузырь дёргается по вертикали.
@@ -439,7 +540,9 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
     if (g.mode === 'time') {
       listRef.current?.style.setProperty('--swipe', `${Math.max(-SWIPE_TIME_MAX, Math.min(0, dx))}px`);
     } else if (g.mode === 'reply' && g.row) {
-      const d = Math.max(0, Math.min(SWIPE_REPLY_MAX, dx * g.dir));
+      const pulled = Math.max(0, (t.clientX - g.ox) * g.dir);
+      // За порогом — с сопротивлением, как резинка, а не упором в стену.
+      const d = pulled <= SWIPE_REPLY_AT ? pulled : Math.min(SWIPE_REPLY_MAX, SWIPE_REPLY_AT + (pulled - SWIPE_REPLY_AT) * 0.35);
       g.row.style.setProperty('--reply', `${d * g.dir}px`);
       if (d >= SWIPE_REPLY_AT && g.row.dataset.replying !== 'armed') navigator.vibrate?.(6);
       g.row.dataset.replying = d >= SWIPE_REPLY_AT ? 'armed' : 'true';
@@ -530,12 +633,14 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
   const reads = useMemo(() => readMap(chat, thread, myId), [chat, thread, myId]);
 
   const rows = useMemo(() => {
-    const msgs = thread.ids.map((id) => thread.byId[id]).filter(Boolean);
+    const msgs = shownIds.map((id) => thread.byId[id]).filter(Boolean);
     const isOwn = (m: Msg) => String(m.authorId) === myId && !notificationsChat && !m.isSystemMessage && !m.isDeleted;
     let lastOwn: Msg | undefined;
     let lastReadOwn: Msg | undefined;
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i];
+    // Отметки «доставлено / прочитано» — по всей загруженной ленте, а рисуются, только если попали в окно.
+    for (let i = thread.ids.length - 1; i >= 0; i--) {
+      const m = thread.byId[thread.ids[i]];
+      if (!m) continue;
       if (!isOwn(m)) continue;
       if (!lastOwn) lastOwn = m;
       const t = new Date(m.createdAt).getTime();
@@ -552,9 +657,11 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
       out = [];
     };
     const seenKeys = seen.current;
+    const before = range.a > 0 ? thread.byId[thread.ids[range.a - 1]] : undefined;
+    const after = thread.byId[thread.ids[range.b + 1]];
     msgs.forEach((m, i) => {
-      const prev = msgs[i - 1];
-      const next = msgs[i + 1];
+      const prev = i ? msgs[i - 1] : before;
+      const next = i < msgs.length - 1 ? msgs[i + 1] : after;
       if (!prev || dayKey(prev.createdAt) !== dayKey(m.createdAt)) {
         closeDay();
         dayStart = String(dayKey(m.createdAt));
@@ -590,7 +697,7 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
     });
     closeDay();
     return days;
-  }, [thread, myId, notificationsChat, reads, users, ctx]);
+  }, [thread, shownIds, range, myId, notificationsChat, reads, users, ctx]);
 
   let content: ReactNode;
   if (!thread.ids.length && (thread.phase === 'loading' || thread.phase === 'idle')) {
@@ -610,7 +717,7 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
     content = (
       <>
         {thread.olderLoading && <div className="cxm-older" aria-busy="true"><Spinner size={16} label="Загружаю историю" /></div>}
-        {!thread.hasMore && thread.phase === 'ready' && <div className="cxm-start">Начало переписки</div>}
+        {!thread.hasMore && range.a === 0 && thread.phase === 'ready' && <div className="cxm-start">Начало переписки</div>}
         {rows}
       </>
     );
@@ -643,7 +750,14 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
         <button
           type="button"
           className="nx-icon-btn cxn-jump"
-          onClick={() => { toBottom(true); setMissed(0); }}
+          onClick={() => {
+            setMissed(0);
+            if (rangeRef.current.atEnd) { toBottom(true); return; }
+            // Окно в истории — рисуем последние сообщения и встаём вниз без долгой анимации через всю ленту.
+            bottomAfter.current = true;
+            const ids = useChatStore.getState().threads[chatId]?.ids || [];
+            setWin(span(ids, ids.length - WINDOW, ids.length - 1));
+          }}
           aria-label={missed ? `К новым сообщениям: ${missed}` : 'К последним сообщениям'}
         >
           <ArrowDown size={18} aria-hidden="true" />

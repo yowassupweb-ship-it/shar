@@ -12,13 +12,16 @@ import { realtime, type RealtimeEvent } from '@/shared/realtime/realtime';
 export interface Account {
   id: string; name: string; email: string; signature?: string;
   imapHost?: string; imapPort?: number; smtpHost?: string; smtpPort?: number; username?: string; useSsl?: boolean;
+  /** Шар выбило из ящика: пароль нечем расшифровать или почтовый сервер его не принял. */
+  needsPassword?: boolean;
 }
 
 export interface AccountForm {
   name: string; email: string; username: string; password: string;
   imapHost: string; imapPort: number; smtpHost: string; smtpPort: number; useSsl: boolean; signature: string;
 }
-export interface Box { role: 'inbox' | 'drafts' | 'sent' | 'junk' | 'trash' | 'archive'; folder: string; title: string; unread: number }
+/** Спецпапка (входящие, отправленные…) или папка, которую человек завёл сам (`folder`, с уровнем вложенности). */
+export interface Box { role: 'inbox' | 'drafts' | 'sent' | 'junk' | 'trash' | 'archive' | 'folder'; folder: string; title: string; unread: number; depth?: number }
 export interface Addr { addr: string; name?: string }
 export interface MailAttachment { filename: string; contentType?: string; content_type?: string; size: number; url?: string }
 
@@ -47,6 +50,9 @@ interface State {
   accountsPhase: Phase;
   accountId: string | null;
   boxes: Box[];
+  /** Список папок не пришёл: без этого экран молча показывал одни «Входящие». 'password' — пароль
+   *  ящика нужно ввести заново (сервер не может его расшифровать), 'server' — почтовый сервер. */
+  boxesError: false | 'password' | 'server';
   folder: string;
   lists: Record<string, MailRow[]>;
   listPhase: Record<string, Phase>;
@@ -57,7 +63,7 @@ interface State {
 }
 
 export const useMail = create<State>(() => ({
-  accounts: [], accountsPhase: 'idle', accountId: null, boxes: [], folder: 'INBOX',
+  accounts: [], accountsPhase: 'idle', accountId: null, boxes: [], boxesError: false, folder: 'INBOX',
   lists: {}, listPhase: {}, syncing: {}, full: {}, search: '', found: null,
 }));
 const set = useMail.setState;
@@ -67,12 +73,17 @@ const get = useMail.getState;
 export { myId } from '@/shared/session/session';
 import { myId } from '@/shared/session/session';
 
+/** Ошибка запроса почты со статусом: 409 — пароль ящика нужно ввести заново. */
+export class MailError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { cache: 'no-store', ...init });
   if (!res.ok) {
     let detail = '';
     try { detail = (await res.json())?.detail || ''; } catch { /* не JSON */ }
-    throw new Error(detail || String(res.status));
+    throw new MailError(detail || String(res.status), res.status);
   }
   return (await res.json()) as T;
 }
@@ -104,6 +115,18 @@ export async function loadAccounts(): Promise<void> {
   }
 }
 
+/** Проверка при входе в Шар: не выбило ли из какого-то ящика. Только список ящиков (без почтового
+ *  сервера и без подписки на события почты) — отдаёт адреса ящиков, которым нужен пароль. */
+export async function checkMailAccess(): Promise<string[]> {
+  try {
+    const accounts = await call<Account[]>(`/api/mail/accounts?userId=${encodeURIComponent(myId())}`);
+    set({ accounts });
+    return accounts.filter((a) => a.needsPassword).map((a) => a.email);
+  } catch {
+    return [];
+  }
+}
+
 /** Подключить ящик (или обновить настройки). Пароль при правке пустой — не менять. */
 export async function saveAccount(id: string | null, form: AccountForm): Promise<Account> {
   const body: Record<string, unknown> = { ...form };
@@ -111,6 +134,8 @@ export async function saveAccount(id: string | null, form: AccountForm): Promise
   const saved = await call<Account>(id ? `/api/mail/accounts/${encodeURIComponent(id)}` : '/api/mail/accounts', json(id ? 'PUT' : 'POST', body));
   await loadAccounts();
   if (!id) { selectAccount(String(saved.id)); void loadBoxes(); }
+  // Новый пароль (в том числе после «нужно ввести заново») — сразу перечитать папки и входящие.
+  else if (id === get().accountId) { set({ boxesError: false }); void loadBoxes(true); void syncFolder('INBOX'); }
   return saved;
 }
 
@@ -122,16 +147,46 @@ export async function removeAccount(id: string): Promise<void> {
 
 export function selectAccount(id: string) {
   try { localStorage.setItem('nxmail:account', id); } catch { /* ignore */ }
-  set({ accountId: id, boxes: [], lists: {}, listPhase: {}, full: {}, folder: 'INBOX', found: null, search: '' });
+  set({ accountId: id, boxes: [], boxesError: false, lists: {}, listPhase: {}, full: {}, folder: 'INBOX', found: null, search: '' });
 }
 
-export async function loadBoxes(): Promise<void> {
+/** Отметить ящик «выбитым» (нужен пароль) или снова рабочим. */
+function setLocked(id: string, locked: boolean) {
+  if (Boolean(get().accounts.find((a) => String(a.id) === id)?.needsPassword) === locked) return;
+  set((s) => ({ accounts: s.accounts.map((a) => (String(a.id) === id ? { ...a, needsPassword: locked } : a)) }));
+}
+
+const isLocked = (id: string | null) => Boolean(id && get().accounts.find((a) => String(a.id) === id)?.needsPassword);
+
+export async function loadBoxes(refresh = false): Promise<void> {
   const acc = get().accountId;
-  if (!acc) return;
+  if (!acc || (isLocked(acc) && !refresh)) return;
   try {
-    const boxes = await call<Box[]>(`/api/mail/mailboxes?accountId=${encodeURIComponent(acc)}&userId=${encodeURIComponent(myId())}`);
-    if (get().accountId === acc) set({ boxes });
-  } catch { /* останутся прежние */ }
+    const qs = new URLSearchParams({ accountId: acc, userId: myId(), ...(refresh ? { refresh: 'true' } : {}) });
+    const boxes = await call<Box[]>(`/api/mail/mailboxes?${qs}`);
+    if (get().accountId === acc) { set({ boxes, boxesError: false }); setLocked(acc, false); }
+  } catch (e) {
+    // прежний список, если был, остаётся
+    const password = e instanceof MailError && e.status === 409;
+    if (get().accountId === acc) set({ boxesError: password ? 'password' : 'server' });
+    if (password) setLocked(acc, true);
+  }
+}
+
+/** Войти в ящик заново: новый пароль → проверка входом (список папок). Ошибка — текстом для человека. */
+export async function relogin(id: string, password: string): Promise<void> {
+  await call(`/api/mail/accounts/${encodeURIComponent(id)}`, json('PUT', { password }));
+  const qs = new URLSearchParams({ accountId: id, userId: myId(), refresh: 'true' });
+  try {
+    const boxes = await call<Box[]>(`/api/mail/mailboxes?${qs}`);
+    setLocked(id, false);
+    if (get().accountId === id) { set({ boxes, boxesError: false }); void syncFolder(get().folder || 'INBOX'); }
+  } catch (e) {
+    if (e instanceof MailError && e.status === 409) throw new Error('Почтовый сервер не принял пароль. Проверьте его и попробуйте ещё раз.');
+    // Пароль сохранён, но почтовый сервер не ответил — вход проверим позже.
+    setLocked(id, false);
+    if (get().accountId === id) set({ boxesError: 'server' });
+  }
 }
 
 export async function loadFolder(folder: string): Promise<void> {
@@ -156,10 +211,13 @@ export async function loadFolder(folder: string): Promise<void> {
  *  их держит сервер сам. */
 export async function syncFolder(folder: string): Promise<void> {
   const acc = get().accountId;
-  if (!acc || get().syncing[folder]) return;
+  // Из ящика выбило — не долбим почтовый сервер, пока человек не введёт пароль.
+  if (!acc || get().syncing[folder] || isLocked(acc)) return;
   set((s) => ({ syncing: { ...s.syncing, [folder]: true } }));
   try {
-    await call('/api/mail/sync', json('POST', { accountId: acc, userId: myId(), folder })).catch(() => null);
+    await call('/api/mail/sync', json('POST', { accountId: acc, userId: myId(), folder }))
+      .then(() => setLocked(acc, false))
+      .catch((e) => { if (e instanceof MailError && e.status === 409) setLocked(acc, true); });
     await loadFolder(folder);
   } finally {
     set((s) => ({ syncing: { ...s.syncing, [folder]: false } }));
@@ -181,8 +239,23 @@ export async function openMessage(id: string): Promise<MailFull | null> {
       return null;
     }
   }
-  if (!full.isRead) void setFlags(id, { isRead: true });
+  // Отметка «прочитано» откатится сама, если сервер не ответил; открытие письма от неё не зависит.
+  if (!full.isRead) setFlags(id, { isRead: true }).catch(() => {});
   return full;
+}
+
+/** Подгрузить письма заранее (соседей открытого) — без отметки «прочитано»: при листании
+ *  следующее письмо уже на месте и открывается без ожидания сервера. */
+const prefetching = new Set<string>();
+export function prefetchMessages(ids: string[]): void {
+  for (const id of ids) {
+    if (!id || get().full[id] || prefetching.has(id)) continue;
+    prefetching.add(id);
+    call<MailFull>(`/api/mail/messages/${encodeURIComponent(id)}`)
+      .then((full) => set((s) => (s.full[id] ? s : { full: { ...s.full, [id]: full } })))
+      .catch(() => { /* откроется обычным путём */ })
+      .finally(() => prefetching.delete(id));
+  }
 }
 
 export async function searchMail(q: string): Promise<void> {

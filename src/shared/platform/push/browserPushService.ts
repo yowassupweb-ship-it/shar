@@ -57,8 +57,17 @@ type LooseRecord = Record<string, unknown>;
 // all server requests. The interval below is only a slow safety-net (visible tab only)
 // to reconcile anything a missed event dropped — and to cover tasks/calendar, which
 // have no WS event of their own.
-const SAFETY_POLL_INTERVAL_MS = 30000;
-const EVENT_POLL_DEBOUNCE_MS = 600;
+// Опрос перекачивает весь список чатов (сотни килобайт) — это была половина трафика сервера:
+// каждый «печатает», «в сети», курсор в документе у каждого открытого клиента дёргал его заново.
+// Уведомление и бейдж ставятся сразу из события, опрос только сверяет — поэтому он редкий:
+// после событий, меняющих непрочитанное, и раз в две минуты (без фокуса — раз в десять).
+const SAFETY_POLL_INTERVAL_MS = 120000;
+const UNFOCUSED_POLL_INTERVAL_MS = 600000;
+const EVENT_POLL_DEBOUNCE_MS = 3000;
+const EVENT_POLL_MAX_WAIT_MS = 15000;
+const AVATAR_REFRESH_MS = 30 * 60 * 1000;
+/** События, после которых непрочитанное могло разойтись со снимком. */
+const UNREAD_EVENTS = new Set(['new_message', 'read_receipt', 'notifications_read', 'message_deleted', 'chat_created', 'chat_deleted']);
 const SEEN_LIMIT = 300;
 const CALENDAR_REMINDER_WINDOW_MS = 60 * 60 * 1000; // 1 час (для пропущенных)
 const CALENDAR_EVENT_START_WINDOW_MS = 30 * 1000; // ± 30 секунд - напоминание РОВНО в момент начала события
@@ -116,11 +125,13 @@ export class BrowserPushService {
   private lastDesktopContext = '';
   private swMessageHandler: ((event: MessageEvent) => void) | null = null;
   private pollCycleCounter = 0;
+  private lastPollAt = 0;
   private avatarCacheRefreshTimer: number | null = null;
   // App-wide WebSocket (same /api/ws/{userId} channel the chat page uses) — the
   // primary trigger for refreshes now, replacing the old 1.5s poll timer.
   private realtimeOff: (() => void) | null = null;
   private eventPollTimer: number | null = null;
+  private eventPollFirstAt = 0;
 
   private seenTaskIds = new Set<string>();
   private chatSnapshots = new Map<string, ChatSnapshot>();
@@ -185,9 +196,14 @@ export class BrowserPushService {
 
         // Клик по уведомлению с разделом (не чатом): переход внутри приложения.
         // Чат открывает стор чатов — он сам слушает notification-navigate.
-        if (event.data?.type === 'notification-navigate' && !event.data?.chatId && event.data?.tab) {
-          const target = fromLegacyUrl(`/account?tab=${encodeURIComponent(String(event.data.tab))}`);
-          if (target) navigate(target);
+        if (event.data?.type === 'notification-navigate' && !event.data?.chatId) {
+          // Адрес нового Шара (/social?dialog=…) — как есть; ?tab= у него свой, не старый раздел.
+          const url = String(event.data?.url || '');
+          if (url.startsWith('/') && !url.startsWith('/account')) navigate(url);
+          else if (event.data?.tab) {
+            const target = fromLegacyUrl(`/account?tab=${encodeURIComponent(String(event.data.tab))}`);
+            if (target) navigate(target);
+          }
         }
 
         // SW pushed a web-push OS notification for this chat — suppress the next poll cycle
@@ -218,13 +234,15 @@ export class BrowserPushService {
     this.connectWs();
     this.timer = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      // Electron в трее или под другими окнами считается «видимым» — без фокуса сверяемся реже.
+      if (typeof document !== 'undefined' && !document.hasFocus() && Date.now() - this.lastPollAt < UNFOCUSED_POLL_INTERVAL_MS) return;
       void this.poll(false);
     }, SAFETY_POLL_INTERVAL_MS);
 
-    // Refresh avatar cache every 5 minutes (300000ms) to pick up profile updates
+    // Фото и имена сотрудников — для карточек уведомлений; меняются редко.
     this.avatarCacheRefreshTimer = window.setInterval(() => {
       void this.refreshUserAvatarCache();
-    }, 300000);
+    }, AVATAR_REFRESH_MS);
   }
 
   stop(): void {
@@ -292,6 +310,7 @@ export class BrowserPushService {
     // is the one guaranteed mounted regardless of which tab is open. Without this,
     // a chat read on the phone left its desktop notification sitting there
     // whenever the desktop wasn't currently on the messages tab.
+    if (type === 'social_message') { void this.notifySocial(data); return; }
     if (type === 'notifications_read' && data?.chatId) {
       const chatId = String(data.chatId);
       // Бейдж гасим сразу: событие само по себе и есть подтверждение
@@ -321,8 +340,9 @@ export class BrowserPushService {
       if (!isOwn && !isOpenAndWatched) this.applyUnreadHint(chatId, true);
     }
 
-    // new_message / read_receipt / notifications_read / reaction / message_edited /
-    // chat_created all change unread/badge/notifications — refresh (debounced).
+    // Сверка — только после событий, которые меняют непрочитанное; чужие прочтения его не трогают.
+    if (!UNREAD_EVENTS.has(type)) return;
+    if (type === 'read_receipt' && !this.getUserIdentityAliases().has(this.normalizeIdentity(String(data.userId || '')))) return;
     this.scheduleEventPoll();
   }
 
@@ -416,13 +436,41 @@ export class BrowserPushService {
     });
   }
 
+  /** Сообщение клиента из ВКонтакте/MAX (модуль «Соцсети»). Сервер шлёт событие только тем, кому оно
+   *  положено по настройкам модуля; здесь — не показывать, если этот диалог и так открыт перед глазами. */
+  private async notifySocial(data: LooseRecord): Promise<void> {
+    if (!this.isPrimed) return;
+    const dialogId = String(data.dialogId || '');
+    const itemId = String(data.itemId || '');
+    const url = String(data.url || '/social');
+    if (!dialogId || !itemId) return;
+    if (isUserAttending() && typeof window !== 'undefined' && window.location.pathname === '/social'
+      && new URLSearchParams(window.location.search).get('dialog') === dialogId) return;
+    const platform = String(data.platform || '');
+    await this.showNotification(String(data.title || 'Соцсети'), String(data.body || ''), {
+      key: `social:${itemId}`,
+      tag: `social-${dialogId}`,
+      url,
+      subtitle: data.kind === 'comments' ? 'Соцсети · Комментарии' : 'Соцсети · Диалоги',
+      senderName: String(data.title || 'Соцсети'),
+      avatar: platform === 'vk' || platform === 'max' ? `/icons/social/${platform}.png` : undefined,
+      requireInteraction: true,
+    });
+  }
+
   // Coalesce a burst of WS events into a single refresh.
+  // Скользящая задержка: в оживлённом чате сверка ждёт паузы, но не дольше EVENT_POLL_MAX_WAIT_MS.
   private scheduleEventPoll(): void {
-    if (!this.running || this.eventPollTimer !== null) return;
+    if (!this.running) return;
+    const now = Date.now();
+    if (!this.eventPollFirstAt) this.eventPollFirstAt = now;
+    if (this.eventPollTimer !== null) window.clearTimeout(this.eventPollTimer);
+    const wait = Math.max(0, Math.min(EVENT_POLL_DEBOUNCE_MS, this.eventPollFirstAt + EVENT_POLL_MAX_WAIT_MS - now));
     this.eventPollTimer = window.setTimeout(() => {
       this.eventPollTimer = null;
+      this.eventPollFirstAt = 0;
       void this.poll(false);
-    }, EVENT_POLL_DEBOUNCE_MS);
+    }, wait);
   }
 
   private async refreshUserAvatarCache(): Promise<void> {
@@ -497,6 +545,9 @@ export class BrowserPushService {
       this.updateAppBadge(count);
     };
     window.addEventListener('shar-unread-changed', this.unreadHintHandler);
+    // Единички инструментов поменялись — тот же значок, пересчитать с прежним числом чатов.
+    this.socialWaitingHandler = () => this.updateAppBadge(this.lastChatBadge);
+    window.addEventListener('shar-tool-badges', this.socialWaitingHandler);
     this.pageUnreadGoneHandler = () => { this.pageUnreadCount = null; };
     window.addEventListener('shar-unread-page-unmounted', this.pageUnreadGoneHandler);
 
@@ -554,6 +605,10 @@ export class BrowserPushService {
     if (this.unreadHintHandler) {
       window.removeEventListener('shar-unread-changed', this.unreadHintHandler);
       this.unreadHintHandler = null;
+    }
+    if (this.socialWaitingHandler) {
+      window.removeEventListener('shar-tool-badges', this.socialWaitingHandler);
+      this.socialWaitingHandler = null;
     }
     if (this.realtimePokeUnsubscribe) {
       this.realtimePokeUnsubscribe();
@@ -698,8 +753,17 @@ export class BrowserPushService {
     }
   }
 
-  private updateAppBadge(count: number): void {
+  private lastChatBadge = 0;
+  private socialWaitingHandler: (() => void) | null = null;
+
+  /** Значок PWA: чаты с непрочитанным + единички инструментов (невзятые заявки, диалоги «Соцсетей» без ответа —
+   *  их ведёт features/more/toolBadges). */
+  private updateAppBadge(chats: number): void {
     if (typeof navigator === 'undefined') return;
+    this.lastChatBadge = chats;
+    let social = 0;
+    try { social = Number(localStorage.getItem('shar_tool_badges_total')) || 0; } catch { /* ignore */ }
+    const count = chats + social;
     try {
       if (count > 0) {
         if ('setAppBadge' in navigator) (navigator as Navigator & { setAppBadge(n: number): Promise<void> }).setAppBadge(count).catch(() => {});
@@ -808,6 +872,7 @@ export class BrowserPushService {
     if (this.inFlight) return;
 
     this.inFlight = true;
+    this.lastPollAt = Date.now();
     this.pollCycleCounter++;
     const isBackgroundCycle = isInitial || this.pollCycleCounter % 2 === 0;
 

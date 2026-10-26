@@ -1,4 +1,4 @@
-import type { Item, Kind, LinkEntry, SharedItem, SharesState, VersionRow, VersionsState, Viewer } from './types';
+import type { Folder, Item, Kind, LinkEntry, SharedItem, SharesState, VersionRow, VersionsState, Viewer } from './types';
 
 export class WorkspaceError extends Error {
   constructor(public status: number, message: string) {
@@ -50,6 +50,15 @@ export const workspaceApi = {
   patch: (id: string, body: Record<string, unknown>) =>
     call<{ item: Item }>(`/api/workspace/items/${enc(id)}`, { method: 'PATCH', json: body }).then((r) => r.item),
   remove: (id: string) => call<{ ok: boolean }>(`/api/workspace/items/${enc(id)}`, { method: 'DELETE' }),
+
+  folders: () => call<{ folders: Folder[] }>('/api/workspace/folders').then((r) => r.folders),
+  createFolder: (title: string) => call<{ folder: Folder; folders: Folder[] }>('/api/workspace/folders', { method: 'POST', json: { title } }),
+  renameFolder: (id: string, title: string) =>
+    call<{ folders: Folder[] }>(`/api/workspace/folders/${enc(id)}`, { method: 'PATCH', json: { title } }).then((r) => r.folders),
+  deleteFolder: (id: string) => call<{ folders: Folder[] }>(`/api/workspace/folders/${enc(id)}`, { method: 'DELETE' }).then((r) => r.folders),
+  /** Положить материал в свою папку или вынуть (null). */
+  placeItem: (id: string, folderId: string | null) =>
+    call<{ folderId: string | null }>(`/api/workspace/items/${enc(id)}/folder`, { method: 'PUT', json: { folderId } }),
 
   shares: (id: string) => call<SharesState>(`/api/workspace/items/${enc(id)}/shares`),
   /** Выдать (или забрать, role = null) доступ человеку либо целому отделу. */

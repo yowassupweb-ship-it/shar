@@ -1,16 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
-import { Bold, CheckSquare, Code2, Eye, Heading2, ImagePlus, Italic, Link2, List, ListOrdered, Pencil, Quote, Smile } from 'lucide-react';
+import { Bold, CheckSquare, Plus, X, Code2, Eye, Heading2, ImagePlus, Italic, Link2, List, ListOrdered, Pencil, Quote, Smile } from 'lucide-react';
 import { uploadFileWithProgress } from '@/shared/api/uploadFile';
 import { renderTextWithEmoji } from '@/shared/emoji/emojiText';
 import { SharEmojiPicker } from '@/shared/emoji/SharEmojiPicker';
-import { Menu, type MenuAnchor } from '@/shared/ui/overlay';
+import { askConfirm, Menu, type MenuAnchor } from '@/shared/ui/overlay';
 import { merge3, shiftCaret } from '../lib/merge';
+import { highlightMarkdown } from '../lib/mdHighlight';
+import { cleanTabTitle, parseTabs, serializeTabs } from '../lib/noteTabs';
 import { FindBar, findAll } from './FindBar';
 import type { EditorProps } from './types';
+import type { RemoteCursor } from '../useCursors';
 import { Spinner } from '@/shared/ui/Spinner';
+import { ScrollTable } from '@/shared/ui/ScrollTable';
 
 /**
  * Заметка: Markdown с панелью форматирования и предпросмотром. Правка — в textarea (на телефоне это
@@ -18,6 +22,43 @@ import { Spinner } from '@/shared/ui/Spinner';
  * в чатах. Картинку можно выбрать, перетащить или вставить из буфера — она уходит в хранилище файлов
  * Шара, а в текст ложится ссылка.
  */
+
+/** Курсор в заметке: вкладка, начало и конец выделения в её тексте и направление выделения. */
+type NoteCursor = { s: number; e: number; b: 0 | 1; t?: number };
+
+/**
+ * Зеркало текста с курсорами коллег: тот же текст тем же шрифтом (прозрачный), выделение — фоном цвета
+ * человека, каретка — линией с флажком имени. Смещения коллеги относятся к его тексту; если он ещё не
+ * сохранил последние правки, позиция может чуть отличаться — подрезаем по длине.
+ */
+function cursorMirror(text: string, cursors: RemoteCursor[]): React.ReactNode[] {
+  const marks = cursors.flatMap((c) => {
+    const p = c.pos as NoteCursor;
+    if (typeof p.s !== 'number' || typeof p.e !== 'number') return [];
+    const s = Math.max(0, Math.min(text.length, Math.min(p.s, p.e)));
+    const e = Math.max(0, Math.min(text.length, Math.max(p.s, p.e)));
+    return [{ c, s, e, at: p.b ? s : e }];
+  });
+  const cuts = [...new Set([0, text.length, ...marks.flatMap((m) => [m.s, m.e, m.at])])].sort((a, b) => a - b);
+  const out: React.ReactNode[] = [];
+  cuts.forEach((at, i) => {
+    for (const m of marks) {
+      if (m.at === at) {
+        out.push(
+          <span key={`c${m.c.userId}`} className="nws-ncaret" style={{ '--c': m.c.color } as React.CSSProperties}>
+            <span key={m.c.movedAt} className="nws-cursor-flag">{m.c.name}</span>
+          </span>,
+        );
+      }
+    }
+    const next = cuts[i + 1];
+    if (next === undefined) return;
+    const piece = text.slice(at, next);
+    const over = marks.find((m) => m.s <= at && next <= m.e && m.s < m.e);
+    out.push(over ? <span key={`s${at}`} className="nws-nsel" style={{ '--c': over.c.color } as React.CSSProperties}>{piece}</span> : piece);
+  });
+  return out;
+}
 
 type Wrap = { before: string; after?: string; placeholder?: string; line?: boolean };
 
@@ -39,8 +80,18 @@ const TOOLS: Array<{ id: string; label: string; icon: typeof Bold; wrap: Wrap }>
   { id: 'link', label: 'Ссылка', icon: Link2, wrap: { before: '[', after: '](https://)', placeholder: 'текст' } },
 ];
 
-export function NoteEditor({ content, onContent, readOnly, loadKey }: EditorProps) {
-  const [text, setText] = useState(content);
+export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = [], onCursor }: EditorProps) {
+  // full — заметка целиком (все вкладки), text — открытая вкладка: с ней работают поле, просмотр, поиск и панель.
+  const [full, setFull] = useState(content);
+  const fullRef = useRef(full);
+  fullRef.current = full;
+  const tabs = useMemo(() => parseTabs(full), [full]);
+  const [activeTab, setActiveTab] = useState(0);
+  const tabIndex = Math.min(activeTab, tabs.length - 1);
+  const tabRef = useRef(tabIndex);
+  tabRef.current = tabIndex;
+  const text = tabs[tabIndex].content;
+  const [renaming, setRenaming] = useState<number | null>(null);
   const [mode, setMode] = useState<'edit' | 'preview'>(content.trim() ? 'preview' : 'edit');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -50,6 +101,8 @@ export function NoteEditor({ content, onContent, readOnly, loadKey }: EditorProp
   const view = useRef<HTMLElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const back = useRef<HTMLDivElement>(null);
+  const syntax = useRef<HTMLDivElement>(null);
+  const mirror = useRef<HTMLDivElement>(null);
 
   // Поиск по тексту (Ctrl+F). В правке совпадения подсвечивает слой под полем ввода, в просмотре — подсветка страницы.
   const [findOpen, setFindOpen] = useState(false);
@@ -64,7 +117,7 @@ export function NoteEditor({ content, onContent, readOnly, loadKey }: EditorProp
 
   // Материал перечитали с сервера (чужая правка, конфликт) — берём присланное.
   const syncedRef = useRef(content);
-  useEffect(() => { setText(content); syncedRef.current = content; }, [loadKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setFull(content); syncedRef.current = content; }, [loadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Коллега печатает в той же заметке: его правка вливается на месте — без перезагрузки редактора и без прыжка
   // курсора. Свои несохранённые правки сливаются с чужими; не слились — остаётся своё, а решение за сессией (баннер).
@@ -72,20 +125,71 @@ export function NoteEditor({ content, onContent, readOnly, loadKey }: EditorProp
     if (content === syncedRef.current) return;
     const previous = syncedRef.current;
     syncedRef.current = content;
-    setText((own) => {
+    setFull((own) => {
       if (own === content) return own;
       const merged = own === previous ? { text: content, conflict: false } : merge3(previous, own, content);
       const next = merged.conflict ? content : merged.text;
       const field = area.current;
       if (field && document.activeElement === field) {
-        const caret = shiftCaret(own, next, field.selectionStart);
+        const tab = tabRef.current;
+        const caret = shiftCaret(parseTabs(own)[tab]?.content ?? '', parseTabs(next)[tab]?.content ?? '', field.selectionStart);
         requestAnimationFrame(() => { if (area.current) area.current.setSelectionRange(caret, caret); });
       }
       return next;
     });
   }, [content]);
 
-  const change = useCallback((next: string) => { setText(next); onContent(next); }, [onContent]);
+  const commit = useCallback((nextFull: string) => { fullRef.current = nextFull; setFull(nextFull); onContent(nextFull); }, [onContent]);
+  /** Правка открытой вкладки: остальные вкладки остаются как были. */
+  const change = useCallback((next: string) => {
+    const all = parseTabs(fullRef.current);
+    all[tabRef.current] = { ...all[tabRef.current], content: next };
+    commit(serializeTabs(all));
+  }, [commit]);
+
+  // ── Вкладки (снизу, как листы таблицы) ──
+  const addTab = () => {
+    const all = parseTabs(fullRef.current);
+    all.push({ title: `Вкладка ${all.length + 1}`, content: '' });
+    commit(serializeTabs(all));
+    setActiveTab(all.length - 1);
+    setMode('edit');
+  };
+  const renameTab = (index: number, title: string | null) => {
+    setRenaming(null);
+    const all = parseTabs(fullRef.current);
+    if (!title || !all[index] || title === all[index].title) return;
+    all[index] = { ...all[index], title: cleanTabTitle(title) };
+    commit(serializeTabs(all));
+  };
+  const removeTab = async (index: number) => {
+    const all = parseTabs(fullRef.current);
+    if (all.length <= 1) return;
+    if (all[index].content.trim() && !(await askConfirm({ title: `Удалить вкладку «${all[index].title}» вместе с её текстом?`, confirm: 'Удалить', tone: 'danger' }))) return;
+    all.splice(index, 1);
+    commit(serializeTabs(all));
+    // Удалили открытую — встаём на соседнюю справа (или на последнюю); удалили левее — открытая сдвигается на одну.
+    const open = tabRef.current;
+    setActiveTab(open > index ? open - 1 : open === index ? Math.min(index, all.length - 1) : open);
+  };
+
+  // Своя позиция — коллегам. В просмотре курсора нет (там нет и поля ввода).
+  const reportCursor = () => {
+    const field = area.current;
+    if (!field || !onCursor) return;
+    onCursor({ s: field.selectionStart, e: field.selectionEnd, b: field.selectionDirection === 'backward' ? 1 : 0, t: tabRef.current });
+  };
+  useEffect(() => { if (!editing) onCursor?.(null); }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Цветной Markdown под прозрачным текстом поля (правка).
+  const coloured = useMemo(() => (editing ? highlightMarkdown(text) : null), [editing, text]);
+  useLayoutEffect(() => { if (syntax.current && area.current) syntax.current.scrollTop = area.current.scrollTop; }, [coloured]);
+  // Курсоры коллег — только тех, кто в той же вкладке.
+  const cursorLayer = useMemo(() => {
+    const here = cursors.filter((c) => ((c.pos as NoteCursor).t ?? 0) === tabIndex);
+    return editing && here.length ? cursorMirror(text, here) : null;
+  }, [editing, cursors, text, tabIndex]);
+  useEffect(() => { reportCursor(); }, [tabIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => { if (mirror.current && area.current) mirror.current.scrollTop = area.current.scrollTop; }, [cursorLayer]);
 
   // Ctrl/⌘+F — по физической клавише: работает и в русской раскладке (там на ней «а»).
   useEffect(() => {
@@ -269,13 +373,19 @@ export function NoteEditor({ content, onContent, readOnly, loadKey }: EditorProp
       )}
 
       {mode === 'edit' && !readOnly ? (
-        <div className="nws-note-edit">
+        <div className="nws-note-edit" data-syntax="true">
+          <div className="nws-note-back nws-note-syntax" ref={syntax} aria-hidden="true">{coloured}{'\n'}</div>
           {backdrop && <div className="nws-note-back" ref={back} aria-hidden="true">{backdrop}{'\n'}</div>}
         <textarea
           ref={area}
           className="nws-note-text"
           value={text}
-          onScroll={(e) => { if (back.current) back.current.scrollTop = e.currentTarget.scrollTop; }}
+          onScroll={(e) => {
+            if (back.current) back.current.scrollTop = e.currentTarget.scrollTop;
+            if (syntax.current) syntax.current.scrollTop = e.currentTarget.scrollTop;
+            if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop;
+          }}
+          onSelect={reportCursor}
           placeholder="Пишите. Markdown: **жирный**, # заголовок, - список, - [ ] задача"
           spellCheck
           onChange={(e) => change(e.target.value)}
@@ -289,6 +399,7 @@ export function NoteEditor({ content, onContent, readOnly, loadKey }: EditorProp
           }}
           aria-label="Текст заметки"
         />
+          {cursorLayer && <div className="nws-note-back nws-note-cursors" ref={mirror} aria-hidden="true">{cursorLayer}{'\n'}</div>}
         </div>
       ) : (
         <article ref={view} className="nws-note-view nx-scroll-y">
@@ -301,6 +412,7 @@ export function NoteEditor({ content, onContent, readOnly, loadKey }: EditorProp
                 h1: ({ children }) => <h1>{withEmoji(children, 'h1')}</h1>,
                 h2: ({ children }) => <h2>{withEmoji(children, 'h2')}</h2>,
                 h3: ({ children }) => <h3>{withEmoji(children, 'h3')}</h3>,
+                table: ({ children }) => <ScrollTable className="nws-md-table"><table>{children}</table></ScrollTable>,
                 td: ({ children }) => <td>{withEmoji(children, 'td')}</td>,
                 th: ({ children }) => <th>{withEmoji(children, 'th')}</th>,
                 strong: ({ children }) => <strong>{withEmoji(children, 's')}</strong>,
@@ -327,6 +439,45 @@ export function NoteEditor({ content, onContent, readOnly, loadKey }: EditorProp
             <p className="nws-hint">Пусто. Переключитесь на «Правка» и напишите что-нибудь.</p>
           )}
         </article>
+      )}
+      {(tabs.length > 1 || !readOnly) && (
+        <div className="nws-note-tabs" role="tablist" aria-label="Вкладки заметки">
+          {tabs.map((tab, index) => (
+            <div key={index} className="nws-note-tab" data-active={index === tabIndex || undefined}>
+              {renaming === index ? (
+                <input
+                  className="nws-note-tab-name"
+                  defaultValue={tab.title}
+                  autoFocus
+                  maxLength={80}
+                  aria-label="Название вкладки"
+                  onFocus={(e) => e.currentTarget.select()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur();
+                    if (e.key === 'Escape') { e.currentTarget.value = tab.title; e.currentTarget.blur(); }
+                  }}
+                  onBlur={(e) => renameTab(index, e.currentTarget.value.trim())}
+                />
+              ) : (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={index === tabIndex}
+                  onClick={() => setActiveTab(index)}
+                  onDoubleClick={() => { if (!readOnly) setRenaming(index); }}
+                  onKeyDown={(e) => { if (e.key === 'F2' && !readOnly) { e.preventDefault(); setRenaming(index); } }}
+                  title={readOnly ? tab.title : `${tab.title}. Двойной щелчок или F2 — переименовать`}
+                >
+                  {tab.title}
+                </button>
+              )}
+              {!readOnly && tabs.length > 1 && renaming !== index && (
+                <button type="button" className="nws-note-tab-close" onClick={() => void removeTab(index)} aria-label={`Удалить вкладку «${tab.title}»`} title="Удалить вкладку"><X size={11} /></button>
+              )}
+            </div>
+          ))}
+          {!readOnly && <button type="button" className="nws-note-tab-add" onClick={addTab} aria-label="Добавить вкладку" title="Добавить вкладку"><Plus size={14} /></button>}
+        </div>
       )}
     </div>
   );

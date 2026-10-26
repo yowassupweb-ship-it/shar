@@ -4,7 +4,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.core.db import db
 from app.core.security import Identity, current_identity
-from app.modules.mail.crypto import _deobfuscate_pw
+from app.modules.mail.crypto import PASSWORD_HINT, PASSWORD_REJECTED_HINT, MailPasswordUnavailable, _deobfuscate_pw, is_auth_error, mark_password
 from app.modules.mail.service import (
     _IMAP_TOOLS,
     MailBox,
@@ -28,9 +28,16 @@ def sync_mail(data: dict = Body(...), me: Identity = Depends(current_identity)):
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    synced, fetched, failed, error = _sync_folder_imap(account, folder)
+    try:
+        synced, fetched, failed, error = _sync_folder_imap(account, folder)
+    except MailPasswordUnavailable:
+        raise HTTPException(status_code=409, detail=PASSWORD_HINT) from None
     if error:
+        if is_auth_error(RuntimeError(error)):
+            mark_password(account['id'], False)
+            raise HTTPException(status_code=409, detail=PASSWORD_REJECTED_HINT)
         raise HTTPException(status_code=502, detail=error)
+    mark_password(account['id'], True)
 
     # Route new INBOX emails to chats based on rules / #Отзывы chat
     routed = 0

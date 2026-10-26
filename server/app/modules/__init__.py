@@ -11,7 +11,10 @@ from fastapi import APIRouter
 def _collect() -> list[APIRouter]:
     from app.modules.admin import router as admin
     from app.modules.auth import router as auth
+    from app.modules.birthdays import router as birthdays
     from app.modules.calendar import router as calendar
+    from app.modules.calendar import workdays as calendar_workdays
+    from app.modules.chats import scheduled as chats_scheduled
     from app.modules.calls import rooms as calls_rooms
     from app.modules.calls import signaling as calls_signaling
     from app.modules.chats import chat_notifications, chats, inline, messages, receipts
@@ -19,6 +22,7 @@ def _collect() -> list[APIRouter]:
     from app.modules.departments import router as departments
     from app.modules.files import avatars, backgrounds, stickers, uploads
     from app.modules.integrations import router as integrations
+    from app.modules.leads import router as leads
     from app.modules.mail import accounts, email_chat_rules, mailboxes
     from app.modules.mail import messages as mail_messages
     from app.modules.mail import sync as mail_sync
@@ -29,17 +33,19 @@ def _collect() -> list[APIRouter]:
     from app.modules.realtime import router as realtime
     from app.modules.requests import router as requests_mod
     from app.modules.search import router as search
+    from app.modules.social import router as social
     from app.modules.todos import router as todos
     from app.modules.users import router as users
     from app.modules.utm import router as utm
+    from app.modules.workspace import folders as workspace_folders
     from app.modules.workspace import public as workspace_public
     from app.modules.workspace import router as workspace
 
     mods = [
         auth, users, departments, chats, messages, receipts, chat_notifications, inline,
         realtime, calls_rooms, calls_signaling, mail_messages, mail_sync, accounts, mailboxes, email_chat_rules,
-        cloud, uploads, avatars, backgrounds, stickers, calendar, todos, notifications, push, requests_mod, admin,
-        client_errors, health, utm, og, integrations, workspace, workspace_public, search,
+        cloud, uploads, avatars, backgrounds, stickers, calendar_workdays, calendar, todos, notifications, push, requests_mod, admin,
+        client_errors, health, utm, og, chats_scheduled, leads, social, integrations, workspace_folders, workspace, workspace_public, search, birthdays,
     ]
     return [m.router for m in mods]
 

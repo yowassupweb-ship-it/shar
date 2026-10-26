@@ -1,6 +1,6 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type FormEvent } from 'react';
 import {
-  AlertCircle, Archive, ArrowLeft, Download, File as FileIcon, FileEdit, Forward, Inbox, Mail, MailOpen, Paperclip,
+  AlertCircle, Archive, ArrowLeft, Download, File as FileIcon, FileEdit, Folder, Forward, Inbox, KeyRound, Mail, MailOpen, Paperclip,
   PenSquare, Reply, ReplyAll, RotateCw, Send, ShieldAlert, Star, Trash2, Settings2,
 } from 'lucide-react';
 import { EmailHtmlView } from '@/features/mail/html/EmailHtmlView';
@@ -12,8 +12,8 @@ import { Avatar } from '@/shared/ui/Avatar';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { SearchField } from '@/shared/ui/SearchField';
 import {
-  loadAccounts, loadBoxes, moveMessage, onNewMail, openFolder, openMessage, searchMail, selectAccount, setFlags, syncFolder,
-  useMail, type Box, type MailFull, type MailRow,
+  loadAccounts, loadBoxes, moveMessage, onNewMail, openFolder, openMessage, prefetchMessages, relogin, searchMail, selectAccount, setFlags, syncFolder,
+  useMail, type Account, type Box, type MailFull, type MailRow,
 } from './api';
 import AccountSheet from './AccountSheet';
 import Compose, { type ComposeMode } from './Compose';
@@ -38,22 +38,26 @@ const subscribeMedia = (cb: () => void) => {
 const subscribeNoop = () => () => {};
 
 const BOX_ICON: Record<Box['role'], typeof Inbox> = {
-  inbox: Inbox, drafts: FileEdit, sent: Send, junk: ShieldAlert, trash: Trash2, archive: Archive,
+  inbox: Inbox, drafts: FileEdit, sent: Send, junk: ShieldAlert, trash: Trash2, archive: Archive, folder: Folder,
 };
 
 type Face = { seed: string; src?: string; name?: string };
 
-/** Лицо по адресу: сотрудник Шара выглядит как в чатах — его фото или тот же
- *  рисованный аватар (сид — id сотрудника), остальные — рисованный по адресу. */
+/** Лицо по адресу: у сотрудника Шара — его настоящее фото; у всех остальных (и у сотрудника без фото) —
+ *  буквы на цвете, как у групповых чатов. Рисованных DiceBear в почте нет: чужому адресу они
+ *  приписывали случайное «лицо». */
 function useFaceByEmail(): (email?: string, fallbackName?: string) => Face {
-  const users = useChatStore((s) => s.users);
+  // Сотрудники в сторе меняются на каждое «в сети / не в сети»; лица от этого не зависят —
+  // пересобираем карту только при смене почты, фото или имени (иначе перерисовывался весь список).
+  const sig = useChatStore((s) => Object.values(s.users).map((u) => `${u.id}${u.email || ''}${u.avatar || ''}${u.name || ''}`).join(''));
   const byEmail = useMemo(() => {
     const map = new Map<string, Face>();
-    for (const u of Object.values(users)) {
+    for (const u of Object.values(useChatStore.getState().users)) {
       if (u.email) map.set(u.email.toLowerCase(), { seed: String(u.id), src: u.avatar || undefined, name: u.name || undefined });
     }
     return map;
-  }, [users]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sig]);
   return useCallback((email?: string, fallbackName?: string) => (
     (email && byEmail.get(email.toLowerCase())) || { seed: email || fallbackName || '?', name: fallbackName }
   ), [byEmail]);
@@ -79,7 +83,7 @@ const Row = memo(function Row({ m, active, sentView, faceOf, onOpen, onMenu }: {
       onContextMenu={(e) => { e.preventDefault(); onMenu(m, { x: e.clientX, y: e.clientY }); }}
     >
       <span className="nml-face">
-        <Avatar name={face.name || addr?.name || addr?.addr || '?'} seed={face.seed} src={face.src} person size={40} />
+        <Avatar name={face.name || addr?.name || addr?.addr || '?'} seed={face.seed} src={face.src} size={40} />
         {!m.isRead && <span className="nml-dot" aria-label="Не прочитано" />}
       </span>
       <span className="nml-text">
@@ -122,7 +126,7 @@ function Reader({ msg, onCompose, onBack, dark, face }: {
       <div className="nmr-scroll nx-scroll-y">
         <h1 className="nmr-subject">{msg.subject || 'Без темы'}</h1>
         <header className="nmr-head">
-          <Avatar name={face.name || msg.fromName || msg.fromAddr || '?'} seed={face.seed} src={face.src} size={40} person />
+          <Avatar name={face.name || msg.fromName || msg.fromAddr || '?'} seed={face.seed} src={face.src} size={40} />
           <div className="nmr-who">
             <span className="nmr-from"><b>{msg.fromName || msg.fromAddr}</b>{msg.fromName && <span>{msg.fromAddr}</span>}</span>
             <span className="nmr-to">Кому: {(msg.toAddrs || []).map((a) => a.name || a.addr).join(', ') || '—'}</span>
@@ -156,6 +160,46 @@ function Reader({ msg, onCompose, onBack, dark, face }: {
   );
 }
 
+/** Шар выбило из ящика: вместо писем (старых, из кэша — по ним казалось, что всё работает) — вход заново. */
+function Relogin({ account }: { account: Account }) {
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!password || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await relogin(String(account.id), password);
+      showToast('Снова вошёл в ящик — почта приходит.', 'success');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не получилось войти.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="nml-relogin" aria-labelledby="nml-relogin-title">
+      <form className="nml-relogin-card nx-form" onSubmit={submit} noValidate>
+        <span className="nml-relogin-icon" aria-hidden="true"><KeyRound size={26} /></span>
+        <h2 id="nml-relogin-title">Шар вышел из ящика</h2>
+        <p>
+          <b>{account.email}</b>: сохранённый пароль больше не подходит. Пока его не ввести заново,
+          новые письма не приходят и отправить письмо нельзя.
+        </p>
+        <label className="nx-label">Пароль ящика
+          <span className="nx-field"><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" autoFocus /></span>
+        </label>
+        {error && <p className="nml-relogin-error" role="alert">{error}</p>}
+        <button type="submit" className="nx-primary" disabled={!password || busy}>
+          {busy ? <Spinner size={16} label="Проверяю пароль" /> : 'Войти в ящик'}
+        </button>
+      </form>
+    </section>
+  );
+}
+
 function readMailLink(): { id: string; account: string | null; folder: string | null } | null {
   if (typeof window === 'undefined') return null;
   const p = new URLSearchParams(window.location.search);
@@ -171,6 +215,7 @@ export default function MailScreen() {
   const accountsPhase = useMail((s) => s.accountsPhase);
   const accountId = useMail((s) => s.accountId);
   const boxes = useMail((s) => s.boxes);
+  const boxesError = useMail((s) => s.boxesError);
   const folder = useMail((s) => s.folder);
   const list = useMail((s) => s.lists[s.folder]);
   const phase = useMail((s) => s.listPhase[s.folder]);
@@ -211,9 +256,15 @@ export default function MailScreen() {
   const box = boxes.find((b) => b.folder === folder);
   const sentView = box?.role === 'sent' || box?.role === 'drafts';
 
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
   const open = useCallback(async (id: string) => {
     setOpenId(id);
     setPane('reader');
+    // Соседи — заранее: листают стрелками и подряд по списку.
+    const list = rowsRef.current;
+    const at = list.findIndex((r) => r.id === id);
+    if (at >= 0) prefetchMessages([list[at + 1]?.id, list[at + 2]?.id, list[at - 1]?.id].filter(Boolean) as string[]);
     const cached = useMail.getState().full[id];
     if (cached) { setMsg(cached); setMsgPhase('idle'); void openMessage(id); return; }
     setMsg(null);
@@ -221,6 +272,9 @@ export default function MailScreen() {
     const full = await openMessage(id);
     if (full) { setMsg(full); setMsgPhase('idle'); } else setMsgPhase('error');
   }, []);
+
+  // Стабильные обработчики — иначе memo у строк не срабатывал и на каждое письмо перерисовывался весь список.
+  const openMenu = useCallback((m: MailRow, anchor: MenuAnchor) => setMenu({ m, anchor }), []);
 
   // Письмо из ссылки: переключаем ящик и папку, потом открываем само письмо — один раз.
   useEffect(() => {
@@ -312,7 +366,9 @@ export default function MailScreen() {
         {(boxes.length ? boxes : [{ role: 'inbox', folder: 'INBOX', title: 'Входящие', unread: 0 } as Box]).map((b) => {
           const Icon = BOX_ICON[b.role] || Inbox;
           return (
-            <button key={b.folder} type="button" className="nmb-item" aria-current={b.folder === folder ? 'true' : undefined} onClick={() => pickFolder(b.folder)}>
+            <button key={b.folder} type="button" className="nmb-item" data-custom={b.role === 'folder' ? 'true' : undefined}
+              style={b.depth ? { '--depth': b.depth } as CSSProperties : undefined}
+              aria-current={b.folder === folder ? 'true' : undefined} onClick={() => pickFolder(b.folder)} title={b.folder}>
               <Icon size={16} aria-hidden="true" />
               <span>{b.title}</span>
               {b.unread > 0 && b.role !== 'sent' && b.role !== 'trash' && <span className="nmb-count">{b.unread}</span>}
@@ -320,6 +376,22 @@ export default function MailScreen() {
           );
         })}
       </nav>
+      {boxesError && (
+        <div className="nmb-error" role="alert">
+          <AlertCircle size={14} aria-hidden="true" />
+          {boxesError === 'password' ? (
+            <>
+              <span>Шар не может войти в ящик: пароль нужно ввести заново.</span>
+              <button type="button" className="nx-ghost" onClick={() => setAccountsOpen(true)}>Ввести пароль</button>
+            </>
+          ) : (
+            <>
+              <span>Не получил список папок с почтового сервера.</span>
+              <button type="button" className="nx-ghost" onClick={() => void loadBoxes(true)}>Повторить</button>
+            </>
+          )}
+        </div>
+      )}
     </aside>
   );
 
@@ -354,7 +426,7 @@ export default function MailScreen() {
         ) : !rows.length ? (
           <div className="nx-state"><MailOpen size={26} aria-hidden="true" /><p>{query ? 'Ничего не нашлось.' : 'Писем нет.'}</p></div>
         ) : (
-          rows.map((m) => <Row key={m.id} m={m} active={m.id === openId} sentView={sentView} faceOf={faceOf} onOpen={(id) => void open(id)} onMenu={(r, anchor) => setMenu({ m: r, anchor })} />)
+          rows.map((m) => <Row key={m.id} m={m} active={m.id === openId} sentView={sentView} faceOf={faceOf} onOpen={open} onMenu={openMenu} />)
         )}
       </div>
     </section>
@@ -381,9 +453,18 @@ export default function MailScreen() {
 
   return (
     <div className="nmail" data-narrow={narrow ? 'true' : undefined} data-pane={pane}>
-      {(!narrow || pane === 'boxes') && sidebar}
-      {(!narrow || pane === 'list') && listPane}
-      {(!narrow || pane === 'reader') && readerPane}
+      {account?.needsPassword ? (
+        <>
+          {!narrow && sidebar}
+          <Relogin account={account} />
+        </>
+      ) : (
+        <>
+          {(!narrow || pane === 'boxes') && sidebar}
+          {(!narrow || pane === 'list') && listPane}
+          {(!narrow || pane === 'reader') && readerPane}
+        </>
+      )}
 
       {menu && (() => {
         const m = menu.m;

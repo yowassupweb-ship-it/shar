@@ -1,17 +1,18 @@
 import { myId } from '@/shared/session/session';
 
 /**
- * История посещений: в каких чатах, материалах «Офиса», задачах, файлах и карточках людей человек был.
+ * История посещений: в каких чатах, материалах «Офиса», задачах, файлах, карточках людей и инструментах
+ * («Заявки», «Соцсети»…) человек был.
  * Хранится на устройстве (по человеку), последние ~80 записей; повторные заходы поднимают запись наверх.
  */
-export type VisitKind = 'chat' | 'office' | 'task' | 'file' | 'person';
+export type VisitKind = 'chat' | 'office' | 'task' | 'file' | 'person' | 'tool';
 
 export interface Visit {
   key: string;
   kind: VisitKind;
   title: string;
   subtitle?: string;
-  /** Подвид: у материала «Офиса» — note | document | table | presentation. */
+  /** Подвид: у материала «Офиса» — note | document | table | presentation; у инструмента — его id. */
   sub?: string;
   /** Куда вести. */
   path: string;

@@ -258,7 +258,7 @@ function previewFromThread(chatId: string) {
     }
     return;
   }
-  if (ts(newest.createdAt) <= ts(chat.lastMessage?.createdAt)) return;
+  if (!isLocalDraft(chat.lastMessage) && ts(newest.createdAt) <= ts(chat.lastMessage?.createdAt)) return;
   const { _key, _status, ...message } = newest;
   touchPreview(chatId, message);
 }
@@ -324,11 +324,17 @@ function schedulePersistThread(chatId: string) {
   });
 }
 
+// Список чатов — сотни килобайт JSON; синхронная запись в localStorage на каждое новое сообщение
+// заметна на слабом ПК. Пишем реже и в простое.
 function schedulePersistChats() {
   debounce('chats', () => {
-    const { me, chats } = get();
-    if (me) lsSet(chatsKey(String(me.id)), Object.values(chats));
-  }, 800);
+    const write = () => {
+      const { me, chats } = get();
+      if (me) lsSet(chatsKey(String(me.id)), Object.values(chats));
+    };
+    if ('requestIdleCallback' in window) window.requestIdleCallback(write, { timeout: 5000 });
+    else write();
+  }, 3000);
 }
 
 function hydrateThread(chatId: string): Thread | null {
@@ -542,12 +548,20 @@ export function lastActivity(c: ChatRow): number {
   return Math.max(ts(c.lastMessage?.createdAt), ts(c.preview?.at)) || ts(c.createdAt);
 }
 
+/** Черновик своей отправки: его время — часы этого компьютера, а не сервера. */
+const isLocalDraft = (m?: Message) => Boolean((m as Msg | undefined)?._status);
+
 function touchPreview(chatId: string, m: Message) {
-  patchChat(chatId, (c) => (ts(c.lastMessage?.createdAt) > ts(m.createdAt)
-    ? c
+  patchChat(chatId, (c) => {
+    // Время черновика (часы компьютера) с серверным не сравниваем: стоило часам спешить на секунду,
+    // и ответ, пришедший сразу после своей отправки, «проигрывал» черновику — в списке навсегда
+    // оставалось «Вы: …», хотя последним было сообщение собеседника. Своя новая отправка — всегда
+    // самое свежее; черновик уступает любому сообщению с сервера; серверные — по серверному времени.
+    const keep = !isLocalDraft(m) && !isLocalDraft(c.lastMessage) && ts(c.lastMessage?.createdAt) > ts(m.createdAt);
     // Новое сообщение снимает «X отреагировал(а)» — по факту прихода, а не по
     // времени: время реакции — часы клиента, сообщения — часы сервера.
-    : { ...c, lastMessage: m, preview: undefined }));
+    return keep ? c : { ...c, lastMessage: m, preview: undefined };
+  });
 }
 
 // ── Прочтение ───────────────────────────────────────────────────────────────
@@ -690,10 +704,14 @@ export function loadChats(): Promise<void> {
 }
 
 let statusTimer: number | null = null;
+let statusAt = 0;
 
-/** Лёгкая сверка «в сети»: события presence теряются при обрыве сокета, поэтому раз в минуту (пока вкладка на экране) сверяемся. */
+/** Лёгкая сверка «в сети»: события presence теряются при обрыве сокета, поэтому раз в минуту (пока вкладка на экране) сверяемся.
+ *  Без фокуса (Electron в трее тоже «на экране») — раз в десять минут: ночью приложения опрашивали сервер впустую. */
 function refreshStatuses() {
   if (document.visibilityState !== 'visible') return;
+  if (!document.hasFocus() && Date.now() - statusAt < 600000) return;
+  statusAt = Date.now();
   fetch('/api/users/statuses', { cache: 'no-store' })
     .then((r) => (r.ok ? r.json() : null))
     .then((rows: { id: string; isOnline?: boolean; lastSeen?: string }[] | null) => {
@@ -714,7 +732,11 @@ function refreshStatuses() {
     .catch(() => { /* следующая сверка догонит */ });
 }
 
+// Запуск и первый resync от сокета приходят почти разом — второй раз весь список сотрудников не качаем.
+let usersAt = 0;
 function loadUsers() {
+  if (Date.now() - usersAt < 10000) return;
+  usersAt = Date.now();
   api.users()
     .then((list) => {
       const users: Record<string, User> = {};
@@ -1044,6 +1066,15 @@ export function sendFiles(chatId: string, files: File[], caption = '') {
   void uploadAndSend(nonce, job);
 }
 
+/** Загрузить файлы для отложенного сообщения: без черновика в ленте — сообщение появится, когда уйдёт. */
+export async function uploadForLater(files: File[]): Promise<OutAttachment[]> {
+  const { uploadFileWithProgress } = await import('@/shared/api/uploadFile');
+  return Promise.all(files.map(async (file) => {
+    const [res, size] = await Promise.all([uploadFileWithProgress(file, () => {}), imageSize(file)]);
+    return { type: kindOf(file), url: res.url, name: file.name, size: file.size, mimeType: file.type, ...size };
+  }));
+}
+
 export function sendVoice(chatId: string, file: File, duration: number, peaks?: number[]) {
   const me = get().me;
   if (!me) return;
@@ -1217,6 +1248,15 @@ function onEvent(e: RealtimeEvent) {
     case 'message_edited': {
       const id = String(e.messageId || '');
       patchThread(chatId, (t) => (t.byId[id] ? { ...t, byId: { ...t.byId, [id]: { ...t.byId[id], content: String(e.content ?? ''), isEdited: true } } } : t));
+      return;
+    }
+    case 'card_updated': {
+      // Карточка из внешней системы (заявка с сайта) поменяла состояние: взяли, закрыли.
+      const id = String(e.messageId || '');
+      patchThread(chatId, (t) => {
+        const m = t.byId[id];
+        return m ? { ...t, byId: { ...t.byId, [id]: { ...m, metadata: { ...(m.metadata || {}), card: e.card as Record<string, unknown> } } } } : t;
+      });
       return;
     }
     case 'message_deleted': {
@@ -1441,6 +1481,7 @@ export function boot(me: User) {
 
 export function shutdown() {
   if (statusTimer !== null) { window.clearInterval(statusTimer); statusTimer = null; }
+  usersAt = 0;
   document.removeEventListener('visibilitychange', onVisible);
   navigator.serviceWorker?.removeEventListener('message', onServiceWorker);
   unsubscribe?.(); unsubscribe = null;

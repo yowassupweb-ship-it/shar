@@ -55,6 +55,8 @@ async def _safe_sync(label: str, fn) -> None:
 async def run(settings: Settings):
     from app.core.legacy_import import import_legacy_data
     from app.modules.calendar.maintenance import migrate_legacy_calendar_rows
+    from app.modules.birthdays.router import birthday_loop
+    from app.modules.chats.scheduled import scheduled_loop
     from app.modules.calendar.reminders import reminder_loop
     from app.modules.calls.rooms import evict_disabled_users_from_calls
     from app.modules.mail import idle as mail_realtime
@@ -87,6 +89,10 @@ async def run(settings: Settings):
         asyncio.create_task(health_probe_loop(), name="health-probe"),
         asyncio.create_task(redis_fanout_loop(), name="redis-fanout"),  # ОДНО pub/sub-соединение на процесс
     ]
+    # Дни рождения — новая задача, у старого бэкенда её нет; дубли исключает отметка в базе (см. birthdays).
+    tasks.append(asyncio.create_task(birthday_loop(), name="birthdays"))
+    # Отложенные сообщения — тоже новая задача; одну строку берёт один процесс (см. chats.scheduled).
+    tasks.append(asyncio.create_task(scheduled_loop(), name="scheduled-messages"))
     if settings.scheduled_jobs:
         tasks.append(asyncio.create_task(reminder_loop(), name="reminders"))
     else:

@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import {
   AlertCircle, Archive, ArchiveRestore, Bell, FileText, MessageSquare, Moon, MoreHorizontal, Pin, PinOff, Plus, RotateCw,
   Search, Sun, Trash2, Users,
@@ -9,6 +9,7 @@ import { askConfirm, Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay
 import SharMark from '@/shared/ui/SharMark';
 import { isIosBrowserTab, notificationState, requestNotifications, type NotificationState } from '@/shared/platform/notifications';
 import { deleteChat, setArchived, setArchiveView, togglePin } from './actions';
+import { BirthdayBanner } from '@/features/birthdays/BirthdayBanner';
 import { ListRow, type RowHandlers } from './ListRow';
 import NewChatSheet from './NewChatSheet';
 import RequestSheet from './RequestSheet';
@@ -48,6 +49,42 @@ function Skeleton() {
 }
 
 type PullStage = 'idle' | 'pull' | 'refresh' | 'archive';
+
+/** Строк сверх видимых с каждой стороны: при быстрой прокрутке край не успевает показать пустоту. */
+const OVERSCAN = 10;
+
+/**
+ * Окно списка: рисуем только строки у экрана, остальное — распорки той же высоты. У всех строк одна высота
+ * (превью — всегда место под две строки), её берём с отрисованной строки: на телефоне шрифт крупнее.
+ * Раньше список на сотни чатов монтировался, раскладывался и рисовался целиком — при запуске и при каждом
+ * изменении (новое сообщение, «печатает», в сети).
+ */
+function useRowWindow(scroller: RefObject<HTMLDivElement | null>, rows: RefObject<HTMLDivElement | null>, count: number) {
+  const [state, setState] = useState({ from: 0, to: Math.min(count, 24), rowH: 76 });
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!el) return undefined;
+    let raf = 0;
+    const measure = () => {
+      raf = 0;
+      const box = rows.current;
+      if (!box) return;
+      const row = box.querySelector<HTMLElement>('.cxl-row-wrap');
+      const rowH = row?.offsetHeight || 76;
+      const top = box.offsetTop;
+      const from = Math.max(0, Math.floor((el.scrollTop - top) / rowH) - OVERSCAN);
+      const to = Math.min(count, Math.ceil((el.scrollTop - top + el.clientHeight) / rowH) + OVERSCAN);
+      setState((cur) => (cur.from === from && cur.to === to && cur.rowH === rowH ? cur : { from, to, rowH }));
+    };
+    const schedule = () => { if (!raf) raf = requestAnimationFrame(measure); };
+    measure();
+    el.addEventListener('scroll', schedule, { passive: true });
+    const ro = new ResizeObserver(schedule);
+    ro.observe(el);
+    return () => { el.removeEventListener('scroll', schedule); ro.disconnect(); cancelAnimationFrame(raf); };
+  }, [scroller, rows, count]);
+  return state;
+}
 
 export default function ChatsPanel({ activeChatId, onOpen }: { activeChatId: string | null; onOpen: (id: string) => void }) {
   const chats = useChatStore((s) => s.chats);
@@ -113,6 +150,8 @@ export default function ChatsPanel({ activeChatId, onOpen }: { activeChatId: str
 
   // ── Жест «тянуть вниз»: короткий — обновить, длинный — архив ─────────────
   const listRef = useRef<HTMLDivElement>(null);
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const shown = useRowWindow(listRef, rowsRef, list.length);
   const stageRef = useRef<HTMLDivElement>(null);
   const floatRef = useRef<HTMLDivElement>(null);
   // Высота парящей капсулы (с полосой архива) → отступ списка сверху.
@@ -203,8 +242,10 @@ export default function ChatsPanel({ activeChatId, onOpen }: { activeChatId: str
     );
   } else {
     body = (
-      <div key={archiveView ? 'archive' : 'active'} className="cxl-rows">
-        {list.map((c) => <ListRow key={c.id} chat={c} active={c.id === activeChatId} h={handlers} />)}
+      <div key={archiveView ? 'archive' : 'active'} ref={rowsRef} className="cxl-rows">
+        {shown.from > 0 && <div style={{ height: shown.from * shown.rowH }} aria-hidden="true" />}
+        {list.slice(shown.from, shown.to).map((c) => <ListRow key={c.id} chat={c} active={c.id === activeChatId} h={handlers} />)}
+        {shown.to < list.length && <div style={{ height: (list.length - shown.to) * shown.rowH }} aria-hidden="true" />}
       </div>
     );
   }
@@ -270,6 +311,7 @@ export default function ChatsPanel({ activeChatId, onOpen }: { activeChatId: str
           реальной высоте (--cxl-float-h), вместе с полосой архива. */}
       <div ref={stageRef} className="cxl-stage">
         <div ref={floatRef} className="cxl-float" data-empty={!archiveView ? 'true' : undefined}>
+          {!archiveView && <BirthdayBanner />}
           {archiveView && (
             <button type="button" className="cxl-archive-bar" onClick={() => setArchiveView(false)}>
               <Archive size={14} aria-hidden="true" /> Архив · вернуться к активным чатам
@@ -317,7 +359,8 @@ export default function ChatsPanel({ activeChatId, onOpen }: { activeChatId: str
           <MenuItem icon={theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />} onSelect={() => { toggleTheme(); setToolsAnchor(null); }}>
             {theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
           </MenuItem>
-          {notif !== 'granted' && notif !== 'unsupported' && (isIosBrowserTab() ? (
+          {/* В приложении для компьютера уведомления показывает само приложение — пункт только для браузера. */}
+          {!desktop && notif !== 'granted' && notif !== 'unsupported' && (isIosBrowserTab() ? (
             <div className="nx-menu-note">
               <b>Уведомления на iPhone</b>
               Добавьте приложение на экран «Домой»: «Поделиться» → «На экран „Домой“».

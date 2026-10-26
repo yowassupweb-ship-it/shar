@@ -6,27 +6,37 @@ from app.core.db import db
 from app.core.realtime import sse_manager
 from app.core.security import Identity, current_identity, require_admin
 from app.modules.mail import idle as mail_realtime
-from app.modules.mail.imap import _imap_connect, _owned_account, _special_folders
+from app.modules.mail.crypto import PASSWORD_HINT, PASSWORD_REJECTED_HINT, MailPasswordUnavailable, is_auth_error, mark_password
+from app.modules.mail.imap import _imap_connect, _mail_folders, _owned_account, _special_folders, _wire
 from app.modules.mail.watch import _ROLE_TITLES
 
 router = APIRouter()
 
 
 @router.get("/api/mail/mailboxes")
-def get_mailboxes(accountId: str, me: Identity = Depends(current_identity)):
-    """Папки ящика с настоящими именами на сервере и счётчиками непрочитанных."""
+def get_mailboxes(accountId: str, refresh: bool = False, me: Identity = Depends(current_identity)):
+    """Папки ящика: сначала спецпапки (входящие, отправленные…) под русскими названиями, за ними —
+    папки, которые человек завёл сам, с уровнем вложенности. Счётчики непрочитанных — из базы."""
     userId = me.user_id  # владелец — вошедший, не параметр запроса
     acc = _owned_account(accountId, userId)
     try:
-        roles = _special_folders(acc)
+        roles, others = _mail_folders(acc, force=refresh)
+    except MailPasswordUnavailable:
+        raise HTTPException(status_code=409, detail=PASSWORD_HINT) from None
     except Exception as e:
+        if is_auth_error(e):
+            mark_password(acc['id'], False)
+            raise HTTPException(status_code=409, detail=PASSWORD_REJECTED_HINT) from None
         raise HTTPException(status_code=502, detail=f"Почтовый сервер не ответил: {e}")
+    mark_password(acc['id'], True)
     unread = db.get_email_unread_counts(str(acc['id'])) or {}
     order = ['inbox', 'drafts', 'sent', 'junk', 'trash', 'archive']
-    return [
+    special = [
         {'role': role, 'folder': roles[role], 'title': _ROLE_TITLES[role], 'unread': int(unread.get(roles[role], 0) or 0)}
         for role in order if role in roles
     ]
+    custom = [{'role': 'folder', **f, 'unread': int(unread.get(f['folder'], 0) or 0)} for f in others]
+    return special + custom
 
 
 @router.post("/api/mail/messages/{message_id}/move")
@@ -48,7 +58,7 @@ def move_mail_message(message_id: str, data: dict = Body(...), me: Identity = De
     if uid.isdigit():
         conn = _imap_connect(acc)
         try:
-            typ, _ = conn.select(src)
+            typ, _ = conn.select(_wire(src))
             if typ != 'OK':
                 raise HTTPException(status_code=502, detail="Папка недоступна на сервере")
             typ, hit = conn.uid('SEARCH', None, 'UID', uid)
@@ -57,9 +67,9 @@ def move_mail_message(message_id: str, data: dict = Body(...), me: Identity = De
                 typ = 'OK'  # на сервере письма уже нет (старое) — убираем только у нас
             elif src != target:
                 if 'MOVE' in conn.capabilities:
-                    typ, _ = conn.uid('MOVE', uid, target)
+                    typ, _ = conn.uid('MOVE', uid, _wire(target))
                 else:
-                    typ, _ = conn.uid('COPY', uid, target)
+                    typ, _ = conn.uid('COPY', uid, _wire(target))
                     if typ == 'OK':
                         conn.uid('STORE', uid, '+FLAGS.SILENT', '(\\Deleted)')
                         if 'UIDPLUS' in conn.capabilities:

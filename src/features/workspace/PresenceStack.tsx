@@ -4,7 +4,7 @@ import type { Viewer } from './types';
 const MAX_SHOWN = 4;
 
 /** Цвет кольца у человека постоянный (по его id): коллега в разных материалах узнаётся по одному цвету. */
-function hueOf(id: string): number {
+export function hueOf(id: string): number {
   let hash = 0;
   for (let i = 0; i < id.length; i += 1) hash = (hash * 31 + id.charCodeAt(i)) | 0;
   return Math.abs(hash) % 360;

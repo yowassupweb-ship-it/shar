@@ -5,11 +5,13 @@ import {
   addDays, colorVar, hhmm, layoutDay, localIso, minutesOfDay, onDay, parseLocal, sameDay, startOfDay, weekdayIndex, WEEKDAYS,
   type CalEvent,
 } from './model';
+import { dayTitle, useWorkdays } from './workdays';
 
 /**
  * Сетка дня и недели, как в «Календаре» macOS.
  *
- *  - протянуть по пустому месту — новое событие на этот отрезок;
+ *  - протянуть по пустому месту — новое событие на этот отрезок (пальцем — после долгого нажатия,
+ *    иначе это прокрутка);
  *  - двойной щелчок по пустому месту — событие на час;
  *  - событие тянется за тело (перенос, в том числе на другой день недели) и
  *    за нижний край (длительность); без движения — открывается;
@@ -20,6 +22,8 @@ export const HOUR = 48;
 const SNAP = 15;
 const snap = (min: number) => Math.round(min / SNAP) * SNAP;
 const clampMin = (min: number) => Math.max(0, Math.min(24 * 60, min));
+/** Сколько держать палец на пустом месте, чтобы начать выделение отрезка. */
+const HOLD_MS = 380;
 
 type Drag =
   | { kind: 'create'; day: number; from: number; to: number }
@@ -44,6 +48,19 @@ export default function TimeGrid({ days, events, onCreate, onOpen, onMove, onPic
   const colsRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const dragRef = useRef<{ d: Drag; x: number; y: number; pointer: number } | null>(null);
+  // Палец на пустом месте: ждём долгого нажатия; сдвинулся раньше — это прокрутка, выделение не начинаем.
+  const holdRef = useRef<{ timer: number; x: number; y: number; pointer: number } | null>(null);
+  const dropHold = () => { if (holdRef.current) window.clearTimeout(holdRef.current.timer); holdRef.current = null; };
+  useEffect(() => dropHold, []);
+
+  // Пока палец выделяет отрезок, ленту не прокручиваем: без этого браузер забирал жест себе (pointercancel).
+  useEffect(() => {
+    const el = colsRef.current;
+    if (!el) return undefined;
+    const block = (e: TouchEvent) => { if (dragRef.current && e.cancelable) e.preventDefault(); };
+    el.addEventListener('touchmove', block, { passive: false });
+    return () => el.removeEventListener('touchmove', block);
+  }, []);
   const [now, setNow] = useState(() => new Date());
 
   // Линия «сейчас» двигается раз в минуту — это часы на экране, не опрос сервера.
@@ -86,10 +103,23 @@ export default function TimeGrid({ days, events, onCreate, onOpen, onMove, onPic
     if ((e.target as HTMLElement).closest('.ncal-ev')) return;
     const { day, min } = pointToSlot(e.clientX, e.clientY);
     const from = Math.floor(min / SNAP) * SNAP;
-    begin(e, { kind: 'create', day, from, to: from + SNAP });
+    const d: Drag = { kind: 'create', day, from, to: from + SNAP };
+    if (e.pointerType !== 'touch') { begin(e, d); return; }
+    dropHold();
+    const { clientX: x, clientY: y, pointerId: pointer } = e;
+    const timer = window.setTimeout(() => {
+      holdRef.current = null;
+      try { colsRef.current?.setPointerCapture(pointer); } catch { /* палец уже отпущен */ }
+      navigator.vibrate?.(8);
+      dragRef.current = { d, x, y, pointer };
+      setDrag(d);
+    }, HOLD_MS);
+    holdRef.current = { timer, x, y, pointer };
   };
 
   const onMoveP = (e: React.PointerEvent) => {
+    const hold = holdRef.current;
+    if (hold && hold.pointer === e.pointerId && Math.hypot(e.clientX - hold.x, e.clientY - hold.y) > 8) dropHold();
     const st = dragRef.current;
     if (!st || st.pointer !== e.pointerId) return;
     const dx = e.clientX - st.x;
@@ -112,14 +142,16 @@ export default function TimeGrid({ days, events, onCreate, onOpen, onMove, onPic
   };
 
   const onUp = (e: React.PointerEvent) => {
+    dropHold();
     const st = dragRef.current;
     if (!st || st.pointer !== e.pointerId) return;
     dragRef.current = null;
     setDrag(null);
     const d = st.d;
     if (d.kind === 'create') {
-      // Щелчок без протягивания ничего не создаёт — для этого двойной щелчок.
-      if (d.to - d.from <= SNAP && Math.abs(e.clientY - st.y) < 4) return;
+      // Щелчок без протягивания ничего не создаёт — для этого двойной щелчок. Палец после долгого нажатия —
+      // уже выбор: отпустил не двигая — событие на 15 минут, как в Календаре iOS.
+      if (e.pointerType !== 'touch' && d.to - d.from <= SNAP && Math.abs(e.clientY - st.y) < 4) return;
       const base = startOfDay(days[d.day]);
       onCreate(new Date(base.getTime() + d.from * 60000), new Date(base.getTime() + d.to * 60000));
       return;
@@ -147,6 +179,7 @@ export default function TimeGrid({ days, events, onCreate, onOpen, onMove, onPic
   };
 
   const cols = { '--days': days.length } as CSSProperties;
+  const kindOf = useWorkdays(days.map((d) => d.getFullYear()));
   const nowMin = minutesOfDay(now);
 
   return (
@@ -157,7 +190,7 @@ export default function TimeGrid({ days, events, onCreate, onOpen, onMove, onPic
           const today = sameDay(d, now);
           return (
             <button key={d.getTime()} type="button" className="ncal-dayhead" data-today={today ? 'true' : undefined}
-              data-weekend={weekdayIndex(d) >= 5 ? 'true' : undefined} onClick={() => onPickDay?.(d)}
+              data-weekend={kindOf(d).off ? 'true' : undefined} title={dayTitle(kindOf(d))} onClick={() => onPickDay?.(d)}
               aria-label={d.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}>
               <span className="ncal-dayhead-wd">{WEEKDAYS[weekdayIndex(d)]}</span>
               <span className="ncal-dayhead-num">{d.getDate()}</span>
@@ -193,12 +226,12 @@ export default function TimeGrid({ days, events, onCreate, onOpen, onMove, onPic
             onPointerDown={onColsDown}
             onPointerMove={onMoveP}
             onPointerUp={onUp}
-            onPointerCancel={() => { dragRef.current = null; setDrag(null); }}
+            onPointerCancel={() => { dropHold(); dragRef.current = null; setDrag(null); }}
             onDoubleClick={onDouble}
             data-dragging={drag ? drag.kind : undefined}
           >
             {days.map((d, i) => (
-              <div key={d.getTime()} className="ncal-col" data-weekend={weekdayIndex(d) >= 5 ? 'true' : undefined}>
+              <div key={d.getTime()} className="ncal-col" data-weekend={kindOf(d).off ? 'true' : undefined}>
                 {timed[i].map((p) => {
                   const dragging = drag && drag.kind !== 'create' && drag.e.id === p.e.id;
                   let top = (p.top / 60) * HOUR;

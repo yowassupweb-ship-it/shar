@@ -29,6 +29,7 @@ from app.modules.chats.messages import send_message
 from app.modules.chats.receipts import mark_messages_as_read, send_typing_indicator
 from app.modules.chats.schemas import MessageCreate
 from app.modules.realtime import frames as chat_realtime
+from app.modules.workspace import store as workspace_store
 
 router = APIRouter()
 
@@ -136,7 +137,8 @@ async def ws_stream(websocket: WebSocket, user_id: str):
     if connections == 1:
         await run_in_threadpool(_presence_mark, user_id, True)
     local_queue = sse_manager.subscribe(user_id)
-    local_queue.put_nowait(json.dumps({**chat_realtime.HELLO, 'seq': sse_manager.current_seq(user_id)}))
+    # Кроме кадров переписки сокет принимает курсор в материале «Офиса» (cursor) — клиент шлёт его, только увидев здесь.
+    local_queue.put_nowait(json.dumps({**chat_realtime.HELLO, 'features': [*chat_realtime.HELLO['features'], 'cursor'], 'seq': sse_manager.current_seq(user_id)}))
     logger.debug("ws subscribed user=%s, now %d queue(s)", user_id, len(sse_manager._queues.get(str(user_id), [])))
 
     async def sender():
@@ -176,6 +178,9 @@ async def ws_stream(websocket: WebSocket, user_id: str):
             try:
                 frame = json.loads(raw)
             except Exception:
+                continue
+            if isinstance(frame, dict) and frame.get('type') == 'cursor':
+                await run_in_threadpool(workspace_store.relay_cursor, str(user_id), frame)
                 continue
             if not isinstance(frame, dict) or frame.get('type') not in chat_realtime.FRAME_TYPES:
                 continue

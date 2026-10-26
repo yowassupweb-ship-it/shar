@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState, type ChangeEvent, type CSSProperties } from 'react';
 import { lazyComponent } from '@/shared/ui/lazy';
 import {
-  Bell, BellOff, Camera, Check, Copy, Eye, Image as ImageIcon, Link as LinkIcon, MessageCircle, Search, UserMinus, UserPlus, Video, X,
+  Bell, BellOff, Camera, Check, Copy, Image as ImageIcon, Link as LinkIcon, MessageCircle, MessageSquareText, Search, UserMinus, UserPlus, Video, X,
 } from 'lucide-react';
 import type { User } from '@/shared/types/chat';
-import LinkPreview from '@/features/chat/bubbles/LinkPreview';
+import LinkPreview, { previewText, warmPreviews } from '@/features/chat/bubbles/LinkPreview';
 import type { ViewerItem } from '@/shared/ui/ImageViewer';
 import { thumbUrl } from '@/shared/ui/media';
 import { copyImage } from './messageActions';
@@ -21,6 +21,7 @@ import {
   useChatStore,
 } from './store';
 import { Spinner } from '@/shared/ui/Spinner';
+import { useProgressive } from '@/shared/ui/useProgressive';
 
 const ImageViewer = lazyComponent(() => import('@/shared/ui/ImageViewer'));
 
@@ -117,7 +118,19 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [serverLinks, thread]);
   const q = query.trim().toLowerCase();
-  const shownLinks = useMemo(() => (q ? links.filter((l) => l.url.toLowerCase().includes(q)) : links), [links, q]);
+  // Поиск — и по адресу, и по тексту превью (заголовок, описание): превью при поиске догружаются.
+  const [previewTick, setPreviewTick] = useState(0);
+  useEffect(() => {
+    if (!q || tab !== 'links') return undefined;
+    let timer = 0;
+    const stop = warmPreviews(links.map((l) => l.url), () => { if (!timer) timer = window.setTimeout(() => { timer = 0; setPreviewTick((n) => n + 1); }, 150); });
+    return () => { stop(); window.clearTimeout(timer); };
+  }, [q, tab, links]);
+  const shownLinks = useMemo(
+    () => (q ? links.filter((l) => l.url.toLowerCase().includes(q) || previewText(l.url).includes(q)) : links),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [links, q, previewTick],
+  );
   const shownFiles = useMemo(() => (q ? files.filter((f) => String(f.filename || f.url).toLowerCase().includes(q)) : files), [files, q]);
 
   const members = useMemo(() => {
@@ -197,6 +210,11 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
     try { await navigator.clipboard.writeText(url); setCopied(true); window.setTimeout(() => setCopied(false), 1800); }
     catch { showToast('Не удалось скопировать ссылку', 'error'); }
   };
+
+  // Открытая вкладка рисуется частями (useProgressive): в большом чате это сотни фото, файлов и ссылок.
+  const tabTotal = tab === 'media' ? media?.length ?? 0 : tab === 'files' ? shownFiles.length : tab === 'links' ? shownLinks.length : shownMembers.length;
+  const part = useProgressive(tabTotal, `${chatId}|${tab}|${q}|${memberQuery}`);
+  const moreMark = part.more ? <div ref={part.sentinel} className="cxf-more" aria-hidden="true" /> : null;
 
   const dept = other?.department;
   const deptColor = dept ? getDepartmentColor(dept) : undefined;
@@ -297,7 +315,7 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
             : !media.length ? <div className="nx-state"><ImageIcon size={28} /><p>Фото и видео пока нет</p></div>
               : (
                 <div className="cxf-media">
-                  {media.map((m, i) => (
+                  {media.slice(0, part.count).map((m, i) => (
                     <div key={`${m.messageId}-${i}`} className="cxf-media-cell">
                       {m.fileType === 'image' ? (
                         <MediaThumb src={thumbUrl(m.url, 160)} onOpen={() => {
@@ -310,9 +328,10 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
                       ) : (
                         <button type="button" className="cxf-thumb" data-state="ok" onClick={() => jump(m.messageId)} aria-label="Видео — перейти к сообщению"><Video size={22} /></button>
                       )}
-                      <button type="button" className="cxf-jump" onClick={() => jump(m.messageId)} aria-label="Перейти к сообщению"><Eye size={13} /></button>
+                      <button type="button" className="cxf-jump" onClick={() => jump(m.messageId)} aria-label="Показать в переписке" title="Показать в переписке"><MessageSquareText size={13} /></button>
                     </div>
                   ))}
+                  {moreMark}
                 </div>
               )
         )}
@@ -328,12 +347,13 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
         {tab === 'files' && (
           !shownFiles.length ? <div className="nx-state"><p>{q ? 'Ничего не найдено' : 'Файлов пока нет'}</p></div> : (
             <div className="cxf-list">
-              {shownFiles.map((f, i) => (
+              {shownFiles.slice(0, part.count).map((f, i) => (
                 <div key={`${f.messageId}-${i}`} className="cxf-file">
                   <FileCard att={{ url: f.url, name: f.filename, size: f.size }} />
-                  <button type="button" className="nx-icon-btn" onClick={() => jump(f.messageId)} aria-label="Перейти к сообщению"><Eye size={16} /></button>
+                  <button type="button" className="nx-icon-btn" onClick={() => jump(f.messageId)} aria-label="Показать в переписке" title="Показать в переписке"><MessageSquareText size={16} /></button>
                 </div>
               ))}
+              {moreMark}
             </div>
           )
         )}
@@ -342,16 +362,17 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
           <>
             {!shownLinks.length ? <div className="nx-state"><LinkIcon size={28} /><p>{q ? 'Ничего не найдено' : 'Ссылок пока нет'}</p></div> : (
               <div className="cxf-list">
-                {shownLinks.map((l, i) => (
+                {shownLinks.slice(0, part.count).map((l, i) => (
                   <div key={`${l.messageId}-${i}`} className="cxf-link">
                     <div className="cxf-link-row">
                       <a href={l.url} target="_blank" rel="noopener noreferrer"><LinkIcon size={16} /><span>{l.url}</span></a>
-                      <button type="button" className="nx-icon-btn" onClick={() => jump(l.messageId)} aria-label="Перейти к сообщению"><Eye size={16} /></button>
+                      <button type="button" className="nx-icon-btn" onClick={() => jump(l.messageId)} aria-label="Показать в переписке" title="Показать в переписке"><MessageSquareText size={16} /></button>
                     </div>
                     <span className="cxf-link-date">{new Date(l.createdAt).toLocaleDateString('ru-RU')}</span>
                     <LinkPreview url={l.url} />
                   </div>
                 ))}
+                {moreMark}
               </div>
             )}
           </>
@@ -400,7 +421,7 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
                 </div>
               </div>
             )}
-            {shownMembers.map((u) => {
+            {shownMembers.slice(0, part.count).map((u) => {
               const id = String(u.id);
               const color = u.department ? getDepartmentColor(u.department) : undefined;
               return (
@@ -427,6 +448,7 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
                 </div>
               );
             })}
+            {moreMark}
           </section>
         )}
       </div>

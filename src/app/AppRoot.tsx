@@ -1,7 +1,10 @@
-import { Suspense, useEffect, useLayoutEffect, useState } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import type { User } from '@/shared/types/chat';
 import { boot, isMuted, shutdown, unreadChatsTotal, useChatStore } from '@/features/chat';
+import { availableTools } from '@/features/more/tools';
+import { startToolBadges, toolBadgesTotal, useToolBadges } from '@/features/more/toolBadges';
+import { addNavTool, removeNavTool } from '@/features/more/navTools';
 import { EventEditorHost } from '@/features/calendar';
 import { BrowserPushService } from '@/shared/platform/push/browserPushService';
 import { OverlayHost } from '@/shared/ui/overlay';
@@ -14,6 +17,8 @@ import { useSession, verifySession } from '@/shared/session/session';
 import LoginScreen from './LoginScreen';
 import ElectronTitlebar from './electron/ElectronTitlebar';
 import { startWorkspaceToasts } from '@/features/workspace/live';
+import { checkMailAccess, useMail } from '@/features/mail/api';
+import { showToast } from '@/shared/ui/Toast';
 import { SpotlightHost, useVisitTracker } from '@/features/spotlight';
 
 /**
@@ -56,9 +61,21 @@ function Workspace({ me }: { me: User }) {
   const navigate = useNavigate();
   const section = sectionFor(pathname);
   const [opts, setOpts] = useState<ShellOptions>({});
-  const unread = useChatStore((s) => unreadChatsTotal(s.chats));
+  const unreadChats = useChatStore((s) => unreadChatsTotal(s.chats));
+  // Невзятые заявки и диалоги «Соцсетей» без ответа — тоже непрочитанное: на логотипе вместе с чатами,
+  // каждое — на иконке своего инструмента; что не вынесено в нижнее меню — на «Ещё».
+  const toolCounts = useToolBadges((s) => s.counts);
+  const unread = unreadChats + toolBadgesTotal(toolCounts);
   const meFull = useChatStore((s) => s.users[String(me.id)]) as
-    (User & { position?: string; visibleTabs?: Record<string, boolean> }) | undefined;
+    (User & { position?: string; visibleTabs?: Record<string, boolean>; navTools?: string[]; enabledTools?: string[]; role?: string }) | undefined;
+  const navTools = useMemo(() => {
+    const tools = availableTools({ role: meFull?.role || me.role, enabledTools: meFull?.enabledTools });
+    return (meFull?.navTools || [])
+      .map((id) => tools.find((t) => t.id === id && !t.external && t.href.startsWith('/')))
+      .filter((t): t is NonNullable<typeof t> => Boolean(t))
+      .map((t) => ({ id: t.id, label: t.name, href: t.href, icon: t.icon, tint: t.tint, count: toolCounts[t.id] || 0 }));
+  }, [meFull?.navTools, meFull?.enabledTools, meFull?.role, me.role, toolCounts]);
+  const moreCount = Object.entries(toolCounts).reduce((sum, [id, n]) => sum + (navTools.some((t) => t.id === id) ? 0 : n || 0), 0);
 
   // Layout-эффект, а не обычный: эффекты родителя идут после эффектов детей, и
   // раздел «Чаты» открыл бы чат из адреса раньше, чем стор поднят, — а boot()
@@ -67,6 +84,20 @@ function Workspace({ me }: { me: User }) {
     boot(me);
     return () => shutdown();
   }, [me]);
+  useEffect(() => startToolBadges(), [me]);
+
+  // Шар выбило из почтового ящика (пароль сменили или его нечем расшифровать) — сразу видно:
+  // красный «!» на «Почте» и предупреждение при входе, а не плашка, которую замечаешь через неделю.
+  const lockedMail = useMail((s) => s.accounts.filter((a) => a.needsPassword).map((a) => a.email).join(', '));
+  useEffect(() => {
+    let alive = true;
+    void checkMailAccess().then((emails) => {
+      if (!alive || !emails.length || sectionFor(window.location.pathname).id === 'mail') return;
+      showToast(`Шар вышел из ящика ${emails.join(', ')}: пароль больше не подходит. Откройте «Почту» и введите его заново.`, 'error');
+    });
+    return () => { alive = false; };
+  }, [me]);
+  const alerts = useMemo(() => (lockedMail ? { mail: `Нужно войти в ящик заново: ${lockedMail}` } : undefined), [lockedMail]);
 
   useTitleBlink(unread);
 
@@ -147,7 +178,11 @@ function Workspace({ me }: { me: User }) {
     <ShellContext.Provider value={setOpts}>
       <AppShell
         section={section.id}
-        badges={{ chats: unread }}
+        badges={{ chats: unreadChats, more: moreCount }}
+        alerts={alerts}
+        navTools={navTools}
+        onNavToolDrop={(id) => void addNavTool(id)}
+        onNavToolRemove={(id) => void removeNavTool(id)}
         visibleTabs={meFull?.visibleTabs}
         navHidden={opts.navHidden}
         onReselect={opts.onReselect}

@@ -4,8 +4,9 @@ import { isMine } from './api';
 import { Chip } from './TimeGrid';
 import {
   addDays, byStart, colorVar, dayIso, monthGrid, MONTHS, onDay, parseLocal, sameDay, startOfDay, startOfMonth, timeRange,
-  weekdayIndex, WEEKDAYS, type CalEvent,
+  WEEKDAYS, type CalEvent,
 } from './model';
+import { dayTitle, useWorkdays } from './workdays';
 
 /**
  * Месяц: большой (основной вид) и маленький (боковая панель), плюс список
@@ -32,6 +33,8 @@ export function MonthView({ anchor, events, selected, compact, onSelect, onOpenD
   const [dropDay, setDropDay] = useState<number | null>(null);
   const today = new Date();
   const month = anchor.getMonth();
+  // Нерабочие дни — по производственному календарю (переносы, праздники), а не просто сб/вс.
+  const kindOf = useWorkdays(days.map((d) => d.getFullYear()));
 
   return (
     <div className="ncal-month" data-compact={compact ? 'true' : undefined} style={{ '--weeks': days.length / 7 } as CSSProperties}>
@@ -42,13 +45,17 @@ export function MonthView({ anchor, events, selected, compact, onSelect, onOpenD
         {days.map((d, i) => {
           const list = perDay[i];
           const extra = list.length - MAX_CHIPS;
+          const kind = kindOf(d);
           return (
             <div
               key={d.getTime()}
               role="gridcell"
               className="ncal-cell"
               data-out={d.getMonth() !== month ? 'true' : undefined}
-              data-weekend={weekdayIndex(d) >= 5 ? 'true' : undefined}
+              data-weekend={kind.off ? 'true' : undefined}
+              data-short={kind.short ? 'true' : undefined}
+              data-workday={kind.workWeekend ? 'true' : undefined}
+              title={dayTitle(kind)}
               data-today={sameDay(d, today) ? 'true' : undefined}
               data-selected={sameDay(d, selected) ? 'true' : undefined}
               data-drop={dropDay === i ? 'true' : undefined}
@@ -68,6 +75,9 @@ export function MonthView({ anchor, events, selected, compact, onSelect, onOpenD
                 aria-label={d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}>
                 {d.getDate() === 1 && !compact ? `${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3).toLowerCase()}` : d.getDate()}
               </button>
+              {!compact && (kind.name || kind.short || kind.workWeekend) && (
+                <span className="ncal-cell-note">{kind.name || (kind.short ? 'сокр.' : 'рабочий')}</span>
+              )}
               {compact ? (
                 list.length > 0 && (
                   <span className="ncal-dots" aria-label={`${list.length} событ.`}>
@@ -102,6 +112,7 @@ export function MiniMonth({ month, selected, events, onMonth, onPick }: {
     return set;
   }, [days, events]);
   const today = new Date();
+  const kindOf = useWorkdays(days.map((d) => d.getFullYear()));
   const step = (n: number) => onMonth(new Date(month.getFullYear(), month.getMonth() + n, 1));
   return (
     <div className="ncal-mini">
@@ -119,6 +130,8 @@ export function MiniMonth({ month, selected, events, onMonth, onPick }: {
             className="ncal-mini-day"
             data-out={d.getMonth() !== month.getMonth() ? 'true' : undefined}
             data-today={sameDay(d, today) ? 'true' : undefined}
+            data-off={kindOf(d).off ? 'true' : undefined}
+            title={dayTitle(kindOf(d))}
             data-busy={busy.has(dayIso(d)) ? 'true' : undefined}
             aria-pressed={sameDay(d, selected)}
             onClick={() => onPick(d)}
@@ -137,11 +150,12 @@ export function DayAgenda({ day, events, onOpen, onCreate, title, onMenu }: {
 }) {
   const list = useMemo(() => events.filter((e) => onDay(e, day)).sort(byStart), [events, day]);
   const today = startOfDay(new Date());
+  const note = dayTitle(useWorkdays([day.getFullYear()])(day));
   const heading = title || (sameDay(day, today) ? 'Сегодня' : sameDay(day, addDays(today, 1)) ? 'Завтра'
     : day.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' }));
   return (
     <section className="ncal-agenda" aria-label={heading}>
-      <h3 className="ncal-agenda-head">{heading}</h3>
+      <h3 className="ncal-agenda-head">{heading}{note && <span className="ncal-agenda-note">{note}</span>}</h3>
       {list.length === 0 ? (
         <button type="button" className="ncal-agenda-empty" onClick={onCreate}>Свободный день — добавить событие</button>
       ) : (

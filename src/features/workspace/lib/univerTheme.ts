@@ -190,6 +190,36 @@ export function hideMissingFonts(univer: unknown) {
   apply();
 }
 
+/** Класс на внешней карточке окна поиска Univer (Ctrl+F): по нему её красят токены и стили Шара. */
+export const FIND_CARD = 'nx-univer-find';
+
+let findWatchers = 0;
+let findObserver: MutationObserver | null = null;
+/**
+ * Пометить карточку окна поиска Univer классом FIND_CARD. Univer рисует её в body своими утилитами, без
+ * своего класса; раньше её находили селектором div:has(> .univer-contents > [find-replace-dialog]) — его
+ * браузер проверял на каждом div всего приложения при каждом пересчёте стилей (в чатах тоже). Наблюдаем,
+ * только пока открыт хоть один редактор Univer. Возвращает отписку.
+ */
+export function tagFindDialog(): () => void {
+  findWatchers += 1;
+  if (!findObserver) {
+    const tag = () => {
+      for (const dialog of document.querySelectorAll('[data-u-comp="find-replace-dialog"]')) {
+        const card = dialog.parentElement?.classList.contains('univer-contents') ? dialog.parentElement.parentElement : null;
+        if (card && !card.classList.contains(FIND_CARD)) card.classList.add(FIND_CARD);
+      }
+    };
+    findObserver = new MutationObserver(tag);
+    findObserver.observe(document.body, { childList: true, subtree: true });
+    tag();
+  }
+  return () => {
+    findWatchers -= 1;
+    if (findWatchers <= 0 && findObserver) { findObserver.disconnect(); findObserver = null; findWatchers = 0; }
+  };
+}
+
 /**
  * Подменить встроенный компонент Univer своим (например выбор эмодзи — на выбор эмодзи Шара). Univer вызывает его
  * с теми же свойствами, что и свой. Любой сбой подмены не должен ронять редактор: тогда остаётся встроенный.

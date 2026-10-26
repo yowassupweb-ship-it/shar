@@ -42,7 +42,7 @@ SECRET_FIELDS = ("password", "passwordHash", "password_hash")
 # Что человек может менять в собственном профиле.
 SELF_FIELDS = frozenset({
     "phone", "personalPhone", "workSchedule", "position", "department",
-    "pinnedTools", "visibleTabs", "toolsOrder", "chatSettings", "telegramUsername",
+    "pinnedTools", "navTools", "visibleTabs", "toolsOrder", "chatSettings", "telegramUsername",
 })
 MIN_PASSWORD_LEN = 6
 
@@ -103,6 +103,7 @@ class UserUpdate(BaseModel):
     isDisabled: Optional[bool] = None  # Отключён (скрыт везде, но не удалён)
     isDepartmentHead: Optional[bool] = None  # Руководитель отдела
     pinnedTools: Optional[List[str]] = None  # Закрепленные инструменты
+    navTools: Optional[List[str]] = None  # Инструменты в нижнем меню
     visibleTabs: Optional[Dict[str, bool]] = None  # Видимые вкладки навигации
     toolsOrder: Optional[List[str]] = None  # Порядок инструментов
     chatSettings: Optional[Dict[str, Any]] = None  # Настройки чата (цвета/фон/шрифты)

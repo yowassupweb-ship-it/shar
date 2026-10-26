@@ -1,20 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { create } from 'zustand';
-import {
-  Calendar, CheckSquare, Clock, CornerDownLeft, File as FileIcon, MessageSquare, Search, Settings, Trash2, User, Users, X, Zap,
-  Mail, FolderOpen, FileText, Shield, RefreshCw, Paperclip,
-} from 'lucide-react';
+import { Clock, CornerDownLeft, FileText, RefreshCw, Search, Shield, Trash2, X, Zap } from 'lucide-react';
 import {
   chatTitle, isFavorites, isGroupChat, isNotifications, lastActivity, otherParticipant, requestJump, useChatStore,
 } from '@/features/chat';
 import { useTasks, loadTasks } from '@/features/tasks/api';
+import { availableTools, TOOLS, type Tool } from '@/features/more/tools';
 import { KIND_LIST, KINDS } from '@/features/workspace/kinds';
 import { workspaceApi } from '@/features/workspace/api';
 import { navigate } from '@/shared/navigation/navigate';
 import { links, paths } from '@/shared/navigation/routes';
 import { myId } from '@/shared/session/session';
 import { Avatar } from '@/shared/ui/Avatar';
+import { SectionIcon, type SectionIconName } from '@/shared/ui/SectionIcon';
 import { showToast } from '@/shared/ui/Toast';
 import { clearVisits, forgetVisit, getVisits, onVisitsChanged, type Visit } from './history';
 import { norm, relativeTime, scoreText, variants } from './engine';
@@ -96,13 +95,21 @@ function Highlight({ text, queries }: { text: string; queries: string[] }) {
   return <>{text}</>;
 }
 
+/** Значок раздела — та же объёмная картинка, что в нижнем меню, а не контурная иконка. */
+const sec = (name: SectionIconName) => <SectionIcon name={name} size={26} />;
+
 const VISIT_ICON: Record<string, ReactNode> = {
-  chat: <MessageSquare size={16} />, task: <CheckSquare size={16} />, file: <FileIcon size={16} />, person: <User size={16} />,
+  chat: sec('chats'), task: sec('todo'), file: sec('files'), person: sec('contacts'),
 };
 
 function kindIcon(kind: keyof typeof KINDS): ReactNode {
   const info = KINDS[kind];
   return <span className="nsp-kind" style={{ '--a': info.tint[0], '--b': info.tint[1] } as React.CSSProperties}><info.icon size={15} /></span>;
+}
+
+/** Плашка инструмента — та же, что в «Ещё»: иконка на его градиенте. */
+function toolIcon(t: Tool): ReactNode {
+  return <span className="nsp-kind" style={{ '--a': t.tint[0], '--b': t.tint[1] } as React.CSSProperties}><t.icon size={15} /></span>;
 }
 
 interface Action { id: string; title: string; subtitle: string; words: string; icon: ReactNode; run: () => void }
@@ -115,26 +122,34 @@ async function createOffice(kind: keyof typeof KINDS) {
   } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось создать', 'error'); }
 }
 
-function buildActions(isAdmin: boolean): Action[] {
+function buildActions(isAdmin: boolean, tools: Tool[]): Action[] {
   const go = (path: string) => () => navigate(path);
   const sections: Action[] = [
-    { id: 'go-chats', title: 'Чаты', subtitle: 'Перейти в раздел', words: 'chats messages сообщения переписка', icon: <MessageSquare size={16} />, run: go(paths.chats) },
-    { id: 'go-tasks', title: 'Задачи', subtitle: 'Перейти в раздел', words: 'tasks todo дела', icon: <CheckSquare size={16} />, run: go(paths.tasks) },
-    { id: 'go-calendar', title: 'Календарь', subtitle: 'Перейти в раздел', words: 'calendar события встречи', icon: <Calendar size={16} />, run: go(paths.calendar) },
-    { id: 'go-contacts', title: 'Контакты', subtitle: 'Перейти в раздел', words: 'contacts люди сотрудники', icon: <Users size={16} />, run: go(paths.contacts) },
-    { id: 'go-files', title: 'Файлы', subtitle: 'Перейти в раздел', words: 'files облако диск', icon: <FolderOpen size={16} />, run: go(paths.files) },
-    { id: 'go-mail', title: 'Почта', subtitle: 'Перейти в раздел', words: 'mail email письма', icon: <Mail size={16} />, run: go(paths.mail) },
-    { id: 'go-office', title: 'Офис', subtitle: 'Заметки, документы, таблицы, презентации', words: 'office docs документы', icon: <FileText size={16} />, run: go(paths.office) },
-    { id: 'go-settings', title: 'Настройки', subtitle: 'Профиль, уведомления, внешний вид', words: 'settings параметры тема звук', icon: <Settings size={16} />, run: go(paths.settings) },
+    { id: 'go-chats', title: 'Чаты', subtitle: 'Перейти в раздел', words: 'chats messages сообщения переписка', icon: sec('chats'), run: go(paths.chats) },
+    { id: 'go-tasks', title: 'Задачи', subtitle: 'Перейти в раздел', words: 'tasks todo дела', icon: sec('todo'), run: go(paths.tasks) },
+    { id: 'go-calendar', title: 'Календарь', subtitle: 'Перейти в раздел', words: 'calendar события встречи', icon: sec('calendar'), run: go(paths.calendar) },
+    { id: 'go-contacts', title: 'Контакты', subtitle: 'Перейти в раздел', words: 'contacts люди сотрудники', icon: sec('contacts'), run: go(paths.contacts) },
+    { id: 'go-files', title: 'Файлы', subtitle: 'Перейти в раздел', words: 'files облако диск', icon: sec('files'), run: go(paths.files) },
+    { id: 'go-mail', title: 'Почта', subtitle: 'Перейти в раздел', words: 'mail email письма', icon: sec('mail'), run: go(paths.mail) },
+    { id: 'go-office', title: 'Офис', subtitle: 'Заметки, документы, таблицы, презентации', words: 'office docs документы', icon: sec('office'), run: go(paths.office) },
+    { id: 'go-settings', title: 'Настройки', subtitle: 'Профиль, уведомления, внешний вид', words: 'settings параметры тема звук', icon: sec('menu'), run: go(paths.settings) },
     { id: 'go-guide', title: 'Инструкция', subtitle: 'Как работать в Шаре', words: 'guide help помощь справка', icon: <FileText size={16} />, run: go(paths.guide) },
   ];
   if (isAdmin) sections.push({ id: 'go-admin', title: 'Админка', subtitle: 'Пользователи, права, система', words: 'admin администрирование', icon: <Shield size={16} />, run: go(paths.admin) });
   const create: Action[] = KIND_LIST.map((k) => ({
     id: `new-${k.kind}`, title: k.newLabel, subtitle: 'Создать и открыть в «Офисе»', words: `new create создать ${k.kind} ${k.plural}`, icon: kindIcon(k.kind), run: () => { void createOffice(k.kind); },
   }));
+  // Инструменты из «Ещё», доступные этому человеку (Заявки, Соцсети, Генератор UTM…). Поиск,
+  // настройки, инструкция и админка уже есть среди разделов выше.
+  const toolActions: Action[] = tools
+    .filter((t) => !['spotlight', 'settings', 'how-to-shar', 'admin'].includes(t.id))
+    .map((t) => ({
+      id: `tool-${t.id}`, title: t.name, subtitle: t.hint, words: `инструмент tool ${t.id} ${t.hint}`, icon: toolIcon(t),
+      run: t.external ? () => { window.open(t.href, '_blank', 'noopener'); } : go(t.href),
+    }));
   const desk = window.sharDesktop;
   const extra: Action[] = desk ? [{ id: 'reload', title: 'Перезагрузить окно', subtitle: 'Обновить интерфейс', words: 'reload refresh обновить перезапустить', icon: <RefreshCw size={16} />, run: () => desk.windowControls.reload?.() }] : [];
-  return [...create, ...sections, ...extra];
+  return [...create, ...sections, ...toolActions, ...extra];
 }
 
 export function SpotlightHost() {
@@ -172,8 +187,14 @@ function SpotlightDialog() {
   const listRef = useRef<HTMLDivElement>(null);
 
   const queries = useMemo(() => variants(query), [query]);
-  const isAdmin = me?.role === 'admin';
-  const actions = useMemo(() => buildActions(Boolean(isAdmin)), [isAdmin]);
+
+  // Роль и выданные инструменты — из справочника пользователей (как в «Ещё»): в me их может не быть.
+  const account = useChatStore((s) => s.users[myId()]) as { role?: string; enabledTools?: string[] } | undefined;
+  const role = account?.role || me?.role;
+  const enabledTools = account?.enabledTools;
+  const tools = useMemo(() => availableTools({ role, enabledTools }), [role, enabledTools]);
+  const isAdmin = role === 'admin';
+  const actions = useMemo(() => buildActions(isAdmin, tools), [isAdmin, tools]);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
   useEffect(() => onVisitsChanged(() => setVisits(getVisits())), []);
@@ -209,13 +230,29 @@ function SpotlightDialog() {
 
   const results = useMemo<Result[]>(() => {
     const out: Result[] = [];
+    // Чат — аватаркой собеседника или группы, как в списке чатов; человек — своей.
+    const chatIcon = (chatId: string): ReactNode | undefined => {
+      const c = chats[chatId];
+      if (!c) return undefined;
+      if (isNotifications(c)) return sec('uved');
+      if (isFavorites(c)) return sec('izb');
+      const other = isGroupChat(c) ? undefined : otherParticipant(c, me, users);
+      return <Avatar name={chatTitle(c, me, users)} seed={String(c.id)} src={c.avatar || other?.avatar} person={!isGroupChat(c)} size={28} />;
+    };
+    const personIcon = (userId: string): ReactNode | undefined => {
+      const u = users[userId];
+      return u ? <Avatar name={u.name || u.username || ''} seed={String(u.id)} src={u.avatar} person size={28} /> : undefined;
+    };
     const open = (fn: () => void) => () => { close(); fn(); };
 
     if (!queries.length) {
       for (const v of visits.slice(0, GROUP_LIMIT['Недавние'])) {
         out.push({
           key: v.key, group: 'Недавние', title: v.title, subtitle: `${v.subtitle ? `${v.subtitle} · ` : ''}${relativeTime(v.ts)}`, score: 1000 - out.length,
-          icon: v.kind === 'office' && v.sub && v.sub in KINDS ? kindIcon(v.sub as keyof typeof KINDS) : VISIT_ICON[v.kind],
+          icon: v.kind === 'tool' ? (() => { const t = TOOLS.find((x) => x.id === v.sub); return t ? toolIcon(t) : VISIT_ICON.file; })()
+            : v.kind === 'office' && v.sub && v.sub in KINDS ? kindIcon(v.sub as keyof typeof KINDS)
+            : v.kind === 'chat' ? chatIcon(v.key.slice(5)) ?? VISIT_ICON.chat
+              : v.kind === 'person' ? personIcon(v.key.slice(7)) ?? VISIT_ICON.person : VISIT_ICON[v.kind],
           run: open(() => { if (v.kind === 'chat') goToChat(v.key.slice(5)); else navigate(v.path); }),
           forget: () => forgetVisit(v.key),
         });
@@ -234,10 +271,9 @@ function SpotlightDialog() {
       const title = chatTitle(c, me, users);
       const s = scoreText(title, queries);
       if (!s) continue;
-      const other = isGroupChat(c) ? undefined : otherParticipant(c, me, users);
       out.push({
         key: `chat:${c.id}`, group: 'Чаты', title, subtitle: isGroupChat(c) ? 'Групповой чат' : isFavorites(c) ? 'Личные заметки' : 'Личный чат', score: s + recencyBonus(`chat:${c.id}`) + Math.min(5, lastActivity(c) / 1e13),
-        icon: <Avatar name={title} seed={String(c.id)} src={c.avatar || other?.avatar} person={!isGroupChat(c) && !isFavorites(c)} kind={isFavorites(c) ? 'favorites' : undefined} size={28} />,
+        icon: chatIcon(String(c.id)),
         run: open(() => goToChat(String(c.id))),
       });
     }
@@ -276,14 +312,14 @@ function SpotlightDialog() {
       if (!s) continue;
       out.push({
         key: `task:${t.id}`, group: 'Задачи', title: t.title, subtitle: t.completed || t.isCompleted ? 'Выполнена' : t.dueDate ? `до ${new Date(t.dueDate).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}` : 'Задача',
-        icon: <CheckSquare size={16} />, score: s + recencyBonus(`task:${t.id}`), run: open(() => navigate(links.task(t.id))),
+        icon: sec('todo'), score: s + recencyBonus(`task:${t.id}`), run: open(() => navigate(links.task(t.id))),
       });
     }
 
     for (const t of remote.events) {
       out.push({
         key: `event:${t.id}`, group: 'События', title: t.title || 'Событие', subtitle: [dateLabel(t.startDate), t.snippet].filter(Boolean).join(' · '),
-        icon: <Calendar size={16} />, score: Math.max(scoreText(t.title, queries), 40) + recencyBonus(`event:${t.id}`),
+        icon: sec('calendar'), score: Math.max(scoreText(t.title, queries), 40) + recencyBonus(`event:${t.id}`),
         run: open(() => navigate(links.event(t.id, dayOf(t.startDate)))),
       });
     }
@@ -291,7 +327,7 @@ function SpotlightDialog() {
     for (const f of remote.files) {
       out.push({
         key: `file:${f.id}`, group: 'Файлы', title: f.name, subtitle: ['Файл в облаке', fileSize(f.size)].filter(Boolean).join(' · '),
-        icon: <FileIcon size={16} />, score: Math.max(scoreText(f.name, queries), 40) + recencyBonus(`file:${f.id}`), run: open(() => navigate(links.file(f.id))),
+        icon: sec('files'), score: Math.max(scoreText(f.name, queries), 40) + recencyBonus(`file:${f.id}`), run: open(() => navigate(links.file(f.id))),
       });
     }
     for (const a of remote.attachments) {
@@ -299,14 +335,14 @@ function SpotlightDialog() {
       const where = chat ? chatTitle(chat, me, users) : 'чат';
       out.push({
         key: `att:${a.messageId}:${a.url}`, group: 'Файлы', title: a.name, subtitle: ['Вложение', where, a.authorName, fileSize(a.size)].filter(Boolean).join(' · '),
-        icon: <Paperclip size={16} />, score: Math.max(scoreText(a.name, queries), 40) - 1, run: open(() => { requestJump(a.chatId, a.messageId); goToChat(a.chatId); }),
+        icon: chatIcon(a.chatId) ?? sec('files'), score: Math.max(scoreText(a.name, queries), 40) - 1, run: open(() => { requestJump(a.chatId, a.messageId); goToChat(a.chatId); }),
       });
     }
 
     for (const m of remote.mail) {
       out.push({
         key: `mail:${m.id}`, group: 'Письма', title: m.subject || '(без темы)', subtitle: [m.from, dateLabel(m.date), m.snippet].filter(Boolean).join(' · '),
-        icon: <Mail size={16} />, score: Math.max(scoreText(m.subject, queries), 40) + recencyBonus(`mail:${m.id}`),
+        icon: sec('mail'), score: Math.max(scoreText(m.subject, queries), 40) + recencyBonus(`mail:${m.id}`),
         run: open(() => navigate(links.mail(m.id, m.accountId, m.folder))),
       });
     }
@@ -316,7 +352,7 @@ function SpotlightDialog() {
       const where = chat ? chatTitle(chat, me, users) : 'чат';
       out.push({
         key: `msg:${m.id}`, group: 'Сообщения', title: m.snippet, subtitle: `${m.authorName ? `${m.authorName} · ` : ''}${where} · ${relativeTime(new Date(m.createdAt.replace(' ', 'T') + 'Z').getTime())}`,
-        icon: <MessageSquare size={16} />, score: 30, run: open(() => { requestJump(m.chatId, m.id); goToChat(m.chatId); }),
+        icon: chatIcon(m.chatId) ?? sec('chats'), score: 30, run: open(() => { requestJump(m.chatId, m.id); goToChat(m.chatId); }),
       });
     }
 

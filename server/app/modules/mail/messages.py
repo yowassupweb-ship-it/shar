@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime as _dt
 from datetime import timezone
 from email.utils import make_msgid
@@ -26,6 +28,37 @@ from app.modules.mail.service import (
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Флаги «прочитано» и «звезда» уходят на почтовый сервер в фоне. Раньше каждое открытое письмо
+# ждало входа в IMAP (1–3 с), а при листании подряд эти входы копились в пуле потоков сервера.
+# Очередь на два потока; повтор для того же письма, пока прежний не ушёл, сливается в один.
+_flag_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='mail-flags')
+_flag_pending: dict = {}
+_flag_lock = threading.Lock()
+
+
+def _push_imap_flags(account_id: str, folder: str, uid: str, updates: dict) -> None:
+    key = (account_id, folder, uid)
+    with _flag_lock:
+        queued = key in _flag_pending
+        _flag_pending[key] = {**_flag_pending.get(key, {}), **updates}
+    if queued:
+        return
+
+    def run() -> None:
+        with _flag_lock:
+            todo = _flag_pending.pop(key, None)
+        if not todo:
+            return
+        try:
+            account = db.conn.fetch_one("SELECT * FROM email_accounts WHERE id = %s", (account_id,))
+            if account:
+                _set_imap_flags(dict(account), folder, uid, todo)
+        except Exception as exc:
+            # Сверка ящика вернёт состояние с почтового сервера — локальная отметка не врёт долго.
+            logger.warning(f"[Mail] IMAP flag update error for {account_id}/{folder}/{uid}: {exc}")
+
+    _flag_pool.submit(run)
 
 
 def _my_message(message_id: str, me: Identity) -> dict:
@@ -127,18 +160,11 @@ def update_mail_message(message_id: str, data: dict = Body(...), me: Identity = 
             updates[snake] = data[camel]
     existing = _my_message(message_id, me)
     imap_updates = {key: value for key, value in updates.items() if key in ('is_read', 'is_starred')}
-    if existing.get('uid') and imap_updates:
-        account = db.conn.fetch_one("SELECT * FROM email_accounts WHERE id = %s", (existing['account_id'],))
-        if not account:
-            raise HTTPException(status_code=404, detail="Mail account not found")
-        try:
-            _set_imap_flags(dict(account), existing.get('folder') or 'INBOX', str(existing['uid']), imap_updates)
-        except Exception as exc:
-            logger.warning(f"[Mail] IMAP flag update error for {message_id}: {exc}")
-            raise HTTPException(status_code=502, detail="Could not update the mail server")
     updated = db.update_email_message(message_id, updates)
     if not updated:
         raise HTTPException(status_code=404, detail="Message not found")
+    if existing.get('uid') and imap_updates:
+        _push_imap_flags(str(existing['account_id']), existing.get('folder') or 'INBOX', str(existing['uid']), imap_updates)
     return snake_to_camel(updated)
 
 

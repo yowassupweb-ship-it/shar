@@ -4,7 +4,7 @@
  * ним по смыслу («Написать» — Чаты, «Задача» — Задачи, «Почта» — Почта),
  * показываем этой же иконкой, чтобы она везде значила одно и то же.
  */
-export type SectionIconName = 'chats' | 'todo' | 'calendar' | 'contacts' | 'files' | 'mail' | 'menu' | 'new' | 'uved' | 'izb';
+export type SectionIconName = 'chats' | 'todo' | 'calendar' | 'contacts' | 'files' | 'mail' | 'office' | 'menu' | 'new' | 'uved' | 'izb';
 
 export function SectionIcon({ name, size = 20 }: { name: SectionIconName; size?: number }) {
   return (

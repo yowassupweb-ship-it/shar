@@ -1,4 +1,5 @@
-import { memo, useRef, useState, type ReactNode } from 'react';
+import { memo, useRef, useState, type PointerEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Archive, BarChart2, BellOff, File as FileIcon, FolderOpen, Image as ImageIcon, Mic, PhoneOff, Pin, Trash2, Video,
 } from 'lucide-react';
@@ -60,11 +61,18 @@ function readersOf(chat: ChatRow, meId: string, users: Record<string, User>): Us
 
 function ReadDot({ readers }: { readers: User[] }) {
   const read = readers.length > 0;
+  // Список рисуется поверх всего окна: внутри строки его обрезали края строки и списка чатов.
+  const [at, setAt] = useState<{ top: number; right: number } | null>(null);
+  const show = (e: PointerEvent<HTMLElement>) => {
+    if (!read || e.pointerType !== 'mouse') return;
+    const r = e.currentTarget.getBoundingClientRect();
+    setAt({ top: r.bottom + 8, right: Math.max(8, window.innerWidth - r.right) });
+  };
   return (
-    <span className="cxl-read" data-read={read ? 'true' : undefined}>
+    <span className="cxl-read" data-read={read ? 'true' : undefined} onPointerEnter={show} onPointerLeave={() => setAt(null)}>
       <span className="cxl-read-dot" aria-label={read ? 'Прочитано' : 'Не прочитано'} />
-      {read && (
-        <span className="cxl-readers" role="tooltip">
+      {read && at && createPortal(
+        <span className="cxl-readers" role="tooltip" style={{ top: at.top, right: at.right }}>
           <span className="cxl-readers-title">Прочитали</span>
           {readers.map((r) => (
             <span key={r.id} className="cxl-reader">
@@ -72,7 +80,8 @@ function ReadDot({ readers }: { readers: User[] }) {
               <span>{displayName(r)}</span>
             </span>
           ))}
-        </span>
+        </span>,
+        document.querySelector<HTMLElement>('.nx') || document.body,
       )}
     </span>
   );

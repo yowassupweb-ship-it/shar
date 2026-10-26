@@ -1,12 +1,13 @@
 import { useEffect } from 'react';
 import { useLocation } from 'react-router';
 import { chatTitle, useChatStore } from '@/features/chat';
+import { TOOLS } from '@/features/more/tools';
 import { useTasks } from '@/features/tasks/api';
 import { links } from '@/shared/navigation/routes';
 import { recordVisit } from './history';
 
 /**
- * Пишет историю посещений по адресу: какой чат, задача, карточка человека или файл открыты.
+ * Пишет историю посещений по адресу: какой чат, задача, карточка человека, файл или инструмент открыты.
  * Материалы «Офиса» пишет сам ItemView — у него есть название и вид. Если название пока не известно
  * (список чатов ещё грузится), ждём, пока оно появится.
  */
@@ -47,6 +48,10 @@ export function useVisitTracker() {
         return true;
       };
       if (!write()) { const off = useChatStore.subscribe(() => { if (write()) off(); }); stop = off; }
+    } else {
+      // Инструмент из «Ещё» (Заявки, Соцсети, Генератор UTM…): настройки и админка — не инструменты.
+      const tool = TOOLS.find((t) => t.href === pathname && !t.external && !['settings', 'admin', 'how-to-shar'].includes(t.id));
+      if (tool) recordVisit({ id: tool.id, kind: 'tool', title: tool.name, subtitle: tool.hint, sub: tool.id, path: tool.href });
     }
     return () => stop?.();
   }, [pathname, search]);
