@@ -660,5 +660,6 @@ html.dark .nws-note-syntax{--md-strong: #fdba74;--md-em: #d8b4fe;--md-code: #86e
 .nws-folder-row[data-drop="after"]::before, .nws-row-slot[data-drop="after"]::before { bottom: -1px; }
 
 /* Кто сейчас в материале — на строке списка. */
+.nws-row:has(> .nws-row-presence) { grid-template-columns: auto minmax(0, 1fr) auto auto; }
 .nws-row-presence { display: inline-flex; flex: none; align-items: center; margin-left: var(--space-2); }
 .nws-row-presence .nws-presence-one { box-shadow: 0 0 0 2px var(--ring, var(--accent-color)), 0 0 0 3px var(--surface-panel); }
