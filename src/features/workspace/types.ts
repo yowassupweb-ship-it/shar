@@ -49,6 +49,13 @@ export interface Folder {
   position?: number | null;
   /** Сколько материалов каждого вида лежит прямо в папке (считает сервер, с учётом прав). */
   counts?: Partial<Record<Kind, number>>;
+  ownerId?: string;
+  /** Владелец чужой папки, открытой вам (у своих — пусто). */
+  ownerName?: string;
+  /** owner — своя; edit/view — папка открыта вам (править документы / только смотреть). */
+  role?: 'owner' | 'edit' | 'view';
+  /** Своя папка: скольким людям и отделам она открыта. */
+  shares?: number;
 }
 
 export interface ShareEntry { userId: string; role: 'view' | 'edit'; name: string }

@@ -218,14 +218,78 @@ def dept_members(dept_ids: list[str]) -> set[str]:
 
 
 def visible_sql(alias: str = "i") -> str:
-    """Условие «пользователь видит материал»; параметры — visible_params(user_id)."""
+    """Условие «пользователь видит материал»; параметры — visible_params(user_id). Через открытую папку виден
+    только материал её владельца, который он сам туда положил: папкой нельзя раздать чужое."""
     return (f"({alias}.owner_id = %s OR {alias}.access_level = 'all' "
             f"OR EXISTS (SELECT 1 FROM workspace_item_shares s WHERE s.item_id = {alias}.id AND s.user_id = %s) "
-            f"OR EXISTS (SELECT 1 FROM workspace_item_dept_shares d WHERE d.item_id = {alias}.id AND d.department_id = ANY(%s)))")
+            f"OR EXISTS (SELECT 1 FROM workspace_item_dept_shares d WHERE d.item_id = {alias}.id AND d.department_id = ANY(%s)) "
+            f"OR EXISTS (SELECT 1 FROM workspace_item_folder fx WHERE fx.item_id = {alias}.id AND fx.user_id = {alias}.owner_id "
+            f"AND fx.folder_id = ANY(%s)))")
 
 
 def visible_params(user_id: str) -> list[Any]:
-    return [user_id, user_id, user_dept_ids(user_id)]
+    depts = user_dept_ids(user_id)
+    return [user_id, user_id, depts, list(shared_folder_roles(user_id, depts))]
+
+
+def shared_folder_roles(user_id: str, depts: list[str] | None = None) -> dict[int, str]:
+    """Чужие папки, открытые человеку (поимённо или его отделу), вместе со всеми вложенными: {id папки: право}.
+    Право наследуется вниз; если папка открыта и на чтение, и на правку — правка."""
+    if depts is None:
+        depts = user_dept_ids(user_id)
+    try:
+        rows = db.conn.fetch_all(
+            """WITH RECURSIVE base AS (
+                   SELECT s.folder_id AS id, s.role FROM workspace_folder_shares s WHERE s.user_id = %s
+                   UNION ALL
+                   SELECT d.folder_id, d.role FROM workspace_folder_dept_shares d WHERE d.department_id = ANY(%s)
+               ), tree AS (
+                   SELECT id, role FROM base
+                   UNION
+                   SELECT f.id, t.role FROM workspace_folders f JOIN tree t ON f.parent_id = t.id
+               )
+               SELECT t.id, t.role FROM tree t JOIN workspace_folders f ON f.id = t.id WHERE f.owner_id <> %s""",
+            (user_id, depts, user_id),
+        ) or []
+    except Exception as exc:  # таблиц ещё нет (старая база до папок) — открытых папок просто нет
+        log.debug("workspace: folder shares unavailable (%s)", exc)
+        return {}
+    out: dict[int, str] = {}
+    for r in rows:
+        fid = int(r["id"])
+        out[fid] = "edit" if r["role"] == "edit" or out.get(fid) == "edit" else "view"
+    return out
+
+
+def folder_audience(owner_id: str) -> set[str]:
+    """Кому открыта хоть одна папка владельца (поимённо и через отделы): им тоже приходят изменения раскладки."""
+    try:
+        users = {str(r["user_id"]) for r in db.conn.fetch_all(
+            "SELECT s.user_id FROM workspace_folder_shares s JOIN workspace_folders f ON f.id = s.folder_id WHERE f.owner_id = %s", (owner_id,)) or []}
+        depts = [str(r["department_id"]) for r in db.conn.fetch_all(
+            "SELECT d.department_id FROM workspace_folder_dept_shares d JOIN workspace_folders f ON f.id = d.folder_id WHERE f.owner_id = %s", (owner_id,)) or []]
+    except Exception:
+        return set()
+    return users | dept_members(depts)
+
+
+def item_folder_audience(row: dict[str, Any]) -> set[str]:
+    """Кому материал виден через открытые папки владельца (папка, куда он его положил, и все выше неё)."""
+    try:
+        chain = [int(r["id"]) for r in db.conn.fetch_all(
+            """WITH RECURSIVE up AS (
+                   SELECT f.id, f.parent_id FROM workspace_item_folder x JOIN workspace_folders f ON f.id = x.folder_id
+                   WHERE x.item_id = %s AND x.user_id = %s
+                   UNION ALL
+                   SELECT p.id, p.parent_id FROM workspace_folders p JOIN up ON p.id = up.parent_id
+               ) SELECT id FROM up""", (int(row["id"]), str(row["owner_id"]))) or []]
+        if not chain:
+            return set()
+        users = {str(r["user_id"]) for r in db.conn.fetch_all("SELECT user_id FROM workspace_folder_shares WHERE folder_id = ANY(%s)", (chain,)) or []}
+        depts = [str(r["department_id"]) for r in db.conn.fetch_all("SELECT department_id FROM workspace_folder_dept_shares WHERE folder_id = ANY(%s)", (chain,)) or []]
+    except Exception:
+        return set()
+    return users | dept_members(depts)
 
 
 NEW_SINCE_KEY = "workspace:new-since"
@@ -266,9 +330,11 @@ def mark_seen(item_id: str, user_id: str) -> None:
     )
 
 
-def permissions(row: dict[str, Any], user_id: str, depts: list[str] | None = None) -> dict[str, Any]:
-    """Что может человек с этим материалом. Правка: владелец; выданное поимённо или его отделу (если есть
-    право на правку хоть где — правит); остальные, кто видит материал по уровню доступа, — по режиму материала."""
+def permissions(row: dict[str, Any], user_id: str, depts: list[str] | None = None,
+                folder_roles: dict[int, str] | None = None) -> dict[str, Any]:
+    """Что может человек с этим материалом. Правка: владелец; выданное поимённо, его отделу или через открытую
+    папку владельца (если есть право на правку хоть где — правит); остальные, кто видит материал по уровню
+    доступа, — по режиму материала. folder_roles — заранее посчитанные открытые папки (для списка)."""
     if str(row["owner_id"]) == user_id:
         return {"isOwner": True, "canEdit": True, "role": "owner"}
     roles = [s["role"] for s in db.conn.fetch_all("SELECT role FROM workspace_item_shares WHERE item_id = %s AND user_id = %s", (row["id"], user_id)) or []]
@@ -276,6 +342,16 @@ def permissions(row: dict[str, Any], user_id: str, depts: list[str] | None = Non
         depts = user_dept_ids(user_id)
     if depts:
         roles += [s["role"] for s in db.conn.fetch_all("SELECT role FROM workspace_item_dept_shares WHERE item_id = %s AND department_id = ANY(%s)", (row["id"], depts)) or []]
+    # Через открытую папку: куда владелец сам положил материал (список передаёт owner_folder_id готовым).
+    if "owner_folder_id" in row:
+        owner_folder = row.get("owner_folder_id")
+    else:
+        placed = db.conn.fetch_one("SELECT folder_id FROM workspace_item_folder WHERE item_id = %s AND user_id = %s", (row["id"], str(row["owner_id"])))
+        owner_folder = placed["folder_id"] if placed else None
+    if owner_folder is not None:
+        via_folder = (folder_roles if folder_roles is not None else shared_folder_roles(user_id, depts)).get(int(owner_folder))
+        if via_folder:
+            roles.append(via_folder)
     if roles:
         role = "edit" if "edit" in roles else "view"
         return {"isOwner": False, "canEdit": role == "edit", "role": role}
@@ -286,7 +362,8 @@ def permissions(row: dict[str, Any], user_id: str, depts: list[str] | None = Non
 
 
 def present(row: dict[str, Any], user_id: str | None = None, *, with_content: bool = False,
-            depts: list[str] | None = None, owners: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+            depts: list[str] | None = None, owners: dict[str, dict[str, Any]] | None = None,
+            folder_roles: dict[int, str] | None = None) -> dict[str, Any]:
     """depts и owners — заранее посчитанные отделы смотрящего и владельцы: список не ходит за ними на каждую строку."""
     owner = owners.get(str(row["owner_id"])) if owners is not None else None
     if owner is None:
@@ -302,7 +379,7 @@ def present(row: dict[str, Any], user_id: str | None = None, *, with_content: bo
         "folderPosition": row.get("folder_position"),
     }
     if user_id is not None:
-        out.update(permissions(row, user_id, depts))
+        out.update(permissions(row, user_id, depts, folder_roles))
     if with_content:
         out["content"] = row["content"]
     return out
@@ -403,7 +480,7 @@ def audience(row: dict[str, Any]) -> set[str]:
     users.add(str(row["owner_id"]))
     users |= {str(r["user_id"]) for r in db.conn.fetch_all("SELECT user_id FROM workspace_item_shares WHERE item_id = %s", (row["id"],)) or []}
     depts = [str(r["department_id"]) for r in db.conn.fetch_all("SELECT department_id FROM workspace_item_dept_shares WHERE item_id = %s", (row["id"],)) or []]
-    return users | dept_members(depts)
+    return users | dept_members(depts) | item_folder_audience(row)
 
 
 def announce(users: set[str], row: dict[str, Any], reason: str, *, actor: str = "", exclude: str = "") -> None:

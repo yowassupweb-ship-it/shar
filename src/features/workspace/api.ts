@@ -56,6 +56,10 @@ export const workspaceApi = {
     call<{ folder: Folder; folders: Folder[] }>('/api/workspace/folders', { method: 'POST', json: { title, parentId } }),
   renameFolder: (id: string, title: string) =>
     call<{ folders: Folder[] }>(`/api/workspace/folders/${enc(id)}`, { method: 'PATCH', json: { title } }).then((r) => r.folders),
+  /** Кому открыта папка; открыть (или закрыть, role = null) человеку либо отделу. */
+  folderShares: (id: string) => call<SharesState>(`/api/workspace/folders/${enc(id)}/shares`),
+  setFolderShare: (id: string, target: { userId: string } | { departmentId: string }, role: 'view' | 'edit' | null) =>
+    call<SharesState>(`/api/workspace/folders/${enc(id)}/shares`, { method: 'PUT', json: { ...target, role } }),
   /** Порядок папок на уровне parentId (null — верхний); папка из другого места переносится сюда. */
   orderFolders: (parentId: string | null, ids: string[]) =>
     call<{ folders: Folder[] }>('/api/workspace/folders/order', { method: 'PUT', json: { parentId, ids } }).then((r) => r.folders),

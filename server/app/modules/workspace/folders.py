@@ -9,13 +9,19 @@
   PUT    /api/workspace/folders/order           {parentId, ids} — порядок папок на уровне (и перенос туда же)
   PUT    /api/workspace/folders/{id}/order      {ids} — порядок материалов в папке (и перенос в неё)
   PUT    /api/workspace/items/{id}/folder       {folderId: id | null} — положить в папку (в конец) / вынуть
+  GET    /api/workspace/folders/{id}/shares     кому открыта папка (поимённо и отделам)
+  PUT    /api/workspace/folders/{id}/shares     {userId | departmentId, role: "view"|"edit"|null}
+
+Открытая папка — как открытый документ, только сразу на всё, что владелец в неё положил (и во вложенные, и что
+положит потом): получатель видит её у себя целиком, с общей раскладкой и порядком. Менять папку (название,
+состав, порядок, доступ) может только владелец; «правка» даёт править документы внутри.
 
 Любое изменение раскладки — событие workspace_folders на все устройства владельца: список перестраивается сам.
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -47,6 +53,21 @@ ALTER TABLE workspace_folders ADD COLUMN IF NOT EXISTS parent_id BIGINT REFERENC
 CREATE INDEX IF NOT EXISTS idx_workspace_folders_parent ON workspace_folders(parent_id);
 ALTER TABLE workspace_folders ADD COLUMN IF NOT EXISTS position DOUBLE PRECISION;
 ALTER TABLE workspace_item_folder ADD COLUMN IF NOT EXISTS position DOUBLE PRECISION;
+CREATE TABLE IF NOT EXISTS workspace_folder_shares (
+    folder_id BIGINT NOT NULL REFERENCES workspace_folders(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('view', 'edit')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (folder_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_folder_shares_user ON workspace_folder_shares(user_id);
+CREATE TABLE IF NOT EXISTS workspace_folder_dept_shares (
+    folder_id BIGINT NOT NULL REFERENCES workspace_folders(id) ON DELETE CASCADE,
+    department_id TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('view', 'edit')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (folder_id, department_id)
+);
 """)
 
 MAX_FOLDERS = 200
@@ -76,21 +97,41 @@ class ItemOrderBody(BaseModel):
     ids: list[str] = Field(max_length=2000)
 
 
-def _changed(user_id: str) -> None:
-    """Раскладка изменилась — все устройства владельца перестроят список (без содержимого). Не ломает запрос."""
+class FolderShareBody(BaseModel):
+    userId: Optional[str] = None
+    departmentId: Optional[str] = None
+    role: Optional[Literal["view", "edit"]] = None
+
+
+def _push(users: set[str], payload: dict) -> None:
     try:
         from app.core.realtime import sse_manager  # поздний импорт: realtime тянет много
 
-        sse_manager.push(user_id, {"type": "workspace_folders"})
+        for uid in users:
+            if uid:
+                sse_manager.push(uid, payload)
     except Exception:
         pass
 
 
+def _changed(user_id: str) -> None:
+    """Раскладка изменилась — все устройства владельца и все, кому открыты его папки, перестроят список
+    (без содержимого): материал или папка «переезжает» у всех на глазах. Не ломает запрос."""
+    _push({user_id} | store.folder_audience(user_id), {"type": "workspace_folders"})
+
+
 def _folders(user_id: str) -> list[dict]:
+    roles = store.shared_folder_roles(user_id)
     rows = db.conn.fetch_all(
-        "SELECT f.id::text AS id, f.parent_id::text AS parent_id, f.title, f.position, f.created_at::text AS created_at FROM workspace_folders f "
-        "WHERE f.owner_id = %s ORDER BY f.position NULLS LAST, lower(f.title), f.id", (user_id,),
+        "SELECT f.id::text AS id, f.parent_id::text AS parent_id, f.title, f.position, f.created_at::text AS created_at, f.owner_id, "
+        "(SELECT count(*) FROM workspace_folder_shares s WHERE s.folder_id = f.id) "
+        "+ (SELECT count(*) FROM workspace_folder_dept_shares d WHERE d.folder_id = f.id) AS shares "
+        "FROM workspace_folders f WHERE f.owner_id = %s OR f.id = ANY(%s) ORDER BY f.position NULLS LAST, lower(f.title), f.id",
+        (user_id, list(roles)),
     ) or []
+    accessible = {r["id"] for r in rows}
+    owner_ids = sorted({str(r["owner_id"]) for r in rows if str(r["owner_id"]) != user_id})
+    owners = {str(u["id"]): u.get("name") or u.get("username") or "" for u in (db.conn.fetch_all("SELECT id, name, username FROM users WHERE id = ANY(%s)", (owner_ids,)) or [])} if owner_ids else {}
     # Сколько своих разложенных материалов каждого вида лежит прямо в папке (видимых человеку): раздел «Доки»
     # показывает папку, только если в ней (или во вложенных) есть документы; совсем пустая видна везде.
     counts: dict[str, dict[str, int]] = {}
@@ -100,8 +141,28 @@ def _folders(user_id: str) -> list[dict]:
         (user_id, *store.visible_params(user_id)),
     ) or []:
         counts.setdefault(c["folder_id"], {})[c["kind"]] = int(c["n"])
-    return [{"id": r["id"], "parentId": r["parent_id"], "title": r["title"], "position": r["position"], "createdAt": r["created_at"],
-             "counts": counts.get(r["id"], {})} for r in rows]
+    # В открытых мне папках считаем по раскладке владельца (её материалы мне видны через папку).
+    if roles:
+        for c in db.conn.fetch_all(
+            "SELECT x.folder_id::text AS folder_id, i.kind, count(*) AS n FROM workspace_item_folder x "
+            "JOIN workspace_items i ON i.id = x.item_id AND i.owner_id = x.user_id "
+            "WHERE x.folder_id = ANY(%s) GROUP BY 1, 2", (list(roles),),
+        ) or []:
+            counts.setdefault(c["folder_id"], {})[c["kind"]] = int(c["n"])
+    out = []
+    for r in rows:
+        mine = str(r["owner_id"]) == user_id
+        out.append({
+            "id": r["id"],
+            # Верх открытой мне ветки — у меня на верхнем уровне (родитель-то мне не открыт).
+            "parentId": r["parent_id"] if (mine or r["parent_id"] in accessible) else None,
+            "title": r["title"], "position": r["position"], "createdAt": r["created_at"],
+            "counts": counts.get(r["id"], {}),
+            "ownerId": str(r["owner_id"]), "ownerName": "" if mine else owners.get(str(r["owner_id"]), ""),
+            "role": "owner" if mine else roles.get(int(r["id"]), "view"),
+            "shares": int(r["shares"] or 0) if mine else 0,
+        })
+    return out
 
 
 def _own(folder_id: Optional[str], user_id: str) -> dict:
@@ -178,6 +239,55 @@ def delete_folder(folder_id: str, me: Identity = Depends(current_identity)):
     db.conn.execute_query("DELETE FROM workspace_folders WHERE id = %s", (int(folder_id),))
     _changed(me.user_id)
     return {"folders": _folders(me.user_id)}
+
+
+def _shares_payload(folder_id: str) -> dict:
+    users = db.conn.fetch_all("SELECT user_id, role FROM workspace_folder_shares WHERE folder_id = %s ORDER BY created_at", (int(folder_id),)) or []
+    names = {str(u["id"]): u.get("name") or u.get("username") or "" for u in (db.conn.fetch_all(
+        "SELECT id, name, username FROM users WHERE id = ANY(%s)", ([str(r["user_id"]) for r in users],)) or [])} if users else {}
+    dept_names = {str(d["id"]): d["name"] for d in (db.get_departments() or [])}
+    depts = db.conn.fetch_all("SELECT department_id, role FROM workspace_folder_dept_shares WHERE folder_id = %s ORDER BY created_at", (int(folder_id),)) or []
+    return {
+        "shares": [{"userId": str(r["user_id"]), "role": r["role"], "name": names.get(str(r["user_id"]), "")} for r in users],
+        "departments": [{"departmentId": str(d["department_id"]), "role": d["role"], "name": dept_names.get(str(d["department_id"]), str(d["department_id"])),
+                         "members": len(store.dept_members([str(d["department_id"])]))} for d in depts],
+    }
+
+
+@router.get("/api/workspace/folders/{folder_id}/shares")
+def folder_shares(folder_id: str, me: Identity = Depends(current_identity)):
+    _own(folder_id, me.user_id)
+    return _shares_payload(folder_id)
+
+
+@router.put("/api/workspace/folders/{folder_id}/shares")
+def set_folder_share(folder_id: str, body: FolderShareBody, me: Identity = Depends(current_identity)):
+    """Открыть папку человеку или отделу (или убрать доступ: role = null). Получатели видят её сразу."""
+    _own(folder_id, me.user_id)
+    if bool(body.userId) == bool(body.departmentId):
+        raise HTTPException(status_code=400, detail="Укажите человека или отдел")
+    if body.userId:
+        if body.userId == me.user_id:
+            raise HTTPException(status_code=400, detail="Владельцу доступ выдавать не нужно")
+        if not db.get_user_by_id(body.userId):
+            raise HTTPException(status_code=404, detail="Человек не найден")
+        affected, table, column, key = {body.userId}, "workspace_folder_shares", "user_id", body.userId
+    else:
+        if not db.get_department(body.departmentId):
+            raise HTTPException(status_code=404, detail="Отдел не найден")
+        affected, table, column, key = store.dept_members([body.departmentId]), "workspace_folder_dept_shares", "department_id", body.departmentId
+    if body.role is None:
+        db.conn.execute_query(f"DELETE FROM {table} WHERE folder_id = %s AND {column} = %s", (int(folder_id), key))
+    else:
+        db.conn.execute_query(
+            f"INSERT INTO {table} (folder_id, {column}, role) VALUES (%s, %s, %s) "
+            f"ON CONFLICT (folder_id, {column}) DO UPDATE SET role = EXCLUDED.role", (int(folder_id), key, body.role))
+    title = (db.conn.fetch_one("SELECT title FROM workspace_folders WHERE id = %s", (int(folder_id),)) or {}).get("title") or ""
+    by = (db.get_user_by_id(me.user_id) or {}).get("name") or ""
+    # Получатели: папка появляется (или исчезает) у них сразу; тем, кому открыли, — уведомление.
+    _push(affected - {me.user_id}, {"type": "workspace_folders", "reason": "shared" if body.role else "changed", "title": title, "by": by})
+    _push({me.user_id}, {"type": "workspace_folders"})
+    return _shares_payload(folder_id)
 
 
 @router.put("/api/workspace/folders/order")

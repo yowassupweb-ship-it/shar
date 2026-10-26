@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { ChevronRight, Folder as FolderIcon, FolderOpen } from 'lucide-react';
+import { ChevronRight, Folder as FolderIcon, FolderOpen, Users } from 'lucide-react';
 import { useLongPress } from '@/shared/ui/useLongPress';
 import type { MenuAnchor } from '@/shared/ui/overlay';
 import type { Folder } from './types';
@@ -47,6 +47,9 @@ export function FolderRow({ folder, count, empty, open, editing, onToggle, onDro
   const [over, setOver] = useState<DropZone | null>(null);
   const press = useLongPress((x, y) => onMenu({ x, y }));
   const Icon = open ? FolderOpen : FolderIcon;
+  // Чужая папка, открытая вам: смотреть и открывать документы можно, менять раскладку — только владельцу.
+  const own = !folder.role || folder.role === 'owner';
+  const sharedNote = own ? (folder.shares ? `Открыта: ${folder.shares}` : '') : `Открыта вам · ${folder.ownerName || 'коллега'}${folder.role === 'view' ? ' · только просмотр' : ''}`;
   return (
     <div className="nws-folder" data-open={open || undefined}>
       <div
@@ -56,7 +59,7 @@ export function FolderRow({ folder, count, empty, open, editing, onToggle, onDro
         data-drop={over && over !== 'into' ? over : undefined}
         onDragOver={(e) => {
           const item = isItemDrag(e);
-          if (!item && !isFolderDrag(e)) return;
+          if (!own || (!item && !isFolderDrag(e))) return;
           e.preventDefault();
           e.stopPropagation();
           e.dataTransfer.dropEffect = 'move';
@@ -64,7 +67,7 @@ export function FolderRow({ folder, count, empty, open, editing, onToggle, onDro
         }}
         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(null); }}
         onDrop={(e) => {
-          if (!isItemDrag(e) && !isFolderDrag(e)) return;
+          if (!own || (!isItemDrag(e) && !isFolderDrag(e))) return;
           e.preventDefault();
           e.stopPropagation();
           const zone = isItemDrag(e) ? 'into' : zoneOf(e, true);
@@ -100,13 +103,14 @@ export function FolderRow({ folder, count, empty, open, editing, onToggle, onDro
             className="nws-folder-toggle"
             aria-expanded={open}
             onClick={onToggle}
-            draggable
+            draggable={own}
             onDragStart={(e) => { e.dataTransfer.setData(FOLDER_DRAG, folder.id); e.dataTransfer.effectAllowed = 'move'; }}
             {...press}
           >
             <ChevronRight size={14} className="nws-folder-chevron" aria-hidden="true" />
             <Icon size={18} className="nws-folder-icon" aria-hidden="true" />
             <span className="nws-folder-title">{folder.title}</span>
+            {sharedNote && <span className="nws-folder-shared" title={sharedNote} aria-label={sharedNote}><Users size={13} aria-hidden="true" /></span>}
             <span className="nws-folder-count">{count || ''}</span>
           </button>
         )}
@@ -114,7 +118,7 @@ export function FolderRow({ folder, count, empty, open, editing, onToggle, onDro
       {open && (
         <div className="nws-folder-items">
           {children}
-          {empty && <p className="nws-folder-empty">Перетащите сюда документы, заметки, таблицы или другую папку</p>}
+          {empty && <p className="nws-folder-empty">{own ? 'Перетащите сюда документы, заметки, таблицы или другую папку' : 'Папка пока пустая'}</p>}
         </div>
       )}
     </div>

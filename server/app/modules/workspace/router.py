@@ -93,21 +93,28 @@ def list_items(kind: Optional[str] = None, q: str = "", templates: bool = False,
     if query:
         where.append("(i.title ILIKE %s OR i.text_content ILIKE %s)")
         params += [f"%{query}%", f"%{query}%"]
-    depts = params[2]  # visible_params уже посчитал отделы смотрящего
+    depts = params[2]  # visible_params уже посчитал отделы смотрящего…
+    shared_ids = params[3]  # …и открытые ему чужие папки
+    folder_roles = store.shared_folder_roles(me.user_id, depts) if shared_ids else {}
     params.append(max(1, min(limit, 1000)))
     # Новое (мне открыли доступ, а я ещё не открывал) — первым, выше закреплённого.
     rows = db.conn.fetch_all(
         f"SELECT {store.LIST_COLUMNS}, {store.is_new_sql('i')} AS is_new, "
-        "f.folder_id::text AS folder_id, f.position AS folder_position "
+        # Своя раскладка; нет её — место в открытой мне папке владельца (общая раскладка у всех, кому открыта).
+        "COALESCE(f.folder_id, CASE WHEN ofo.folder_id = ANY(%s) THEN ofo.folder_id END)::text AS folder_id, "
+        "CASE WHEN f.folder_id IS NOT NULL THEN f.position ELSE ofo.position END AS folder_position, "
+        "ofo.folder_id AS owner_folder_id "
         f"FROM workspace_items i LEFT JOIN workspace_item_folder f ON f.item_id = i.id AND f.user_id = %s "
+        f"LEFT JOIN workspace_item_folder ofo ON ofo.item_id = i.id AND ofo.user_id = i.owner_id "
         f"WHERE {' AND '.join(where)} ORDER BY is_new DESC, i.pinned DESC, i.updated_at DESC LIMIT %s",
-        tuple(store.is_new_params(me.user_id, depts) + [me.user_id] + params),
+        tuple(store.is_new_params(me.user_id, depts) + [shared_ids, me.user_id] + params),
     ) or []
     owner_ids = sorted({str(r["owner_id"]) for r in rows})
     owners = {str(u["id"]): u for u in (db.conn.fetch_all("SELECT id, name, username FROM users WHERE id = ANY(%s)", (owner_ids,)) or [])} if owner_ids else {}
     # Кто сейчас в материале — аватарки на строке списка (себя не показываем).
     present_now = store.viewers_many([str(r["id"]) for r in rows], exclude=me.user_id)
-    return {"items": [{**store.present(row, me.user_id, depts=depts, owners=owners), "viewers": present_now.get(str(row["id"]), [])} for row in rows]}
+    return {"items": [{**store.present(row, me.user_id, depts=depts, owners=owners, folder_roles=folder_roles),
+                       "viewers": present_now.get(str(row["id"]), [])} for row in rows]}
 
 
 class PresenceListBody(BaseModel):

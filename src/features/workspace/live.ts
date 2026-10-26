@@ -19,9 +19,14 @@ export interface WorkspaceEvent {
 
 export const isWorkspaceEvent = (event: { type?: string }): event is WorkspaceEvent => event.type === 'workspace_changed';
 
-/** Один раз на приложение (AppRoot): тост «Вам открыли доступ». Возвращает отписку. */
+/** Один раз на приложение (AppRoot): тост «Вам открыли доступ» (к материалу или папке). Возвращает отписку. */
 export function startWorkspaceToasts(): () => void {
   return realtime.subscribe((event) => {
+    const folder = event as { type?: string; reason?: string; title?: string; by?: string };
+    if (folder.type === 'workspace_folders' && folder.reason === 'shared') {
+      showToast(`${folder.by || 'Коллега'} открыл(а) вам папку «${folder.title || 'Без названия'}». Она уже в «Офисе»`, 'info');
+      return;
+    }
     if (!isWorkspaceEvent(event) || event.reason !== 'shared') return;
     const info = KINDS[event.kind];
     if (!info) return;

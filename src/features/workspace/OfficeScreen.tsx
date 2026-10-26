@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
-import { Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, LayoutGrid, Lock, MonitorUp, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
+import { Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, UserPlus, LayoutGrid, Lock, MonitorUp, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
 import { useShellOptions } from '@/shared/shell/ShellContext';
 import { realtime } from '@/shared/realtime/realtime';
 import { SearchField } from '@/shared/ui/SearchField';
@@ -20,6 +20,7 @@ import { canSticky, dragNoteOut, forgetSticky, openSticky } from './lib/sticky';
 import type { Folder, Item, Kind, Viewer } from './types';
 import { FOLDER_DRAG, FolderRow, isFolderDrag, isItemDrag, ITEM_DRAG, zoneOf, type DropZone } from './Folders';
 import { PresenceStack } from './PresenceStack';
+import { FolderShareDialog } from './FolderShareDialog';
 import { useDragAutoScroll, useFlip } from './lib/listMotion';
 
 const OPEN_FOLDERS_KEY = 'shar.office.open-folders';
@@ -135,6 +136,7 @@ export default function OfficeScreen() {
   const [editingFolder, setEditingFolder] = useState<string | null>(null);
   const [folderMenu, setFolderMenu] = useState<{ folder: Folder; anchor: MenuAnchor } | null>(null);
   const [moveMenu, setMoveMenu] = useState<{ item: Item; anchor: MenuAnchor } | null>(null);
+  const [shareFolder, setShareFolder] = useState<Folder | null>(null);
   const [rootOver, setRootOver] = useState(false);
   const [sendItem, setSendItem] = useState<Item | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -461,7 +463,8 @@ export default function OfficeScreen() {
 
   // Строка материала в папке — ещё и цель: отпущенный материал встаёт перед ней или после.
   const [slotOver, setSlotOver] = useState<{ id: string; zone: DropZone } | null>(null);
-  const renderSlot = (folderId: string) => (item: Item) => (
+  const ownFolder = (id: string) => { const f = folders.find((x) => x.id === id); return !f?.role || f.role === 'owner'; };
+  const renderSlot = (folderId: string) => (item: Item) => (!ownFolder(folderId) ? renderRow(item) : (
     <div
       key={item.id}
       className="nws-row-slot"
@@ -479,7 +482,7 @@ export default function OfficeScreen() {
     >
       {renderRow(item)}
     </div>
-  );
+  ));
 
   const renderFolder = (f: Folder): ReactNode => {
     const subs = visibleChildren(f.id);
@@ -624,17 +627,25 @@ export default function OfficeScreen() {
       )}
       {folderMenu && (
         <Menu anchor={folderMenu.anchor} label="Папка" onClose={() => setFolderMenu(null)}>
+          {folderMenu.folder.role && folderMenu.folder.role !== 'owner' ? (
+            <MenuItem icon={<Users size={15} />} disabled onSelect={() => undefined}>
+              Открыта вам · {folderMenu.folder.ownerName || 'коллега'}{folderMenu.folder.role === 'view' ? ' · только просмотр' : ''}
+            </MenuItem>
+          ) : (<>
+          <MenuItem icon={<UserPlus size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); setShareFolder(f); }}>Доступ…</MenuItem>
           <MenuItem icon={<Pencil size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); setEditingFolder(f.id); }}>Переименовать</MenuItem>
           <MenuItem icon={<FolderPlus size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void newFolder(undefined, f.id); }}>Новая папка внутри</MenuItem>
           {folderMenu.folder.parentId && (
             <MenuItem icon={<FolderUp size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void placeFolder(f.id, null); }}>Вынести на верхний уровень</MenuItem>
           )}
           <MenuItem icon={<Trash2 size={15} />} tone="danger" onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void removeFolder(f); }}>Удалить папку</MenuItem>
+          </>)}
         </Menu>
       )}
+      {shareFolder && <FolderShareDialog folder={shareFolder} onClose={() => setShareFolder(null)} onChanged={() => void load()} />}
       {moveMenu && (
         <Menu anchor={moveMenu.anchor} label="В папку" onClose={() => setMoveMenu(null)}>
-          {[...folders].sort((a, b) => (folderPath.get(a.id) || '').localeCompare(folderPath.get(b.id) || '', 'ru')).map((f) => (
+          {folders.filter((f) => !f.role || f.role === 'owner').sort((a, b) => (folderPath.get(a.id) || '').localeCompare(folderPath.get(b.id) || '', 'ru')).map((f) => (
             <MenuItem key={f.id} icon={<FolderIcon size={15} />} disabled={moveMenu.item.folderId === f.id} onSelect={() => { const i = moveMenu.item; setMoveMenu(null); void moveToFolder(i.id, f.id); }}>{folderPath.get(f.id) || f.title}</MenuItem>
           ))}
           {moveMenu.item.folderId && <MenuItem icon={<FolderMinus size={15} />} onSelect={() => { const i = moveMenu.item; setMoveMenu(null); void moveToFolder(i.id, null); }}>Вынуть из папки</MenuItem>}
