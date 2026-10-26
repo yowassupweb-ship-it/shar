@@ -14,10 +14,21 @@ export const FOLDER_DRAG = 'application/x-shar-folder';
 
 export const isFolderDrag = (e: React.DragEvent) => e.dataTransfer.types.includes(FOLDER_DRAG);
 
+/** Куда отпускают над строкой: перед ней, после неё или внутрь (только папка). */
+export type DropZone = 'before' | 'after' | 'into';
+
+/** Зона по высоте строки: верхняя четверть — «перед», нижняя — «после», середина — «внутрь» (если можно). */
+export function zoneOf(e: React.DragEvent, allowInto: boolean): DropZone {
+  const r = e.currentTarget.getBoundingClientRect();
+  const y = (e.clientY - r.top) / Math.max(1, r.height);
+  if (!allowInto) return y < 0.5 ? 'before' : 'after';
+  return y < 0.28 ? 'before' : y > 0.72 ? 'after' : 'into';
+}
+
 /**
- * Папка в списке «Офиса»: строка с числом материалов, по щелчку раскрывается. На неё можно перетащить строку
- * материала или другую папку (папку саму тоже можно тащить); правый щелчок / долгое нажатие — меню
- * (переименовать, вложенная папка, удалить). Новая папка сразу в режиме имени.
+ * Папка в списке «Офиса»: строка с числом материалов (со вложенными), по щелчку раскрывается. Папку можно тащить:
+ * отпущенная у верхнего или нижнего края другой папки встаёт перед ней или после, в середине — внутрь. Материал,
+ * отпущенный на папку, ложится в неё. Правый щелчок / долгое нажатие — меню. Новая папка сразу в режиме имени.
  */
 export function FolderRow({ folder, count, empty, open, editing, onToggle, onDropItem, onDropFolder, onMenu, onRename, children }: {
   folder: Folder;
@@ -28,30 +39,40 @@ export function FolderRow({ folder, count, empty, open, editing, onToggle, onDro
   editing: boolean;
   onToggle: () => void;
   onDropItem: (itemId: string) => void;
-  onDropFolder: (folderId: string) => void;
+  onDropFolder: (folderId: string, zone: DropZone) => void;
   onMenu: (anchor: MenuAnchor) => void;
   onRename: (title: string | null) => void;
   children: ReactNode;
 }) {
-  const [over, setOver] = useState(false);
+  const [over, setOver] = useState<DropZone | null>(null);
   const press = useLongPress((x, y) => onMenu({ x, y }));
   const Icon = open ? FolderOpen : FolderIcon;
   return (
     <div className="nws-folder" data-open={open || undefined}>
       <div
         className="nws-folder-row"
-        data-over={over || undefined}
-        onDragOver={(e) => { if (!isItemDrag(e) && !isFolderDrag(e)) return; e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'move'; setOver(true); }}
-        onDragLeave={() => setOver(false)}
+        data-flip={`f${folder.id}`}
+        data-over={over === 'into' || undefined}
+        data-drop={over && over !== 'into' ? over : undefined}
+        onDragOver={(e) => {
+          const item = isItemDrag(e);
+          if (!item && !isFolderDrag(e)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = 'move';
+          setOver(item ? 'into' : zoneOf(e, true));
+        }}
+        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(null); }}
         onDrop={(e) => {
           if (!isItemDrag(e) && !isFolderDrag(e)) return;
           e.preventDefault();
           e.stopPropagation();
-          setOver(false);
+          const zone = isItemDrag(e) ? 'into' : zoneOf(e, true);
+          setOver(null);
           const item = e.dataTransfer.getData(ITEM_DRAG);
           const dragged = e.dataTransfer.getData(FOLDER_DRAG);
           if (item) onDropItem(item);
-          else if (dragged && dragged !== folder.id) onDropFolder(dragged);
+          else if (dragged && dragged !== folder.id) onDropFolder(dragged, zone);
         }}
         onContextMenu={(e) => { e.preventDefault(); onMenu({ x: e.clientX, y: e.clientY }); }}
       >

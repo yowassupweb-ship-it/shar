@@ -649,3 +649,16 @@ html.dark .nws-note-syntax{--md-strong: #fdba74;--md-em: #d8b4fe;--md-code: #86e
 .nws-row-path { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; color: var(--text-muted); font-size: var(--text-xs); white-space: nowrap; text-overflow: ellipsis; }
 .nws-row-path svg { flex: none; color: #e8a33d; }
 .nws-folder-hit-icon { --a: #f5c26b; --b: #e8a33d; }
+
+/* Перестановка перетаскиванием: линия места вставки над строкой или под ней (папки и материалы в папке). */
+.nws-folder-row, .nws-row-slot { position: relative; }
+.nws-folder-row[data-drop]::before, .nws-row-slot[data-drop]::before {
+  content: ""; position: absolute; left: var(--space-2); right: var(--space-2); z-index: 2; height: 2px; border-radius: 2px;
+  background: var(--accent-color); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color) 25%, transparent); pointer-events: none;
+}
+.nws-folder-row[data-drop="before"]::before, .nws-row-slot[data-drop="before"]::before { top: -1px; }
+.nws-folder-row[data-drop="after"]::before, .nws-row-slot[data-drop="after"]::before { bottom: -1px; }
+
+/* Кто сейчас в материале — на строке списка. */
+.nws-row-presence { display: inline-flex; flex: none; align-items: center; margin-left: var(--space-2); }
+.nws-row-presence .nws-presence-one { box-shadow: 0 0 0 2px var(--ring, var(--accent-color)), 0 0 0 3px var(--surface-panel); }

@@ -6,7 +6,11 @@
   POST   /api/workspace/folders                 {title, parentId?}
   PATCH  /api/workspace/folders/{id}            {title?, parentId?} — переименовать / переложить (parentId: null — наверх)
   DELETE /api/workspace/folders/{id}
-  PUT    /api/workspace/items/{id}/folder       {folderId: id | null} — положить в папку / вынуть
+  PUT    /api/workspace/folders/order           {parentId, ids} — порядок папок на уровне (и перенос туда же)
+  PUT    /api/workspace/folders/{id}/order      {ids} — порядок материалов в папке (и перенос в неё)
+  PUT    /api/workspace/items/{id}/folder       {folderId: id | null} — положить в папку (в конец) / вынуть
+
+Любое изменение раскладки — событие workspace_folders на все устройства владельца: список перестраивается сам.
 """
 
 from __future__ import annotations
@@ -41,6 +45,8 @@ CREATE TABLE IF NOT EXISTS workspace_item_folder (
 CREATE INDEX IF NOT EXISTS idx_workspace_item_folder_folder ON workspace_item_folder(folder_id);
 ALTER TABLE workspace_folders ADD COLUMN IF NOT EXISTS parent_id BIGINT REFERENCES workspace_folders(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_workspace_folders_parent ON workspace_folders(parent_id);
+ALTER TABLE workspace_folders ADD COLUMN IF NOT EXISTS position DOUBLE PRECISION;
+ALTER TABLE workspace_item_folder ADD COLUMN IF NOT EXISTS position DOUBLE PRECISION;
 """)
 
 MAX_FOLDERS = 200
@@ -61,10 +67,29 @@ class PlaceBody(BaseModel):
     folderId: Optional[str] = None
 
 
+class FolderOrderBody(BaseModel):
+    parentId: Optional[str] = None
+    ids: list[str] = Field(max_length=MAX_FOLDERS)
+
+
+class ItemOrderBody(BaseModel):
+    ids: list[str] = Field(max_length=2000)
+
+
+def _changed(user_id: str) -> None:
+    """Раскладка изменилась — все устройства владельца перестроят список (без содержимого). Не ломает запрос."""
+    try:
+        from app.core.realtime import sse_manager  # поздний импорт: realtime тянет много
+
+        sse_manager.push(user_id, {"type": "workspace_folders"})
+    except Exception:
+        pass
+
+
 def _folders(user_id: str) -> list[dict]:
     rows = db.conn.fetch_all(
-        "SELECT f.id::text AS id, f.parent_id::text AS parent_id, f.title, f.created_at::text AS created_at FROM workspace_folders f "
-        "WHERE f.owner_id = %s ORDER BY lower(f.title), f.id", (user_id,),
+        "SELECT f.id::text AS id, f.parent_id::text AS parent_id, f.title, f.position, f.created_at::text AS created_at FROM workspace_folders f "
+        "WHERE f.owner_id = %s ORDER BY f.position NULLS LAST, lower(f.title), f.id", (user_id,),
     ) or []
     # Сколько своих разложенных материалов каждого вида лежит прямо в папке (видимых человеку): раздел «Доки»
     # показывает папку, только если в ней (или во вложенных) есть документы; совсем пустая видна везде.
@@ -75,7 +100,7 @@ def _folders(user_id: str) -> list[dict]:
         (user_id, *store.visible_params(user_id)),
     ) or []:
         counts.setdefault(c["folder_id"], {})[c["kind"]] = int(c["n"])
-    return [{"id": r["id"], "parentId": r["parent_id"], "title": r["title"], "createdAt": r["created_at"],
+    return [{"id": r["id"], "parentId": r["parent_id"], "title": r["title"], "position": r["position"], "createdAt": r["created_at"],
              "counts": counts.get(r["id"], {})} for r in rows]
 
 
@@ -120,8 +145,11 @@ def create_folder(body: FolderBody, me: Identity = Depends(current_identity)):
     if count >= MAX_FOLDERS:
         raise HTTPException(status_code=400, detail="Слишком много папок")
     parent = _check_parent(body.parentId, me.user_id) if body.parentId else None
-    row = db.conn.fetch_one("INSERT INTO workspace_folders (owner_id, title, parent_id) VALUES (%s, %s, %s) RETURNING id::text AS id",
-                            (me.user_id, title, parent))
+    row = db.conn.fetch_one(
+        "INSERT INTO workspace_folders (owner_id, title, parent_id, position) VALUES (%s, %s, %s, "
+        "(SELECT COALESCE(max(position), -1) + 1 FROM workspace_folders WHERE owner_id = %s AND parent_id IS NOT DISTINCT FROM %s)) "
+        "RETURNING id::text AS id", (me.user_id, title, parent, me.user_id, parent))
+    _changed(me.user_id)
     folders = _folders(me.user_id)
     return {"folder": next(f for f in folders if f["id"] == row["id"]), "folders": folders}
 
@@ -134,6 +162,7 @@ def change_folder(folder_id: str, body: FolderPatch, me: Identity = Depends(curr
     if "parentId" in body.model_fields_set:
         parent = _check_parent(body.parentId, me.user_id, moving=folder_id) if body.parentId else None
         db.conn.execute_query("UPDATE workspace_folders SET parent_id = %s WHERE id = %s", (parent, int(folder_id)))
+    _changed(me.user_id)
     return {"folders": _folders(me.user_id)}
 
 
@@ -147,7 +176,41 @@ def delete_folder(folder_id: str, me: Identity = Depends(current_identity)):
     if parent is not None:
         db.conn.execute_query("UPDATE workspace_item_folder SET folder_id = %s WHERE folder_id = %s", (parent, int(folder_id)))
     db.conn.execute_query("DELETE FROM workspace_folders WHERE id = %s", (int(folder_id),))
+    _changed(me.user_id)
     return {"folders": _folders(me.user_id)}
+
+
+@router.put("/api/workspace/folders/order")
+def order_folders(body: FolderOrderBody, me: Identity = Depends(current_identity)):
+    """Порядок папок на одном уровне — как в ids. Папка из другого места переносится сюда (с проверкой на цикл)."""
+    parent = int(body.parentId) if body.parentId else None
+    if body.parentId:
+        _own(body.parentId, me.user_id)
+    for index, folder_id in enumerate(body.ids):
+        folder = _own(folder_id, me.user_id)
+        if folder.get("parent_id") != parent:
+            parent = _check_parent(body.parentId, me.user_id, moving=folder_id) if body.parentId else None
+        db.conn.execute_query("UPDATE workspace_folders SET parent_id = %s, position = %s WHERE id = %s", (parent, index, int(folder_id)))
+    _changed(me.user_id)
+    return {"folders": _folders(me.user_id)}
+
+
+@router.put("/api/workspace/folders/{folder_id}/order")
+def order_items(folder_id: str, body: ItemOrderBody, me: Identity = Depends(current_identity)):
+    """Порядок материалов в папке — как в ids. Материал из другого места кладётся в эту папку."""
+    _own(folder_id, me.user_id)
+    for index, item_id in enumerate(body.ids):
+        try:
+            store.get_visible(item_id, me.user_id, content=False)
+        except WorkspaceError as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+        db.conn.execute_query(
+            "INSERT INTO workspace_item_folder (user_id, item_id, folder_id, position) VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (user_id, item_id) DO UPDATE SET folder_id = EXCLUDED.folder_id, position = EXCLUDED.position",
+            (me.user_id, int(item_id), int(folder_id), index),
+        )
+    _changed(me.user_id)
+    return {"ok": True}
 
 
 @router.put("/api/workspace/items/{item_id}/folder")
@@ -159,10 +222,12 @@ def place_item(item_id: str, body: PlaceBody, me: Identity = Depends(current_ide
     if body.folderId:
         _own(body.folderId, me.user_id)
         db.conn.execute_query(
-            "INSERT INTO workspace_item_folder (user_id, item_id, folder_id) VALUES (%s, %s, %s) "
-            "ON CONFLICT (user_id, item_id) DO UPDATE SET folder_id = EXCLUDED.folder_id",
-            (me.user_id, int(item_id), int(body.folderId)),
+            "INSERT INTO workspace_item_folder (user_id, item_id, folder_id, position) VALUES (%s, %s, %s, "
+            "(SELECT COALESCE(max(position), -1) + 1 FROM workspace_item_folder WHERE user_id = %s AND folder_id = %s)) "
+            "ON CONFLICT (user_id, item_id) DO UPDATE SET folder_id = EXCLUDED.folder_id, position = EXCLUDED.position",
+            (me.user_id, int(item_id), int(body.folderId), me.user_id, int(body.folderId)),
         )
     else:
         db.conn.execute_query("DELETE FROM workspace_item_folder WHERE user_id = %s AND item_id = %s", (me.user_id, int(item_id)))
+    _changed(me.user_id)
     return {"folderId": body.folderId or None}

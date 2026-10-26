@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core.db import db
 from app.core.security import Identity, current_identity
@@ -98,13 +98,33 @@ def list_items(kind: Optional[str] = None, q: str = "", templates: bool = False,
     # Новое (мне открыли доступ, а я ещё не открывал) — первым, выше закреплённого.
     rows = db.conn.fetch_all(
         f"SELECT {store.LIST_COLUMNS}, {store.is_new_sql('i')} AS is_new, "
-        "(SELECT f.folder_id::text FROM workspace_item_folder f WHERE f.item_id = i.id AND f.user_id = %s) AS folder_id "
-        f"FROM workspace_items i WHERE {' AND '.join(where)} ORDER BY is_new DESC, i.pinned DESC, i.updated_at DESC LIMIT %s",
+        "f.folder_id::text AS folder_id, f.position AS folder_position "
+        f"FROM workspace_items i LEFT JOIN workspace_item_folder f ON f.item_id = i.id AND f.user_id = %s "
+        f"WHERE {' AND '.join(where)} ORDER BY is_new DESC, i.pinned DESC, i.updated_at DESC LIMIT %s",
         tuple(store.is_new_params(me.user_id, depts) + [me.user_id] + params),
     ) or []
     owner_ids = sorted({str(r["owner_id"]) for r in rows})
     owners = {str(u["id"]): u for u in (db.conn.fetch_all("SELECT id, name, username FROM users WHERE id = ANY(%s)", (owner_ids,)) or [])} if owner_ids else {}
-    return {"items": [store.present(row, me.user_id, depts=depts, owners=owners) for row in rows]}
+    # Кто сейчас в материале — аватарки на строке списка (себя не показываем).
+    present_now = store.viewers_many([str(r["id"]) for r in rows], exclude=me.user_id)
+    return {"items": [{**store.present(row, me.user_id, depts=depts, owners=owners), "viewers": present_now.get(str(row["id"]), [])} for row in rows]}
+
+
+class PresenceListBody(BaseModel):
+    ids: list[str] = Field(max_length=1000)
+
+
+@router.post("/api/workspace/presence")
+def presence_for_list(body: PresenceListBody, me: Identity = Depends(current_identity)):
+    """Кто сейчас в материалах списка — для периодического обновления аватарок (присутствие истекает без события)."""
+    ids = [i for i in body.ids if str(i).isdigit()]
+    if not ids:
+        return {"viewers": {}}
+    visible = db.conn.fetch_all(
+        f"SELECT i.id::text AS id FROM workspace_items i WHERE i.id = ANY(%s) AND {store.visible_sql('i')}",
+        (list(map(int, ids)), *store.visible_params(me.user_id)),
+    ) or []
+    return {"viewers": store.viewers_many([r["id"] for r in visible], exclude=me.user_id)}
 
 
 @router.post("/api/workspace/items", status_code=201)
@@ -318,6 +338,8 @@ def set_presence(item_id: str, body: PresenceBody, me: Identity = Depends(curren
     viewers = store.viewer_list(item_id)
     if before != sorted((v["userId"], v["editing"]) for v in viewers):
         store.push_to_viewers(item_id, {"type": "workspace_presence", "itemId": item_id, "viewers": viewers}, exclude=me.user_id)
+        # И всем, кто видит материал в своём списке, — аватарки на строке обновятся сразу.
+        store.announce_presence(row, viewers)
     return {"viewers": viewers}
 
 

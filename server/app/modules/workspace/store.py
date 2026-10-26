@@ -299,6 +299,7 @@ def present(row: dict[str, Any], user_id: str | None = None, *, with_content: bo
         "sizeBytes": row.get("size_bytes") or 0, "snippet": row.get("snippet") or "",
         "isNew": bool(row.get("is_new")),
         "folderId": row.get("folder_id"),
+        "folderPosition": row.get("folder_position"),
     }
     if user_id is not None:
         out.update(permissions(row, user_id, depts))
@@ -552,6 +553,52 @@ class Presence:
 
 
 presence = Presence()
+
+
+def viewers_many(item_ids: list[str], *, exclude: str = "") -> dict[str, list[dict[str, Any]]]:
+    """Кто сейчас в каждом из материалов — одним походом в Redis (для строк списка). Только непустые."""
+    if not item_ids:
+        return {}
+    raw: dict[str, list[tuple[str, bool]]] = {}
+    if presence._redis is not None:
+        try:
+            now = presence._now()
+            pipe = presence._redis.pipeline()
+            for item_id in item_ids:
+                pipe.zrangebyscore(f"shar:wsp:{item_id}", now - PRESENCE_TTL, "+inf")
+                pipe.hgetall(f"shar:wspe:{item_id}")
+            res = pipe.execute()
+            for index, item_id in enumerate(item_ids):
+                members, flags = res[2 * index] or [], res[2 * index + 1] or {}
+                raw[item_id] = [(m, flags.get(m) == "1") for m in members]
+        except Exception as exc:
+            log.debug("workspace presence: redis unavailable (%s)", exc)
+            raw = {}
+    if not raw:
+        raw = {item_id: presence.viewers(item_id) for item_id in item_ids}
+    user_ids = sorted({uid for pairs in raw.values() for uid, _ in pairs if uid != exclude})
+    if not user_ids:
+        return {}
+    users = {str(u["id"]): u for u in (db.conn.fetch_all("SELECT id, name, username, avatar FROM users WHERE id = ANY(%s)", (user_ids,)) or [])}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for item_id, pairs in raw.items():
+        people = [{"userId": uid, "name": (users.get(uid) or {}).get("name") or (users.get(uid) or {}).get("username") or uid,
+                   "avatar": (users.get(uid) or {}).get("avatar") or "", "editing": editing} for uid, editing in pairs if uid != exclude]
+        if people:
+            out[item_id] = people
+    return out
+
+
+def announce_presence(row: dict[str, Any], viewers: list[dict[str, Any]]) -> None:
+    """Состав присутствующих изменился — всем, кто видит материал: строка списка обновит аватарки. Не ломает запрос."""
+    try:
+        from app.core.realtime import sse_manager
+
+        payload = {"type": "workspace_presence_list", "itemId": str(row["id"]), "viewers": viewers}
+        for uid in audience(row):
+            sse_manager.push(uid, payload)
+    except Exception as exc:
+        log.debug("workspace: presence announce failed: %s", exc)
 
 
 def viewer_list(item_id: str) -> list[dict[str, Any]]:

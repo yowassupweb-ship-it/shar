@@ -17,8 +17,10 @@ import { IMPORT_RULES, importFile } from './lib/importFile';
 import { isWorkspaceEvent } from './live';
 import { readPlace, writePlace } from './lib/officeMemory';
 import { canSticky, dragNoteOut, forgetSticky, openSticky } from './lib/sticky';
-import type { Folder, Item, Kind } from './types';
-import { FOLDER_DRAG, FolderRow, isFolderDrag, isItemDrag, ITEM_DRAG } from './Folders';
+import type { Folder, Item, Kind, Viewer } from './types';
+import { FOLDER_DRAG, FolderRow, isFolderDrag, isItemDrag, ITEM_DRAG, zoneOf, type DropZone } from './Folders';
+import { PresenceStack } from './PresenceStack';
+import { useDragAutoScroll, useFlip } from './lib/listMotion';
 
 const OPEN_FOLDERS_KEY = 'shar.office.open-folders';
 function readOpenFolders(): Set<string> {
@@ -81,6 +83,7 @@ function ItemRow({ item, active, path, onOpen, onMenu }: { item: Item; active: b
     <button
       type="button"
       className="nws-row"
+      data-flip={`i${item.id}`}
       aria-current={active ? 'true' : undefined}
       data-color={item.kind === 'note' ? item.meta.color || undefined : undefined}
       onClick={onOpen}
@@ -98,6 +101,7 @@ function ItemRow({ item, active, path, onOpen, onMenu }: { item: Item; active: b
         {path && <span className="nws-row-path"><FolderIcon size={11} aria-hidden="true" />{path}</span>}
         <span className="nws-row-snippet">{item.kind === 'note' ? plainSnippet(item.snippet) : item.snippet}</span>
       </span>
+      {item.viewers && item.viewers.length > 0 && <span className="nws-row-presence"><PresenceStack viewers={item.viewers} size={20} /></span>}
       <span className="nws-row-meta">
         <span>{since(item.updatedAt)}</span>
         <span className="nws-row-flags">
@@ -197,12 +201,37 @@ export default function OfficeScreen() {
   useEffect(() => {
     let timer = 0;
     const off = realtime.subscribe((event) => {
-      if (!isWorkspaceEvent(event)) return;
+      const e = event as { type?: string; itemId?: string; viewers?: Viewer[] };
+      if (e.type === 'workspace_presence_list' && e.itemId) {
+        const me = myId();
+        const viewers = (e.viewers || []).filter((v) => String(v.userId) !== me);
+        setItems((cur) => cur?.map((i) => (i.id === e.itemId ? { ...i, viewers } : i)) ?? cur);
+        return;
+      }
+      // Раскладка изменилась на другом устройстве (или у коллеги в общей папке) — перестраиваемся, строки «переезжают».
+      if (!isWorkspaceEvent(event) && e.type !== 'workspace_folders') return;
       window.clearTimeout(timer);
       timer = window.setTimeout(() => void load(), 250);
     });
     return () => { off(); window.clearTimeout(timer); };
   }, [load]);
+
+  // Присутствие истекает молча (закрыли вкладку без «ухода») — раз в 30 с сверяем аватарки на строках.
+  const itemIds = useMemo(() => (items || []).map((i) => i.id).join(','), [items]);
+  useEffect(() => {
+    if (!itemIds) return undefined;
+    const tick = () => {
+      if (document.visibilityState !== 'visible') return;
+      workspaceApi.listPresence(itemIds.split(',')).then((map) => {
+        setItems((cur) => cur?.map((i) => {
+          const next = map[i.id] || [];
+          return (i.viewers?.length || 0) === next.length && (i.viewers || []).every((v, k) => v.userId === next[k]?.userId && v.editing === next[k]?.editing) ? i : { ...i, viewers: next };
+        }) ?? cur);
+      }).catch(() => undefined);
+    };
+    const timer = window.setInterval(tick, 30_000);
+    return () => window.clearInterval(timer);
+  }, [itemIds]);
 
   const select = (id: string | null, kind: Kind | 'all' = filter, replace = false) => {
     const next: Record<string, string> = {};
@@ -268,6 +297,9 @@ export default function OfficeScreen() {
   const byFolder = useMemo(() => {
     const map = new Map<string, Item[]>();
     for (const i of items || []) if (foldered(i) && !i.isNew) map.set(i.folderId!, [...(map.get(i.folderId!) || []), i]);
+    // Ручной порядок; ещё не расставленные — в конце, свежие выше.
+    const rank = (i: Item) => (i.folderPosition ?? Number.POSITIVE_INFINITY);
+    for (const list of map.values()) list.sort((a, b) => (rank(a) - rank(b)) || b.updatedAt.localeCompare(a.updatedAt));
     return map;
   }, [items, foldered]);
   // Дерево папок: вложенные по родителю (родитель пропал — папка наверху) и путь «Родитель / Папка» для меню.
@@ -278,6 +310,8 @@ export default function OfficeScreen() {
       const parent = f.parentId && known.has(f.parentId) ? f.parentId : null;
       map.set(parent, [...(map.get(parent) || []), f]);
     }
+    const rank = (f: Folder) => (f.position ?? Number.POSITIVE_INFINITY);
+    for (const list of map.values()) list.sort((a, b) => (rank(a) - rank(b)) || a.title.localeCompare(b.title, 'ru'));
     return map;
   }, [folders]);
   const folderPath = useMemo(() => {
@@ -354,14 +388,31 @@ export default function OfficeScreen() {
     try { await workspaceApi.placeItem(itemId, folderId); } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось переместить', 'error'); void load(); }
   }
 
-  /** Переложить папку в другую (null — наверх): сразу в списке, потом на сервер. */
-  async function moveFolder(folderId: string, parentId: string | null) {
-    const folder = folders.find((f) => f.id === folderId);
-    if (!folder || (folder.parentId || null) === parentId) return;
+  /** Поставить папку на уровень parentId (null — верхний) на место index (по умолчанию — в конец): сразу в списке, потом на сервер. */
+  async function placeFolder(folderId: string, parentId: string | null, index?: number) {
     if (parentId && isWithin(parentId, folderId)) { showToast('Папку нельзя положить в саму себя или во вложенную в неё', 'error'); return; }
-    setFolders((cur) => cur.map((f) => (f.id === folderId ? { ...f, parentId } : f)));
+    const ids = (childFolders.get(parentId) || []).map((f) => f.id).filter((id) => id !== folderId);
+    ids.splice(index === undefined ? ids.length : Math.max(0, Math.min(index, ids.length)), 0, folderId);
+    setFolders((cur) => cur.map((f) => { const p = ids.indexOf(f.id); return p >= 0 ? { ...f, parentId, position: p } : f; }));
     if (parentId) toggleFolder(parentId, true);
-    try { setFolders(await workspaceApi.moveFolder(folderId, parentId)); } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось переместить папку', 'error'); void load(); }
+    try { setFolders(await workspaceApi.orderFolders(parentId, ids)); } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось переместить папку', 'error'); void load(); }
+  }
+
+  /** Папку отпустили на другую: перед ней, после неё (на её уровне) или внутрь (в конец). */
+  function dropFolderOn(target: Folder, folderId: string, zone: DropZone) {
+    if (zone === 'into') { void placeFolder(folderId, target.id); return; }
+    const parent = target.parentId && folders.some((f) => f.id === target.parentId) ? target.parentId : null;
+    const siblings = (childFolders.get(parent) || []).map((f) => f.id).filter((id) => id !== folderId);
+    void placeFolder(folderId, parent, siblings.indexOf(target.id) + (zone === 'after' ? 1 : 0));
+  }
+
+  /** Материал отпустили на другой в папке: встаёт перед ним или после (и переезжает в эту папку, если был не здесь). */
+  async function dropItemOn(folderId: string, target: Item, itemId: string, zone: DropZone) {
+    if (itemId === target.id) return;
+    const ids = (byFolder.get(folderId) || []).map((i) => i.id).filter((id) => id !== itemId);
+    ids.splice(ids.indexOf(target.id) + (zone === 'after' ? 1 : 0), 0, itemId);
+    setItems((cur) => cur?.map((i) => { const p = ids.indexOf(i.id); return p >= 0 ? { ...i, folderId, folderPosition: p } : i; }) ?? cur);
+    try { await workspaceApi.orderItems(folderId, ids); } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось переместить', 'error'); void load(); }
   }
 
   async function newFolder(thenPlace?: Item, parentId: string | null = null) {
@@ -392,6 +443,8 @@ export default function OfficeScreen() {
       setItems((cur) => cur?.map((i) => (i.folderId === folder.id ? { ...i, folderId: folder.parentId } : i)) ?? cur);
     } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось удалить папку', 'error'); }
   }
+  useFlip(rowsRef, [items, folders, openFolders], `${filter}:${query}`);
+  useDragAutoScroll(rowsRef);
   const importing = busy.startsWith('import');
   const importRule = IMPORT_RULES[filter];
 
@@ -406,6 +459,28 @@ export default function OfficeScreen() {
     />
   );
 
+  // Строка материала в папке — ещё и цель: отпущенный материал встаёт перед ней или после.
+  const [slotOver, setSlotOver] = useState<{ id: string; zone: DropZone } | null>(null);
+  const renderSlot = (folderId: string) => (item: Item) => (
+    <div
+      key={item.id}
+      className="nws-row-slot"
+      data-drop={slotOver?.id === item.id ? slotOver.zone : undefined}
+      onDragOver={(e) => { if (!isItemDrag(e)) return; e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'move'; setSlotOver({ id: item.id, zone: zoneOf(e, false) }); }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setSlotOver((cur) => (cur?.id === item.id ? null : cur)); }}
+      onDrop={(e) => {
+        if (!isItemDrag(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setSlotOver(null);
+        const id = e.dataTransfer.getData(ITEM_DRAG);
+        if (id) void dropItemOn(folderId, item, id, zoneOf(e, false));
+      }}
+    >
+      {renderRow(item)}
+    </div>
+  );
+
   const renderFolder = (f: Folder): ReactNode => {
     const subs = visibleChildren(f.id);
     const own = byFolder.get(f.id) || [];
@@ -413,18 +488,18 @@ export default function OfficeScreen() {
       <FolderRow
         key={f.id}
         folder={f}
-        count={own.length}
+        count={folderStats.get(f.id)?.here ?? own.length}
         empty={!own.length && !subs.length}
         open={openFolders.has(f.id)}
         editing={editingFolder === f.id}
         onToggle={() => toggleFolder(f.id)}
         onDropItem={(id) => void moveToFolder(id, f.id)}
-        onDropFolder={(id) => void moveFolder(id, f.id)}
+        onDropFolder={(id, zone) => dropFolderOn(f, id, zone)}
         onMenu={(anchor) => setFolderMenu({ folder: f, anchor })}
         onRename={(title) => void renameFolder(f, title)}
       >
         {subs.map(renderFolder)}
-        {own.map(renderRow)}
+        {own.map(renderSlot(f.id))}
       </FolderRow>
     );
   };
@@ -474,7 +549,7 @@ export default function OfficeScreen() {
             const id = e.dataTransfer.getData(ITEM_DRAG);
             const folderId = e.dataTransfer.getData(FOLDER_DRAG);
             if (id) void moveToFolder(id, null);
-            else if (folderId) void moveFolder(folderId, null);
+            else if (folderId) void placeFolder(folderId, null);
           }}
         >
           {items === null && !error && <div className="nws-loading"><Spinner size={22} label="Загружаю" /></div>}
@@ -552,7 +627,7 @@ export default function OfficeScreen() {
           <MenuItem icon={<Pencil size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); setEditingFolder(f.id); }}>Переименовать</MenuItem>
           <MenuItem icon={<FolderPlus size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void newFolder(undefined, f.id); }}>Новая папка внутри</MenuItem>
           {folderMenu.folder.parentId && (
-            <MenuItem icon={<FolderUp size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void moveFolder(f.id, null); }}>Вынести на верхний уровень</MenuItem>
+            <MenuItem icon={<FolderUp size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void placeFolder(f.id, null); }}>Вынести на верхний уровень</MenuItem>
           )}
           <MenuItem icon={<Trash2 size={15} />} tone="danger" onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void removeFolder(f); }}>Удалить папку</MenuItem>
         </Menu>

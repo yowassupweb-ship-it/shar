@@ -56,9 +56,13 @@ export const workspaceApi = {
     call<{ folder: Folder; folders: Folder[] }>('/api/workspace/folders', { method: 'POST', json: { title, parentId } }),
   renameFolder: (id: string, title: string) =>
     call<{ folders: Folder[] }>(`/api/workspace/folders/${enc(id)}`, { method: 'PATCH', json: { title } }).then((r) => r.folders),
-  /** Переложить папку в другую (null — на верхний уровень). */
-  moveFolder: (id: string, parentId: string | null) =>
-    call<{ folders: Folder[] }>(`/api/workspace/folders/${enc(id)}`, { method: 'PATCH', json: { parentId } }).then((r) => r.folders),
+  /** Порядок папок на уровне parentId (null — верхний); папка из другого места переносится сюда. */
+  orderFolders: (parentId: string | null, ids: string[]) =>
+    call<{ folders: Folder[] }>('/api/workspace/folders/order', { method: 'PUT', json: { parentId, ids } }).then((r) => r.folders),
+  /** Порядок материалов в папке; материал из другого места кладётся в неё. */
+  orderItems: (folderId: string, ids: string[]) => call<{ ok: boolean }>(`/api/workspace/folders/${enc(folderId)}/order`, { method: 'PUT', json: { ids } }),
+  /** Кто сейчас в материалах списка (присутствие истекает без события — обновляем периодически). */
+  listPresence: (ids: string[]) => call<{ viewers: Record<string, Viewer[]> }>('/api/workspace/presence', { method: 'POST', json: { ids } }).then((r) => r.viewers),
   deleteFolder: (id: string) => call<{ folders: Folder[] }>(`/api/workspace/folders/${enc(id)}`, { method: 'DELETE' }).then((r) => r.folders),
   /** Положить материал в свою папку или вынуть (null). */
   placeItem: (id: string, folderId: string | null) =>
