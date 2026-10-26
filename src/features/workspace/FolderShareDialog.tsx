@@ -78,7 +78,7 @@ export function FolderShareDialog({ folder, onClose, onChanged }: { folder: Fold
             <Select
               className="nws-select nws-pick"
               label="Кому открыть"
-              placeholder="Выберите человека или отдел"
+              placeholder="Человек или отдел"
               value={pick}
               onChange={setPick}
               groups={[

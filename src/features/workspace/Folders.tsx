@@ -49,7 +49,10 @@ export function FolderRow({ folder, count, empty, open, editing, onToggle, onDro
   const Icon = open ? FolderOpen : FolderIcon;
   // Чужая папка, открытая вам: смотреть и открывать документы можно, менять раскладку — только владельцу.
   const own = !folder.role || folder.role === 'owner';
-  const sharedNote = own ? (folder.shares ? `Открыта: ${folder.shares}` : '') : `Открыта вам · ${folder.ownerName || 'коллега'}${folder.role === 'view' ? ' · только просмотр' : ''}`;
+  // Значок — только у верхней папки открытой ветки (вложенные открыты вместе с ней) и у своих, открытых напрямую.
+  const sharedNote = own
+    ? (folder.shares ? `Открыта: ${folder.shares}` : '')
+    : (!folder.parentId ? `Открыта вам · ${folder.ownerName || 'коллега'}${folder.role === 'view' ? ' · только просмотр' : ''}` : '');
   return (
     <div className="nws-folder" data-open={open || undefined}>
       <div
