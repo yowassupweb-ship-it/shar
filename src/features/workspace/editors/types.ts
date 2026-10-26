@@ -1,3 +1,4 @@
+import type { CursorPos, RemoteCursor } from '../useCursors';
 /**
  * Контракт редактора вида. Редактор сам разбирает и собирает формат содержимого;
  * сессия (useItemSession) видит только строку и отвечает за сохранение.
@@ -14,4 +15,8 @@ export interface EditorProps {
   visible?: boolean;
   /** Публичная ссылка: без меню владельца. */
   title?: string;
+  /** Курсоры других людей в материале. */
+  cursors?: RemoteCursor[];
+  /** Своё положение курсора — для остальных (null — ушёл из текста). */
+  onCursor?: (pos: CursorPos | null) => void;
 }

@@ -29,7 +29,14 @@ export interface Item {
   role: Role | null;
   /** Только у карточки (GET /items/{id}); в списке содержимого нет. */
   content?: string;
+  /** Материал ещё не открывали (выделяется в списке). */
+  isNew?: boolean;
+  /** Своя папка, куда человек положил материал; у каждого своя раскладка. */
+  folderId?: string | null;
 }
+
+/** Папка «Офиса» — личная: раскладывает материалы только для её владельца. */
+export interface Folder { id: string; title: string; createdAt: string }
 
 export interface ShareEntry { userId: string; role: 'view' | 'edit'; name: string }
 /** Доступ, выданный отделу: его сотрудники (и подразделов) получают материал в свой «Офис» сразу. */
