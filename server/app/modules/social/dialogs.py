@@ -114,6 +114,12 @@ def record_history(account_id: str, dialog_id: str, inc: Incoming, direction: st
     Повтор (сообщение уже есть) ничего не меняет. Возвращает True, если сообщение новое."""
     data = dict(inc.__dict__)
     if direction == "out":
+        # Ответ из Шара уже записан record_out: у старых записей ext_message_id — out-<uuid>, id на площадке — в sent_id.
+        if db.conn.fetch_one(
+            "SELECT 1 FROM social_items WHERE account_id = %s AND ext_chat_id = %s AND direction = 'out' AND data->>'sent_id' = %s LIMIT 1",
+            (account_id, inc.ext_chat_id, inc.ext_message_id),
+        ):
+            return False
         data = {"text": inc.text, "author_name": author_name or "Сообщество", "media": inc.media, "images": inc.images, "sent_id": inc.ext_message_id}
         ext_id = f"out-{inc.ext_message_id}"
     else:
