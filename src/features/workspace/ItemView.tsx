@@ -62,6 +62,8 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen }: {
   const { item, status, state, error, conflict, loadKey } = session;
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
   const [downloadMenu, setDownloadMenu] = useState<MenuAnchor | null>(null);
+  const [uploadMenu, setUploadMenu] = useState<MenuAnchor | null>(null);
+  const [importing, setImporting] = useState(false);
   const [share, setShare] = useState(false);
   const [sendToChat, setSendToChat] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
@@ -188,6 +190,7 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen }: {
     if (importInput.current) importInput.current.value = '';
     if (!file || !item) return;
     try {
+      if (item.kind === 'presentation') { await importSlides(file); return; }
       const imported = await importFile(file, undefined, item.kind);
       // У заметки — исходная строка: markdown() превращает её вкладки в разделы, а дописать нужно в последнюю вкладку.
       const current = item.kind === 'table' || item.kind === 'note' ? session.getContent() : markdown();
@@ -204,6 +207,39 @@ ${added}`;
       }
       showToast('Файл импортирован', 'success');
     } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось импортировать', 'error'); }
+  }
+
+  /** PowerPoint или PDF → в открытую презентацию: заменить её или добавить слайды в конец. Слайды другого размера
+   *  вписываются в размер этой презентации, свой фон сохраняют. */
+  async function importSlides(file: File) {
+    if (importMode.current === 'replace'
+      && !(await askConfirm({ title: 'Заменить презентацию?', text: `Все слайды будут заменены слайдами из «${file.name}».`, confirm: 'Заменить', tone: 'danger' }))) return;
+    setImporting(true);
+    try {
+      const imported = await importFile(file, undefined, 'presentation');
+      if (importMode.current === 'replace') {
+        session.replaceContent(imported.content, item!.title.trim() ? undefined : imported.title);
+      } else {
+        const { deckSize, parseDeck, serializeDeck } = await import('./slides/deck');
+        const current = parseDeck(session.getContent());
+        const incoming = parseDeck(imported.content);
+        const to = deckSize(current);
+        const from = deckSize(incoming);
+        const k = Math.min(to.w / from.w, to.h / from.h);
+        const dx = Math.round((to.w - from.w * k) / 2);
+        const dy = Math.round((to.h - from.h * k) / 2);
+        current.slides.push(...incoming.slides.map((slide) => ({
+          ...slide,
+          background: slide.background || incoming.theme.background,
+          elements: slide.elements.map((el) => ({
+            ...el, x: Math.round(el.x * k) + dx, y: Math.round(el.y * k) + dy, w: Math.round(el.w * k), h: Math.round(el.h * k),
+            ...(el.type !== 'image' && el.style?.fontSize ? { style: { ...el.style, fontSize: Math.max(8, Math.round(el.style.fontSize * k)) } } : {}),
+          })),
+        })) as typeof current.slides);
+        session.replaceContent(serializeDeck(current));
+      }
+      showToast(importMode.current === 'replace' ? 'Презентация загружена' : 'Слайды добавлены в конец', 'success');
+    } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось загрузить', 'error'); } finally { setImporting(false); }
   }
 
   async function copyLink() {
@@ -256,6 +292,13 @@ ${added}`;
             <Download size={17} />
           </button>
         )}
+        {/* Скачать презентацию — в панели слайдов; здесь — загрузить её из PowerPoint или PDF. */}
+        {item.kind === 'presentation' && !shared && !readOnly && (
+          <button type="button" className="nx-ghost nws-upload-btn" aria-haspopup="menu" aria-expanded={Boolean(uploadMenu)} disabled={importing}
+            title="Загрузить из PowerPoint (.pptx) или PDF" onClick={(e) => setUploadMenu({ element: e.currentTarget, align: 'end' })}>
+            {importing ? <Spinner size={14} label="Загружаю" /> : <Upload size={15} aria-hidden="true" />} <span className="nws-label">{importing ? 'Загружаю…' : 'Загрузить'}</span>
+          </button>
+        )}
         {!shared && (
           <button type="button" className="nx-primary nws-share-btn" onClick={() => setShare(true)} title="Поделиться"><Share2 size={14} aria-hidden="true" /> <span>Поделиться</span></button>
         )}
@@ -280,8 +323,15 @@ ${added}`;
         </Suspense>
       </div>
 
-      {!shared && item.kind !== 'presentation' && (
+      {!shared && (
         <input ref={importInput} type="file" accept={IMPORT_RULES[item.kind].accept} hidden onChange={(e) => void importInto(e.target.files?.[0])} />
+      )}
+
+      {uploadMenu && (
+        <Menu anchor={uploadMenu} label="Загрузить презентацию" onClose={() => setUploadMenu(null)}>
+          <MenuItem icon={<FilePlus size={15} />} onSelect={() => { setUploadMenu(null); pickImport('append'); }}>Добавить слайды из файла…</MenuItem>
+          <MenuItem icon={<Upload size={15} />} onSelect={() => { setUploadMenu(null); pickImport('replace'); }}>Заменить презентацию файлом…</MenuItem>
+        </Menu>
       )}
 
       {downloadMenu && (
@@ -315,10 +365,10 @@ ${added}`;
           {canSticky(item.kind) && <MenuItem icon={<MonitorUp size={15} />} onSelect={() => { setMenu(null); void openSticky(item.id); }}>На рабочий стол</MenuItem>}
           <MenuItem icon={<Link2 size={15} />} onSelect={() => { setMenu(null); void copyLink(); }}>Скопировать ссылку на материал</MenuItem>
           <MenuItem icon={<Copy size={15} />} onSelect={() => { setMenu(null); void duplicate(); }}>Сделать копию</MenuItem>
-          {!readOnly && item.kind !== 'presentation' && (
+          {!readOnly && (
             <>
               <MenuItem icon={<Upload size={15} />} onSelect={() => { setMenu(null); pickImport('replace'); }}>Импорт из файла (заменить)…</MenuItem>
-              {item.kind !== 'table' && <MenuItem icon={<FilePlus size={15} />} onSelect={() => { setMenu(null); pickImport('append'); }}>Добавить из файла в конец…</MenuItem>}
+              {item.kind !== 'table' && <MenuItem icon={<FilePlus size={15} />} onSelect={() => { setMenu(null); pickImport('append'); }}>{item.kind === 'presentation' ? 'Добавить слайды из файла…' : 'Добавить из файла в конец…'}</MenuItem>}
             </>
           )}
           {item.kind === 'note' && !readOnly && (

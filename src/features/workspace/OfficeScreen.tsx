@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
-import { Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, UserPlus, LayoutGrid, Lock, MonitorUp, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
+import { ChevronsDownUp, ChevronsUpDown, Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, UserPlus, LayoutGrid, Lock, MonitorUp, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
 import { useShellOptions } from '@/shared/shell/ShellContext';
 import { realtime } from '@/shared/realtime/realtime';
 import { SearchField } from '@/shared/ui/SearchField';
@@ -376,6 +376,14 @@ export default function OfficeScreen() {
     return false;
   };
 
+  // Свернуть все раскрытые папки разом (или раскрыть все, если свёрнуты): длинное дерево не листать.
+  const anyFolderOpen = folders.some((f) => openFolders.has(f.id));
+  const toggleAllFolders = () => {
+    const next = new Set(anyFolderOpen ? [] : folders.map((f) => f.id));
+    writeOpenFolders(next);
+    setOpenFolders(next);
+  };
+
   const toggleFolder = (id: string, open?: boolean) => setOpenFolders((cur) => {
     const next = new Set(cur);
     if (open ?? !next.has(id)) next.add(id); else next.delete(id);
@@ -572,7 +580,15 @@ export default function OfficeScreen() {
           {fresh.map(renderRow)}
           {pinned.length > 0 && <h2 className="nws-group" data-flip="g-pinned">Закреплённые</h2>}
           {pinned.map(renderRow)}
-          {!query && visibleChildren(null).length > 0 && <h2 className="nws-group" data-flip="g-folders">Папки</h2>}
+          {!query && visibleChildren(null).length > 0 && (
+            <div className="nws-group-row" data-flip="g-folders">
+              <h2 className="nws-group">Папки</h2>
+              <button type="button" className="nws-group-btn" onClick={toggleAllFolders} aria-label={anyFolderOpen ? 'Свернуть все папки' : 'Развернуть все папки'}>
+                {anyFolderOpen ? <ChevronsDownUp size={14} aria-hidden="true" /> : <ChevronsUpDown size={14} aria-hidden="true" />}
+                {anyFolderOpen ? 'Свернуть все' : 'Развернуть все'}
+              </button>
+            </div>
+          )}
           {!query && visibleChildren(null).map(renderFolder)}
           {matchedFolders.length > 0 && <h2 className="nws-group" data-flip="g-folders">Папки</h2>}
           {matchedFolders.map((f) => (

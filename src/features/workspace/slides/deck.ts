@@ -35,6 +35,11 @@ export type Deck = { version: 1; size?: Size; theme: Theme; slides: Slide[] };
 
 export const deckSize = (deck: Pick<Deck, "size"> | null | undefined): Size => (deck?.size && deck.size.w > 0 && deck.size.h > 0 ? deck.size : DEFAULT_SIZE);
 
+/** Размер слайда по пропорциям страницы (PDF, PowerPoint): длинная сторона 960, вертикальное остаётся вертикальным. */
+export function sizeFor(width: number, height: number): Size {
+  return width >= height ? { w: 960, h: Math.round(960 * height / width) } : { w: Math.round(960 * width / height), h: 960 };
+}
+
 export const THEMES: Theme[] = [
   { name: "Светлая", fontFamily: "Inter, 'Segoe UI', Arial, sans-serif", background: "#ffffff", text: "#1d1d1f", accent: "#0a84ff", titleSize: 44, bodySize: 22 },
   { name: "Графит", fontFamily: "Inter, 'Segoe UI', Arial, sans-serif", background: "#1c1c1e", text: "#f5f5f7", accent: "#64d2ff", titleSize: 44, bodySize: 22 },

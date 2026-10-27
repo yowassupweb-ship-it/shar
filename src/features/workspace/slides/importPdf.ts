@@ -1,15 +1,10 @@
 import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
-import { THEMES, uid, type Deck, type Size, type Slide } from "./deck";
+import { sizeFor, THEMES, uid, type Deck, type Slide } from "./deck";
 
 type PdfJs = typeof import("pdfjs-dist");
 
 const MAX_PAGES = 150;
 const PARALLEL_UPLOADS = 4;
-
-/** Размер слайда по пропорциям страницы: длинная сторона 960, вертикальный PDF остаётся вертикальным. */
-export function sizeFor(width: number, height: number): Size {
-  return width >= height ? { w: 960, h: Math.round(960 * height / width) } : { w: Math.round(960 * width / height), h: 960 };
-}
 
 /**
  * PDF → презентация. Каждая страница — слайд во весь размер, текст страницы — заметки докладчика (их видят поиск и агент).

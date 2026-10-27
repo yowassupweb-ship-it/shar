@@ -53,16 +53,17 @@ async function uploadDataUrl(dataUrl: string): Promise<string> {
 
 /** Что подходит в каждом разделе: в «Документах» — документы, в «Таблицах» — таблицы и так далее. */
 export const IMPORT_RULES: Record<Kind | 'all', { accept: string; label: string; hint: string }> = {
-  all: { accept: '.docx,.md,.markdown,.txt,.xlsx,.xlsm,.csv,.pdf', label: 'Импорт файла', hint: 'Word, Markdown, Excel, CSV, PDF — станет заметкой, документом, таблицей или презентацией по типу файла' },
+  all: { accept: '.docx,.md,.markdown,.txt,.xlsx,.xlsm,.csv,.pptx,.pdf', label: 'Импорт файла', hint: 'Word, Markdown, Excel, CSV, PowerPoint, PDF — станет заметкой, документом, таблицей или презентацией по типу файла' },
   note: { accept: '.docx,.md,.markdown,.txt', label: 'Импорт заметки', hint: 'Markdown, текст или Word' },
   document: { accept: '.docx,.md,.markdown,.txt', label: 'Импорт документа', hint: 'Word (.docx), Markdown или текст' },
   table: { accept: '.xlsx,.xlsm,.csv', label: 'Импорт таблицы', hint: 'Excel (.xlsx) или CSV' },
-  presentation: { accept: '.pdf', label: 'Импорт презентации', hint: 'PDF: каждая страница станет слайдом' },
+  presentation: { accept: '.pptx,.pdf', label: 'Загрузить презентацию', hint: 'PowerPoint (.pptx) — слайды с текстом и картинками; PDF — каждая страница станет слайдом' },
 };
 
 /**
  * Файл с компьютера → новый материал по расширению: Word, Markdown и текст — документ (в разделе «Заметки» — заметка);
- * Excel и CSV — таблица; PDF — презентация (каждая страница — слайд). `scope` — раздел, из которого импортируют:
+ * Excel и CSV — таблица; PowerPoint — презентация со слайдами как в файле, PDF — презентация (каждая страница — слайд).
+ * `scope` — раздел, из которого импортируют:
  * чужой тип файла там отклоняется понятной подсказкой. Бросает Error с текстом для человека.
  */
 export async function importFile(file: File, onProgress?: (done: number, total: number) => void, scope: Kind | 'all' = 'all'): Promise<Imported> {
@@ -108,6 +109,11 @@ export async function importFile(file: File, onProgress?: (done: number, total: 
   if (ext === '.pdf') {
     const { pdfToDeck } = await import('../slides/importPdf');
     const deck = await pdfToDeck(file, uploadDataUrl, onProgress);
+    return { kind: 'presentation', title, content: JSON.stringify(deck) };
+  }
+  if (ext === '.pptx') {
+    const { pptxToDeck } = await import('../slides/importPptx');
+    const deck = await pptxToDeck(file, uploadBlob, onProgress);
     return { kind: 'presentation', title, content: JSON.stringify(deck) };
   }
   throw new Error(`Подходят файлы: ${IMPORT_RULES.all.hint}`);
