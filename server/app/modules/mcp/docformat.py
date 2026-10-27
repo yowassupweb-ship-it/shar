@@ -207,6 +207,70 @@ def append_markdown(snapshot: dict[str, Any], markdown: str) -> dict[str, Any]:
     return snapshot
 
 
+def snapshot_text(snapshot: dict[str, Any]) -> str:
+    """Чистый текст документа — тот, в котором ищет replace_text (абзацы — строками, без разметки)."""
+    stream = str((snapshot.get("body") or {}).get("dataStream") or "")
+    return _CONTROL.sub("", stream.replace("\r\n", "").replace("\r", "\n")).strip()
+
+
+class TextNotFound(ValueError):
+    pass
+
+
+def _boundary(i: int, pos: int, end: int, size: int) -> int:
+    """Граница между символами (начало или конец участка) после замены [pos, end) на текст длины size: позади
+    замены — сдвиг на разницу длин, внутри — прижать к новому тексту, впереди — как было."""
+    if i >= end:
+        return i + size - (end - pos)
+    return pos + min(i - pos, size) if i > pos else i
+
+
+def _last_char(i: int, pos: int, end: int, size: int) -> int:
+    """То же для индекса последнего символа (endIndex у ссылок и таблиц включительный)."""
+    if i >= end:
+        return i + size - (end - pos)
+    return pos + max(0, min(i - pos, size - 1)) if i >= pos else i
+
+
+def replace_text(snapshot: dict[str, Any], old: str, new: str, *, replace_all: bool = False) -> int:
+    """Заменить кусок текста внутри абзаца, сохранив оформление: всё, что стоит после, сдвигается на разницу длин
+    (абзацы, стили, ссылки, таблицы, картинки, разрывы). Возвращает число замен.
+
+    Перенос строки в old/new не допускается: менять структуру абзацев так нельзя — для этого update_document."""
+    if not old:
+        raise TextNotFound("Пустой искомый текст")
+    if any(ch in old + new for ch in "\r\n") or _CONTROL.search(old + new):
+        raise TextNotFound("Замена работает внутри абзаца: без переносов строк в тексте")
+    body = snapshot.setdefault("body", {})
+    stream = str(body.get("dataStream") or "")
+    found = []
+    start = stream.find(old)
+    while start >= 0:
+        found.append(start)
+        start = stream.find(old, start + len(old))
+    if not found:
+        raise TextNotFound("Такого текста в документе нет (ищется точный текст без разметки Markdown)")
+    if len(found) > 1 and not replace_all:
+        raise TextNotFound(f"Текст встречается {len(found)} раз: уточните его или включите replace_all")
+
+    size = len(new)
+    for pos in reversed(found):
+        cut = (pos, pos + len(old), size)
+        stream = stream[:pos] + new + stream[pos + len(old):]
+        for key in ("paragraphs", "sectionBreaks", "customBlocks"):
+            for item in body.get(key) or []:
+                item["startIndex"] = _boundary(int(item.get("startIndex", 0)), *cut)
+        for run in body.get("textRuns") or []:
+            run["st"] = _boundary(int(run.get("st", 0)), *cut)
+            run["ed"] = _boundary(int(run.get("ed", 0)), *cut)
+        for key in ("customRanges", "customDecorations", "tables"):
+            for item in body.get(key) or []:
+                item["startIndex"] = _boundary(int(item.get("startIndex", 0)), *cut)
+                item["endIndex"] = max(item["startIndex"], _last_char(int(item.get("endIndex", 0)), *cut))
+    body["dataStream"] = stream
+    return len(found)
+
+
 def snapshot_to_markdown(snapshot: dict[str, Any]) -> str:
     """Markdown со структурой, которую понимает редактор: заголовки по кеглю, жирный, курсив, ссылки."""
     body = snapshot.get("body") or {}
