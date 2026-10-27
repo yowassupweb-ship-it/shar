@@ -38,6 +38,34 @@ function when(iso: string | null): string {
 const timeOf = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '');
 
 /**
+ * Где остановились, как в чатах Шара: какой диалог был открыт на каждой вкладке и до какого сообщения
+ * дочитали в каждом диалоге. В памяти — для мгновенного возврата из другого раздела, в sessionStorage — на
+ * случай перезагрузки. Внизу переписки позицию не храним: туда диалог и так открывается.
+ */
+type Spot = { id: string; offset: number };
+const memory = new Map<string, string>();
+function remember(key: string, value: string | null) {
+  if (value) memory.set(key, value); else memory.delete(key);
+  try {
+    if (value) sessionStorage.setItem(key, value); else sessionStorage.removeItem(key);
+  } catch { /* ignore */ }
+}
+function recall(key: string): string | null {
+  const mem = memory.get(key);
+  if (mem) return mem;
+  try { return sessionStorage.getItem(key); } catch { return null; }
+}
+const openKey = (mode: string) => `nx:social-open:${mode}`;
+const spotKey = (dialogId: string) => `nx:social-scroll:${dialogId}`;
+function readSpot(dialogId: string): Spot | null {
+  try { return JSON.parse(recall(spotKey(dialogId)) || 'null'); } catch { return null; }
+}
+const NEAR_BOTTOM = 40;
+const nearBottom = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM;
+/** Верх строки в координатах содержимого ленты. */
+const topIn = (scroller: HTMLElement, el: HTMLElement) => el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+
+/**
  * Диалоги с клиентами — все площадки в одной системе: слева список (ВКонтакте и MAX вместе, свежие
  * сверху, «ждёт ответа» — точкой), справа переписка и ответ. Две вкладки раздела — один экран в двух
  * режимах: «Диалоги» (личные и беседы) и «Комментарии» (автор под постом). Открытый диалог — в адресе (?dialog=…),
@@ -72,23 +100,51 @@ export default function DialogsTab({ mode }: { mode: 'dialogs' | 'comments' }) {
     setParams(next, { replace: !narrow });
   };
 
+  // Вернулись в раздел без диалога в адресе — открываем тот, на котором ушли. Закрыли диалог сами
+  // (назад к списку на телефоне) — забываем.
+  const restoring = useRef(!openId && Boolean(recall(openKey(mode))));
+  useEffect(() => {
+    if (restoring.current) {
+      restoring.current = false;
+      const last = recall(openKey(mode));
+      if (last) {
+        const next = new URLSearchParams(params);
+        next.set('dialog', last);
+        setParams(next, { replace: true });
+        return;
+      }
+    }
+    remember(openKey(mode), openId);
+  }, [openId, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Открытый диалог виден в списке, даже если до него надо листать.
+  const rows = useRef<HTMLDivElement>(null);
+  const shownOpen = useRef<string | null>(null);
+  useEffect(() => {
+    if (!list || !openId || shownOpen.current === openId) return;
+    shownOpen.current = openId;
+    rows.current?.querySelector<HTMLElement>('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
+  }, [list, openId]);
+
   const listPane = (
     <aside className="nsd-list" aria-label={mode === 'comments' ? 'Комментарии' : 'Диалоги'}>
       <div className="nsd-filters">
-        <div className="nx-segment" role="group" aria-label="Какие диалоги">
-          <button type="button" aria-pressed={!waitingOnly} onClick={() => setWaitingOnly(false)}>Все</button>
-          <button type="button" aria-pressed={waitingOnly} onClick={() => setWaitingOnly(true)}>
-            Ждут ответа{list && list.waiting[mode] > 0 && <span className="nsd-count">{list.waiting[mode]}</span>}
-          </button>
-        </div>
-        <div className="nx-segment" role="group" aria-label="Площадка">
-          <button type="button" aria-pressed={platform === ''} onClick={() => setPlatform('')}>Все</button>
-          <button type="button" aria-pressed={platform === 'vk'} onClick={() => setPlatform('vk')}>ВК</button>
-          <button type="button" aria-pressed={platform === 'max'} onClick={() => setPlatform('max')}>MAX</button>
+        <div className="nsd-filter-row">
+          <div className="nx-segment" role="group" aria-label="Какие диалоги">
+            <button type="button" aria-pressed={!waitingOnly} onClick={() => setWaitingOnly(false)}>Все</button>
+            <button type="button" aria-pressed={waitingOnly} onClick={() => setWaitingOnly(true)}>
+              Ждут ответа{list && list.waiting[mode] > 0 && <span className="nsd-count">{list.waiting[mode]}</span>}
+            </button>
+          </div>
+          <div className="nx-segment" role="group" aria-label="Площадка">
+            <button type="button" aria-pressed={platform === ''} onClick={() => setPlatform('')}>Все</button>
+            <button type="button" aria-pressed={platform === 'vk'} onClick={() => setPlatform('vk')}>ВК</button>
+            <button type="button" aria-pressed={platform === 'max'} onClick={() => setPlatform('max')}>MAX</button>
+          </div>
         </div>
         <SearchField value={q} onChange={setQ} placeholder={mode === 'comments' ? 'Автор, текст, пост' : 'Клиент, текст'} label="Поиск" />
       </div>
-      <div className="nsd-rows nx-scroll-y">
+      <div className="nsd-rows nx-scroll-y" ref={rows}>
         {error ? (
           <div className="nx-state" data-tone="danger" role="alert"><AlertCircle size={22} aria-hidden="true" /><p>{error}</p></div>
         ) : !list ? (
@@ -142,11 +198,48 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
   useEffect(() => {
     loadDialog(id).then((d) => { setData(d); setError(''); }).catch((e: Error) => setError(e.message));
   }, [id, tick]);
-  // Новое сообщение — к низу переписки.
+  // Открыли диалог — туда, где остановились (нет записи — вниз). Новое сообщение — к низу, если и так были внизу:
+  // дочитывающего выше не сдёргиваем.
+  const placed = useRef(false);
+  const atBottom = useRef(true);
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [data?.messages.length]);
+    if (!el) return;
+    if (!placed.current) {
+      placed.current = true;
+      const spot = readSpot(id);
+      const row = spot && el.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(spot.id)}"]`);
+      if (row) {
+        el.scrollTop = topIn(el, row) - spot.offset;
+        atBottom.current = nearBottom(el);
+        return;
+      }
+    }
+    if (atBottom.current) el.scrollTop = el.scrollHeight;
+  }, [data?.messages.length, id]);
+  // Позицию пишем, пока листают (не чаще раза в 150 мс): первое видимое сообщение и его отступ от верха.
+  const saveTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(saveTimer.current), []);
+  const onScroll = () => {
+    const el = scroller.current;
+    if (!el) return;
+    atBottom.current = nearBottom(el);
+    if (saveTimer.current) return;
+    saveTimer.current = window.setTimeout(() => {
+      saveTimer.current = 0;
+      const box = scroller.current;
+      if (!box) return;
+      if (nearBottom(box)) { remember(spotKey(id), null); return; }
+      const top = box.getBoundingClientRect().top;
+      const first = Array.from(box.querySelectorAll<HTMLElement>('[data-msg-id]')).find((r) => r.getBoundingClientRect().bottom > top);
+      if (first) remember(spotKey(id), JSON.stringify({ id: first.dataset.msgId, offset: topIn(box, first) - box.scrollTop }));
+    }, 150);
+  };
+  // Картинка догрузилась и сдвинула переписку — кто был внизу, остаётся внизу.
+  const keepBottom = () => {
+    const el = scroller.current;
+    if (el && atBottom.current) el.scrollTop = el.scrollHeight;
+  };
   // Эмодзи из панели — в поле, в место курсора.
   useEffect(() => {
     const onEmoji = (e: Event) => input.current?.insertEmoji(String((e as CustomEvent).detail || ''));
@@ -179,7 +272,7 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
     if ((!body && !ready.length) || busy || uploading) return;
     setBusy(true);
     sendToDialog(id, body, ready)
-      .then(() => { setText(''); setFiles([]); setEmoji(false); onSent(); return loadDialog(id).then(setData); })
+      .then(() => { setText(''); setFiles([]); setEmoji(false); onSent(); atBottom.current = true; return loadDialog(id).then(setData); })
       .catch((e: Error) => showToast(e.message, 'error'))
       .finally(() => setBusy(false));
   };
@@ -223,18 +316,18 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
           onSent={(dialogId) => { setPrivateOpen(false); onSent(); showToast('Сообщение ушло в личные', 'success'); navigate(`${paths.social}?dialog=${encodeURIComponent(dialogId)}`); }} />
       )}
       {d.kind === 'comments' && d.context && <div className="nsd-context"><CornerDownRight size={13} aria-hidden="true" /><span>Пост: {d.context}</span></div>}
-      <div className="nsd-messages nx-scroll-y" ref={scroller}>
+      <div className="nsd-messages nx-scroll-y" ref={scroller} onScroll={onScroll}>
         {data.messages.map((m: DialogMessage, i) => {
           const prev = data.messages[i - 1];
           const showName = m.direction === 'out' ? prev?.direction !== 'out' || prev?.authorUserId !== m.authorUserId : group && (prev?.direction !== 'in' || prev?.authorName !== m.authorName);
           return (
-            <div key={m.id} className="nsd-msg" data-dir={m.direction}>
+            <div key={m.id} className="nsd-msg" data-dir={m.direction} data-msg-id={m.id}>
               {showName && <span className="nsd-msg-name">{m.direction === 'out' ? m.authorName || 'Сотрудник' : m.authorName}</span>}
               <div className="nsd-bubble">
                 {m.images?.length > 0 && (
                   <span className="nsd-msg-images">
                     {m.images.map((src) => (
-                      <a key={src} href={src} target="_blank" rel="noopener noreferrer"><img src={src} alt="Вложение" loading="lazy" referrerPolicy="no-referrer" /></a>
+                      <a key={src} href={src} target="_blank" rel="noopener noreferrer"><img src={src} alt="Вложение" loading="lazy" referrerPolicy="no-referrer" onLoad={keepBottom} /></a>
                     ))}
                   </span>
                 )}

@@ -44,7 +44,10 @@
 .nsd-list{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--border-color)}
 .nsd[data-narrow=true] .nsd-list{border-right:0}
 .nsd-filters{display:grid;gap:var(--space-2);padding:var(--space-3);border-bottom:1px solid var(--border-color)}
-.nsd-filters .nx-segment{justify-self:start}
+.nsd-filter-row{display:flex;flex-wrap:wrap;gap:var(--space-2)}
+/* Рамка диалогов — до самого низа: у страницы свой нижний отступ, у рамки свой, вместе выходила пустая полоса. */
+.nsc-page[data-view=dialogs]>.nx-page-inner,.nsc-page[data-view=comments]>.nx-page-inner{padding-bottom:var(--space-3)}
+.nsc-page .nsd{margin-bottom:var(--nx-nav-space, 0px)}
 .nsd-count{margin-left:5px;padding:0 6px;border-radius:var(--radius-pill);background:var(--accent-fill);color:var(--on-accent);font-size:11px;font-variant-numeric:tabular-nums}
 .nsd-rows{flex:1;min-height:0;padding:4px 6px}
 .nsd-row{display:flex;align-items:center;gap:var(--space-3);width:100%;padding:8px 10px;border:0;border-radius:var(--radius-md);background:transparent;color:var(--text-main);font:inherit;text-align:left;cursor:pointer}
