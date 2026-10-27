@@ -2,13 +2,14 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
-import { Bold, CheckSquare, Plus, Redo2, Undo2, X, Code2, Eye, Heading2, ImagePlus, Italic, Link2, List, ListOrdered, Pencil, Quote, Smile } from 'lucide-react';
+import { Bold, CheckSquare, Plus, Redo2, Undo2, X, Code2, Eye, Heading2, ImagePlus, Italic, Link2, List, ListOrdered, Pencil, Quote, Smile, Strikethrough, Underline } from 'lucide-react';
 import { uploadFileWithProgress } from '@/shared/api/uploadFile';
 import { renderTextWithEmoji } from '@/shared/emoji/emojiText';
 import { SharEmojiPicker } from '@/shared/emoji/SharEmojiPicker';
 import { askConfirm, Menu, type MenuAnchor } from '@/shared/ui/overlay';
 import { merge3, shiftCaret } from '../lib/merge';
 import { highlightMarkdown } from '../lib/mdHighlight';
+import remarkUnderline from '../lib/remarkUnderline';
 import { cleanTabTitle, parseTabs, serializeTabs } from '../lib/noteTabs';
 import { applyText, diffText, TEXT_OP } from '../live/textOps';
 import { FindBar, findAll } from './FindBar';
@@ -72,6 +73,9 @@ const withEmoji = (children: React.ReactNode, key: string): React.ReactNode =>
 const TOOLS: Array<{ id: string; label: string; icon: typeof Bold; wrap: Wrap }> = [
   { id: 'bold', label: 'Жирный', icon: Bold, wrap: { before: '**', after: '**', placeholder: 'жирный' } },
   { id: 'italic', label: 'Курсив', icon: Italic, wrap: { before: '*', after: '*', placeholder: 'курсив' } },
+  // В Markdown подчёркивания нет — общепринятый <u>…</u> (GitHub, Obsidian); просмотр рисует его (remarkUnderline).
+  { id: 'underline', label: 'Подчёркнутый', icon: Underline, wrap: { before: '<u>', after: '</u>', placeholder: 'подчёркнутый' } },
+  { id: 'strike', label: 'Зачёркнутый', icon: Strikethrough, wrap: { before: '~~', after: '~~', placeholder: 'зачёркнутый' } },
   { id: 'h2', label: 'Заголовок', icon: Heading2, wrap: { before: '## ', line: true, placeholder: 'Заголовок' } },
   { id: 'ul', label: 'Список', icon: List, wrap: { before: '- ', line: true, placeholder: 'пункт' } },
   { id: 'ol', label: 'Нумерованный список', icon: ListOrdered, wrap: { before: '1. ', line: true, placeholder: 'пункт' } },
@@ -436,9 +440,11 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
       travel(e.code === 'KeyZ' && !e.shiftKey);
       return;
     }
-    const key = e.key.toLowerCase();
-    if (key === 'b') { e.preventDefault(); apply(TOOLS[0].wrap); }
-    if (key === 'i') { e.preventDefault(); apply(TOOLS[1].wrap); }
+    // Тоже по физической клавише: в русской раскладке e.key у B, I, U — «и», «ш», «г», и сочетания не срабатывали.
+    // Ctrl+B, Ctrl+I, Ctrl+U и Ctrl+Shift+X (зачеркнуть, как в Google Docs).
+    const tool = e.shiftKey ? (e.code === 'KeyX' ? 'strike' : undefined) : ({ KeyB: 'bold', KeyI: 'italic', KeyU: 'underline' } as Record<string, string>)[e.code];
+    const wrap = tool ? TOOLS.find((t) => t.id === tool)?.wrap : undefined;
+    if (wrap && !e.altKey) { e.preventDefault(); apply(wrap); }
   }
 
   // Галочки в предпросмотре работают: клик переписывает «- [ ]» ↔ «- [x]» в исходнике.
@@ -535,7 +541,7 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
         <article ref={view} className="nws-note-view nx-scroll-y">
           {text.trim() ? (
             <Markdown
-              remarkPlugins={[remarkGfm, remarkBreaks]}
+              remarkPlugins={[remarkGfm, remarkBreaks, remarkUnderline]}
               components={{
                 p: ({ children }) => <p>{withEmoji(children, 'p')}</p>,
                 li: ({ children, ...rest }) => <li {...rest}>{withEmoji(children, 'li')}</li>,

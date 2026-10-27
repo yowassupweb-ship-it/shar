@@ -9,7 +9,7 @@ import type { Content, PhrasingContent, Root, TableCell } from 'mdast';
  */
 
 type Docx = typeof import('docx');
-type Inline = { bold?: boolean; italics?: boolean; strike?: boolean; code?: boolean };
+type Inline = { bold?: boolean; italics?: boolean; strike?: boolean; underline?: boolean; code?: boolean };
 
 const HEADINGS = ['HEADING_1', 'HEADING_2', 'HEADING_3', 'HEADING_4', 'HEADING_5', 'HEADING_6'] as const;
 
@@ -17,17 +17,22 @@ export async function markdownToDocx(title: string, markdown: string): Promise<B
   const [docx, { unified }, { default: remarkParse }, { default: remarkGfm }] = await Promise.all([
     import('docx'), import('unified'), import('remark-parse'), import('remark-gfm'),
   ]);
-  const tree = unified().use(remarkParse).use(remarkGfm).parse(markdown) as Root;
+  // Подчёркнутое (<u>, __, ++) — отдельным узлом, как в просмотре заметки.
+  const { default: remarkUnderline } = await import('./remarkUnderline');
+  const processor = unified().use(remarkParse).use(remarkGfm).use(remarkUnderline as unknown as () => (tree: Root) => void);
+  const tree = processor.runSync(processor.parse(markdown), markdown) as Root;
   const { Document, Packer, Paragraph, TextRun, ExternalHyperlink, HeadingLevel, Table, TableRow, TableCell: Cell, WidthType, BorderStyle, LevelFormat, AlignmentType } = docx;
 
   const runs = (nodes: PhrasingContent[], style: Inline = {}): Array<InstanceType<Docx['TextRun']> | InstanceType<Docx['ExternalHyperlink']>> => {
     const out: Array<InstanceType<Docx['TextRun']> | InstanceType<Docx['ExternalHyperlink']>> = [];
     for (const node of nodes) {
       switch (node.type) {
-        case 'text': out.push(new TextRun({ text: node.value, bold: style.bold, italics: style.italics, strike: style.strike, font: style.code ? 'Consolas' : undefined })); break;
+        case 'text': out.push(new TextRun({ text: node.value, bold: style.bold, italics: style.italics, strike: style.strike, underline: style.underline ? {} : undefined, font: style.code ? 'Consolas' : undefined })); break;
         case 'strong': out.push(...runs(node.children, { ...style, bold: true })); break;
         case 'emphasis': out.push(...runs(node.children, { ...style, italics: true })); break;
         case 'delete': out.push(...runs(node.children, { ...style, strike: true })); break;
+        // Узел подчёркивания добавляет remarkUnderline — в типах mdast его нет.
+        case 'underline' as PhrasingContent['type']: out.push(...runs((node as unknown as { children: PhrasingContent[] }).children, { ...style, underline: true })); break;
         case 'inlineCode': out.push(new TextRun({ text: node.value, font: 'Consolas', bold: style.bold, italics: style.italics })); break;
         case 'break': out.push(new TextRun({ break: 1 })); break;
         case 'link': out.push(new ExternalHyperlink({ link: node.url, children: runs(node.children, style).filter((r): r is InstanceType<Docx['TextRun']> => r instanceof TextRun).map((r) => r) })); break;

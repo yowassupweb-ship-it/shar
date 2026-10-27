@@ -267,7 +267,11 @@
   line-height: var(--leading-normal);
 }
 .nws-note-text:focus-visible { box-shadow: none; outline: none; }
-.nws-note-view { overflow-y: auto; font-size: var(--text-reading); line-height: 1.6; overflow-wrap: anywhere; }
+/* Курсив: у Inter в Шаре нет наклонного начертания, а интерфейс запрещает его подделку (base.css: font-synthesis: none) —
+   в тексте заметки разрешаем браузеру наклонить буквы, иначе *курсив* выглядел прямым. */
+.nws-note-view { overflow-y: auto; font-size: var(--text-reading); line-height: 1.6; overflow-wrap: anywhere; font-synthesis: style; }
+.nws-note-view em { font-style: italic; }
+.nws-note-view u { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: .18em; }
 .nws-note-view > :first-child { margin-top: 0; }
 .nws-note-view h1, .nws-note-view h2, .nws-note-view h3 { line-height: 1.25; margin: 1.2em 0 .4em; font-weight: var(--weight-bold); }
 .nws-note-view h1 { font-size: 1.6em; } .nws-note-view h2 { font-size: 1.3em; } .nws-note-view h3 { font-size: 1.1em; }
@@ -281,7 +285,16 @@
 .nws-note-view code { padding: 1px 5px; border-radius: 5px; background: var(--surface-hover); font-family: var(--font-mono); font-size: .9em; }
 .nws-note-view pre { padding: var(--space-3); border-radius: var(--radius-md); background: var(--surface-hover); overflow-x: auto; }
 .nws-note-view pre code { padding: 0; background: transparent; }
-.nws-note-view blockquote { padding-left: var(--space-3); border-left: 3px solid var(--border-color); color: var(--text-2); }
+/* Цитата: акцентная полоса слева и лёгкая подложка в тон, скруглённая справа; вложенная — без второй подложки. */
+.nws-note-view blockquote {
+  padding: var(--space-2) var(--space-3) var(--space-2) calc(var(--space-3) + 2px);
+  border-left: 3px solid var(--accent-fill);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: color-mix(in srgb, var(--accent-fill) 7%, transparent);
+  color: var(--text-main);
+}
+.nws-note-view blockquote > :last-child { margin-bottom: 0; }
+.nws-note-view blockquote blockquote { margin-top: var(--space-2); background: transparent; border-left-color: color-mix(in srgb, var(--accent-fill) 45%, transparent); }
 .nws-note-view table { border-collapse: collapse; }
 .nws-note-view th, .nws-note-view td { padding: 4px 8px; border: 1px solid var(--border-color); }
 .nws-note-view input[type="checkbox"] { margin-right: 6px; accent-color: var(--accent-fill); }
@@ -671,6 +684,9 @@ html.dark .nws-note-syntax{--md-strong: #fdba74;--md-em: #d8b4fe;--md-code: #86e
 .nmd-strong{color:var(--md-strong)}
 .nmd-em{color:var(--md-em)}
 .nmd-strike{color:var(--text-muted);text-decoration:line-through}
+/* Подчёркнутое видно и в поле правки: линия не меняет ширину букв, каретка не расходится с текстом. */
+.nmd-u-text{text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:.18em}
+.nws-note-view s,.nws-note-view del{color:var(--text-muted)}
 .nmd-code{color:var(--md-code)}
 .nmd-link-text{color:var(--md-link)}
 .nmd-link-url{color:var(--md-url)}

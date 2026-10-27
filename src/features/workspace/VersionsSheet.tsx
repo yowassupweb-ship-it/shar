@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bot, Clock, RotateCcw, Undo2 } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkUnderline from './lib/remarkUnderline';
 import remarkBreaks from 'remark-breaks';
 import { askConfirm, Sheet } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
@@ -246,7 +247,7 @@ export function VersionsSheet({ itemId, kind, currentContent, onClose, onRestore
                 compared.whole.trim()
                   ? kind === 'table' || kind === 'presentation'
                     ? <pre className="nws-versions-plain">{compared.whole}</pre>
-                    : <article className="nws-versions-prose"><Markdown remarkPlugins={[remarkGfm, remarkBreaks]}>{compared.whole}</Markdown></article>
+                    : <article className="nws-versions-prose"><Markdown remarkPlugins={[remarkGfm, remarkBreaks, remarkUnderline]}>{compared.whole}</Markdown></article>
                   : <p className="nx-hint">В этом состоянии пусто.</p>
               ) : (
                 <>
