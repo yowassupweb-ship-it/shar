@@ -438,3 +438,85 @@
 .cxn-scroll-wrap .cxn-jump:active { background: color-mix(in srgb, var(--text-main) 10%, var(--element-bg)); }
 
 .cxn-empty img { margin-bottom: var(--space-2); object-fit: contain; filter: var(--icon-shadow); }
+
+/* ── Плавающий чат (frame/ChatFrame.tsx): поверх любого раздела, перетаскивается ─────────────── */
+.nxcf-bubble {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  box-shadow: var(--glass-shadow);
+  cursor: grab;
+  touch-action: none;
+  transition: transform 0.15s var(--ease-out);
+}
+.nxcf-bubble:hover { transform: scale(1.05); }
+.nxcf-bubble:active { cursor: grabbing; }
+.nxcf-bubble:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 3px; }
+.nxcf-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--danger-fill);
+  color: #fff;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+  line-height: 20px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--surface-panel);
+}
+.nxcf-window {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl);
+  background: var(--surface-panel);
+  box-shadow: var(--glass-shadow);
+  animation: nxcf-in 0.18s var(--ease-out);
+}
+@keyframes nxcf-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
+.nxcf-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  height: 40px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border-color);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.nxcf-window[data-chat="true"] .nxcf-head { height: 32px; padding-left: 4px; }
+.nxcf-head:active { cursor: grabbing; }
+.nxcf-title { flex: 1; min-width: 0; font-weight: var(--weight-semibold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nxcf-count { padding: 0 7px; border-radius: var(--radius-pill); background: var(--accent-fill); color: var(--on-accent); font-size: var(--text-xs); line-height: 18px; }
+.nxcf-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.nxcf-btn:hover { background: var(--surface-hover); color: var(--text-main); }
+/* Внутри окна список и переписка — одной колонкой, как на телефоне. */
+.nxcf-body.cxn { display: flex; flex-direction: column; flex: 1; min-height: 0; height: auto; --cxv-max: 100%; --cxn-bubble-max: 82%; }
+.nxcf-body > * { flex: 1; min-height: 0; width: 100%; }
+@media (prefers-reduced-motion: reduce) { .nxcf-window { animation: none; } .nxcf-bubble { transition: none; } }
