@@ -3,6 +3,7 @@ import { ChevronRight, Folder as FolderIcon, FolderOpen, Users } from 'lucide-re
 import { useLongPress } from '@/shared/ui/useLongPress';
 import type { MenuAnchor } from '@/shared/ui/overlay';
 import type { Folder } from './types';
+import { Highlight } from './lib/highlight';
 
 /** Тип данных при перетаскивании строки материала (id материала). */
 export const ITEM_DRAG = 'application/x-shar-item';
@@ -30,9 +31,11 @@ export function zoneOf(e: React.DragEvent, allowInto: boolean): DropZone {
  * отпущенная у верхнего или нижнего края другой папки встаёт перед ней или после, в середине — внутрь. Материал,
  * отпущенный на папку, ложится в неё. Правый щелчок / долгое нажатие — меню. Новая папка сразу в режиме имени.
  */
-export function FolderRow({ folder, count, empty, otherKinds, open, editing, onToggle, onDropItem, onDropFolder, onMenu, onRename, children }: {
+export function FolderRow({ folder, count, empty, otherKinds, open, terms, editing, onToggle, onDropItem, onDropFolder, onMenu, onRename, children }: {
   folder: Folder;
   count: number;
+  /** Поиск: слова для подсветки в названии. */
+  terms?: string[];
   /** Нет ни материалов, ни вложенных папок — показываем подсказку. */
   empty: boolean;
   /** В разделе папка пуста, но в ней есть материалы других видов — «пусто» было бы неправдой. */
@@ -114,7 +117,7 @@ export function FolderRow({ folder, count, empty, otherKinds, open, editing, onT
           >
             <ChevronRight size={14} className="nws-folder-chevron" aria-hidden="true" />
             <Icon size={18} className="nws-folder-icon" aria-hidden="true" />
-            <span className="nws-folder-title">{folder.title}</span>
+            <span className="nws-folder-title"><Highlight text={folder.title} terms={terms ?? []} /></span>
             {sharedNote && <span className="nws-folder-shared" title={sharedNote} aria-label={sharedNote}><Users size={13} aria-hidden="true" /></span>}
             <span className="nws-folder-count">{count || ''}</span>
           </button>

@@ -160,21 +160,32 @@ def _notify_self(access: Access, item_id: str, kind: str, *, content: bool) -> N
         log.warning("mcp: could not notify %s about %s: %s", access.me.user_id, item_id, exc)
 
 
+def _via(access: Access) -> str:
+    return f"агент «{access.ctx.key_name}»"
+
+
 def _write(access: Access, item: dict[str, Any], **fields: Any) -> None:
-    """Записать правку агента: версия «до» с пометкой, запись с проверкой, что материал не изменили тем временем."""
+    """Записать правку агента: граница в истории «До правки агента», запись с пометкой «через агента» и с проверкой,
+    что материал не изменили тем временем."""
     if not item.get("canEdit"):
         raise ToolError("Этот материал вам открыт только для просмотра")
+    via = _via(access)
     if "content" in fields:
         row = store.get_row(item["id"])
-        if row:
+        # Граница — когда агент начинает править чужое состояние (человека, другого агента). Серия его правок подряд —
+        # одна версия, как у человека, иначе история зарастает «До правки агента» после каждого вызова.
+        if row and (row.get("updated_via") or "") != via:
             store.snapshot(row, access.me.user_id, force=True, label=f"До правки агента «{access.ctx.key_name}»", keep_object=True)
     patch = ws.ItemPatch(**fields, **({"baseUpdatedAt": item["updatedAt"]} if "content" in fields else {}))
+    token = store.EDIT_VIA.set(via)
     try:
         _call(ws.patch_item, item["id"], patch, access.me)
     except ToolError as exc:
         if "изменили" in str(exc):
             raise ToolError("Материал изменили, пока агент работал: перечитайте его (read_item) и повторите правку") from exc
         raise
+    finally:
+        store.EDIT_VIA.reset(token)
     _notify_self(access, item["id"], item["kind"], content="content" in fields or "title" in fields)
 
 
@@ -183,7 +194,11 @@ def _create(access: Access, kind: str, title: str, content: str, folder_id: Any)
     if kind not in access.kinds:
         raise ToolError(f"Этому ключу не открыты материалы вида «{KIND_NAMES[kind]}»")
     folder = access.target_folder(folder_id)
-    item = _call(ws.create_item, ws.ItemCreate(kind=kind, title=title, content=content), access.me)["item"]
+    token = store.EDIT_VIA.set(_via(access))
+    try:
+        item = _call(ws.create_item, ws.ItemCreate(kind=kind, title=title, content=content), access.me)["item"]
+    finally:
+        store.EDIT_VIA.reset(token)
     if folder:
         _call(ws_folders.place_item, item["id"], ws_folders.PlaceBody(folderId=folder), access.me)
     _notify_self(access, item["id"], kind, content=False)

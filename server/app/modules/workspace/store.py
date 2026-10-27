@@ -22,6 +22,7 @@ import re
 import secrets
 import time
 import uuid
+from contextvars import ContextVar
 from typing import Any, Optional
 
 from app.core import schema
@@ -111,6 +112,15 @@ CREATE TABLE IF NOT EXISTS workspace_item_seen (
 ALTER TABLE workspace_items ADD COLUMN IF NOT EXISTS shared_all_at TIMESTAMPTZ;
 """)
 
+# Через что сделана правка: '' — человек сам, в интерфейсе; иначе — например «агент «Claude»» (ставит MCP на время своей
+# правки). Хранится у материала (кто и как сделал текущее состояние) и у версии: история показывает, что правил агент,
+# а новая версия заводится и тогда, когда после агента правит сам человек.
+schema.register("workspace_edit_via", """
+ALTER TABLE workspace_items ADD COLUMN IF NOT EXISTS updated_via TEXT NOT NULL DEFAULT '';
+ALTER TABLE workspace_item_versions ADD COLUMN IF NOT EXISTS saved_via TEXT NOT NULL DEFAULT '';
+""")
+EDIT_VIA: ContextVar[str] = ContextVar("workspace_edit_via", default="")
+
 # В списке содержимого нет: снимок документа весит сотни килобайт, а списку нужны название, дата и фрагмент.
 LIST_COLUMNS = """id::text AS id, kind, title, pinned, is_template, meta, owner_id, access_level, access_mode,
     created_at::text AS created_at, updated_at::text AS updated_at,
@@ -150,7 +160,94 @@ def text_of(kind: str, content: str) -> str:
             return "\n".join(p for p in parts if p)
     except (ValueError, TypeError, AttributeError):
         return ""
-    return ""  # таблица лежит файлом xlsx: по ячейкам не ищем
+    if kind == "table":
+        return _table_text(content)
+    return ""
+
+
+MAX_TABLE_TEXT = 200_000
+
+
+def _table_text(content: str) -> str:
+    """Текст таблицы для поиска: значения ячеек по строкам. Большие книги не разбираем — поиск не должен тормозить запись."""
+    if not content or len(content) > 4 * 1024 * 1024:
+        return ""
+    try:
+        import base64
+        import io
+
+        from openpyxl import load_workbook
+
+        book = load_workbook(io.BytesIO(base64.b64decode(content)), read_only=True, data_only=True)
+        lines: list[str] = []
+        size = 0
+        for sheet in book.worksheets:
+            for row in sheet.iter_rows(values_only=True):
+                line = " | ".join(str(v) for v in row if v not in (None, ""))
+                if line:
+                    lines.append(line)
+                    size += len(line)
+                if size > MAX_TABLE_TEXT:
+                    return "\n".join(lines)
+        return "\n".join(lines)
+    except Exception as exc:  # noqa: BLE001 — битая книга: без текста для поиска, но сохраняется
+        log.debug("workspace: table text failed: %s", exc)
+        return ""
+
+
+# ── поиск ────────────────────────────────────────────────────────────────────
+# Один поиск для «Офиса», Spotlight и агента: все слова запроса (в любом порядке) — в названии или тексте; слово
+# без окончания («казани» → «каза», «туры» → «тур»), чтобы находилась любая форма; совпадение в названии выше.
+
+_WORD = re.compile(r"\w+", re.UNICODE)
+
+
+def search_terms(query: str) -> list[str]:
+    terms: list[str] = []
+    for word in _WORD.findall(query.lower())[:8]:
+        stem = word if word.isdigit() or len(word) <= 4 else word[:-2] if len(word) > 6 else word[:-1]
+        if stem not in terms:
+            terms.append(stem)
+    return terms
+
+
+def _like(term: str) -> str:
+    return "%" + re.sub(r"([!%_])", r"!\1", term) + "%"
+
+
+def search_sql(query: str, alias: str = "i") -> tuple[str, list[Any], str, list[Any], str, list[Any]]:
+    """(условие, параметры; ранг, параметры; кусок текста у первого совпадения, параметры). Пустой запрос — ('', …)."""
+    terms = search_terms(query)
+    if not terms:
+        return "", [], "0", [], "''", []
+    a = alias
+    where = " AND ".join(f"({a}.title ILIKE %s ESCAPE '!' OR {a}.text_content ILIKE %s ESCAPE '!')" for _ in terms)
+    where_params: list[Any] = [p for t in terms for p in (_like(t), _like(t))]
+    phrase = _like(query.strip().lower())
+    rank = (f"(CASE WHEN {a}.title ILIKE %s ESCAPE '!' THEN 100 ELSE 0 END)"
+            + "".join(f" + (CASE WHEN {a}.title ILIKE %s ESCAPE '!' THEN 10 ELSE 0 END)" for _ in terms)
+            + f" + (CASE WHEN {a}.text_content ILIKE %s ESCAPE '!' THEN 5 ELSE 0 END)")
+    rank_params: list[Any] = [phrase, *[_like(t) for t in terms], phrase]
+    hit = f"substring({a}.text_content from greatest(1, strpos(lower({a}.text_content), %s) - 80) for 260)"
+    return where, where_params, rank, rank_params, hit, [terms[0]]
+
+
+def search_snippet(hit: str | None, fallback: str) -> str:
+    """Кусок у совпадения — без переносов, с «…» по краям обрезанного."""
+    text = re.sub(r"\s+", " ", hit or "").strip()
+    return f"…{text}…" if text else fallback
+
+
+def reindex_text(kinds: tuple[str, ...] = ("table",)) -> int:
+    """Пересчитать текст для поиска у уже сохранённых материалов (таблицам он раньше не считался). Возвращает число строк."""
+    done = 0
+    for row in db.conn.fetch_all("SELECT id::text AS id FROM workspace_items WHERE kind = ANY(%s)", (list(kinds),)) or []:
+        full = get_row(row["id"])
+        if not full:
+            continue
+        db.conn.execute_query("UPDATE workspace_items SET text_content = %s WHERE id = %s", (text_of(full["kind"], full["content"] or ""), int(row["id"])))
+        done += 1
+    return done
 
 
 def slide_count(content: str) -> int | None:
@@ -402,11 +499,27 @@ def table_ready(name: str) -> bool:
     return ok
 
 
+def column_ready(table: str, column: str) -> bool:
+    """Есть ли столбец (как table_ready: код, вышедший раньше схемы, работает и без него)."""
+    name = f"{table}.{column}"
+    seen = _tables_seen.get(name)
+    if seen == float("inf") or (seen is not None and time.monotonic() - seen < 60):
+        return seen == float("inf")
+    row = db.conn.fetch_one("SELECT 1 AS ok FROM information_schema.columns WHERE table_name = %s AND column_name = %s", (table, column))
+    _tables_seen[name] = float("inf") if row else time.monotonic()
+    return bool(row)
+
+
+def via_ready() -> bool:
+    return column_ready("workspace_items", "updated_via") and column_ready("workspace_item_versions", "saved_via")
+
+
 def get_row(item_id: str, *, full: bool = True, content: bool = True) -> Optional[dict[str, Any]]:
     """content=False: все поля, кроме содержимого из S3 (для проверки прав и служебных запросов)."""
     if not str(item_id).isdigit():
         return None
-    row = db.conn.fetch_one(f"SELECT {FULL_COLUMNS if full else LIST_COLUMNS} FROM workspace_items i WHERE id = %s", (int(item_id),))
+    columns = (FULL_COLUMNS + (", updated_via" if via_ready() else "")) if full else LIST_COLUMNS
+    row = db.conn.fetch_one(f"SELECT {columns} FROM workspace_items i WHERE id = %s", (int(item_id),))
     if row and full and content and row.get("content_key"):
         row["content"] = read_object(row["content_key"])
     return row
@@ -540,9 +653,11 @@ def snapshot(row: dict[str, Any], editor: str, *, force: bool = False, label: st
         (row["updated_at"], item_id),
     )
     previous_author = row.get("updated_by") or str(row["owner_id"])
+    previous_via = row.get("updated_via") or ""
     if not force and last:
         gap = float(last["gap"] or 0)
-        if previous_author == editor and gap < VERSION_GAP_SECONDS:
+        # Тот же человек тем же способом — правки копятся в одну версию; сменился человек или способ (сам ↔ агент) — новая.
+        if previous_author == editor and previous_via == EDIT_VIA.get() and gap < VERSION_GAP_SECONDS:
             return False
         if not key and last["content"] == content:
             return False  # то же состояние уже записано
@@ -555,11 +670,12 @@ def snapshot(row: dict[str, Any], editor: str, *, force: bool = False, label: st
             log.error("workspace: S3 copy failed for %s: %s", copy_key, exc)
             raise WorkspaceError(502, "Не удалось сохранить версию в хранилище") from exc
         key, content, taken = copy_key, "", False
+    via = via_ready()
     db.conn.execute_query(
-        """INSERT INTO workspace_item_versions (item_id, title, content, content_key, content_size, saved_by, label, created_at)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s::timestamptz)""",
+        f"""INSERT INTO workspace_item_versions (item_id, title, content, content_key, content_size, saved_by, label, created_at{', saved_via' if via else ''})
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s::timestamptz{', %s' if via else ''})""",
         (item_id, row.get("title") or "", "" if key else content, key, len(content.encode("utf-8")) if content else int(row.get("size_bytes") or 0),
-         previous_author, label[:80], row["updated_at"]),
+         previous_author, label[:80], row["updated_at"], *([previous_via] if via else [])),
     )
     stale = db.conn.fetch_all(
         "SELECT id, content_key FROM workspace_item_versions WHERE item_id = %s ORDER BY id DESC OFFSET %s", (item_id, MAX_VERSIONS),

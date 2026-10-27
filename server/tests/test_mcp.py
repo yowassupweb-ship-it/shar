@@ -99,9 +99,22 @@ def test_tools_work_as_the_person(client, anna, boris):
     _ok(client, token, "edit_note", id=note["id"], old_text="Вторая", new_text="Третья")
     read = _ok(client, token, "read_item", id=note["id"])
     assert read["content"] == "Первая строка\n\nТретья строка" and read["canEdit"]
-    # перед правкой агента — версия с пометкой: человек может вернуть прежнее
-    versions = anna.get(f"/api/workspace/items/{note['id']}/versions").json()["versions"]
-    assert any("До правки агента «Claude»" in (v.get("label") or "") for v in versions)
+    # серия правок агента — одно состояние «через агента»; человек правит после — состояние агента остаётся версией
+    current = anna.get(f"/api/workspace/items/{note['id']}").json()["item"]
+    anna.patch(f"/api/workspace/items/{note['id']}", json={"content": current["content"] + "\nот человека", "baseUpdatedAt": current["updatedAt"]})
+    history = anna.get(f"/api/workspace/items/{note['id']}/versions").json()
+    assert history["current"]["savedVia"] == "" and history["versions"][0]["savedVia"] == "агент «Claude»"
+    # человек написал — агент правит: перед правкой граница «До правки агента», текущее состояние — «через агента»
+    own = anna.post("/api/workspace/items", json={"kind": "note", "title": "Своя", "content": "написал человек"}).json()["item"]
+    _ok(client, token, "edit_note", id=own["id"], old_text="человек", new_text="человек, поправил агент")
+    _ok(client, token, "edit_note", id=own["id"], old_text="поправил", new_text="дважды поправил")
+    history = anna.get(f"/api/workspace/items/{own['id']}/versions").json()
+    assert history["current"]["savedVia"] == "агент «Claude»"
+    boundaries = [v for v in history["versions"] if v["label"] == "До правки агента «Claude»"]
+    assert len(boundaries) == 1 and boundaries[0]["savedVia"] == ""
+    # откат правки агента — восстановлением версии «До правки агента»
+    assert anna.post(f"/api/workspace/items/{own['id']}/versions/{boundaries[0]['id']}/restore").status_code == 200
+    assert anna.get(f"/api/workspace/items/{own['id']}").json()["item"]["content"] == "написал человек"
 
     doc = _ok(client, token, "create_document", title="Отчёт", markdown="# Итоги\nВсё **хорошо** и спокойно")
     _ok(client, token, "edit_document", id=doc["id"], old_text="спокойно", new_text="по плану")

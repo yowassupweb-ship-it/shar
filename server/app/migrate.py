@@ -9,6 +9,7 @@ Baseline 0001 идемпотентен, поэтому на боевой баз�
 На проде автоматических миграций нет (SHAR_AUTO_MIGRATE=0) — схема догоняется отдельным шагом выпуска:
   python -m app.migrate --print          показать DDL модулей (прочитать перед применением)
   python -m app.migrate --schema-only    применить только DDL модулей (новые таблицы и столбцы, IF NOT EXISTS)
+  python -m app.migrate --reindex-office пересчитать текст для поиска у таблиц «Офиса» (разово)
 Подробно — docs/RELEASE.md."""
 
 from __future__ import annotations
@@ -72,6 +73,11 @@ if __name__ == "__main__":
     elif "--schema-only" in sys.argv:
         schema_only()
         print("schema: applied")
+    elif "--reindex-office" in sys.argv:
+        # Текст для поиска у таблиц, сохранённых до того, как его начали считать (разовый шаг выпуска).
+        from app.modules.workspace import store  # noqa: PLC0415
+
+        print("reindexed:", store.reindex_text())
     else:
         done = run()
         print("applied:", ", ".join(done) if done else "nothing to do")

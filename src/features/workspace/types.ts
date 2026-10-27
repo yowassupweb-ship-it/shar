@@ -80,10 +80,11 @@ export interface SharedItem {
 export interface Viewer { userId: string; name: string; avatar: string; editing: boolean }
 
 /** Строка истории версий: состояние материала до очередной правки и кто его сохранил. */
-export interface VersionRow { id: string; title: string; label: string; size: number; createdAt: string; savedBy: string; savedByName: string }
+/** Версия — состояние материала: кто его сделал (savedBy) и как (savedVia: '' — сам, иначе «агент «…»»). */
+export interface VersionRow { id: string; title: string; label: string; size: number; createdAt: string; savedBy: string; savedByName: string; savedVia?: string }
 export interface VersionsState {
   versions: VersionRow[];
-  /** Нынешнее состояние: когда и кем сохранено последний раз. */
-  current: { updatedAt: string; title: string; savedBy: string; savedByName: string };
+  /** Нынешнее состояние: когда, кем и как сохранено последний раз. */
+  current: { updatedAt: string; title: string; savedBy: string; savedByName: string; savedVia?: string };
   canRestore: boolean;
 }

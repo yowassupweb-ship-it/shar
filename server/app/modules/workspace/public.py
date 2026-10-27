@@ -75,7 +75,7 @@ def save_shared(token: str, body: SharedPatch):
         if body.content is not None:
             store.validate_content(row["kind"], body.content, shared=True)
             parts, values, new_key = store.content_sets(int(row["id"]), body.content)
-            sets += parts + ["text_content = %s", "updated_by = 'link'"]
+            sets += parts + ["text_content = %s", "updated_by = 'link'"] + (["updated_via = ''"] if store.via_ready() else [])
             params += values + [store.text_of(row["kind"], body.content)]
     except WorkspaceError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.message) from exc

@@ -14,6 +14,7 @@ import { workspaceApi } from './api';
 import { initialContent, ItemView } from './ItemView';
 import { KIND_LIST, KINDS } from './kinds';
 import { IMPORT_RULES, importFile } from './lib/importFile';
+import { Highlight, matchesAll, searchTerms } from './lib/highlight';
 import { isWorkspaceEvent } from './live';
 import { readPlace, writePlace } from './lib/officeMemory';
 import { canSticky, dragNoteOut, forgetSticky, openSticky } from './lib/sticky';
@@ -75,7 +76,12 @@ function plainSnippet(text: string) {
     .trim();
 }
 
-function ItemRow({ item, active, path, onOpen, onMenu }: { item: Item; active: boolean; path?: string; onOpen: () => void; onMenu: (anchor: MenuAnchor) => void }) {
+function ItemRow({ item, active, terms, snippet, onOpen, onMenu }: {
+  item: Item; active: boolean;
+  /** Поиск: слова для подсветки и кусок текста у совпадения (вместо начала материала). */
+  terms?: string[]; snippet?: string;
+  onOpen: () => void; onMenu: (anchor: MenuAnchor) => void;
+}) {
   const info = KINDS[item.kind];
   const press = useLongPress((x, y) => onMenu({ x, y }));
   const AccessIcon = item.accessLevel === 'all' ? Globe2 : Lock;
@@ -98,9 +104,10 @@ function ItemRow({ item, active, path, onOpen, onMenu }: { item: Item; active: b
     >
       <span className="nws-kind-icon" style={{ '--a': info.tint[0], '--b': info.tint[1] } as React.CSSProperties} aria-hidden="true"><info.icon size={16} /></span>
       <span className="nws-row-text">
-        <span className="nws-row-title">{item.isNew && <span className="nws-new">Новое</span>}{item.title || info.untitled}</span>
-        {path && <span className="nws-row-path"><FolderIcon size={11} aria-hidden="true" />{path}</span>}
-        <span className="nws-row-snippet">{item.kind === 'note' ? plainSnippet(item.snippet) : item.snippet}</span>
+        <span className="nws-row-title">{item.isNew && <span className="nws-new">Новое</span>}<Highlight text={item.title || info.untitled} terms={terms ?? []} /></span>
+        <span className="nws-row-snippet" data-hit={snippet ? 'true' : undefined}>
+          <Highlight text={item.kind === 'note' ? plainSnippet(snippet || item.snippet) : (snippet || item.snippet)} terms={terms ?? []} />
+        </span>
       </span>
       {item.viewers && item.viewers.length > 0 && <span className="nws-row-presence"><PresenceStack viewers={item.viewers} size={20} /></span>}
       <span className="nws-row-meta">
@@ -178,7 +185,7 @@ export default function OfficeScreen() {
     const mine = ++reqId.current;
     try {
       // Папки грузим вместе со списком; старый сервер без папок — просто без них.
-      const [list, folderList] = await Promise.all([workspaceApi.list(null, query, false, 1000), workspaceApi.folders().catch(() => null)]);
+      const [list, folderList] = await Promise.all([workspaceApi.list(null, '', false, 1000), workspaceApi.folders().catch(() => null)]);
       if (mine !== reqId.current) return;
       setItems(list);
       if (folderList) setFolders(folderList);
@@ -186,12 +193,29 @@ export default function OfficeScreen() {
     } catch (cause) {
       if (mine === reqId.current) setError(cause instanceof Error ? cause.message : 'Не удалось загрузить');
     }
-  }, [query]);
+  }, []);
 
+  useEffect(() => { void load(); }, [load]);
+
+  // Поиск — поверх полного списка: сервер отдаёт найденное по порядку (лучшее — выше) с куском текста у совпадения,
+  // а дерево папок остаётся на месте — в нём видно только найденное. Пока печатают, список не пропадает.
+  const terms = useMemo(() => searchTerms(query), [query]);
+  const [hits, setHits] = useState<{ order: Map<string, number>; snippet: Map<string, string> } | null>(null);
+  const searchId = useRef(0);
   useEffect(() => {
-    const timer = window.setTimeout(() => void load(), query ? 250 : 0);
+    if (!terms.length) { setHits(null); return undefined; }
+    const mine = ++searchId.current;
+    const timer = window.setTimeout(() => {
+      workspaceApi.list(null, query, false, 500)
+        .then((found) => {
+          if (mine !== searchId.current) return;
+          setHits({ order: new Map(found.map((i, n) => [i.id, n])), snippet: new Map(found.map((i) => [i.id, i.snippet || ''])) });
+        })
+        .catch(() => { if (mine === searchId.current) setHits({ order: new Map(), snippet: new Map() }); });
+    }, 200);
     return () => window.clearTimeout(timer);
-  }, [load, query]);
+  }, [query, terms]);
+  const searching = terms.length > 0;
 
   // Вернулись в окно — список мог измениться (коллега поделился, правил с другого устройства).
   useEffect(() => {
@@ -290,27 +314,11 @@ export default function OfficeScreen() {
   useEffect(() => {
     if (openId) setItems((cur) => (cur?.some((i) => i.id === openId && i.isNew) ? cur.map((i) => (i.id === openId ? { ...i, isNew: false } : i)) : cur));
   }, [openId, items]);
-  // В поиске список плоский; иначе материал из папки показывается только в своей папке (новое — ещё и сверху).
+  // Материал из папки показывается в своей папке (новое — ещё и сверху), и в поиске тоже: дерево не рассыпается.
   const foldered = useMemo(() => {
     const known = new Set(folders.map((f) => f.id));
-    return (i: Item) => !query && Boolean(i.folderId && known.has(i.folderId));
-  }, [folders, query]);
-  const fresh = useMemo(() => (items || []).filter((i) => i.isNew), [items]);
-  const pinned = useMemo(() => (items || []).filter((i) => i.pinned && !i.isNew && !foldered(i)), [items, foldered]);
-  // Вне папок — ручной порядок: ещё не расставленные (новые) сверху, как пришли с сервера (свежие выше), за ними — расставленные.
-  const rest = useMemo(() => {
-    const loose = (items || []).filter((i) => !i.pinned && !i.isNew && !foldered(i));
-    const placed = loose.filter((i) => i.rootPosition != null).sort((a, b) => (a.rootPosition ?? 0) - (b.rootPosition ?? 0));
-    return [...loose.filter((i) => i.rootPosition == null), ...placed];
-  }, [items, foldered]);
-  const byFolder = useMemo(() => {
-    const map = new Map<string, Item[]>();
-    for (const i of items || []) if (foldered(i) && !i.isNew) map.set(i.folderId!, [...(map.get(i.folderId!) || []), i]);
-    // Ручной порядок; ещё не расставленные — в конце, свежие выше.
-    const rank = (i: Item) => (i.folderPosition ?? Number.POSITIVE_INFINITY);
-    for (const list of map.values()) list.sort((a, b) => (rank(a) - rank(b)) || b.updatedAt.localeCompare(a.updatedAt));
-    return map;
-  }, [items, foldered]);
+    return (i: Item) => Boolean(i.folderId && known.has(i.folderId));
+  }, [folders]);
   // Дерево папок: вложенные по родителю (родитель пропал — папка наверху) и путь «Родитель / Папка» для меню.
   const childFolders = useMemo(() => {
     const known = new Set(folders.map((f) => f.id));
@@ -323,6 +331,41 @@ export default function OfficeScreen() {
     for (const list of map.values()) list.sort((a, b) => (rank(a) - rank(b)) || a.title.localeCompare(b.title, 'ru'));
     return map;
   }, [folders]);
+  // Что видно в поиске: найденное сервером и всё содержимое папок, подошедших по названию (с вложенными);
+  // папка видна, если подошла сама, лежит в подошедшей или в ней (глубже) есть найденное.
+  const search = useMemo(() => {
+    if (!searching) return null;
+    const named = new Set<string>();
+    const addTree = (id: string) => { if (named.has(id)) return; named.add(id); (childFolders.get(id) || []).forEach((c) => addTree(c.id)); };
+    folders.filter((f) => matchesAll(f.title, terms)).forEach((f) => addTree(f.id));
+    const shown = (items || []).filter((i) => hits?.order.has(i.id) || (i.folderId && named.has(i.folderId)));
+    const parents = new Map(folders.map((f) => [f.id, f.parentId || null]));
+    const visible = new Set(named);
+    for (const i of shown) {
+      for (let id: string | null | undefined = i.folderId, guard = 0; id && guard < 64; id = parents.get(id), guard += 1) visible.add(id);
+    }
+    return { shown: new Set(shown.map((i) => i.id)), visible, named, count: shown.length + named.size };
+  }, [searching, folders, childFolders, terms, items, hits]);
+  const listed = useMemo(() => (search ? (items || []).filter((i) => search.shown.has(i.id)) : items || []), [items, search]);
+  const byRank = (a: Item, b: Item) => (hits?.order.get(a.id) ?? 1e6) - (hits?.order.get(b.id) ?? 1e6);
+  const fresh = useMemo(() => (search ? [] : listed.filter((i) => i.isNew)), [listed, search]);
+  const pinned = useMemo(() => (search ? [] : listed.filter((i) => i.pinned && !i.isNew && !foldered(i))), [listed, foldered, search]);
+  // Вне папок — ручной порядок: ещё не расставленные (новые) сверху, как пришли с сервера (свежие выше), за ними — расставленные.
+  // В поиске — по совпадению: лучшее выше.
+  const rest = useMemo(() => {
+    if (search) return listed.filter((i) => !foldered(i)).sort(byRank);
+    const loose = listed.filter((i) => !i.pinned && !i.isNew && !foldered(i));
+    const placed = loose.filter((i) => i.rootPosition != null).sort((a, b) => (a.rootPosition ?? 0) - (b.rootPosition ?? 0));
+    return [...loose.filter((i) => i.rootPosition == null), ...placed];
+  }, [listed, foldered, search]); // eslint-disable-line react-hooks/exhaustive-deps
+  const byFolder = useMemo(() => {
+    const map = new Map<string, Item[]>();
+    for (const i of listed) if (foldered(i) && (search || !i.isNew)) map.set(i.folderId!, [...(map.get(i.folderId!) || []), i]);
+    // Ручной порядок; ещё не расставленные — в конце, свежие выше. В поиске — найденное по совпадению.
+    const rank = (i: Item) => (i.folderPosition ?? Number.POSITIVE_INFINITY);
+    for (const list of map.values()) list.sort(search ? byRank : (a, b) => (rank(a) - rank(b)) || b.updatedAt.localeCompare(a.updatedAt));
+    return map;
+  }, [listed, foldered, search]); // eslint-disable-line react-hooks/exhaustive-deps
   const folderPath = useMemo(() => {
     const byId = new Map(folders.map((f) => [f.id, f]));
     const path = (f: Folder, seen = new Set<string>()): string => {
@@ -353,18 +396,14 @@ export default function OfficeScreen() {
     for (const root of childFolders.get(null) || []) walk(root);
     return stats;
   }, [childFolders, byFolder, filter]);
-  const visibleChildren = (parent: string | null) => childFolders.get(parent) || [];
-  // В поиске: папки, чьё название подходит (щелчок — открыть её на месте в дереве).
-  const matchedFolders = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return q ? folders.filter((f) => f.title.toLowerCase().includes(q)) : [];
-  }, [folders, query]);
-  const revealFolder = (f: Folder) => {
-    const byId = new Map(folders.map((x) => [x.id, x]));
-    const chain: string[] = [];
-    for (let cur: Folder | undefined = f; cur && chain.length < 64; cur = cur.parentId ? byId.get(cur.parentId) : undefined) chain.push(cur.id);
-    setOpenFolders((cur) => { const next = new Set(cur); chain.forEach((id) => next.add(id)); writeOpenFolders(next); return next; });
-    setQuery('');
+  const visibleChildren = (parent: string | null) => (childFolders.get(parent) || []).filter((f) => !search || search.visible.has(f.id));
+  // В поиске папки с найденным раскрыты сами (свернуть можно, но это не трогает обычное раскрытие).
+  const [searchClosed, setSearchClosed] = useState<Set<string>>(() => new Set());
+  useEffect(() => { setSearchClosed(new Set()); }, [query]);
+  const isOpen = (id: string) => (search ? !searchClosed.has(id) : openFolders.has(id));
+  const toggleOpen = (id: string) => {
+    if (!search) { toggleFolder(id); return; }
+    setSearchClosed((cur) => { const next = new Set(cur); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   };
 
   /** Папка folderId — это ancestorId или лежит внутри неё (туда ancestorId класть нельзя). */
@@ -376,13 +415,12 @@ export default function OfficeScreen() {
     return false;
   };
 
-  // Свернуть все раскрытые папки разом (или раскрыть все, если свёрнуты): длинное дерево не листать.
-  const anyFolderOpen = folders.some((f) => openFolders.has(f.id));
-  const toggleAllFolders = () => {
-    const next = new Set(anyFolderOpen ? [] : folders.map((f) => f.id));
-    writeOpenFolders(next);
-    setOpenFolders(next);
-  };
+  // Блок «Папки» целиком можно свернуть — список материалов тогда сразу под рукой. Помним на этом устройстве.
+  const [foldersHidden, setFoldersHidden] = useState(() => { try { return localStorage.getItem('nws:folders-hidden') === '1'; } catch { return false; } });
+  const toggleFoldersBlock = () => setFoldersHidden((cur) => {
+    try { localStorage.setItem('nws:folders-hidden', cur ? '0' : '1'); } catch { /* приватный режим — просто не запомним */ }
+    return !cur;
+  });
 
   const toggleFolder = (id: string, open?: boolean) => setOpenFolders((cur) => {
     const next = new Set(cur);
@@ -472,7 +510,8 @@ export default function OfficeScreen() {
       key={item.id}
       item={item}
       active={item.id === openId}
-      path={query && item.folderId ? folderPath.get(item.folderId) : undefined}
+      terms={search ? terms : undefined}
+      snippet={search ? hits?.snippet.get(item.id) : undefined}
       onOpen={() => select(item.id, filter === 'all' ? 'all' : item.kind)}
       onMenu={(anchor) => setRowMenu({ item, anchor })}
     />
@@ -481,7 +520,8 @@ export default function OfficeScreen() {
   // Строка материала в папке и вне папок — ещё и цель: отпущенный материал встаёт перед ней или после.
   const [slotOver, setSlotOver] = useState<{ id: string; zone: DropZone } | null>(null);
   const ownFolder = (id: string | null) => { if (!id) return true; const f = folders.find((x) => x.id === id); return !f?.role || f.role === 'owner'; };
-  const renderSlot = (folderId: string | null) => (item: Item) => (!ownFolder(folderId) ? renderRow(item) : (
+  // В поиске перестановка выключена: показан не весь порядок, вставать «между» найденным бессмысленно.
+  const renderSlot = (folderId: string | null) => (item: Item) => (search || !ownFolder(folderId) ? renderRow(item) : (
     <div
       key={item.id}
       className="nws-row-slot"
@@ -509,11 +549,12 @@ export default function OfficeScreen() {
         key={f.id}
         folder={f}
         count={folderStats.get(f.id)?.here ?? own.length}
-        empty={!own.length && !subs.length}
+        empty={!search && !own.length && !subs.length}
         otherKinds={(folderStats.get(f.id)?.total ?? 0) > 0}
-        open={openFolders.has(f.id)}
+        open={isOpen(f.id)}
+        terms={search ? terms : undefined}
         editing={editingFolder === f.id}
-        onToggle={() => toggleFolder(f.id)}
+        onToggle={() => toggleOpen(f.id)}
         onDropItem={(id) => void moveToFolder(id, f.id)}
         onDropFolder={(id, zone) => dropFolderOn(f, id, zone)}
         onMenu={(anchor) => setFolderMenu({ folder: f, anchor })}
@@ -580,32 +621,29 @@ export default function OfficeScreen() {
           {fresh.map(renderRow)}
           {pinned.length > 0 && <h2 className="nws-group" data-flip="g-pinned">Закреплённые</h2>}
           {pinned.map(renderRow)}
-          {!query && visibleChildren(null).length > 0 && (
+          {search && (
+            <p className="nws-search-state" role="status">
+              {!hits ? <><Spinner size={13} /> Ищу…</> : search.count ? `Найдено: ${search.count}` : 'Ничего не нашлось — попробуйте другие слова.'}
+            </p>
+          )}
+          {visibleChildren(null).length > 0 && (
             <div className="nws-group-row" data-flip="g-folders">
-              <h2 className="nws-group">Папки</h2>
-              <button type="button" className="nws-group-btn" onClick={toggleAllFolders} aria-label={anyFolderOpen ? 'Свернуть все папки' : 'Развернуть все папки'}>
-                {anyFolderOpen ? <ChevronsDownUp size={14} aria-hidden="true" /> : <ChevronsUpDown size={14} aria-hidden="true" />}
-                {anyFolderOpen ? 'Свернуть все' : 'Развернуть все'}
-              </button>
+              <h2 className="nws-group">Папки{(foldersHidden && !search) && <span className="nws-group-count"> · {visibleChildren(null).length}</span>}</h2>
+              {!search && (
+                <button type="button" className="nws-group-btn" onClick={toggleFoldersBlock} aria-expanded={!foldersHidden}>
+                  {foldersHidden ? <ChevronsUpDown size={14} aria-hidden="true" /> : <ChevronsDownUp size={14} aria-hidden="true" />}
+                  {foldersHidden ? 'Показать' : 'Свернуть'}
+                </button>
+              )}
             </div>
           )}
-          {!query && visibleChildren(null).map(renderFolder)}
-          {matchedFolders.length > 0 && <h2 className="nws-group" data-flip="g-folders">Папки</h2>}
-          {matchedFolders.map((f) => (
-            <button key={f.id} type="button" className="nws-row nws-folder-hit" onClick={() => revealFolder(f)}>
-              <span className="nws-kind-icon nws-folder-hit-icon" aria-hidden="true"><FolderIcon size={16} /></span>
-              <span className="nws-row-text">
-                <span className="nws-row-title">{f.title}</span>
-                {f.parentId && <span className="nws-row-snippet">{folderPath.get(f.parentId)}</span>}
-              </span>
-            </button>
-          ))}
-          {(pinned.length > 0 || fresh.length > 0 || matchedFolders.length > 0 || (!query && visibleChildren(null).length > 0)) && rest.length > 0 && <h2 className="nws-group" data-flip="g-rest">{query ? 'Материалы' : 'Остальные'}</h2>}
-          {rest.map(query ? renderRow : renderSlot(null))}
-          {items !== null && !items.length && !error && (
+          {(search || !foldersHidden) && visibleChildren(null).map(renderFolder)}
+          {(pinned.length > 0 || fresh.length > 0 || visibleChildren(null).length > 0) && rest.length > 0 && <h2 className="nws-group" data-flip="g-rest">{search ? 'Вне папок' : 'Остальные'}</h2>}
+          {rest.map(renderSlot(null))}
+          {items !== null && !items.length && !error && !search && (
             <div className="nws-empty-list">
-              <p>{query ? 'Ничего не нашлось.' : filter === 'all' ? 'Здесь появятся ваши заметки, документы, таблицы и презентации.' : KINDS[filter].empty}</p>
-              {!query && (
+              <p>{filter === 'all' ? 'Здесь появятся ваши заметки, документы, таблицы и презентации.' : KINDS[filter].empty}</p>
+              {(
                 <div className="nws-empty-actions">
                   <button type="button" className="nx-primary" onClick={() => void createItem(filter === 'all' ? 'document' : filter)}><Plus size={14} aria-hidden="true" /> {filter === 'all' ? 'Новый документ' : KINDS[filter].newLabel}</button>
                   <button type="button" className="nx-ghost" disabled={importing} onClick={() => fileInput.current?.click()}><Upload size={14} aria-hidden="true" /> {importRule.label}</button>

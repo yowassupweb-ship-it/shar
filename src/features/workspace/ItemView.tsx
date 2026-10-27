@@ -384,7 +384,7 @@ ${added}`;
       )}
 
       {versionsOpen && !shared && (
-        <VersionsSheet itemId={item.id} kind={item.kind} onClose={() => setVersionsOpen(false)} onRestored={() => { void session.reload(); onChanged?.(); }} />
+        <VersionsSheet itemId={item.id} kind={item.kind} currentContent={session.getContent} onClose={() => setVersionsOpen(false)} onRestored={() => { void session.reload(); onChanged?.(); }} />
       )}
 
       {sendToChat && !shared && (

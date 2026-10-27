@@ -436,3 +436,32 @@ def test_root_order_is_personal_and_takes_items_out_of_folders(anna, boris):
     assert rows[c["id"]]["folderId"] is None
     # чужое переставить нельзя, а свой порядок у каждого свой
     assert boris.put("/api/workspace/root/order", json={"ids": [a["id"]]}).status_code == 404
+
+
+def test_search_words_forms_tables_and_snippet(anna):
+    import base64
+    import io
+
+    from openpyxl import Workbook
+
+    _create(anna, "note", title="Туры по Татарстану", content="Программа: Казань, потом Свияжск. " + "текст " * 80 + "Итог: скидка для групп")
+    _create(anna, "note", title="Казань зимой", content="Без лишнего")
+    book = Workbook()
+    book.active.append(["Город", "Цена"])
+    book.active.append(["Иннополис", 15000])
+    out = io.BytesIO()
+    book.save(out)
+    table = _create(anna, "table", title="Цены", content=base64.b64encode(out.getvalue()).decode())
+
+    def titles(q):
+        return [i["title"] for i in anna.get("/api/workspace/items", params={"q": q}).json()["items"]]
+
+    # слова в любом порядке и в другой форме; совпадение в названии — выше
+    assert titles("казани туры")[0] == "Туры по Татарстану"
+    assert "Казань зимой" not in titles("казани туры")  # нужны все слова
+    assert titles("казань")[0] == "Казань зимой" and "Туры по Татарстану" in titles("казань")
+    # таблица ищется по ячейкам
+    assert table["title"] in titles("иннополис")
+    # кусок текста — у совпадения, а не начало
+    hit = next(i for i in anna.get("/api/workspace/items", params={"q": "скидка групп"}).json()["items"] if i["title"] == "Туры по Татарстану")
+    assert "скидка для групп" in hit["snippet"] and hit["snippet"].startswith("…")
