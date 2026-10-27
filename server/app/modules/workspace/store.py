@@ -359,6 +359,42 @@ def shared_folder_roles(user_id: str, depts: list[str] | None = None) -> dict[in
     return out
 
 
+def inherited_shares(start_folder_id: int | None) -> list[dict[str, Any]]:
+    """Кому открыты папки от start_folder_id (включительно) и выше: доступ к папке наследуют вложенные папки и
+    материалы в них, поэтому в окне доступа они должны быть видны, хоть выданы не здесь. Каждая запись знает, через
+    какую папку пришла: {kind: user|department, id, name, role, members?, folderId, folderTitle}."""
+    if start_folder_id is None:
+        return []
+    try:
+        chain = db.conn.fetch_all(
+            """WITH RECURSIVE up AS (
+                   SELECT id, parent_id, title, 0 AS depth FROM workspace_folders WHERE id = %s
+                   UNION ALL
+                   SELECT p.id, p.parent_id, p.title, up.depth + 1 FROM workspace_folders p JOIN up ON p.id = up.parent_id
+               ) SELECT id, title FROM up ORDER BY depth""", (int(start_folder_id),)) or []
+        if not chain:
+            return []
+        ids = [int(r["id"]) for r in chain]
+        titles = {int(r["id"]): r["title"] or "" for r in chain}
+        order = {fid: i for i, fid in enumerate(ids)}
+        users = db.conn.fetch_all("SELECT folder_id, user_id, role FROM workspace_folder_shares WHERE folder_id = ANY(%s)", (ids,)) or []
+        depts = db.conn.fetch_all("SELECT folder_id, department_id, role FROM workspace_folder_dept_shares WHERE folder_id = ANY(%s)", (ids,)) or []
+    except Exception as exc:  # таблиц папок ещё нет — наследовать нечего
+        log.debug("workspace: inherited shares unavailable (%s)", exc)
+        return []
+    out: list[dict[str, Any]] = []
+    for r in sorted(users, key=lambda r: order[int(r["folder_id"])]):
+        user = db.get_user_by_id(str(r["user_id"])) or {}
+        out.append({"kind": "user", "id": str(r["user_id"]), "name": user.get("name") or user.get("username") or "", "role": r["role"],
+                    "folderId": str(r["folder_id"]), "folderTitle": titles[int(r["folder_id"])]})
+    names = {str(d["id"]): d["name"] for d in (db.get_departments() or [])} if depts else {}
+    for r in sorted(depts, key=lambda r: order[int(r["folder_id"])]):
+        dept = str(r["department_id"])
+        out.append({"kind": "department", "id": dept, "name": names.get(dept, dept), "role": r["role"], "members": len(dept_members([dept])),
+                    "folderId": str(r["folder_id"]), "folderTitle": titles[int(r["folder_id"])]})
+    return out
+
+
 def folder_audience(owner_id: str) -> set[str]:
     """Кому открыта хоть одна папка владельца (поимённо и через отделы): им тоже приходят изменения раскладки."""
     try:

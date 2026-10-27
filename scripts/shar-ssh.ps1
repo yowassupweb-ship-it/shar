@@ -1,14 +1,15 @@
 ﻿# Общее для скриптов выпуска: SSH к прод-серверу через Posh-SSH (Install-Module Posh-SSH -Scope CurrentUser).
 #
 # Пароль root лежит в файле ВНЕ репозитория строкой SSH_PASSWORD=... Где файл:
-#   параметр -CredentialFile скрипта, иначе $env:SHAR_SSH_CREDENTIALS, иначе ~/.shar/ssh.env.
+#   параметр -CredentialFile скрипта, иначе $env:SHAR_SSH_CREDENTIALS, иначе ~/.shar/ssh.env,
+#   иначе ~/Desktop/shar-messenger/.env (рабочее место владельца).
 # Подключать: . "$PSScriptRoot/shar-ssh.ps1"
 
 $script:SharHost = '81.90.31.129'
 $script:SharUser = 'root'
 
 function Resolve-SharCredentialFile([string]$Path) {
-    foreach ($candidate in @($Path, $env:SHAR_SSH_CREDENTIALS, (Join-Path $HOME '.shar/ssh.env'))) {
+    foreach ($candidate in @($Path, $env:SHAR_SSH_CREDENTIALS, (Join-Path $HOME '.shar/ssh.env'), (Join-Path $HOME 'Desktop/shar-messenger/.env'))) {
         if ($candidate -and (Test-Path -LiteralPath $candidate)) { return $candidate }
     }
     throw 'Нет файла с SSH_PASSWORD: укажите -CredentialFile или $env:SHAR_SSH_CREDENTIALS (см. docs/RELEASE.md).'

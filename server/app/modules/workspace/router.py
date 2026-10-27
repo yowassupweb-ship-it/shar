@@ -311,7 +311,9 @@ def _shares_payload(item_id: str) -> dict[str, Any]:
     depts = db.conn.fetch_all("SELECT department_id, role FROM workspace_item_dept_shares WHERE item_id = %s ORDER BY created_at", (int(item_id),)) or []
     departments = [{"departmentId": d["department_id"], "role": d["role"], "name": names.get(str(d["department_id"]), d["department_id"]),
                     "members": len(store.dept_members([str(d["department_id"])]))} for d in depts]
-    return {"shares": out, "departments": departments}
+    placed = db.conn.fetch_one("SELECT x.folder_id FROM workspace_item_folder x JOIN workspace_items i ON i.id = x.item_id "
+                               "WHERE x.item_id = %s AND x.user_id = i.owner_id", (int(item_id),)) or {}
+    return {"shares": out, "departments": departments, "inherited": store.inherited_shares(placed.get("folder_id"))}
 
 
 @router.put("/api/workspace/items/{item_id}/shares")

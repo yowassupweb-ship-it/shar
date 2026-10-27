@@ -63,7 +63,9 @@ export interface Folder {
 export interface ShareEntry { userId: string; role: 'view' | 'edit'; name: string }
 /** Доступ, выданный отделу: его сотрудники (и подразделов) получают материал в свой «Офис» сразу. */
 export interface DeptShareEntry { departmentId: string; role: 'view' | 'edit'; name: string; members: number }
-export interface SharesState { shares: ShareEntry[]; departments: DeptShareEntry[] }
+/** Доступ, пришедший от папки выше: действует, но снимается в той папке, где выдан. */
+export interface InheritedShare { kind: 'user' | 'department'; id: string; name: string; role: 'view' | 'edit'; members?: number; folderId: string; folderTitle: string }
+export interface SharesState { shares: ShareEntry[]; departments: DeptShareEntry[]; inherited?: InheritedShare[] }
 export interface LinkEntry { token: string; mode: 'view' | 'edit'; createdAt: string; lastUsedAt: string | null }
 
 /** Материал, открытый по ссылке: без прав на другие материалы и без владельца. */

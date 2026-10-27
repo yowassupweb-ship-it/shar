@@ -465,3 +465,21 @@ def test_search_words_forms_tables_and_snippet(anna):
     # кусок текста — у совпадения, а не начало
     hit = next(i for i in anna.get("/api/workspace/items", params={"q": "скидка групп"}).json()["items"] if i["title"] == "Туры по Татарстану")
     assert "скидка для групп" in hit["snippet"] and hit["snippet"].startswith("…")
+
+
+def test_access_window_shows_what_is_inherited_from_parent_folders(anna, boris, users):
+    """Папку открыли выше — человек видит и вложенную папку, и материал в ней; в окнах доступа он значится «через папку»."""
+    parent = anna.post("/api/workspace/folders", json={"title": "Многодневные"}).json()["folder"]
+    child = anna.post("/api/workspace/folders", json={"title": "Готово", "parentId": parent["id"]}).json()["folder"]
+    note = _create(anna, "note", title="Маршрут", content="x")
+    assert anna.put(f"/api/workspace/items/{note['id']}/folder", json={"folderId": child["id"]}).status_code == 200
+    assert anna.put(f"/api/workspace/folders/{parent['id']}/shares", json={"userId": users.ids["boris"], "role": "view"}).status_code == 200
+    # доступ действует вниз по дереву
+    assert note["id"] in {i["id"] for i in boris.get("/api/workspace/items").json()["items"]}
+    # окно папки: у вложенной своих выдач нет, зато есть унаследованная, у верхней — только своя
+    low = anna.get(f"/api/workspace/folders/{child['id']}/shares").json()
+    assert low["shares"] == [] and [(e["id"], e["folderTitle"], e["role"]) for e in low["inherited"]] == [(users.ids["boris"], "Многодневные", "view")]
+    assert anna.get(f"/api/workspace/folders/{parent['id']}/shares").json()["inherited"] == []
+    # окно материала: он лежит во вложенной папке — тот же человек, через ту же папку
+    item_window = anna.get(f"/api/workspace/items/{note['id']}/shares").json()
+    assert item_window["shares"] == [] and [e["folderTitle"] for e in item_window["inherited"]] == ["Многодневные"]

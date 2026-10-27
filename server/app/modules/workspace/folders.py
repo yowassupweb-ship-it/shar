@@ -250,6 +250,7 @@ def delete_folder(folder_id: str, me: Identity = Depends(current_identity)):
 
 
 def _shares_payload(folder_id: str) -> dict:
+    parent = db.conn.fetch_one("SELECT parent_id FROM workspace_folders WHERE id = %s", (int(folder_id),)) or {}
     users = db.conn.fetch_all("SELECT user_id, role FROM workspace_folder_shares WHERE folder_id = %s ORDER BY created_at", (int(folder_id),)) or []
     names = {str(u["id"]): u.get("name") or u.get("username") or "" for u in (db.conn.fetch_all(
         "SELECT id, name, username FROM users WHERE id = ANY(%s)", ([str(r["user_id"]) for r in users],)) or [])} if users else {}
@@ -259,6 +260,8 @@ def _shares_payload(folder_id: str) -> dict:
         "shares": [{"userId": str(r["user_id"]), "role": r["role"], "name": names.get(str(r["user_id"]), "")} for r in users],
         "departments": [{"departmentId": str(d["department_id"]), "role": d["role"], "name": dept_names.get(str(d["department_id"]), str(d["department_id"])),
                          "members": len(store.dept_members([str(d["department_id"])]))} for d in depts],
+        # Выдано выше по дереву и действует здесь тоже: видно в окне, но снимается в той папке.
+        "inherited": store.inherited_shares(parent.get("parent_id")),
     }
 
 

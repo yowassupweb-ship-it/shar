@@ -8,7 +8,8 @@ import { Select } from '@/shared/ui/Select';
 import { showToast } from '@/shared/ui/Toast';
 import { myId } from '@/shared/session/session';
 import { workspaceApi } from './api';
-import type { DeptShareEntry, Folder, ShareEntry } from './types';
+import { InheritedShares } from './InheritedShares';
+import type { DeptShareEntry, Folder, InheritedShare, ShareEntry } from './types';
 
 /**
  * Доступ к папке — как к документу, только сразу на всё содержимое: вложенные папки и всё, что владелец туда
@@ -20,16 +21,17 @@ export function FolderShareDialog({ folder, onClose, onChanged }: { folder: Fold
   const { departments } = useContacts();
   const [shares, setShares] = useState<ShareEntry[]>([]);
   const [deptShares, setDeptShares] = useState<DeptShareEntry[]>([]);
+  const [inherited, setInherited] = useState<InheritedShare[]>([]);
   const [pick, setPick] = useState('');
   const [role, setRole] = useState<'view' | 'edit'>('edit');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   const fail = (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause));
-  const apply = (next: { shares: ShareEntry[]; departments: DeptShareEntry[] }) => { setShares(next.shares); setDeptShares(next.departments); onChanged(); };
+  const apply = (next: { shares: ShareEntry[]; departments: DeptShareEntry[]; inherited?: InheritedShare[] }) => { setShares(next.shares); setDeptShares(next.departments); setInherited(next.inherited ?? []); onChanged(); };
 
   useEffect(() => {
-    workspaceApi.folderShares(folder.id).then((next) => { setShares(next.shares); setDeptShares(next.departments); }).catch(fail);
+    workspaceApi.folderShares(folder.id).then((next) => { setShares(next.shares); setDeptShares(next.departments); setInherited(next.inherited ?? []); }).catch(fail);
   }, [folder.id]);
 
   const people = useMemo(
@@ -125,7 +127,8 @@ export function FolderShareDialog({ folder, onClose, onChanged }: { folder: Fold
               </div>
             </div>
           ))}
-          {!shares.length && !deptShares.length && <div className="nx-row"><span className="nx-row-hint">Папка пока только у вас</span></div>}
+          <InheritedShares entries={inherited} />
+          {!shares.length && !deptShares.length && !inherited.length && <div className="nx-row"><span className="nx-row-hint">Папка пока только у вас</span></div>}
         </Group>
         {error && <p className="nws-error" role="alert">{error}</p>}
       </div>
