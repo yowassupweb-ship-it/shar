@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
-import { ChevronsDownUp, ChevronsUpDown, Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, UserPlus, LayoutGrid, Lock, MonitorUp, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
+import { ChevronsDownUp, ChevronsUpDown, Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, UserPlus, LayoutGrid, Lock, MonitorUp, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
 import { useShellOptions } from '@/shared/shell/ShellContext';
 import { realtime } from '@/shared/realtime/realtime';
 import { SearchField } from '@/shared/ui/SearchField';
@@ -41,6 +41,7 @@ import './workspace.css';
  */
 
 const NARROW = '(max-width: 899px)';
+const LIST_FOLDED_KEY = 'nx:office-list-folded';
 const subscribeMedia = (cb: () => void) => {
   const mq = window.matchMedia(NARROW);
   mq.addEventListener('change', cb);
@@ -130,6 +131,28 @@ export default function OfficeScreen() {
   const filter: Kind | 'all' = kindParam && kindParam in KINDS ? (kindParam as Kind) : 'all';
   const openId = params.get('id');
   const narrow = useSyncExternalStore(subscribeMedia, () => window.matchMedia(NARROW).matches, () => false);
+
+  // Список материалов можно убрать (крупный масштаб, широкая таблица): остаётся узкая полоска с «развернуть» и
+  // «создать». Положение помнится; Ctrl+\ — свернуть или развернуть. На телефоне список и материал и так раздельно.
+  const [listFolded, setListFolded] = useState(() => { try { return localStorage.getItem(LIST_FOLDED_KEY) === '1'; } catch { return false; } });
+  const toggleList = useCallback(() => setListFolded((was) => {
+    try { localStorage.setItem(LIST_FOLDED_KEY, was ? '0' : '1'); } catch { /* приватное окно — просто не запомним */ }
+    return !was;
+  }), []);
+  const folded = listFolded && !narrow;
+  useEffect(() => {
+    // Холсты документа и таблицы пересчитывают размер по resize окна — сообщаем, когда ширина доехала.
+    const timer = window.setTimeout(() => window.dispatchEvent(new Event('resize')), 300);
+    return () => window.clearTimeout(timer);
+  }, [folded]);
+  useEffect(() => {
+    if (narrow) return undefined;
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.code === 'Backslash') { event.preventDefault(); toggleList(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [narrow, toggleList]);
 
   // Грузим все виды разом: разделы — фильтр по одному списку, и переключение между ними не ждёт сервера.
   const [allItems, setItems] = useState<Item[] | null>(null);
@@ -567,7 +590,7 @@ export default function OfficeScreen() {
   };
 
   return (
-    <div className="nws" ref={layoutRef} data-open={openId ? 'true' : undefined}>
+    <div className="nws" ref={layoutRef} data-open={openId ? 'true' : undefined} data-list={folded ? 'folded' : undefined}>
       <aside
         className={`nws-list${dropping ? ' is-dropping' : ''}`}
         aria-label="Материалы"
@@ -575,7 +598,22 @@ export default function OfficeScreen() {
         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropping(false); }}
         onDrop={(e) => { if (!e.dataTransfer.files.length) return; e.preventDefault(); setDropping(false); void importPicked(e.dataTransfer.files[0]); }}
       >
+        {folded && (
+          <div className="nws-rail">
+            <button type="button" className="nws-rail-btn" onClick={toggleList} title="Показать список материалов (Ctrl+\)" aria-label="Показать список материалов">
+              <PanelLeftOpen size={18} aria-hidden="true" />
+            </button>
+            <button type="button" className="nws-rail-btn" aria-haspopup="menu" aria-expanded={Boolean(create)} disabled={Boolean(busy)} title="Создать" aria-label="Создать" onClick={(e) => setCreate({ element: e.currentTarget, align: 'start' })}>
+              <Plus size={18} aria-hidden="true" />
+            </button>
+          </div>
+        )}
         <header className="nws-list-head">
+          {!narrow && (
+            <button type="button" className="nws-fold" onClick={toggleList} title="Скрыть список материалов (Ctrl+\)" aria-label="Скрыть список материалов">
+              <PanelLeftClose size={17} aria-hidden="true" />
+            </button>
+          )}
           <button type="button" className="nx-ghost nws-import" disabled={importing} title={`${importRule.label}: ${importRule.hint}`} aria-label={importRule.label} onClick={() => fileInput.current?.click()}>
             <Upload size={15} aria-hidden="true" /> Импорт
           </button>
@@ -654,7 +692,7 @@ export default function OfficeScreen() {
         </div>
       </aside>
 
-      {!narrow && <Splitter containerRef={layoutRef} cssVar="--nws-list" storageKey="nx:office-list-width" min={280} max={620} initial={340} maxRatio={0.5} label="Ширина списка материалов" />}
+      {!narrow && !folded && <Splitter containerRef={layoutRef} cssVar="--nws-list" storageKey="nx:office-list-width" min={280} max={620} initial={340} maxRatio={0.5} label="Ширина списка материалов" />}
 
       <section className="nws-pane">
         {openId ? (

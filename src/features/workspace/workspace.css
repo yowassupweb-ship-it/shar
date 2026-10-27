@@ -13,6 +13,29 @@
   background: var(--surface-panel);
 }
 .nws > .nx-splitter { left: var(--nws-list); }
+/* Список свёрнут: вместо него — узкая полоска с «развернуть» и «создать»; ширина меняется плавно. */
+.nws { transition: grid-template-columns 0.24s var(--ease-out); }
+.nws[data-list="folded"] { grid-template-columns: 52px minmax(0, 1fr); }
+.nws[data-list="folded"] > .nws-list { padding-inline: 0; overflow: hidden; }
+.nws[data-list="folded"] > .nws-list > :not(.nws-rail) { display: none; }
+.nws-rail { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
+.nws-rail-btn, .nws-fold {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.nws-rail-btn:hover, .nws-fold:hover { background: var(--surface-hover); color: var(--text-main); }
+.nws-rail-btn:focus-visible, .nws-fold:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 1px; }
+.nws-rail-btn:disabled { opacity: 0.5; cursor: default; }
+@media (prefers-reduced-motion: reduce) { .nws { transition: none; } }
 
 /* ── Список ───────────────────────────────────────────────────────────── */
 .nws-list {
