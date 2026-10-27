@@ -1,5 +1,9 @@
 # Docker deployment without production downtime
 
+> **История.** Это план переезда на Docker, по которому 05.10.2026 прод переключили на новый стек
+> (`compose.live.yaml`, сборка образов на сервере). Как выкладывать сейчас — [RELEASE.md](RELEASE.md).
+> Отсюда ещё актуален раздел про перенос фоновых задач со старого бэкенда (он не выполнен).
+
 The Docker stack is intentionally separate from the current systemd deployment.
 Nothing in this runbook stops or edits the old application automatically.
 

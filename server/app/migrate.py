@@ -4,7 +4,12 @@
   2. DDL модулей (core/schema.py) — идемпотентные CREATE TABLE IF NOT EXISTS.
 
 Baseline 0001 идемпотентен, поэтому на боевой базе старого бэкенда он ничего не ломает:
-существующие таблицы остаются, недостающие создаются."""
+существующие таблицы остаются, недостающие создаются.
+
+На проде автоматических миграций нет (SHAR_AUTO_MIGRATE=0) — схема догоняется отдельным шагом выпуска:
+  python -m app.migrate --print          показать DDL модулей (прочитать перед применением)
+  python -m app.migrate --schema-only    применить только DDL модулей (новые таблицы и столбцы, IF NOT EXISTS)
+Подробно — docs/RELEASE.md."""
 
 from __future__ import annotations
 
@@ -46,7 +51,27 @@ def run() -> list[str]:
     return applied
 
 
+def schema_only() -> None:
+    """Только DDL модулей: шаг выпуска на проде, где миграции при старте выключены."""
+    import app.modules  # noqa: F401, PLC0415
+
+    failed = schema.apply()
+    if failed:
+        raise RuntimeError(f"schema not applied: {', '.join(failed)}")
+
+
 if __name__ == "__main__":
+    import sys
+
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    done = run()
-    print("applied:", ", ".join(done) if done else "nothing to do")
+    if "--print" in sys.argv:
+        import app.modules  # noqa: F401, PLC0415
+
+        for name, ddl in schema._statements:
+            print(f"-- {name}\n{ddl.strip()}\n")
+    elif "--schema-only" in sys.argv:
+        schema_only()
+        print("schema: applied")
+    else:
+        done = run()
+        print("applied:", ", ".join(done) if done else "nothing to do")

@@ -8,3 +8,6 @@ desktop/release/
 desktop/release-test/
 desktop/web/
 desktop/release-beta/
+
+# Архивы ручных выкладок и бэкапов — не в репозиторий
+/*.tgz
