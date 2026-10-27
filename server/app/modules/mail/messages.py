@@ -279,14 +279,15 @@ def get_mail_unread(accountId: str, me: Identity = Depends(current_identity)):
 
 
 @router.get("/api/mail/unread/total")
-def get_mail_unread_total(me: Identity = Depends(current_identity)):
-    """Total unread email count across all accounts for a user."""
+def get_mail_unread_total(inbox: bool = False, me: Identity = Depends(current_identity)):
+    """Total unread email count across all accounts for a user. inbox=true — только «Входящие» (единичка на «Почте»
+    в меню, как у почтовых программ: непрочитанное в спаме и корзине её не зажигает)."""
     userId = me.user_id  # владелец — вошедший, не параметр запроса
     accounts = db.get_email_accounts(userId) if hasattr(db, 'get_email_accounts') else []
     total = 0
     for acc in accounts:
         counts = db.get_email_unread_counts(str(acc['id'])) if hasattr(db, 'get_email_unread_counts') else {}
-        total += sum(counts.values())
+        total += sum(n for folder, n in counts.items() if not inbox or str(folder).upper() == 'INBOX')
     return {"total": total}
 
 
