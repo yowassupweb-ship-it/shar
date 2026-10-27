@@ -390,14 +390,20 @@ def update_table(access: Access, args: dict[str, Any]) -> dict[str, Any]:
         raise ToolError(f"Это {KIND_NAMES[item['kind']]}, а не таблица")
     cells = args.get("cells") or []
     rows = args.get("append_rows") or []
-    if not cells and not rows:
-        raise ToolError("Нечего менять: передайте cells и/или append_rows")
-    if len(cells) > 2000 or len(rows) > 2000:
+    drop = args.get("delete_rows") or []
+    if not cells and not rows and not drop and not args.get("create_sheet"):
+        raise ToolError("Нечего менять: передайте cells, append_rows, delete_rows и/или create_sheet")
+    if len(cells) > 2000 or len(rows) > 2000 or len(drop) > 2000:
         raise ToolError("За раз — не больше 2000 ячеек и 2000 строк")
+    if not all(isinstance(n, int) and n >= 1 for n in drop):
+        raise ToolError("delete_rows — номера строк листа, начиная с 1")
     book = load_workbook(io.BytesIO(base64.b64decode(item.get("content") or "")))
     name = args.get("sheet")
     if name and name not in book.sheetnames:
-        raise ToolError(f"Нет листа «{name}». Листы: {', '.join(book.sheetnames)}")
+        # Новый лист — только по явной просьбе, чтобы опечатка в имени не плодила пустые листы.
+        if not args.get("create_sheet"):
+            raise ToolError(f"Нет листа «{name}». Листы: {', '.join(book.sheetnames)}. Чтобы создать — create_sheet: true")
+        book.create_sheet(str(name)[:31])
     sheet = book[name] if name else book.worksheets[0]
     for cell in cells:
         ref = str((cell or {}).get("ref") or "").upper()
@@ -406,10 +412,13 @@ def update_table(access: Access, args: dict[str, Any]) -> dict[str, Any]:
         sheet[ref] = _cell_value(cell.get("value"))
     for row in rows:
         sheet.append([_cell_value(v) for v in list(row)[:MAX_TABLE_COLS * 4]])
+    # Удаляем с конца, чтобы номера оставшихся строк не съезжали; номера — как в read_item (шапка = 1).
+    for n in sorted(set(drop), reverse=True):
+        sheet.delete_rows(n)
     out = io.BytesIO()
     book.save(out)
     _write(access, item, content=base64.b64encode(out.getvalue()).decode("ascii"))
-    return {"id": item["id"], "sheet": sheet.title, "cells": len(cells), "appendedRows": len(rows)}
+    return {"id": item["id"], "sheet": sheet.title, "cells": len(cells), "appendedRows": len(rows), "deletedRows": len(set(drop))}
 
 
 def rename_item(access: Access, args: dict[str, Any]) -> dict[str, Any]:
@@ -477,12 +486,14 @@ TOOLS: list[dict[str, Any]] = [
      "inputSchema": {"type": "object", "properties": {"id": _ID, "markdown": {"type": "string"}, "mode": {"type": "string", "enum": ["append", "replace"], "default": "append"}},
                      "required": ["id", "markdown"]}},
     {"name": "update_table", "handler": update_table, "level": "edit",
-     "description": "Изменить таблицу: значения ячеек по адресам (cells: [{ref: \"B2\", value}], формула — строкой с «=») и/или строки в конец листа (append_rows). "
+     "description": "Изменить таблицу: значения ячеек по адресам (cells: [{ref: \"B2\", value}], формула — строкой с «=») и/или строки в конец листа (append_rows), удалить строки (delete_rows: номера с 1), создать лист (create_sheet: true вместе с sheet). "
                     "Лист — sheet (по умолчанию первый).",
      "inputSchema": {"type": "object", "properties": {
          "id": _ID, "sheet": {"type": "string"},
          "cells": {"type": "array", "items": {"type": "object", "properties": {"ref": {"type": "string"}, "value": {}}, "required": ["ref"]}},
-         "append_rows": {"type": "array", "items": {"type": "array", "items": {}}}}, "required": ["id"]}},
+         "append_rows": {"type": "array", "items": {"type": "array", "items": {}}},
+         "delete_rows": {"type": "array", "items": {"type": "integer"}},
+         "create_sheet": {"type": "boolean"}}, "required": ["id"]}},
     {"name": "rename_item", "handler": rename_item, "level": "edit", "description": "Переименовать материал.",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "title": {"type": "string"}}, "required": ["id", "title"]}},
     {"name": "create_note", "handler": create_note, "level": "create",
