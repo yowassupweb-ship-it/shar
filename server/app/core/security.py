@@ -87,6 +87,9 @@ class Decision:
 def is_public(method: str, path: str) -> bool:
     if any(path.startswith(p) for p in PUBLIC_PREFIXES):
         return True
+    # MCP с ключом в адресе: /api/mcp/shar_mcp_…; /api/mcp/keys и прочее управление ключами остаётся под сессией.
+    if path.startswith("/api/mcp/shar_mcp_"):
+        return method.upper() in ("POST", "GET")
     methods = PUBLIC_METHODS.get(path.rstrip("/"))
     return bool(methods) and method.upper() in methods
 

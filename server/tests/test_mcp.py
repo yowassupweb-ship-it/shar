@@ -185,3 +185,15 @@ def test_scope_folders_kinds_and_shared(client, anna, boris, users):
     # доступ меняется без смены ключа у агента и действует сразу
     assert anna.patch(f"/api/mcp/keys/{own_key['id']}", json={"scope": {**FULL, "shared": True}}).status_code == 200
     assert shared["id"] in {i["id"] for i in _ok(client, own_only, "list_items")["items"]}
+
+
+def test_key_in_the_address_for_clients_without_headers(client, anna):
+    """ChatGPT («Без аутентификации») несёт ключ в пути: /api/mcp/<ключ>. Управление ключами остаётся под сессией."""
+    token, _ = _key(anna)
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+    ok = client.post(f"/api/mcp/{token}", json=body)
+    assert ok.status_code == 200 and ok.json()["result"]["tools"]
+    assert client.post(f"/api/mcp/{token}x", json=body).status_code == 401           # чужой ключ
+    assert client.post("/api/mcp/whatever", json=body).status_code in (401, 404)     # не ключ — дальше не пускаем
+    assert client.get(f"/api/mcp/{token}").status_code == 405
+    assert client.get("/api/mcp/keys").status_code == 401                            # без сессии список ключей закрыт

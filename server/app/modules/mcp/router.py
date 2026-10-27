@@ -6,6 +6,8 @@
 
 Подключение (Claude Code):
   claude mcp add --transport http shar https://<домен>/api/mcp --header "Authorization: Bearer <ключ>"
+Клиентам без своих заголовков (ChatGPT: «Без аутентификации») — тот же ключ в адресе: https://<домен>/api/mcp/<ключ>.
+Ключ в адресе попадает в журналы прокси — держать его с узким доступом и срок ставить небольшой.
 """
 
 from __future__ import annotations
@@ -67,10 +69,26 @@ def mcp_get():
     return Response(status_code=405, headers={"Allow": "POST"})
 
 
+@router.get("/api/mcp/{token}")
+def mcp_get_keyed(token: str):
+    return mcp_get()
+
+
+@router.post("/api/mcp/{token}")
+async def mcp_post_keyed(token: str, request: Request):
+    # Только ключи (shar_mcp_…): так адрес не пересекается с /api/mcp/keys и прочим управлением ключами.
+    if not token.startswith(keys.PREFIX):
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return await _handle(request, token)
+
+
 @router.post("/api/mcp")
 async def mcp_post(request: Request):
     auth = request.headers.get("authorization", "")
-    token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    return await _handle(request, auth[7:].strip() if auth.lower().startswith("bearer ") else "")
+
+
+async def _handle(request: Request, token: str):
     ctx = await run_in_threadpool(keys.context_for_token, token) if token else None
     if ctx is None:
         return JSONResponse({"error": "Нужен действующий ключ MCP: Настройки → MCP"}, status_code=401,
