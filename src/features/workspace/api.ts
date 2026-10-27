@@ -37,11 +37,12 @@ const enc = encodeURIComponent;
 export interface SharedResult { mode: 'view' | 'edit'; item: SharedItem }
 
 export const workspaceApi = {
-  list: (kind: Kind | null, q = '', templates = false) => {
+  list: (kind: Kind | null, q = '', templates = false, limit?: number) => {
     const qs = new URLSearchParams();
     if (kind) qs.set('kind', kind);
     if (q.trim()) qs.set('q', q.trim());
     if (templates) qs.set('templates', '1');
+    if (limit) qs.set('limit', String(limit));
     return call<{ items: Item[] }>(`/api/workspace/items?${qs}`).then((r) => r.items);
   },
   get: (id: string) => call<{ item: Item }>(`/api/workspace/items/${enc(id)}`).then((r) => r.item),
@@ -65,6 +66,8 @@ export const workspaceApi = {
     call<{ folders: Folder[] }>('/api/workspace/folders/order', { method: 'PUT', json: { parentId, ids } }).then((r) => r.folders),
   /** Порядок материалов в папке; материал из другого места кладётся в неё. */
   orderItems: (folderId: string, ids: string[]) => call<{ ok: boolean }>(`/api/workspace/folders/${enc(folderId)}/order`, { method: 'PUT', json: { ids } }),
+  /** Порядок материалов вне папок (из папки материал при этом выходит). */
+  orderRoot: (ids: string[]) => call<{ ok: boolean }>('/api/workspace/root/order', { method: 'PUT', json: { ids } }),
   /** Кто сейчас в материалах списка (присутствие истекает без события — обновляем периодически). */
   listPresence: (ids: string[]) => call<{ viewers: Record<string, Viewer[]> }>('/api/workspace/presence', { method: 'POST', json: { ids } }).then((r) => r.viewers),
   deleteFolder: (id: string) => call<{ folders: Folder[] }>(`/api/workspace/folders/${enc(id)}`, { method: 'DELETE' }).then((r) => r.folders),

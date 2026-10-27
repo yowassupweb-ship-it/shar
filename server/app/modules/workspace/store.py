@@ -20,6 +20,7 @@ import json
 import logging
 import re
 import secrets
+import time
 import uuid
 from typing import Any, Optional
 
@@ -377,12 +378,28 @@ def present(row: dict[str, Any], user_id: str | None = None, *, with_content: bo
         "isNew": bool(row.get("is_new")),
         "folderId": row.get("folder_id"),
         "folderPosition": row.get("folder_position"),
+        "rootPosition": row.get("root_position"),
     }
     if user_id is not None:
         out.update(permissions(row, user_id, depts, folder_roles))
     if with_content:
         out["content"] = row["content"]
     return out
+
+
+_tables_seen: dict[str, float] = {}
+
+
+def table_ready(name: str) -> bool:
+    """Есть ли таблица в базе. На проде схему применяют вручную (SHAR_AUTO_MIGRATE=0): код, вышедший раньше своей
+    таблицы, не должен ломать то, что работало без неё. Есть — помним навсегда, нет — перепроверяем раз в минуту."""
+    seen = _tables_seen.get(name)
+    if seen == float("inf") or (seen is not None and time.monotonic() - seen < 60):
+        return seen == float("inf")
+    row = db.conn.fetch_one("SELECT to_regclass(%s) IS NOT NULL AS ok", (name,))
+    ok = bool(row and row.get("ok"))
+    _tables_seen[name] = float("inf") if ok else time.monotonic()
+    return ok
 
 
 def get_row(item_id: str, *, full: bool = True, content: bool = True) -> Optional[dict[str, Any]]:

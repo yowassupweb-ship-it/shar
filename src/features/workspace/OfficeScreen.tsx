@@ -124,7 +124,9 @@ export default function OfficeScreen() {
   const openId = params.get('id');
   const narrow = useSyncExternalStore(subscribeMedia, () => window.matchMedia(NARROW).matches, () => false);
 
-  const [items, setItems] = useState<Item[] | null>(null);
+  // Грузим все виды разом: разделы — фильтр по одному списку, и переключение между ними не ждёт сервера.
+  const [allItems, setItems] = useState<Item[] | null>(null);
+  const items = useMemo(() => (allItems && filter !== 'all' ? allItems.filter((i) => i.kind === filter) : allItems), [allItems, filter]);
   const [error, setError] = useState('');
   const [query, setQuery] = useState(() => (!new URLSearchParams(window.location.search).toString() ? place.current?.query ?? '' : ''));
   const [busy, setBusy] = useState('');
@@ -176,7 +178,7 @@ export default function OfficeScreen() {
     const mine = ++reqId.current;
     try {
       // Папки грузим вместе со списком; старый сервер без папок — просто без них.
-      const [list, folderList] = await Promise.all([workspaceApi.list(filter === 'all' ? null : filter, query), workspaceApi.folders().catch(() => null)]);
+      const [list, folderList] = await Promise.all([workspaceApi.list(null, query, false, 1000), workspaceApi.folders().catch(() => null)]);
       if (mine !== reqId.current) return;
       setItems(list);
       if (folderList) setFolders(folderList);
@@ -184,7 +186,7 @@ export default function OfficeScreen() {
     } catch (cause) {
       if (mine === reqId.current) setError(cause instanceof Error ? cause.message : 'Не удалось загрузить');
     }
-  }, [filter, query]);
+  }, [query]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), query ? 250 : 0);
@@ -295,7 +297,12 @@ export default function OfficeScreen() {
   }, [folders, query]);
   const fresh = useMemo(() => (items || []).filter((i) => i.isNew), [items]);
   const pinned = useMemo(() => (items || []).filter((i) => i.pinned && !i.isNew && !foldered(i)), [items, foldered]);
-  const rest = useMemo(() => (items || []).filter((i) => !i.pinned && !i.isNew && !foldered(i)), [items, foldered]);
+  // Вне папок — ручной порядок: ещё не расставленные (новые) сверху, как пришли с сервера (свежие выше), за ними — расставленные.
+  const rest = useMemo(() => {
+    const loose = (items || []).filter((i) => !i.pinned && !i.isNew && !foldered(i));
+    const placed = loose.filter((i) => i.rootPosition != null).sort((a, b) => (a.rootPosition ?? 0) - (b.rootPosition ?? 0));
+    return [...loose.filter((i) => i.rootPosition == null), ...placed];
+  }, [items, foldered]);
   const byFolder = useMemo(() => {
     const map = new Map<string, Item[]>();
     for (const i of items || []) if (foldered(i) && !i.isNew) map.set(i.folderId!, [...(map.get(i.folderId!) || []), i]);
@@ -326,9 +333,9 @@ export default function OfficeScreen() {
     };
     return new Map(folders.map((f) => [f.id, path(f)]));
   }, [folders]);
-  // Разделы — фильтры по одному дереву: в «Доках» видна папка, где (с вложенными) есть документы, а совсем пустая —
-  // во всех разделах, чтобы в неё было что положить. Свой вид считаем по загруженным строкам (переносы видны сразу),
-  // остальные виды — по счётчикам сервера.
+  // Разделы — фильтры по одному дереву: папки видны во всех разделах (дерево не прыгает при переключении), в папках —
+  // только материалы раздела. Свой вид считаем по загруженным строкам (переносы видны сразу), остальные виды — по
+  // счётчикам сервера: так папка с одними таблицами в «Доках» не называется пустой.
   const folderStats = useMemo(() => {
     const stats = new Map<string, { here: number; total: number }>();
     const walk = (f: Folder): { here: number; total: number } => {
@@ -346,12 +353,7 @@ export default function OfficeScreen() {
     for (const root of childFolders.get(null) || []) walk(root);
     return stats;
   }, [childFolders, byFolder, filter]);
-  const shownInSection = (f: Folder) => {
-    if (filter === 'all') return true;
-    const s = folderStats.get(f.id);
-    return !s || s.here > 0 || s.total === 0;
-  };
-  const visibleChildren = (parent: string | null) => (childFolders.get(parent) || []).filter(shownInSection);
+  const visibleChildren = (parent: string | null) => childFolders.get(parent) || [];
   // В поиске: папки, чьё название подходит (щелчок — открыть её на месте в дереве).
   const matchedFolders = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -408,13 +410,20 @@ export default function OfficeScreen() {
     void placeFolder(folderId, parent, siblings.indexOf(target.id) + (zone === 'after' ? 1 : 0));
   }
 
-  /** Материал отпустили на другой в папке: встаёт перед ним или после (и переезжает в эту папку, если был не здесь). */
-  async function dropItemOn(folderId: string, target: Item, itemId: string, zone: DropZone) {
+  /** Материал отпустили на другой в папке (folderId) или вне папок (null): встаёт перед ним или после — и переезжает
+   *  туда, если был не здесь. */
+  async function dropItemOn(folderId: string | null, target: Item, itemId: string, zone: DropZone) {
     if (itemId === target.id) return;
-    const ids = (byFolder.get(folderId) || []).map((i) => i.id).filter((id) => id !== itemId);
+    const ids = (folderId ? byFolder.get(folderId) || [] : rest).map((i) => i.id).filter((id) => id !== itemId);
     ids.splice(ids.indexOf(target.id) + (zone === 'after' ? 1 : 0), 0, itemId);
-    setItems((cur) => cur?.map((i) => { const p = ids.indexOf(i.id); return p >= 0 ? { ...i, folderId, folderPosition: p } : i; }) ?? cur);
-    try { await workspaceApi.orderItems(folderId, ids); } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось переместить', 'error'); void load(); }
+    setItems((cur) => cur?.map((i) => {
+      const p = ids.indexOf(i.id);
+      if (p < 0) return i;
+      return folderId ? { ...i, folderId, folderPosition: p } : { ...i, folderId: null, rootPosition: p };
+    }) ?? cur);
+    try {
+      await (folderId ? workspaceApi.orderItems(folderId, ids) : workspaceApi.orderRoot(ids));
+    } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось переместить', 'error'); void load(); }
   }
 
   async function newFolder(thenPlace?: Item, parentId: string | null = null) {
@@ -461,10 +470,10 @@ export default function OfficeScreen() {
     />
   );
 
-  // Строка материала в папке — ещё и цель: отпущенный материал встаёт перед ней или после.
+  // Строка материала в папке и вне папок — ещё и цель: отпущенный материал встаёт перед ней или после.
   const [slotOver, setSlotOver] = useState<{ id: string; zone: DropZone } | null>(null);
-  const ownFolder = (id: string) => { const f = folders.find((x) => x.id === id); return !f?.role || f.role === 'owner'; };
-  const renderSlot = (folderId: string) => (item: Item) => (!ownFolder(folderId) ? renderRow(item) : (
+  const ownFolder = (id: string | null) => { if (!id) return true; const f = folders.find((x) => x.id === id); return !f?.role || f.role === 'owner'; };
+  const renderSlot = (folderId: string | null) => (item: Item) => (!ownFolder(folderId) ? renderRow(item) : (
     <div
       key={item.id}
       className="nws-row-slot"
@@ -493,6 +502,7 @@ export default function OfficeScreen() {
         folder={f}
         count={folderStats.get(f.id)?.here ?? own.length}
         empty={!own.length && !subs.length}
+        otherKinds={(folderStats.get(f.id)?.total ?? 0) > 0}
         open={openFolders.has(f.id)}
         editing={editingFolder === f.id}
         onToggle={() => toggleFolder(f.id)}
@@ -557,13 +567,14 @@ export default function OfficeScreen() {
         >
           {items === null && !error && <div className="nws-loading"><Spinner size={22} label="Загружаю" /></div>}
           {error && <p className="nws-hint nws-error" role="alert">{error} <button type="button" className="nx-ghost" onClick={() => void load()}>Повторить</button></p>}
-          {fresh.length > 0 && <h2 className="nws-group">Новые для вас</h2>}
+          {/* data-flip у заголовков групп: при раскрытии папок они переезжают вместе со строками, а не прыгают. */}
+          {fresh.length > 0 && <h2 className="nws-group" data-flip="g-new">Новые для вас</h2>}
           {fresh.map(renderRow)}
-          {pinned.length > 0 && <h2 className="nws-group">Закреплённые</h2>}
+          {pinned.length > 0 && <h2 className="nws-group" data-flip="g-pinned">Закреплённые</h2>}
           {pinned.map(renderRow)}
-          {!query && visibleChildren(null).length > 0 && <h2 className="nws-group">Папки</h2>}
+          {!query && visibleChildren(null).length > 0 && <h2 className="nws-group" data-flip="g-folders">Папки</h2>}
           {!query && visibleChildren(null).map(renderFolder)}
-          {matchedFolders.length > 0 && <h2 className="nws-group">Папки</h2>}
+          {matchedFolders.length > 0 && <h2 className="nws-group" data-flip="g-folders">Папки</h2>}
           {matchedFolders.map((f) => (
             <button key={f.id} type="button" className="nws-row nws-folder-hit" onClick={() => revealFolder(f)}>
               <span className="nws-kind-icon nws-folder-hit-icon" aria-hidden="true"><FolderIcon size={16} /></span>
@@ -573,8 +584,8 @@ export default function OfficeScreen() {
               </span>
             </button>
           ))}
-          {(pinned.length > 0 || fresh.length > 0 || matchedFolders.length > 0 || (!query && visibleChildren(null).length > 0)) && rest.length > 0 && <h2 className="nws-group">{query ? 'Материалы' : 'Остальные'}</h2>}
-          {rest.map(renderRow)}
+          {(pinned.length > 0 || fresh.length > 0 || matchedFolders.length > 0 || (!query && visibleChildren(null).length > 0)) && rest.length > 0 && <h2 className="nws-group" data-flip="g-rest">{query ? 'Материалы' : 'Остальные'}</h2>}
+          {rest.map(query ? renderRow : renderSlot(null))}
           {items !== null && !items.length && !error && (
             <div className="nws-empty-list">
               <p>{query ? 'Ничего не нашлось.' : filter === 'all' ? 'Здесь появятся ваши заметки, документы, таблицы и презентации.' : KINDS[filter].empty}</p>

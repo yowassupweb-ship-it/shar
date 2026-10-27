@@ -30,11 +30,13 @@ export function zoneOf(e: React.DragEvent, allowInto: boolean): DropZone {
  * отпущенная у верхнего или нижнего края другой папки встаёт перед ней или после, в середине — внутрь. Материал,
  * отпущенный на папку, ложится в неё. Правый щелчок / долгое нажатие — меню. Новая папка сразу в режиме имени.
  */
-export function FolderRow({ folder, count, empty, open, editing, onToggle, onDropItem, onDropFolder, onMenu, onRename, children }: {
+export function FolderRow({ folder, count, empty, otherKinds, open, editing, onToggle, onDropItem, onDropFolder, onMenu, onRename, children }: {
   folder: Folder;
   count: number;
   /** Нет ни материалов, ни вложенных папок — показываем подсказку. */
   empty: boolean;
+  /** В разделе папка пуста, но в ней есть материалы других видов — «пусто» было бы неправдой. */
+  otherKinds?: boolean;
   open: boolean;
   editing: boolean;
   onToggle: () => void;
@@ -121,7 +123,12 @@ export function FolderRow({ folder, count, empty, open, editing, onToggle, onDro
       {open && (
         <div className="nws-folder-items">
           {children}
-          {empty && <p className="nws-folder-empty">{own ? 'Перетащите сюда документы, заметки, таблицы или другую папку' : 'Папка пока пустая'}</p>}
+          {/* data-flip: подсказка переезжает вместе со строками, а не прыгает, пока выше раскрывают или сворачивают папку. */}
+          {empty && (
+            <p className="nws-folder-empty" data-flip={`e${folder.id}`}>
+              {otherKinds ? 'Здесь только материалы других видов' : own ? 'Пусто — перетащите сюда материал или папку' : 'Папка пока пустая'}
+            </p>
+          )}
         </div>
       )}
     </div>

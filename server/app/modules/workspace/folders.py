@@ -9,6 +9,7 @@
   PUT    /api/workspace/folders/order           {parentId, ids} — порядок папок на уровне (и перенос туда же)
   PUT    /api/workspace/folders/{id}/order      {ids} — порядок материалов в папке (и перенос в неё)
   PUT    /api/workspace/items/{id}/folder       {folderId: id | null} — положить в папку (в конец) / вынуть
+  PUT    /api/workspace/root/order              {ids} — порядок материалов вне папок (и вынуть их туда из папок)
   GET    /api/workspace/folders/{id}/shares     кому открыта папка (поимённо и отделам)
   PUT    /api/workspace/folders/{id}/shares     {userId | departmentId, role: "view"|"edit"|null}
 
@@ -67,6 +68,13 @@ CREATE TABLE IF NOT EXISTS workspace_folder_dept_shares (
     role TEXT NOT NULL CHECK (role IN ('view', 'edit')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (folder_id, department_id)
+);
+-- Ручной порядок материалов вне папок (у каждого свой, как и раскладка по папкам).
+CREATE TABLE IF NOT EXISTS workspace_item_root_order (
+    user_id TEXT NOT NULL,
+    item_id BIGINT NOT NULL REFERENCES workspace_items(id) ON DELETE CASCADE,
+    position DOUBLE PRECISION NOT NULL,
+    PRIMARY KEY (user_id, item_id)
 );
 """)
 
@@ -318,6 +326,26 @@ def order_items(folder_id: str, body: ItemOrderBody, me: Identity = Depends(curr
             "INSERT INTO workspace_item_folder (user_id, item_id, folder_id, position) VALUES (%s, %s, %s, %s) "
             "ON CONFLICT (user_id, item_id) DO UPDATE SET folder_id = EXCLUDED.folder_id, position = EXCLUDED.position",
             (me.user_id, int(item_id), int(folder_id), index),
+        )
+    _changed(me.user_id)
+    return {"ok": True}
+
+
+@router.put("/api/workspace/root/order")
+def order_root(body: ItemOrderBody, me: Identity = Depends(current_identity)):
+    """Порядок материалов вне папок — как в ids. Материал из своей папки при этом из неё выходит."""
+    if not store.table_ready("workspace_item_root_order"):
+        raise HTTPException(status_code=503, detail="Порядок вне папок ещё не включён на сервере")
+    for index, item_id in enumerate(body.ids):
+        try:
+            store.get_visible(item_id, me.user_id, content=False)
+        except WorkspaceError as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+        db.conn.execute_query("DELETE FROM workspace_item_folder WHERE user_id = %s AND item_id = %s", (me.user_id, int(item_id)))
+        db.conn.execute_query(
+            "INSERT INTO workspace_item_root_order (user_id, item_id, position) VALUES (%s, %s, %s) "
+            "ON CONFLICT (user_id, item_id) DO UPDATE SET position = EXCLUDED.position",
+            (me.user_id, int(item_id), index),
         )
     _changed(me.user_id)
     return {"ok": True}

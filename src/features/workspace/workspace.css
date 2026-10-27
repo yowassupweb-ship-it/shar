@@ -132,6 +132,7 @@
   color: var(--on-media);
   box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .25);
 }
+.nws-kind-icon svg { width: 20px; height: 20px; }
 
 /* ── Правая часть ─────────────────────────────────────────────────────── */
 .nws-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
@@ -619,7 +620,8 @@ html.dark .nws-note-syntax{--md-strong: #fdba74;--md-em: #d8b4fe;--md-code: #86e
 .nmd-quote{color:var(--text-2)}
 .nws-folder-row{border-radius:var(--radius-md)}
 .nws-folder-row[data-over]{background:color-mix(in srgb,var(--accent-fill) 16%,transparent);box-shadow:inset 0 0 0 1.5px var(--accent-color)}
-.nws-folder-toggle{display:flex;align-items:center;gap:var(--space-2);width:100%;min-height:40px;padding:4px var(--space-2);border:0;border-radius:var(--radius-md);background:transparent;color:var(--text-main);font:inherit;text-align:left;cursor:pointer}
+.nws-folder-toggle{display:flex;align-items:center;gap:var(--space-2);width:100%;min-height:32px;padding:2px var(--space-2);border:0;border-radius:var(--radius-md);background:transparent;color:var(--text-main);font:inherit;text-align:left;cursor:pointer}
+@media(pointer:coarse){.nws-folder-toggle{min-height:40px}}
 @media(hover:hover){button.nws-folder-toggle:hover{background:var(--surface-hover)}}
 .nws-folder-chevron{flex:none;color:var(--text-muted);transition:transform var(--duration-fast) var(--ease-out)}
 .nws-folder[data-open] .nws-folder-chevron{transform:rotate(90deg)}
@@ -628,7 +630,7 @@ html.dark .nws-note-syntax{--md-strong: #fdba74;--md-em: #d8b4fe;--md-code: #86e
 .nws-folder-count{flex:none;color:var(--text-muted);font-size:var(--text-xs)}
 .nws-folder-name{flex:1;min-width:0;height:28px;padding:0 var(--space-2);border:1px solid var(--accent-color);border-radius:var(--radius-sm);background:var(--element-bg);color:var(--text-main);font:inherit}
 .nws-folder-items{margin-left:14px;padding-left:var(--space-2);border-left:1px solid var(--border-color)}
-.nws-folder-empty{margin:4px var(--space-2) var(--space-2);color:var(--text-muted);font-size:var(--text-xs)}
+.nws-folder-empty{margin:0 var(--space-2) 4px;color:var(--text-muted);font-size:var(--text-xs);line-height:24px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .nws-rows[data-over]{box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent-color) 40%,transparent);border-radius:var(--radius-md)}
 [data-u-comp=rect-popup] button .univerjs-icon,[data-u-comp=rect-popup] .univer-cursor-pointer.univer-size-6 .univerjs-icon{color:var(--text-2)}
 @media(hover:hover){[data-u-comp=rect-popup] button:hover .univerjs-icon,[data-u-comp=rect-popup] .univer-cursor-pointer.univer-size-6:hover .univerjs-icon{color:var(--text-main)}}

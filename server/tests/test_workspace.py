@@ -423,3 +423,16 @@ def test_personal_folders(anna, boris, users):
     assert anna.delete(f"/api/workspace/folders/{folder['id']}").status_code == 200
     row = next(i for i in anna.get("/api/workspace/items").json()["items"] if i["id"] == note["id"])
     assert row["folderId"] is None
+
+
+def test_root_order_is_personal_and_takes_items_out_of_folders(anna, boris):
+    a, b, c = (_create(anna, "note", title=t) for t in ("А", "Б", "В"))
+    folder = anna.post("/api/workspace/folders", json={"title": "Временная"}).json()["folder"]
+    assert anna.put(f"/api/workspace/items/{c['id']}/folder", json={"folderId": folder["id"]}).status_code == 200
+    # ручной порядок вне папок: В выходит из папки и встаёт первой
+    assert anna.put("/api/workspace/root/order", json={"ids": [c["id"], a["id"], b["id"]]}).status_code == 200
+    rows = {i["id"]: i for i in anna.get("/api/workspace/items?kind=note").json()["items"]}
+    assert [rows[x["id"]]["rootPosition"] for x in (c, a, b)] == [0, 1, 2]
+    assert rows[c["id"]]["folderId"] is None
+    # чужое переставить нельзя, а свой порядок у каждого свой
+    assert boris.put("/api/workspace/root/order", json={"ids": [a["id"]]}).status_code == 404
