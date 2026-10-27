@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronLeft, MessageCircle, Minus } from 'lucide-react';
 import ChatsPanel from '../ChatsPanel';
 import Conversation from '../Conversation';
@@ -93,7 +94,7 @@ export default function ChatFrame({ unread }: { unread: number }) {
   };
 
   if (!state.open) {
-    return (
+    return inShell(
       <button
         type="button"
         className="nxcf-bubble"
@@ -107,11 +108,11 @@ export default function ChatFrame({ unread }: { unread: number }) {
       >
         <MessageCircle size={24} aria-hidden="true" />
         {unread > 0 && <span className="nxcf-badge">{unread > 99 ? '99+' : unread}</span>}
-      </button>
+      </button>,
     );
   }
 
-  return (
+  return inShell(
     <section className="nxcf-window" data-chat={state.chatId ? 'true' : undefined} style={{ left: pos.x, top: pos.y, width: w, height: h }} aria-label="Чат">
       <header className="nxcf-head" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
         {state.chatId && (
@@ -133,6 +134,12 @@ export default function ChatFrame({ unread }: { unread: number }) {
           <ChatsPanel activeChatId={null} onOpen={(id) => update({ chatId: id })} />
         )}
       </div>
-    </section>
+    </section>,
   );
+}
+
+/** Внутрь корня интерфейса (.nx), как меню и диалоги: там живут токены темы — цвета, радиусы, тени. */
+function inShell(node: ReactNode) {
+  const root = document.querySelector<HTMLElement>('.nx') || document.body;
+  return createPortal(node, root);
 }
