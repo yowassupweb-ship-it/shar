@@ -115,7 +115,8 @@ try {
         $name = [IO.Path]::GetFileName($archive)
         Invoke-SharServer $conn (@(
             "set -e; rm -rf /tmp/shar-release && mkdir /tmp/shar-release && tar -xzf /tmp/$name -C /tmp/shar-release",
-            $(if ($ServerOnly) { 'true' } else { "cd $remote && rm -rf dist.prev && mv dist dist.prev && mv /tmp/shar-release/dist dist" }),
+            "cd $remote",
+            $(if ($ServerOnly) { 'true' } else { 'rm -rf dist.prev && mv dist dist.prev && mv /tmp/shar-release/dist dist' }),
             "cp -a /tmp/shar-release/server/. server/ && cp -a /tmp/shar-release/docker/. docker/ && cp /tmp/shar-release/compose.live.yaml compose.live.yaml",
             "rm -rf /tmp/shar-release /tmp/$name"
         ) -join ' && ') | Out-Null
