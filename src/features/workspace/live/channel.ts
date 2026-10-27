@@ -64,8 +64,13 @@ export interface LiveHooks {
   onReset: () => void;
   onStatus?: (status: LiveStatus) => void;
   transport?: LiveTransport;
-  /** Как часто записывать в базу, пока правки идут (таблицу собирать в xlsx дорого — реже). */
+  /** Как часто записывать в базу, пока правки идут. */
   saveEvery?: number;
+  /**
+   * Записывать в базу только после паузы в правках (мс), но не реже раза в SAVE_IDLE_CAP_MS. Для таблицы и документа:
+   * их снимок собирается в основном потоке (xlsx большой таблицы — полсекунды), и посреди набора это ощущается лагом.
+   */
+  saveIdle?: number;
 }
 
 /** Сколько ждать после своей правки, прежде чем записать в базу (и не реже, пока правки идут подряд). */
@@ -76,6 +81,7 @@ const SAVE_AFTER_MS = 2000;
  * запись снимка в базу идёт в фоне и в статус не попадает.
  */
 const SENDING_SHOW_MS = 600;
+const SAVE_IDLE_CAP_MS = 30_000;
 /** Чужие несохранённые правки сохраняем сами, если за это время их не сохранил автор (закрыл окно, пропала сеть). */
 const SAVE_FOR_OTHERS_MS = 8000;
 const ACK_TIMEOUT_MS = 8000;
@@ -122,6 +128,8 @@ export class LiveChannel {
   private saving = false;
   private saveTimer = 0;
   private saveDue = 0;
+  /** С какого момента есть своя правка, не записанная в базу (для потолка ожидания паузы). */
+  private dirtySince = 0;
   private sendingTimer = 0;
   private gapTimer = 0;
   private ackTimer = 0;
@@ -194,6 +202,11 @@ export class LiveChannel {
     window.clearInterval(this.beatTimer);
     this.net.send({ type: 'live', itemId: this.hooks.itemId, state: 'leave' });
     this.editor = null;
+  }
+
+  /** Содержимое как есть сейчас — для скачивания, печати, копии (редактор собирает его по запросу). */
+  snapshot(): Promise<string> | null {
+    return this.editor ? this.editor.serialize() : null;
   }
 
   /** Сохранить сейчас, если можно (Ctrl+S, уход со страницы). */
@@ -356,6 +369,16 @@ export class LiveChannel {
   private scheduleSave(delay?: number) {
     if (this.closed || !this.hooks.canEdit || this.rev <= this.savedRev) return;
     const mine = this.authoredRev > this.savedRev;
+    if (delay === undefined && mine && this.hooks.saveIdle) {
+      // Ждём паузы: каждая своя правка отодвигает запись, но не дальше потолка от первой незаписанной.
+      const now = Date.now();
+      if (!this.dirtySince) this.dirtySince = now;
+      const due = Math.min(now + this.hooks.saveIdle, this.dirtySince + SAVE_IDLE_CAP_MS);
+      window.clearTimeout(this.saveTimer);
+      this.saveDue = due;
+      this.saveTimer = window.setTimeout(() => { this.saveTimer = 0; void this.save(); }, Math.max(0, due - now));
+      return;
+    }
     const wait = delay ?? (mine ? this.hooks.saveEvery ?? SAVE_AFTER_MS : SAVE_FOR_OTHERS_MS + Math.random() * 4000);
     const due = Date.now() + wait;
     // Уже назначено не позже — не откладываем: при печати без пауз база всё равно обновляется регулярно.
@@ -377,6 +400,7 @@ export class LiveChannel {
       const content = await this.editor.serialize();
       await this.hooks.save(content, { epoch, rev });
       this.savedRev = Math.max(this.savedRev, rev);
+      if (this.savedRev >= this.authoredRev) this.dirtySince = 0;
     } catch {
       // 409 и прочее разбирает сессия (перечитывание); правки целы в журнале — пробуем записать позже.
       this.scheduleSave(4000);

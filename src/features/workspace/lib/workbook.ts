@@ -653,6 +653,14 @@ function writeSheet(target: Worksheet, source: IWorkbookData['sheets'][string], 
     const style = typeof s === 'string' ? snapshot.styles?.[s] : s;
     return style && typeof style === 'object' && Object.keys(style).length ? (style as IStyleData) : null;
   };
+  // Стиль ячейки почти всегда — номер из реестра книги: его отпечаток считаем один раз на стиль.
+  const keyById = new Map<string, string>();
+  const keyOf = (s: unknown, style: IStyleData | null) => {
+    if (typeof s !== 'string') return styleKey(style);
+    let key = keyById.get(s);
+    if (key === undefined) { key = styleKey(style); keyById.set(s, key); }
+    return key;
+  };
 
   // Объединения: снимаем только исчезнувшие и добавляем новые — снятие сбрасывает оформление ячеек внутри.
   const wanted = (source.mergeData || []).map((m) => ({ top: m.startRow + 1, left: m.startColumn + 1, bottom: m.endRow + 1, right: m.endColumn + 1 }));
@@ -678,7 +686,7 @@ function writeSheet(target: Worksheet, source: IWorkbookData['sheets'][string], 
       seen.add(key);
       const targetCell = target.getCell(r + 1, c + 1);
       const style = resolve(cell.s);
-      const sk = styleKey(style);
+      const sk = keyOf(cell.s, style);
       const before = ex.styleKeys.get(`${previousName}!${key}`) ?? '';
       if (sk !== before) targetCell.style = styleToExcel(style) as Cell['style'];
       ex.styleKeys.set(`${name}!${key}`, sk);

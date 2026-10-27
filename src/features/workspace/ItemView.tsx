@@ -121,6 +121,7 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen }: {
 
   async function duplicate() {
     try {
+      await session.refreshContent();
       const created = await workspaceApi.create({ kind: item!.kind, title: `${item!.title || info.untitled} (копия)`, content: session.getContent(), meta: item!.meta });
       showToast('Копия создана', 'success');
       onOpen?.(created.id, created.kind);
@@ -140,6 +141,7 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen }: {
   const canPrint = item.kind === 'document' || item.kind === 'note' || item.kind === 'table';
   async function print() {
     const title = item!.title || info.untitled;
+    await session.refreshContent();
     if (item!.kind === 'table') {
       try { printHtml(await workbookHtml(title, session.getContent())); } catch { showToast('Не удалось подготовить таблицу к печати', 'error'); }
       return;
@@ -150,6 +152,7 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen }: {
 
   async function downloadDocx() {
     try {
+      await session.refreshContent();
       const { markdownToDocx } = await import('./lib/exportDocx');
       downloadBlob(`${name}.docx`, await markdownToDocx(item!.title || info.untitled, markdown()));
     } catch { showToast('Не удалось собрать файл Word', 'error'); }
@@ -158,6 +161,7 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen }: {
   /** Таблица → CSV (первый лист, разделитель «;» и BOM — так его без плясок открывает русский Excel). */
   async function downloadCsv() {
     try {
+      await session.refreshContent();
       const { bookFromBase64 } = await import('./lib/workbook');
       const sheet = (await bookFromBase64(session.getContent())).worksheets[0];
       const quote = (value: unknown) => {
@@ -192,6 +196,7 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen }: {
     try {
       if (item.kind === 'presentation') { await importSlides(file); return; }
       const imported = await importFile(file, undefined, item.kind);
+      await session.refreshContent();
       // У заметки — исходная строка: markdown() превращает её вкладки в разделы, а дописать нужно в последнюю вкладку.
       const current = item.kind === 'table' || item.kind === 'note' ? session.getContent() : markdown();
       const empty = item.kind !== 'table' && !current.trim();
@@ -347,7 +352,7 @@ ${added}`;
           )}
           {item.kind === 'table' && (
             <>
-              <MenuItem icon={<Download size={15} />} onSelect={() => { setDownloadMenu(null); downloadBase64(`${name}.xlsx`, XLSX_MIME, session.getContent()); }}>Excel (.xlsx)</MenuItem>
+              <MenuItem icon={<Download size={15} />} onSelect={() => { setDownloadMenu(null); void session.refreshContent().then(() => downloadBase64(`${name}.xlsx`, XLSX_MIME, session.getContent())); }}>Excel (.xlsx)</MenuItem>
               <MenuItem icon={<Download size={15} />} onSelect={() => { setDownloadMenu(null); void downloadCsv(); }}>CSV (.csv)</MenuItem>
             </>
           )}

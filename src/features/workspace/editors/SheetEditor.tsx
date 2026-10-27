@@ -225,7 +225,8 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
       }
     };
     const listener = workbook.onCommandExecuted((command) => {
-      if (!ready || readOnly) return;
+      // Совместная правка: файл собирает канал — после паузы для базы и по запросу для скачивания (live/channel.ts).
+      if (!ready || readOnly || live) return;
       // Выбор ячейки, фокус, прокрутка и пересчёт формул идут тем же командным каналом, но файл не меняют:
       // файл меняют только мутации листа (свои и пришедшие от коллег).
       if (command.type !== 2 /* CommandType.MUTATION */ || !isSharedSheetMutation(command.id)) return;

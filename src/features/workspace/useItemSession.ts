@@ -128,6 +128,7 @@ export function useItemSession(source: Source) {
             try {
               const res = await workspaceApi.saveLive(String(loaded.id), content, mark);
               savedContent.current = content;
+              liveContent.current = content;
               setItem((cur) => (cur ? { ...cur, updatedAt: res.item.updatedAt } : cur));
               setError('');
               return res.live === 'already' ? 'already' : 'saved';
@@ -140,7 +141,8 @@ export function useItemSession(source: Source) {
           },
           onReset: () => onLiveReset.current(),
           onStatus: (next) => setState(LIVE_STATE[next]),
-          saveEvery: loaded.kind === 'table' ? 5000 : 2000,
+          saveEvery: 2000,
+          saveIdle: loaded.kind === 'table' ? 2000 : loaded.kind === 'document' ? 1500 : undefined,
         }, loaded.live, savedRev);
         liveRef.current = channel;
         setLive(channel);
@@ -368,8 +370,17 @@ export function useItemSession(source: Source) {
   /** Самое свежее содержимое, в том числе ещё не отправленное на сервер (для экспорта и копирования). */
   const getContent = useCallback(() => pendingContent.current ?? liveContent.current ?? savedContent.current, []);
 
+  /**
+   * Собрать содержимое из редактора прямо сейчас (совместная правка: таблица и документ не собирают файл после каждой
+   * правки — это тормозило ввод). Звать перед скачиванием, печатью, копией; дальше getContent вернёт свежее.
+   */
+  const refreshContent = useCallback(async () => {
+    const fresh = await liveRef.current?.snapshot();
+    if (typeof fresh === 'string') liveContent.current = fresh;
+  }, []);
+
   return {
-    item, status, error, state, conflict, loadKey, getContent, live,
+    item, status, error, state, conflict, loadKey, getContent, refreshContent, live,
     setContent, replaceContent, setTitle, save, resolveConflict, patchFields,
     reload: () => load(true),
   };

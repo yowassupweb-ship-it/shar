@@ -174,7 +174,8 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
     }, 300);
     let syncTimer = 0;
     const subscription = univerAPI.addEvent(univerAPI.Event.CommandExecuted, (event) => {
-      if (!ready || readOnly || !event.id.startsWith('doc.mutation.')) return;
+      // Совместная правка: снимок собирает канал — после паузы для базы и по запросу для скачивания.
+      if (!ready || readOnly || live || !event.id.startsWith('doc.mutation.')) return;
       window.clearTimeout(syncTimer);
       syncTimer = window.setTimeout(() => {
         const snapshot = localizeImages(doc.save() as unknown as DocSnapshot);
