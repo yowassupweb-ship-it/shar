@@ -51,7 +51,8 @@ async function transformFor(kind: Kind): Promise<Transform | null> {
   return null;
 }
 
-const LIVE_STATE: Record<LiveStatus, SaveState> = { synced: 'saved', sending: 'pending', saving: 'saving', offline: 'pending' };
+// Правка у сервера (в журнале и у коллег) — «Сохранено»; сервер долго не отвечает — «Сохраняю…»; нет связи — правки ждут.
+const LIVE_STATE: Record<LiveStatus, SaveState> = { synced: 'saved', sending: 'saving', saving: 'saving', offline: 'pending' };
 
 export function useItemSession(source: Source) {
   const key = 'token' in source ? `t:${source.token}` : `i:${source.id}`;
@@ -139,6 +140,7 @@ export function useItemSession(source: Source) {
           },
           onReset: () => onLiveReset.current(),
           onStatus: (next) => setState(LIVE_STATE[next]),
+          saveEvery: loaded.kind === 'table' ? 5000 : 2000,
         }, loaded.live, savedRev);
         liveRef.current = channel;
         setLive(channel);

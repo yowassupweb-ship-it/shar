@@ -64,10 +64,18 @@ export interface LiveHooks {
   onReset: () => void;
   onStatus?: (status: LiveStatus) => void;
   transport?: LiveTransport;
+  /** Как часто записывать в базу, пока правки идут (таблицу собирать в xlsx дорого — реже). */
+  saveEvery?: number;
 }
 
-/** Сколько ждать после своей правки, прежде чем сохранить в базу. */
-const SAVE_AFTER_MS = 1200;
+/** Сколько ждать после своей правки, прежде чем записать в базу (и не реже, пока правки идут подряд). */
+const SAVE_AFTER_MS = 2000;
+/**
+ * «Сохраняю…» показываем, только если сервер не подтвердил правку дольше этого: обычно ответ приходит за доли
+ * секунды, и мигать статусом на каждую букву незачем. Подтверждённая правка уже в журнале и у коллег — «Сохранено»;
+ * запись снимка в базу идёт в фоне и в статус не попадает.
+ */
+const SENDING_SHOW_MS = 600;
 /** Чужие несохранённые правки сохраняем сами, если за это время их не сохранил автор (закрыл окно, пропала сеть). */
 const SAVE_FOR_OTHERS_MS = 8000;
 const ACK_TIMEOUT_MS = 8000;
@@ -113,6 +121,8 @@ export class LiveChannel {
   private authoredRev = 0;
   private saving = false;
   private saveTimer = 0;
+  private saveDue = 0;
+  private sendingTimer = 0;
   private gapTimer = 0;
   private ackTimer = 0;
   private beatTimer = 0;
@@ -158,7 +168,9 @@ export class LiveChannel {
   local(ops: LiveOp[]) {
     if (this.closed || !this.hooks.canEdit || !ops.length) return;
     this.buffer.push(...ops);
-    this.setStatus('sending');
+    if (!this.sendingTimer && this.status !== 'sending') {
+      this.sendingTimer = window.setTimeout(() => { this.sendingTimer = 0; if (this.pendingCount()) this.setStatus('sending'); }, SENDING_SHOW_MS);
+    }
     this.flush();
   }
 
@@ -176,6 +188,7 @@ export class LiveChannel {
     this.closed = true;
     for (const off of this.offs) off();
     window.clearTimeout(this.saveTimer);
+    window.clearTimeout(this.sendingTimer);
     window.clearTimeout(this.gapTimer);
     window.clearTimeout(this.ackTimer);
     window.clearInterval(this.beatTimer);
@@ -243,7 +256,7 @@ export class LiveChannel {
       case 'workspace_live_saved':
         if (e.epoch === this.epoch) {
           this.savedRev = Math.max(this.savedRev, Number(e.rev) || 0);
-          if (!this.hasUnsaved() && !this.pendingCount()) this.setStatus('synced');
+          if (!this.pendingCount()) this.setStatus('synced');
         }
         return;
       case 'workspace_live_reset':
@@ -287,7 +300,11 @@ export class LiveChannel {
       this.inflight = null;
       this.authoredRev = this.rev;
       this.flush();
-      if (!this.pendingCount()) this.setStatus(this.hasUnsaved() ? 'saving' : 'synced');
+      if (!this.pendingCount()) {
+        window.clearTimeout(this.sendingTimer);
+        this.sendingTimer = 0;
+        this.setStatus('synced');
+      }
       this.scheduleSave();
       return;
     }
@@ -336,35 +353,36 @@ export class LiveChannel {
    * Сохранение в базу. Свою правку сохраняем вскоре после подтверждения; чужие несохранённые (автор закрыл окно
    * раньше, чем успел сохранить) — с запасом, если их так никто и не сохранил.
    */
-  private scheduleSave() {
+  private scheduleSave(delay?: number) {
     if (this.closed || !this.hooks.canEdit || this.rev <= this.savedRev) return;
-    window.clearTimeout(this.saveTimer);
     const mine = this.authoredRev > this.savedRev;
-    this.saveTimer = window.setTimeout(() => void this.save(), mine ? SAVE_AFTER_MS : SAVE_FOR_OTHERS_MS + Math.random() * 4000);
+    const wait = delay ?? (mine ? this.hooks.saveEvery ?? SAVE_AFTER_MS : SAVE_FOR_OTHERS_MS + Math.random() * 4000);
+    const due = Date.now() + wait;
+    // Уже назначено не позже — не откладываем: при печати без пауз база всё равно обновляется регулярно.
+    if (this.saveTimer && this.saveDue <= due) return;
+    window.clearTimeout(this.saveTimer);
+    this.saveDue = due;
+    this.saveTimer = window.setTimeout(() => { this.saveTimer = 0; void this.save(); }, wait);
   }
 
   private async save() {
     if (this.closed || this.saving || !this.editor || !this.hooks.canEdit) return;
     if (this.rev <= this.savedRev) return;
-    // Неподтверждённые правки есть — редактор не в версии rev; сохраним после подтверждения.
-    if (this.pendingCount()) return;
+    // Неподтверждённые правки есть — редактор не в версии rev; пробуем снова, как только пачка подтвердится.
+    if (this.pendingCount()) { this.scheduleSave(300); return; }
     this.saving = true;
     const rev = this.rev;
     const epoch = this.epoch;
     try {
-      this.setStatus('saving');
       const content = await this.editor.serialize();
       await this.hooks.save(content, { epoch, rev });
       this.savedRev = Math.max(this.savedRev, rev);
     } catch {
-      // 409 и прочее разбирает сессия (перечитывание); здесь просто попробуем ещё раз позже.
-      this.saveTimer = window.setTimeout(() => void this.save(), 4000);
+      // 409 и прочее разбирает сессия (перечитывание); правки целы в журнале — пробуем записать позже.
+      this.scheduleSave(4000);
     } finally {
       this.saving = false;
-      if (!this.closed) {
-        if (this.rev > this.savedRev) this.scheduleSave();
-        this.setStatus(this.pendingCount() ? 'sending' : this.hasUnsaved() ? 'saving' : 'synced');
-      }
+      if (!this.closed && this.rev > this.savedRev) this.scheduleSave();
     }
   }
 }
