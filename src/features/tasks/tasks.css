@@ -337,3 +337,22 @@
 /* Повтор включён — чип подсвечен, как включённые настройки в редакторе события. */
 .ntd-chip[data-on="true"] { background: color-mix(in srgb, var(--accent-fill) 15%, transparent); color: var(--text-main); }
 .ntd-chip[data-on="true"] svg { color: var(--accent-color); }
+
+/* Вложения задачи: материалы «Офиса», файлы, ссылки — карточками под свойствами. */
+.ntd-attachments { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; padding: 0 var(--space-5) var(--space-3); list-style: none; }
+.ntd-attachments li { position: relative; display: flex; min-width: 0; max-width: 100%; }
+.ntd-attachment { display: flex; align-items: center; gap: 10px; min-width: 0; max-width: 340px; padding: 8px 36px 8px 10px; border: 0; border-radius: var(--radius-md); background: var(--surface-hover); color: var(--text-main); font: inherit; text-align: left; cursor: pointer; }
+@media (hover: hover) { .ntd-attachment:hover { background: var(--surface-selected); } }
+.ntd-attachment-icon { display: grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: var(--radius-sm); background: var(--surface-panel); color: var(--accent-color); }
+.ntd-attachments li[data-type="cloud"] .ntd-attachment-icon { color: var(--note-blue); }
+.ntd-attachments li[data-type="file"] .ntd-attachment-icon { color: var(--note-orange); }
+.ntd-attachments li[data-type="link"] .ntd-attachment-icon { color: var(--note-green); }
+.ntd-attachment-text { display: grid; min-width: 0; }
+.ntd-attachment-text b { overflow: hidden; font-size: var(--text-sm); font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
+.ntd-attachment-text span { overflow: hidden; color: var(--text-muted); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.ntd-attachment-out { flex: none; color: var(--text-muted); }
+.ntd-attachment-remove { position: absolute; top: 50%; right: 4px; width: 26px; height: 26px; margin-top: -13px; opacity: .55; }
+@media (hover: hover) { .ntd-attachment-remove:hover { opacity: 1; color: var(--state-danger); } }
+.ntd-pick-list { display: grid; gap: 2px; margin-top: var(--space-2); }
+.ntd-pick-list .nx-pick small { display: block; overflow: hidden; color: var(--text-muted); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.ntd-link-form { display: grid; gap: var(--space-3); }

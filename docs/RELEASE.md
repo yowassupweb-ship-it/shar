@@ -87,6 +87,15 @@ docker compose -f /opt/shar-next/compose.live.yaml --project-directory /opt/shar
 Перед выкладкой нового DDL прочитать его и убедиться, что старый код с ним работает (только добавление таблиц и
 столбцов). Удаление и переименование — отдельный план с остановкой записи, не через `--schema-only`.
 
+### Разовые шаги
+
+После выкладки, где таблицам «Офиса» впервые стал считаться текст для поиска (27.10.2026), один раз пересчитать его
+у уже сохранённых таблиц, иначе старые таблицы по ячейкам не найдутся:
+
+```bash
+docker compose -f /opt/shar-next/compose.live.yaml --project-directory /opt/shar-next exec -T api python -m app.migrate --reindex-office
+```
+
 ### Откат
 
 ```bash

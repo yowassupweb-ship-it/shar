@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import {
-  AlertCircle, ArrowLeft, CalendarDays, Check, ChevronDown, Eye, Flag, FolderClosed, MoreHorizontal, Pencil,
+  AlertCircle, ArrowLeft, CalendarDays, Check, ChevronDown, Cloud, Eye, FileText, Flag, FolderClosed, Link2, MoreHorizontal, Paperclip, Pencil,
   Repeat, Search, Trash2, UserPlus,
 } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
@@ -16,6 +16,7 @@ import { repeatIdOf, repeatLabel, syncTaskRepeat, TASK_REPEATS } from './repeat'
 import { DatePicker } from '@/shared/ui/DatePicker';
 import { continueList, MarkdownToolbar, markdownShortcut, replaceRange } from './MarkdownToolbar';
 import { Spinner } from '@/shared/ui/Spinner';
+import { AttachmentList, AttachPicker, attachmentsOf, LinkSheet, newId, type Attachment } from './attachments';
 
 /**
  * Задача — документ, как заметка MBOX: первая строка — крупный заголовок,
@@ -58,7 +59,10 @@ export default function TaskDocument({ task, onBack, onGone }: {
   const latest = useRef(initial);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
-  const [menu, setMenu] = useState<{ kind: 'status' | 'priority' | 'list' | 'more' | 'date' | 'repeat'; anchor: MenuAnchor } | null>(null);
+  const [menu, setMenu] = useState<{ kind: 'status' | 'priority' | 'list' | 'more' | 'date' | 'repeat' | 'attach'; anchor: MenuAnchor } | null>(null);
+  const [attachSheet, setAttachSheet] = useState<'office' | 'cloud' | 'link' | null>(null);
+  const [uploading, setUploading] = useState(0);
+  const filePick = useRef<HTMLInputElement>(null);
   const [people, setPeople] = useState<'assignees' | 'customer' | null>(null);
   const users = useChatStore((s) => s.users);
   const allLists = useTasks((s) => s.lists);
@@ -188,6 +192,49 @@ export default function TaskDocument({ task, onBack, onGone }: {
     }
   };
 
+  // ── Вложения: материалы «Офиса», файлы из «Файлов», файлы с компьютера, ссылки ──
+  const attachments = attachmentsOf(task.metadata);
+  const setAttachments = (next: Attachment[]) => patch({ metadata: { ...(useTasks.getState().tasks[task.id]?.metadata || task.metadata || {}), attachments: next } });
+  const attach = (a: Attachment) => {
+    const current = attachmentsOf(useTasks.getState().tasks[task.id]?.metadata);
+    const same = current.some((x) => (x.type === 'office' && a.type === 'office' && x.itemId === a.itemId) || (x.type === 'cloud' && a.type === 'cloud' && x.fileId === a.fileId));
+    if (!same) void setAttachments([...current, a]);
+  };
+  const detach = (id: string) => void setAttachments(attachmentsOf(useTasks.getState().tasks[task.id]?.metadata).filter((a) => a.id !== id));
+  // Свой закрытый материал прикрепили к задаче с исполнителями — предложить открыть им, иначе вложение у них не откроется.
+  const pickOffice = async (a: Attachment, hit?: { isOwner?: boolean; accessLevel?: string; title: string }) => {
+    setAttachSheet(null);
+    attach(a);
+    const others = assigneesOf(task).filter((id) => id !== myId());
+    if (a.type !== 'office' || !hit?.isOwner || hit.accessLevel === 'all' || !others.length) return;
+    const ok = await askConfirm({ title: `Открыть «${hit.title || 'материал'}» исполнителям?`, text: 'Сейчас он виден только вам — исполнители не смогут его открыть. Они получат право смотреть и править.', confirm: 'Открыть' });
+    if (!ok) return;
+    try {
+      for (const userId of others) {
+        const res = await fetch(`/api/workspace/items/${encodeURIComponent(a.itemId)}/shares`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, role: 'edit' }) });
+        if (!res.ok) throw new Error(String(res.status));
+      }
+      showToast('Исполнители получили доступ', 'success');
+    } catch { showToast('Доступ не выдался — откройте материал и поделитесь им вручную.', 'error'); }
+  };
+  const uploadFiles = async (files: File[]) => {
+    if (!files.length) return;
+    const { uploadFileWithProgress } = await import('@/shared/api/uploadFile');
+    setUploading((n) => n + files.length);
+    for (const file of files) {
+      try {
+        const res = await uploadFileWithProgress(file, () => {});
+        attach({ id: newId(), type: 'file', url: res.url, name: file.name, size: file.size });
+      } catch { showToast(`«${file.name}» не загрузился — проверьте связь.`, 'error'); } finally { setUploading((n) => n - 1); }
+    }
+  };
+  const attachTools = [
+    { key: 'office', title: 'Прикрепить документ из «Офиса»', icon: <FileText size={16} />, onClick: () => setAttachSheet('office') },
+    { key: 'cloud', title: 'Прикрепить файл из «Файлов»', icon: <Cloud size={16} />, onClick: () => setAttachSheet('cloud') },
+    { key: 'upload', title: 'Прикрепить файл с компьютера', icon: <Paperclip size={16} />, onClick: () => filePick.current?.click() },
+    { key: 'link', title: 'Прикрепить ссылку', icon: <Link2 size={16} />, onClick: () => setAttachSheet('link') },
+  ];
+
   const repeat = repeatIdOf(task);
   // Повтор: пометка в задаче + серия сроков в календаре на месяц вперёд.
   const setRepeat = async (id: string) => {
@@ -207,7 +254,7 @@ export default function TaskDocument({ task, onBack, onGone }: {
   const list = lists.find((l) => l.id === task.listId);
   const priority = PRIORITIES.find((p) => p.id === (task.priority || 'medium'))!;
   const customer = task.assignedById ? users[String(task.assignedById)] : undefined;
-  const open = (kind: 'status' | 'priority' | 'list' | 'more' | 'date' | 'repeat') => (e: React.MouseEvent<HTMLButtonElement>) => setMenu({ kind, anchor: { element: e.currentTarget, align: kind === 'more' ? 'end' : 'start' } });
+  const open = (kind: 'status' | 'priority' | 'list' | 'more' | 'date' | 'repeat' | 'attach') => (e: React.MouseEvent<HTMLButtonElement>) => setMenu({ kind, anchor: { element: e.currentTarget, align: kind === 'more' ? 'end' : 'start' } });
 
   return (
     <section className="ntd" aria-label={title || 'Задача'}>
@@ -269,9 +316,15 @@ export default function TaskDocument({ task, onBack, onGone }: {
             <FolderClosed size={14} aria-hidden="true" />{list?.name || 'Без списка'}
           </button>
         )}
+        <button type="button" className="ntd-chip" onClick={open('attach')} aria-haspopup="menu">
+          {uploading > 0 ? <Spinner size={13} /> : <Paperclip size={14} aria-hidden="true" />}{uploading > 0 ? 'Загружаю…' : 'Прикрепить'}
+        </button>
       </div>
 
-      {mode === 'edit' && <MarkdownToolbar targetRef={bodyRef} onPickImages={(f) => void insertImages(f)} />}
+      <AttachmentList items={attachments} onRemove={detach} />
+      <input ref={filePick} type="file" multiple hidden onChange={(e) => { void uploadFiles([...(e.target.files ?? [])]); e.target.value = ''; }} />
+
+      {mode === 'edit' && <MarkdownToolbar targetRef={bodyRef} onPickImages={(f) => void insertImages(f)} extra={attachTools} />}
 
       <div className="ntd-scroll nx-scroll-y">
         {mode === 'edit' ? (
@@ -346,6 +399,17 @@ export default function TaskDocument({ task, onBack, onGone }: {
           ))}
         </Menu>
       )}
+      {menu?.kind === 'attach' && (
+        <Menu anchor={menu.anchor} label="Прикрепить" onClose={() => setMenu(null)}>
+          {attachTools.map((t) => (
+            <MenuItem key={t.key} icon={t.icon} onSelect={() => { setMenu(null); t.onClick(); }}>{t.title.replace('Прикрепить ', '').replace(/^./, (c) => c.toUpperCase())}</MenuItem>
+          ))}
+        </Menu>
+      )}
+      {(attachSheet === 'office' || attachSheet === 'cloud') && (
+        <AttachPicker source={attachSheet} onClose={() => setAttachSheet(null)} onPick={(a, hit) => void pickOffice(a, hit)} />
+      )}
+      {attachSheet === 'link' && <LinkSheet onClose={() => setAttachSheet(null)} onAdd={(a) => { setAttachSheet(null); attach(a); }} />}
       {menu?.kind === 'more' && (
         <Menu anchor={menu.anchor} label="Задача" onClose={() => setMenu(null)}>
           <MenuItem icon={<Trash2 size={16} />} tone="danger" onSelect={() => { setMenu(null); void remove(); }}>Удалить задачу</MenuItem>
