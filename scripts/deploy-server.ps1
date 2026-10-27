@@ -49,8 +49,12 @@ try {
 
     if (-not $SkipBuild) {
         Write-Host '› npm run build'
+        # Предупреждения сборщика идут в stderr: в Windows PowerShell 5.1 при 'Stop' это падение, судим по коду выхода.
+        $ErrorActionPreference = 'Continue'
         npm run build
-        if ($LASTEXITCODE -ne 0) { throw 'Сборка упала' }
+        $buildCode = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        if ($buildCode -ne 0) { throw 'Сборка упала' }
     }
     $entry = ((Get-Content dist/index.html -Raw) | Select-String -Pattern 'assets/index-[\w-]+\.js').Matches.Value
     Write-Host "Сборка: $entry (та же должна уйти в Shar OS — scripts/publish-electron.ps1)"

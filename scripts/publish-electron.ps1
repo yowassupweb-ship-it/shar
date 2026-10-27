@@ -54,7 +54,7 @@ if (-not $Execute) { Write-Host 'Сухой прогон: ничего не со
 
 if (-not $SkipBuild) {
     Push-Location (Join-Path $root 'desktop')
-    try { npm run build:win; if ($LASTEXITCODE -ne 0) { throw 'Сборка установщика упала' } } finally { Pop-Location }
+    try { $ErrorActionPreference = 'Continue'; npm run build:win; $code = $LASTEXITCODE; $ErrorActionPreference = 'Stop'; if ($code -ne 0) { throw 'Сборка установщика упала' } } finally { Pop-Location }
 }
 foreach ($f in @($exe, $pkg, 'latest.yml')) { if (-not (Test-Path (Join-Path $release $f))) { throw "Нет $release/$f" } }
 
