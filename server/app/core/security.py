@@ -52,6 +52,8 @@ PUBLIC_PREFIXES: tuple[str, ...] = (
 # а читать их может только админ.
 PUBLIC_METHODS: dict[str, tuple[str, ...]] = {
     "/api/client-errors": ("POST",),
+    # MCP «Офиса»: личность — по личному ключу в Authorization (modules/mcp). Только сам адрес: /api/mcp/keys — по сессии.
+    "/api/mcp": ("POST", "GET"),
 }
 
 # Ходит сам бэкенд / внешние системы; сессии у них нет по определению.

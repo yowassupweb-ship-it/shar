@@ -26,6 +26,8 @@ def _collect() -> list[APIRouter]:
     from app.modules.mail import accounts, email_chat_rules, mailboxes
     from app.modules.mail import messages as mail_messages
     from app.modules.mail import sync as mail_sync
+    from app.modules.mcp import keys as mcp_keys
+    from app.modules.mcp import router as mcp
     from app.modules.notifications import router as notifications
     from app.modules.og import router as og
     from app.modules.ops import client_errors, health
@@ -46,6 +48,7 @@ def _collect() -> list[APIRouter]:
         realtime, calls_rooms, calls_signaling, mail_messages, mail_sync, accounts, mailboxes, email_chat_rules,
         cloud, uploads, avatars, backgrounds, stickers, calendar_workdays, calendar, todos, notifications, push, requests_mod, admin,
         client_errors, health, utm, og, chats_scheduled, leads, social, integrations, workspace_folders, workspace, workspace_public, search, birthdays,
+        mcp_keys, mcp,
     ]
     return [m.router for m in mods]
 

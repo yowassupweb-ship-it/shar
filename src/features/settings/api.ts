@@ -108,6 +108,15 @@ export async function loadDevices(): Promise<Device[]> {
 export const revokeDevice = (id: string) => call(`/api/auth/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
 export const revokeOtherDevices = () => call('/api/auth/devices/revoke-others', { method: 'POST' });
 
+// ── Ключи MCP ───────────────────────────────────────────────────────────────
+
+/** Личный ключ MCP: самого ключа сервер не хранит и не отдаёт — только начало для узнавания. */
+export interface McpKey { id: string; name: string; start: string; createdAt: string; lastUsedAt: string | null }
+
+export const loadMcpKeys = () => call<{ keys: McpKey[] }>('/api/mcp/keys').then((r) => r.keys);
+export const createMcpKey = (name: string) => call<{ key: McpKey; token: string }>('/api/mcp/keys', json('POST', { name }));
+export const revokeMcpKey = (id: string) => call(`/api/mcp/keys/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
 // ── Пуши ───────────────────────────────────────────────────────────────────
 
 export async function loadReactionPush(): Promise<boolean | null> {

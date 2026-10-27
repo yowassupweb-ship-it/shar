@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Bell, ChevronLeft, ChevronRight, KeyRound, LayoutGrid, LogOut, MonitorSmartphone, Palette, RotateCw, User, Volume2 } from 'lucide-react';
+import { Bell, Bot, ChevronLeft, ChevronRight, KeyRound, LayoutGrid, LogOut, MonitorSmartphone, Palette, RotateCw, User, Volume2 } from 'lucide-react';
 import { logout } from '@/shared/session/session';
 import { adoptServerChatPrefs } from '@/shared/settings/chatPrefs';
 import { paths } from '@/shared/navigation/routes';
@@ -14,6 +14,7 @@ import AppearanceSection from './sections/AppearanceSection';
 import SoundsSection from './sections/SoundsSection';
 import NotificationsSection from './sections/NotificationsSection';
 import SectionsSection from './sections/SectionsSection';
+import McpSection from './sections/McpSection';
 import './settings.css';
 
 /**
@@ -22,7 +23,7 @@ import './settings.css';
  * «Назад» работает как везде, а на раздел можно дать ссылку.
  */
 
-type SectionId = 'profile' | 'account' | 'devices' | 'appearance' | 'sounds' | 'notifications' | 'sections';
+type SectionId = 'profile' | 'account' | 'devices' | 'appearance' | 'sounds' | 'notifications' | 'sections' | 'mcp';
 
 interface SectionDef {
   id: SectionId;
@@ -41,6 +42,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'sounds', label: 'Звуки', icon: Volume2, tint: ['#60a5fa', '#2563eb'] },
   { id: 'notifications', label: 'Уведомления', icon: Bell, tint: ['#fb923c', '#dc2626'] },
   { id: 'sections', label: 'Разделы в меню', icon: LayoutGrid, tint: ['#34d399', '#059669'], needsProfile: true },
+  { id: 'mcp', label: 'MCP', icon: Bot, tint: ['#a78bfa', '#4f46e5'] },
 ];
 
 const isSection = (v: string | null): v is SectionId => SECTIONS.some((s) => s.id === v);
@@ -152,6 +154,7 @@ export default function SettingsScreen() {
   else if (open === 'sounds') body = <SoundsSection />;
   else if (open === 'notifications') body = <NotificationsSection />;
   else if (open === 'sections' && profile) body = <SectionsSection profile={profile} onChange={setProfile} />;
+  else if (open === 'mcp') body = <McpSection />;
 
   return (
     <div className="nst" data-open={open ? 'true' : undefined}>
