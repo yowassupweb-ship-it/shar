@@ -50,6 +50,9 @@ export const workspaceApi = {
     call<{ item: Item }>('/api/workspace/items', { method: 'POST', json: body }).then((r) => r.item),
   patch: (id: string, body: Record<string, unknown>) =>
     call<{ item: Item }>(`/api/workspace/items/${enc(id)}`, { method: 'PATCH', json: body }).then((r) => r.item),
+  /** Сохранение от живого редактора (документ, таблица): содержимое версии rev журнала совместной правки. */
+  saveLive: (id: string, content: string, live: { epoch: string; rev: number }) =>
+    call<{ item: Item; live?: 'already' }>(`/api/workspace/items/${enc(id)}`, { method: 'PATCH', json: { content, live } }),
   remove: (id: string) => call<{ ok: boolean }>(`/api/workspace/items/${enc(id)}`, { method: 'DELETE' }),
 
   folders: () => call<{ folders: Folder[] }>('/api/workspace/folders').then((r) => r.folders),

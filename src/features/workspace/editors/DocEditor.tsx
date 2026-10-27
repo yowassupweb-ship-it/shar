@@ -22,6 +22,7 @@ import { emptySnapshot, ensureDrawingResource, fingerprint, localizeImages, pars
 import { disableBlockHandle, hideMissingFonts, isDarkTheme, overrideComponent, styleDocSurface, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
 import type { EditorProps } from './types';
 import { CursorLayer, type CursorShape } from '../CursorLayer';
+import { bindDoc } from '../live/docOps';
 import type { CursorPos, RemoteCursor } from '../useCursors';
 
 /** Курсор в документе: смещения в тексте, раздел (основной текст или колонтитул) и направление выделения. */
@@ -67,7 +68,7 @@ function measureCursors(injector: Injector, unitId: string, host: HTMLElement, c
  * Google Docs. Правка отдаёт снимок целиком, сервер хранит его как есть. Загружается отдельным куском —
  * Univer тяжёлый, и остальной Шар ради него не ждёт.
  */
-export default function DocEditor({ content, onContent, readOnly, loadKey, visible = true, cursors = [], onCursor }: EditorProps) {
+export default function DocEditor({ content, onContent, readOnly, loadKey, visible = true, cursors = [], onCursor, live }: EditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const theme = useUniverTheme();
   const initial = useRef<DocSnapshot>(parseSnapshot(content) ?? emptySnapshot());
@@ -164,7 +165,13 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
     // Правки текста, форматирования и полей страницы идут мутациями; мутация без реальной разницы
     // (фокус, выделение) отсеивается сравнением с сохранённым отпечатком.
     let ready = false;
-    const readyTimer = window.setTimeout(() => { ready = true; }, 300);
+    let unbind: (() => void) | null = null;
+    const serialize = async () => JSON.stringify(localizeImages(doc.save() as unknown as DocSnapshot));
+    const readyTimer = window.setTimeout(() => {
+      ready = true;
+      // Совместная правка: свои правки — коллегам сразу, их правки — сюда на место (live/docOps.ts).
+      if (live) unbind = bindDoc(injector, unitId, live, serialize);
+    }, 300);
     let syncTimer = 0;
     const subscription = univerAPI.addEvent(univerAPI.Event.CommandExecuted, (event) => {
       if (!ready || readOnly || !event.id.startsWith('doc.mutation.')) return;
@@ -184,6 +191,9 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
       stopPasteUpload();
       window.clearTimeout(readyTimer);
       window.clearTimeout(syncTimer);
+      unbind?.();
+      // Пересоздание (тема, просмотр ↔ правка) открывает документ из initial — пусть в нём будет всё, что уже есть.
+      if (ready) { try { initial.current = localizeImages(doc.save() as unknown as DocSnapshot); } catch { /* уже разобран */ } }
       subscription.dispose();
       selectionSub.unsubscribe();
       engine.current = null;
@@ -191,7 +201,7 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
       untagFind();
       window.setTimeout(() => { univer.dispose(); mount.remove(); }, 0);
     };
-  }, [loadKey, readOnly, theme]);
+  }, [loadKey, readOnly, theme, live]);
 
   useEffect(() => { if (visible) window.dispatchEvent(new Event('resize')); }, [visible]);
 

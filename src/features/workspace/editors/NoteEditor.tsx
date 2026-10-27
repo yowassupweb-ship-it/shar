@@ -10,6 +10,7 @@ import { askConfirm, Menu, type MenuAnchor } from '@/shared/ui/overlay';
 import { merge3, shiftCaret } from '../lib/merge';
 import { highlightMarkdown } from '../lib/mdHighlight';
 import { cleanTabTitle, parseTabs, serializeTabs } from '../lib/noteTabs';
+import { applyText, diffText, TEXT_OP } from '../live/textOps';
 import { FindBar, findAll } from './FindBar';
 import type { EditorProps } from './types';
 import type { RemoteCursor } from '../useCursors';
@@ -80,7 +81,7 @@ const TOOLS: Array<{ id: string; label: string; icon: typeof Bold; wrap: Wrap }>
   { id: 'link', label: 'Ссылка', icon: Link2, wrap: { before: '[', after: '](https://)', placeholder: 'текст' } },
 ];
 
-export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = [], onCursor }: EditorProps) {
+export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = [], onCursor, live }: EditorProps) {
   // full — заметка целиком (все вкладки), text — открытая вкладка: с ней работают поле, просмотр, поиск и панель.
   const [full, setFull] = useState(content);
   const fullRef = useRef(full);
@@ -115,6 +116,40 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
   const count = editing ? matches.length : domRanges.length;
   const current = count ? Math.min(findIndex, count - 1) : 0;
 
+  // Совместная правка (live/channel.ts): своя правка — коллегам сразу, их правка — прямо в поле, в том же такте,
+  // что и наша последняя буква: иначе следующая буква сравнивалась бы с устаревшим текстом.
+  const liveRef = useRef(live);
+  liveRef.current = live;
+  const sendLive = (before: string, after: string) => {
+    const op = liveRef.current ? diffText(before, after) : null;
+    if (op) liveRef.current!.local([{ id: TEXT_OP, params: { o: op } }]);
+  };
+  useEffect(() => {
+    if (!live) return undefined;
+    return live.attach({
+      apply: (ops) => {
+        const before = fullRef.current;
+        let next = before;
+        for (const op of ops) next = applyText(next, op.params.o as Array<number | string>);
+        if (next === before) return;
+        fullRef.current = next;
+        syncedRef.current = next;
+        const field = area.current;
+        const tab = tabRef.current;
+        const oldTab = parseTabs(before)[tab]?.content ?? '';
+        const newTab = parseTabs(next)[tab]?.content ?? '';
+        if (field && oldTab !== newTab && field.value === oldTab) {
+          const { selectionStart: s, selectionEnd: e, selectionDirection: d } = field;
+          field.value = newTab;
+          if (document.activeElement === field) field.setSelectionRange(shiftCaret(oldTab, newTab, s), shiftCaret(oldTab, newTab, e), d ?? undefined);
+        }
+        setFull(next);
+        onContent(next);
+      },
+      serialize: async () => fullRef.current,
+    });
+  }, [live]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Общая точка с сессией: последний текст, который редактор отдал ей (onContent) или принял от неё.
   // Материал перечитали с сервера (чужая правка, конфликт) — берём присланное.
   const syncedRef = useRef(content);
@@ -139,7 +174,7 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
     }
     fullRef.current = next;
     setFull(next);
-    if (next !== content) { syncedRef.current = next; onContent(next); }
+    if (next !== content) { syncedRef.current = next; onContent(next); sendLive(content, next); }
   }, [content]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Отмена и повтор ──
@@ -176,11 +211,13 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
   };
 
   const commit = useCallback((nextFull: string, typing = false) => {
-    record(fullRef.current, nextFull, typing);
+    const before = fullRef.current;
+    record(before, nextFull, typing);
     fullRef.current = nextFull;
     syncedRef.current = nextFull;
     setFull(nextFull);
     onContent(nextFull);
+    sendLive(before, nextFull);
   }, [onContent]);
   /** Правка открытой вкладки: остальные вкладки остаются как были. */
   const change = useCallback((next: string, typing = false) => {
@@ -202,6 +239,7 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
     syncedRef.current = next;
     setFull(next);
     onContent(next);
+    sendLive(current, next);
     setHistoryTick((n) => n + 1);
     if (step.tab !== tabRef.current) setActiveTab(step.tab);
     requestAnimationFrame(() => {

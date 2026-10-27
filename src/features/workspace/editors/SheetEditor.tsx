@@ -7,7 +7,13 @@ import { UniverSheetsFindReplacePreset } from '@univerjs/preset-sheets-find-repl
 import UniverPresetSheetsFindReplaceRuRU from '@univerjs/preset-sheets-find-replace/locales/ru-RU';
 import { UniverSheetsHyperLinkPreset } from '@univerjs/preset-sheets-hyper-link';
 import UniverPresetSheetsHyperLinkRuRU from '@univerjs/preset-sheets-hyper-link/locales/ru-RU';
+import { UniverSheetsFilterPreset } from '@univerjs/preset-sheets-filter';
+import UniverPresetSheetsFilterRuRU from '@univerjs/preset-sheets-filter/locales/ru-RU';
+import { UniverSheetsSortPreset } from '@univerjs/preset-sheets-sort';
+import UniverPresetSheetsSortRuRU from '@univerjs/preset-sheets-sort/locales/ru-RU';
 import '@univerjs/preset-sheets-hyper-link/lib/index.css';
+import '@univerjs/preset-sheets-filter/lib/index.css';
+import '@univerjs/preset-sheets-sort/lib/index.css';
 import '@univerjs/preset-sheets-core/lib/index.css';
 import '@univerjs/preset-sheets-find-replace/lib/index.css';
 import { IRenderManagerService } from '@univerjs/engine-render';
@@ -16,6 +22,7 @@ import { hideMissingFonts, isDarkTheme, univerTheme, tagFindDialog, useUniverThe
 import { applySnapshot, bookFromBase64, bookToBase64, excelToUniver } from '../lib/workbook';
 import type { EditorProps } from './types';
 import type { CursorPos, RemoteCursor } from '../useCursors';
+import { bindSheet, isSharedSheetMutation } from '../live/sheetOps';
 import { Spinner } from '@/shared/ui/Spinner';
 
 /** Курсор в таблице: лист и выделенный диапазон (строки и столбцы с нуля). */
@@ -102,11 +109,12 @@ function cellUrl(cell: ICellData | null | undefined): string | null {
 }
 
 /**
- * Таблица: Univer Sheets поверх книги xlsx. Формулы, форматирование ячеек, листы — как в Excel.
- * Правки складываются в книгу и уходят на сервер файлом xlsx. По ссылке «только просмотр» вместо
+ * Таблица: Univer Sheets поверх книги xlsx. Формулы, форматирование ячеек, фильтры и сортировка, листы — как в Excel.
+ * Правки складываются в книгу и уходят на сервер файлом xlsx. Вместе с коллегами (live) каждая правка ещё и сразу
+ * уходит им по сокету и применяется у них на месте (live/sheetOps.ts). По ссылке «только просмотр» вместо
  * ленты и строки формул — чистый лист с вкладками.
  */
-export default function SheetEditor({ content, onContent, readOnly, loadKey, visible = true, cursors = [], onCursor }: EditorProps) {
+export default function SheetEditor({ content, onContent, readOnly, loadKey, visible = true, cursors = [], onCursor, live }: EditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const theme = useUniverTheme();
   const [book, setBook] = useState<ExcelWorkbook | null>(null);
@@ -140,12 +148,12 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
     el.appendChild(mount);
     const { univer, univerAPI } = createUniver({
       locale: LocaleType.RU_RU,
-      locales: { [LocaleType.RU_RU]: mergeLocales(UniverPresetSheetsCoreRuRU, UniverPresetSheetsFindReplaceRuRU, UniverPresetSheetsHyperLinkRuRU) },
+      locales: { [LocaleType.RU_RU]: mergeLocales(UniverPresetSheetsCoreRuRU, UniverPresetSheetsFindReplaceRuRU, UniverPresetSheetsHyperLinkRuRU, UniverPresetSheetsFilterRuRU, UniverPresetSheetsSortRuRU) },
       darkMode: isDarkTheme(theme),
       theme: univerTheme(theme),
       // «Classic» держит функции в именованных группах; публичная ссылка на просмотр — читалка, а не
       // заблокированный редактор: ни ленты, ни строки формул, ни меню правки.
-      presets: [UniverSheetsCorePreset({ container: mount, header: !readOnly, toolbar: !readOnly, formulaBar: !readOnly, contextMenu: !readOnly, menu: {}, ribbonType: 'classic' }), UniverSheetsFindReplacePreset(), UniverSheetsHyperLinkPreset()],
+      presets: [UniverSheetsCorePreset({ container: mount, header: !readOnly, toolbar: !readOnly, formulaBar: !readOnly, contextMenu: !readOnly, menu: {}, ribbonType: 'classic' }), UniverSheetsFindReplacePreset(), UniverSheetsHyperLinkPreset(), UniverSheetsFilterPreset(), UniverSheetsSortPreset()],
     });
     univerAPI.toggleDarkMode(isDarkTheme(theme));
     univerAPI.setTheme(univerTheme(theme));
@@ -188,8 +196,20 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
       onCursorRef.current?.(pos as CursorPos | null);
     });
 
+    // Файл xlsx собирается из снимка, взятого синхронно (workbook.save() — вместе с фильтрами): совместная правка
+    // сохраняет ровно ту версию, в которой редактор был в момент вызова.
+    const serialize = () => {
+      applySnapshot(book, workbook.save() as IWorkbookData);
+      return bookToBase64(book);
+    };
     let ready = false;
-    const readyTimer = window.setTimeout(() => { ready = true; }, 250);
+    let unbind: (() => void) | null = null;
+    const readyTimer = window.setTimeout(() => {
+      ready = true;
+      // Правки при открытии (подгонка высот, пересчёт) у каждого свои — к коллегам уходит только набранное после.
+      if (live && !readOnly) unbind = bindSheet(injector, workbook.getId(), live, serialize);
+      else if (live) unbind = bindSheet(injector, workbook.getId(), live, async () => contentRef.current);
+    }, 250);
     let syncTimer = 0;
     let saving = false;
     let again = false;
@@ -197,9 +217,8 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
       if (saving) { again = true; return; }
       saving = true;
       try {
-        applySnapshot(book, workbook.getWorkbook().getSnapshot() as IWorkbookData);
         sheetName.current = workbook.getActiveSheet().getSheetName();
-        onContentRef.current(await bookToBase64(book));
+        onContentRef.current(await serialize());
       } finally {
         saving = false;
         if (again) { again = false; void flush(); }
@@ -207,13 +226,17 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
     };
     const listener = workbook.onCommandExecuted((command) => {
       if (!ready || readOnly) return;
-      // Выбор ячейки, фокус, прокрутка и пересчёт формул идут тем же командным каналом, но файл не меняют.
-      if (!/^sheet\.(?:command|operation|mutation)\.(set-range-values|set-style|insert-|remove-|delete-|set-worksheet-name|move-range|hide-|show-|merge-|unmerge-|delta-column-width|delta-row-height|set-worksheet-col-width|set-worksheet-row-height|set-row-height|set-col-is-auto-width|set-row-is-auto-height|set-worksheet-row-is-auto-height|paste-col-width|set-col-auto-width)/.test(command.id)) return;
+      // Выбор ячейки, фокус, прокрутка и пересчёт формул идут тем же командным каналом, но файл не меняют:
+      // файл меняют только мутации листа (свои и пришедшие от коллег).
+      if (command.type !== 2 /* CommandType.MUTATION */ || !isSharedSheetMutation(command.id)) return;
       window.clearTimeout(syncTimer);
-      syncTimer = window.setTimeout(() => void flush(), 150);
+      syncTimer = window.setTimeout(() => void flush(), 300);
     });
     return () => {
       window.clearTimeout(readyTimer);
+      unbind?.();
+      // Редактор пересоздаётся (тема, просмотр ↔ правка): книга должна унести всё, включая правки коллег за последние мгновения.
+      if (ready && !readOnly) { try { applySnapshot(book, workbook.save() as IWorkbookData); } catch { /* уже разобран */ } }
       window.clearTimeout(syncTimer);
       listener.dispose();
       clicks.dispose();
@@ -224,7 +247,7 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
       untagFind();
       window.setTimeout(() => { univer.dispose(); mount.remove(); }, 0);
     };
-  }, [book, readOnly, theme]);
+  }, [book, readOnly, theme, live]);
 
   useEffect(() => { if (visible) window.dispatchEvent(new Event('resize')); }, [visible]);
 

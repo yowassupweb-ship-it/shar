@@ -1,4 +1,5 @@
 import type { CursorPos, RemoteCursor } from '../useCursors';
+import type { LiveChannel } from '../live/channel';
 /**
  * Контракт редактора вида. Редактор сам разбирает и собирает формат содержимого;
  * сессия (useItemSession) видит только строку и отвечает за сохранение.
@@ -19,4 +20,9 @@ export interface EditorProps {
   cursors?: RemoteCursor[];
   /** Своё положение курсора — для остальных (null — ушёл из текста). */
   onCursor?: (pos: CursorPos | null) => void;
+  /**
+   * Совместная правка в реальном времени (документы и таблицы): редактор отдаёт в канал свои правки и применяет
+   * чужие на месте. Сохраняет в базу сам канал; onContent тогда нужен только для экспорта и копирования.
+   */
+  live?: LiveChannel | null;
 }

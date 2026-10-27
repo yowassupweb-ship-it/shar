@@ -673,11 +673,14 @@ VERSION_GAP_SECONDS = 600
 MAX_VERSIONS = 60
 
 
-def snapshot(row: dict[str, Any], editor: str, *, force: bool = False, label: str = "", keep_object: bool = False) -> bool:
+def snapshot(row: dict[str, Any], editor: str, *, force: bool = False, label: str = "", keep_object: bool = False,
+             together: bool = False) -> bool:
     """Положить в историю содержимое `row` (то, что только что перезаписано новым). Зовут ПОСЛЕ успешной записи.
 
     Возвращает True, если версия забрала себе объект S3 (`content_key`): вызывающий тогда не должен его удалять.
-    keep_object=True — материал продолжает ссылаться на тот же объект (ручная версия): для версии делается копия."""
+    keep_object=True — материал продолжает ссылаться на тот же объект (ручная версия): для версии делается копия.
+    together=True — совместная правка: сохраняют по очереди все, кто печатает, и версии копятся по времени, а не по
+    смене сохранившего (иначе десять человек давали бы новую версию на каждое сохранение)."""
     content = row.get("content") or ""
     key = row.get("content_key") or ""
     if not content and not key:
@@ -693,7 +696,7 @@ def snapshot(row: dict[str, Any], editor: str, *, force: bool = False, label: st
     if not force and last:
         gap = float(last["gap"] or 0)
         # Тот же человек тем же способом — правки копятся в одну версию; сменился человек или способ (сам ↔ агент) — новая.
-        if previous_author == editor and previous_via == EDIT_VIA.get() and gap < VERSION_GAP_SECONDS:
+        if (previous_author == editor or together) and previous_via == EDIT_VIA.get() and gap < VERSION_GAP_SECONDS:
             return False
         if not key and last["content"] == content:
             return False  # то же состояние уже записано

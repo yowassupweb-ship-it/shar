@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { realtime } from '@/shared/realtime/realtime';
+import { showToast } from '@/shared/ui/Toast';
 import { WorkspaceError, workspaceApi } from './api';
 import { merge3 } from './lib/merge';
+import { LiveChannel, type LiveStart, type LiveStatus, type Transform } from './live/channel';
 import type { AccessLevel, AccessMode, Item, Kind } from './types';
 
 /**
@@ -12,6 +14,11 @@ import type { AccessLevel, AccessMode, Item, Kind } from './types';
  * `baseUpdatedAt`: если за это время материал записал кто-то другой (по ссылке, коллега),
  * сервер отвечает 409 и человек выбирает — взять чужую версию или оставить свою.
  * Ctrl+S, закрытие страницы и уход со страницы сохраняют сразу.
+ *
+ * Документы и таблицы, открытые после входа, правятся вместе в реальном времени (live/channel.ts): каждая правка
+ * сразу уходит коллегам, содержимое сохраняет канал с номером версии — без конфликтов и без «чью версию оставить».
+ * Сессия тогда только открывает материал, показывает состояние и перечитывает его, если записали мимо совместной
+ * правки (версия из истории, агент по MCP).
  */
 
 export type Source = { id: string } | { token: string };
@@ -31,9 +38,20 @@ export interface SessionItem {
   accessLevel?: AccessLevel;
   accessMode?: AccessMode;
   ownerName?: string;
+  live?: LiveStart;
 }
 
 const AUTOSAVE_MS = 900;
+
+/** Перенос правок для вида материала: модули редакторов тяжёлые и грузятся отдельно — перенос тоже. */
+async function transformFor(kind: Kind): Promise<Transform | null> {
+  if (kind === 'document') return (await import('./live/docOps')).docTransform;
+  if (kind === 'table') return (await import('./live/sheetOps')).sheetTransform;
+  if (kind === 'note') return (await import('./live/textOps')).textTransform;
+  return null;
+}
+
+const LIVE_STATE: Record<LiveStatus, SaveState> = { synced: 'saved', sending: 'pending', saving: 'saving', offline: 'pending' };
 
 export function useItemSession(source: Source) {
   const key = 'token' in source ? `t:${source.token}` : `i:${source.id}`;
@@ -46,6 +64,13 @@ export function useItemSession(source: Source) {
   const [state, setState] = useState<SaveState>('saved');
   const [conflict, setConflict] = useState(false);
   const [loadKey, setLoadKey] = useState(0);
+  const [live, setLive] = useState<LiveChannel | null>(null);
+  const liveRef = useRef<LiveChannel | null>(null);
+  /** Последнее содержимое из живого редактора — для экспорта и копирования (сохраняет его канал). */
+  const liveContent = useRef<string | null>(null);
+  const resetAt = useRef(0);
+  const onLiveReset = useRef<() => void>(() => undefined);
+  const kindRef = useRef<Kind | null>(null);
 
   const pendingContent = useRef<string | null>(null);
   const pendingTitle = useRef<string | null>(null);
@@ -75,6 +100,7 @@ export function useItemSession(source: Source) {
       id: full.id, kind: full.kind, title: full.title, content: full.content ?? '', meta: full.meta,
       updatedAt: full.updatedAt, canEdit: full.canEdit, isOwner: full.isOwner,
       pinned: full.pinned, accessLevel: full.accessLevel, accessMode: full.accessMode, ownerName: full.ownerName,
+      live: full.live,
     };
   }, []);
 
@@ -82,10 +108,42 @@ export function useItemSession(source: Source) {
     setError('');
     try {
       const loaded = await fetchItem();
+      const transform = loaded.live ? await transformFor(loaded.kind) : null;
       pendingContent.current = null;
       pendingTitle.current = null;
+      liveContent.current = null;
       setConflict(false);
       setState('saved');
+      liveRef.current?.close();
+      liveRef.current = null;
+      if (loaded.live && transform && !('token' in sourceRef.current)) {
+        const savedLive = (loaded.meta as { live?: { epoch?: string; rev?: number } } | undefined)?.live;
+        const savedRev = savedLive?.epoch === loaded.live.epoch ? Number(savedLive.rev) || 0 : loaded.live.rev;
+        const channel = new LiveChannel({
+          itemId: String(loaded.id),
+          canEdit: loaded.canEdit,
+          transform,
+          save: async (content, mark) => {
+            try {
+              const res = await workspaceApi.saveLive(String(loaded.id), content, mark);
+              savedContent.current = content;
+              setItem((cur) => (cur ? { ...cur, updatedAt: res.item.updatedAt } : cur));
+              setError('');
+              return res.live === 'already' ? 'already' : 'saved';
+            } catch (cause) {
+              // 409: материал записали мимо совместной правки — журнал сменился, открываем заново.
+              if (cause instanceof WorkspaceError && cause.status === 409) onLiveReset.current();
+              else setError(cause instanceof Error ? cause.message : String(cause));
+              throw cause;
+            }
+          },
+          onReset: () => onLiveReset.current(),
+          onStatus: (next) => setState(LIVE_STATE[next]),
+        }, loaded.live, savedRev);
+        liveRef.current = channel;
+        setLive(channel);
+      } else setLive(null);
+      kindRef.current = loaded.kind;
       apply(loaded, remount);
       setStatus('ready');
     } catch (cause) {
@@ -99,6 +157,26 @@ export function useItemSession(source: Source) {
     setItem(null);
     void load(true);
   }, [key, load]);
+
+  // Ушли из материала — канал совместной правки закрывается (коллеги перестают слать нам правки).
+  useEffect(() => () => { liveRef.current?.close(); liveRef.current = null; }, [key]);
+
+  /**
+   * Журнал совместной правки больше не описывает материал (его записали мимо: версия из истории, агент, гость по
+   * ссылке): открываем заново. Не чаще раза в 3 с — если журнал всё время «устаревший», не крутимся в цикле.
+   */
+  onLiveReset.current = () => {
+    const unsent = liveRef.current?.pendingCount() ?? 0;
+    liveRef.current?.close();
+    liveRef.current = null;
+    const wait = Math.max(0, 3000 - (Date.now() - resetAt.current));
+    resetAt.current = Date.now() + wait;
+    window.setTimeout(() => {
+      // Заметку не открываем заново: её редактор сольёт новое содержимое со своим текстом на месте.
+      void load(kindRef.current !== 'note');
+      if (unsent) showToast('Материал изменили в обход совместной правки — он открыт заново. Последние несколько секунд правок могли не сохраниться', 'info');
+    }, wait);
+  };
 
   const save = useCallback(async () => {
     if (savingRef.current) return;
@@ -135,6 +213,8 @@ export function useItemSession(source: Source) {
   }, []);
 
   const setContent = useCallback((next: string) => {
+    // Совместная правка: правки уходят из редактора в канал сами, здесь — только для экспорта и копирования.
+    if (liveRef.current) { liveContent.current = next; return; }
     if (!canEditRef.current || next === savedContent.current) return;
     pendingContent.current = next;
     setError('');
@@ -157,9 +237,12 @@ export function useItemSession(source: Source) {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void save(); }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); liveRef.current?.saveNow(); void save(); }
     };
-    const flush = () => { if (pendingContent.current !== null || pendingTitle.current !== null) void save(); };
+    const flush = () => {
+      liveRef.current?.saveNow();
+      if (pendingContent.current !== null || pendingTitle.current !== null) void save();
+    };
     window.addEventListener('keydown', onKey);
     window.addEventListener('pagehide', flush);
     return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('pagehide', flush); flush(); };
@@ -167,6 +250,8 @@ export function useItemSession(source: Source) {
 
   // Вернулись в окно: если без наших несохранённых правок материал уже изменили — подтягиваем свежую версию.
   const pullRemote = useCallback(async () => {
+    // Живой редактор догоняет журнал сам (канал), перечитывать материал целиком не нужно.
+    if (liveRef.current) return;
     if (pendingContent.current !== null || pendingTitle.current !== null || savingRef.current) return;
     try {
       const seq = saves.current;
@@ -186,7 +271,7 @@ export function useItemSession(source: Source) {
    */
   const liveTimer = useRef(0);
   const pullLive = useCallback(async () => {
-    if (savingRef.current || 'token' in sourceRef.current) return;
+    if (liveRef.current || savingRef.current || 'token' in sourceRef.current) return;
     try {
       const seq = saves.current;
       const fresh = await fetchItem();
@@ -260,19 +345,29 @@ export function useItemSession(source: Source) {
    */
   const replaceContent = useCallback((next: string, title?: string) => {
     if (!canEditRef.current) return;
+    const src = sourceRef.current;
+    if (liveRef.current && !('token' in src)) {
+      // Совместная правка: новое содержимое целиком — запись мимо журнала. Сохраняем сразу; у всех (и у нас)
+      // материал откроется заново уже с ним.
+      setState('saving');
+      workspaceApi.patch(src.id, { content: next, ...(title !== undefined ? { title } : {}) })
+        .then(() => load(true))
+        .catch((cause: unknown) => { setError(cause instanceof Error ? cause.message : String(cause)); setState('error'); });
+      return;
+    }
     pendingContent.current = next;
     if (title !== undefined) pendingTitle.current = title;
     setItem((cur) => (cur ? { ...cur, content: next, ...(title !== undefined ? { title } : {}) } : cur));
     setLoadKey((n) => n + 1);
     setError('');
     setState('pending');
-  }, []);
+  }, [load]);
 
   /** Самое свежее содержимое, в том числе ещё не отправленное на сервер (для экспорта и копирования). */
-  const getContent = useCallback(() => pendingContent.current ?? savedContent.current, []);
+  const getContent = useCallback(() => pendingContent.current ?? liveContent.current ?? savedContent.current, []);
 
   return {
-    item, status, error, state, conflict, loadKey, getContent,
+    item, status, error, state, conflict, loadKey, getContent, live,
     setContent, replaceContent, setTitle, save, resolveConflict, patchFields,
     reload: () => load(true),
   };

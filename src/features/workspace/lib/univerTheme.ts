@@ -74,7 +74,9 @@ export function styleDocSurface(univer: unknown, unitId: string, modern: boolean
   const injector = (univer as { __getInjector: () => { get: <T>(token: unknown) => T } }).__getInjector();
   let tries = 0;
   const apply = () => {
-    const unit = injector.get<IRenderManagerService>(IRenderManagerService).getRenderUnitById(unitId) as unknown as { components?: Map<string, DocBackground> } | null;
+    let unit: { components?: Map<string, DocBackground> } | null;
+    // Документ закрыли раньше, чем появился его фон: редактор разобран — красить нечего.
+    try { unit = injector.get<IRenderManagerService>(IRenderManagerService).getRenderUnitById(unitId) as unknown as typeof unit; } catch { return; }
     const background = unit?.components?.get('__Document_Render_Background__');
     if (!background?.setFillColors) { if (tries++ < 60) window.requestAnimationFrame(apply); return; }
     if (background._noMarginMarks) return;
@@ -118,7 +120,9 @@ export function disableBlockHandle(univer: unknown, unitId: string) {
   let tries = 0;
   const apply = () => {
     // Сервис ручки живёт на уровне отрисовки документа и появляется не сразу после создания.
-    const unit = injector.get<IRenderManagerService>(IRenderManagerService).getRenderUnitById(unitId) as unknown as { with?: <T>(token: unknown) => T } | null;
+    let unit: { with?: <T>(token: unknown) => T } | null;
+    // Документ закрыли раньше, чем сервис появился: редактор разобран.
+    try { unit = injector.get<IRenderManagerService>(IRenderManagerService).getRenderUnitById(unitId) as unknown as typeof unit; } catch { return; }
     let service: Menu | null = null;
     try { service = unit?.with?.<Menu>(DocParagraphMenuService) ?? null; } catch { service = null; }
     if (!service) { if (tries++ < 60) window.requestAnimationFrame(apply); return; }
