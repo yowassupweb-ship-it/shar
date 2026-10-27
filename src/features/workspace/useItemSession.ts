@@ -53,6 +53,8 @@ export function useItemSession(source: Source) {
   const baseRef = useRef('');
   const canEditRef = useRef(false);
   const savedContent = useRef('');
+  /** Счётчик своих сохранений: перечитанное с сервера, пока шло наше сохранение, уже устарело. */
+  const saves = useRef(0);
 
   const apply = useCallback((next: SessionItem, remount: boolean) => {
     setItem(next);
@@ -113,13 +115,15 @@ export function useItemSession(source: Source) {
       let updatedAt: string;
       if ('token' in src) updatedAt = (await workspaceApi.saveShared(src.token, body)).item.updatedAt;
       else updatedAt = (await workspaceApi.patch(src.id, body)).updatedAt;
+      saves.current += 1;
       baseRef.current = updatedAt;
       if (content !== null) savedContent.current = content;
       if (pendingContent.current === content) pendingContent.current = null;
       if (pendingTitle.current === title) pendingTitle.current = null;
-      // Название в поле не трогаем: оно и так свежее. Подстановка отправленного затирала буквы, набранные,
-      // пока шёл запрос, — при медленном наборе «пропадала буква-две».
-      setItem((cur) => (cur ? { ...cur, updatedAt, ...(content !== null ? { content } : {}) } : cur));
+      // Ни название, ни содержимое не подставляем: в редакторе они и так свежее отправленного. Подстановка
+      // затирала набранное, пока шёл запрос: в названии «пропадала буква-две», а заметка принимала своё же
+      // сохранение за чужую правку и при зажатой клавише откатывала текст на отправленный — набор дёргался.
+      setItem((cur) => (cur ? { ...cur, updatedAt } : cur));
       setError('');
       setState(pendingContent.current !== null || pendingTitle.current !== null ? 'pending' : 'saved');
     } catch (cause) {
@@ -165,8 +169,9 @@ export function useItemSession(source: Source) {
   const pullRemote = useCallback(async () => {
     if (pendingContent.current !== null || pendingTitle.current !== null || savingRef.current) return;
     try {
+      const seq = saves.current;
       const fresh = await fetchItem();
-      if (pendingContent.current !== null || pendingTitle.current !== null || savingRef.current) return;
+      if (pendingContent.current !== null || pendingTitle.current !== null || savingRef.current || seq !== saves.current) return;
       if (fresh.updatedAt === baseRef.current) return;
       const contentChanged = fresh.content !== savedContent.current;
       apply(fresh, contentChanged);
@@ -183,8 +188,10 @@ export function useItemSession(source: Source) {
   const pullLive = useCallback(async () => {
     if (savingRef.current || 'token' in sourceRef.current) return;
     try {
+      const seq = saves.current;
       const fresh = await fetchItem();
-      if (savingRef.current || fresh.updatedAt === baseRef.current) return;
+      // Пока читали, ушло наше сохранение: прочитанное его не содержит — дождёмся следующего события.
+      if (savingRef.current || seq !== saves.current || fresh.updatedAt === baseRef.current) return;
       const mine = pendingContent.current;
       const note = fresh.kind === 'note';
       if (mine === null && pendingTitle.current === null) {

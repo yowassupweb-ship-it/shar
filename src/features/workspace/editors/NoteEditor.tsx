@@ -115,31 +115,39 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
   const count = editing ? matches.length : domRanges.length;
   const current = count ? Math.min(findIndex, count - 1) : 0;
 
+  // Общая точка с сессией: последний текст, который редактор отдал ей (onContent) или принял от неё.
   // Материал перечитали с сервера (чужая правка, конфликт) — берём присланное.
   const syncedRef = useRef(content);
   useEffect(() => { setFull(content); syncedRef.current = content; }, [loadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Коллега печатает в той же заметке: его правка вливается на месте — без перезагрузки редактора и без прыжка
-  // курсора. Свои несохранённые правки сливаются с чужими; не слились — остаётся своё, а решение за сессией (баннер).
+  // Коллега печатает в той же заметке: сессия сливает его правку с нашими и присылает итог — он вливается на месте,
+  // без перезагрузки редактора и без прыжка курсора. Набранное, пока шло слияние, доливается поверх; не слилось —
+  // берём присланное, а решение за сессией (баннер).
   useEffect(() => {
     if (content === syncedRef.current) return;
-    const previous = syncedRef.current;
+    const base = syncedRef.current;
+    const own = fullRef.current;
     syncedRef.current = content;
-    setFull((own) => {
-      if (own === content) return own;
-      const merged = own === previous ? { text: content, conflict: false } : merge3(previous, own, content);
-      const next = merged.conflict ? content : merged.text;
-      const field = area.current;
-      if (field && document.activeElement === field) {
-        const tab = tabRef.current;
-        const caret = shiftCaret(parseTabs(own)[tab]?.content ?? '', parseTabs(next)[tab]?.content ?? '', field.selectionStart);
-        requestAnimationFrame(() => { if (area.current) area.current.setSelectionRange(caret, caret); });
-      }
-      return next;
-    });
-  }, [content]);
+    if (own === content) return;
+    const merged = own === base ? { text: content, conflict: false } : merge3(base, own, content);
+    const next = merged.conflict ? content : merged.text;
+    const field = area.current;
+    if (field && document.activeElement === field) {
+      const tab = tabRef.current;
+      const caret = shiftCaret(parseTabs(own)[tab]?.content ?? '', parseTabs(next)[tab]?.content ?? '', field.selectionStart);
+      requestAnimationFrame(() => { if (area.current) area.current.setSelectionRange(caret, caret); });
+    }
+    fullRef.current = next;
+    setFull(next);
+    if (next !== content) { syncedRef.current = next; onContent(next); }
+  }, [content]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const commit = useCallback((nextFull: string) => { fullRef.current = nextFull; setFull(nextFull); onContent(nextFull); }, [onContent]);
+  const commit = useCallback((nextFull: string) => {
+    fullRef.current = nextFull;
+    syncedRef.current = nextFull;
+    setFull(nextFull);
+    onContent(nextFull);
+  }, [onContent]);
   /** Правка открытой вкладки: остальные вкладки остаются как были. */
   const change = useCallback((next: string) => {
     const all = parseTabs(fullRef.current);
