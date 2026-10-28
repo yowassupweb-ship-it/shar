@@ -10,6 +10,7 @@ import { askConfirm, Menu, type MenuAnchor } from '@/shared/ui/overlay';
 import { merge3, shiftCaret } from '../lib/merge';
 import { highlightMarkdown } from '../lib/mdHighlight';
 import remarkUnderline from '../lib/remarkUnderline';
+import { rehypeSourceLines, showLineInField, showLineInView, topLineOfField, topLineOfView } from '../lib/viewPosition';
 import { cleanTabTitle, parseTabs, serializeTabs } from '../lib/noteTabs';
 import { applyText, diffText, TEXT_OP } from '../live/textOps';
 import { FindBar, findAll } from './FindBar';
@@ -98,6 +99,37 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
   const text = tabs[tabIndex].content;
   const [renaming, setRenaming] = useState<number | null>(null);
   const [mode, setMode] = useState<'edit' | 'preview'>(content.trim() ? 'preview' : 'edit');
+  // Переключение «Правка ↔ Просмотр» не сбрасывает место в тексте: привязываемся к строке исходника у верхнего края.
+  // Вернулись в правку, не прокручивая просмотр, — всё как было (прокрутка и выделение до символа).
+  const switching = useRef<{ to: 'edit' | 'preview'; line: number } | null>(null);
+  const editState = useRef<{ top: number; start: number; end: number; viewTop: number } | null>(null);
+  const switchMode = (next: 'edit' | 'preview') => {
+    if (next === mode) return;
+    if (mode === 'edit' && area.current) {
+      const field = area.current;
+      editState.current = { top: field.scrollTop, start: field.selectionStart, end: field.selectionEnd, viewTop: -1 };
+      switching.current = { to: 'preview', line: topLineOfField(field) };
+    } else if (mode === 'preview' && view.current) {
+      switching.current = { to: 'edit', line: topLineOfView(view.current) };
+      if (!(editState.current && Math.abs(view.current.scrollTop - editState.current.viewTop) < 2)) editState.current = null;
+    }
+    setMode(next);
+  };
+  useLayoutEffect(() => {
+    const job = switching.current;
+    switching.current = null;
+    if (!job) return;
+    if (job.to === 'preview' && view.current) {
+      showLineInView(view.current, job.line);
+      if (editState.current) editState.current.viewTop = view.current.scrollTop;
+    } else if (job.to === 'edit' && area.current) {
+      const field = area.current;
+      const saved = editState.current;
+      if (saved) { field.scrollTop = saved.top; field.setSelectionRange(saved.start, saved.end); } else showLineInField(field, job.line);
+      field.focus({ preventScroll: true });
+      field.scrollTop = saved ? saved.top : field.scrollTop;
+    }
+  }, [mode]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [emojiAt, setEmojiAt] = useState<MenuAnchor | null>(null);
@@ -475,8 +507,8 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
     <div className="nws-note" ref={root}>
       <div className="nws-note-bar" role="toolbar" aria-label="Форматирование">
         <div className="nx-segment" role="group" aria-label="Режим">
-          <button type="button" aria-pressed={mode === 'edit'} onClick={() => setMode('edit')} disabled={readOnly}><Pencil size={13} aria-hidden="true" /> Правка</button>
-          <button type="button" aria-pressed={mode === 'preview'} onClick={() => setMode('preview')}><Eye size={13} aria-hidden="true" /> Просмотр</button>
+          <button type="button" aria-pressed={mode === 'edit'} onClick={() => switchMode('edit')} disabled={readOnly}><Pencil size={13} aria-hidden="true" /> Правка</button>
+          <button type="button" aria-pressed={mode === 'preview'} onClick={() => switchMode('preview')}><Eye size={13} aria-hidden="true" /> Просмотр</button>
         </div>
         {!readOnly && (
           <div className="nws-note-history" role="group" aria-label="История правок">
@@ -542,12 +574,13 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
           {text.trim() ? (
             <Markdown
               remarkPlugins={[remarkGfm, remarkBreaks, remarkUnderline]}
+              rehypePlugins={[rehypeSourceLines]}
               components={{
-                p: ({ children }) => <p>{withEmoji(children, 'p')}</p>,
+                p: (props) => <p data-line={props['data-line' as keyof typeof props] as number | undefined}>{withEmoji(props.children, 'p')}</p>,
                 li: ({ children, ...rest }) => <li {...rest}>{withEmoji(children, 'li')}</li>,
-                h1: ({ children }) => <h1>{withEmoji(children, 'h1')}</h1>,
-                h2: ({ children }) => <h2>{withEmoji(children, 'h2')}</h2>,
-                h3: ({ children }) => <h3>{withEmoji(children, 'h3')}</h3>,
+                h1: (props) => <h1 data-line={props['data-line' as keyof typeof props] as number | undefined}>{withEmoji(props.children, 'h1')}</h1>,
+                h2: (props) => <h2 data-line={props['data-line' as keyof typeof props] as number | undefined}>{withEmoji(props.children, 'h2')}</h2>,
+                h3: (props) => <h3 data-line={props['data-line' as keyof typeof props] as number | undefined}>{withEmoji(props.children, 'h3')}</h3>,
                 table: ({ children }) => <ScrollTable className="nws-md-table"><table>{children}</table></ScrollTable>,
                 td: ({ children }) => <td>{withEmoji(children, 'td')}</td>,
                 th: ({ children }) => <th>{withEmoji(children, 'th')}</th>,

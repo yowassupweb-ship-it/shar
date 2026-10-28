@@ -139,7 +139,9 @@ contextBridge.exposeInMainWorld('sharDesktop', {
 
   // ── Заметки на рабочем столе (sticky-notes.cjs) ────────────────────
   sticky: {
-    open: (noteId, point) => ipcRenderer.invoke('sticky:open', String(noteId), point || null),
+    open: (noteId, point, opts) => ipcRenderer.invoke('sticky:open', String(noteId), point || null, opts || null),
+    // Окно показывает другой материал (выбор из списка заметок): запоминается за новым id.
+    switchTo: (noteId, kind) => ipcRenderer.invoke('sticky:switch', String(noteId), kind || ''),
     close: (noteId) => ipcRenderer.invoke('sticky:close', noteId ? String(noteId) : ''),
     forget: (noteId) => ipcRenderer.invoke('sticky:forget', String(noteId)),
     setOnTop: (value) => ipcRenderer.invoke('sticky:set-on-top', value),

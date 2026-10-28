@@ -13,6 +13,10 @@ const path = require('node:path');
 const { app, BrowserWindow, ipcMain, screen } = require('electron');
 
 const NOTE_SIZE = { width: 320, height: 380 };
+// Документ и таблица — рабочие окна, не «записка»: им нужно место.
+const WIDE_SIZE = { width: 980, height: 740 };
+const KINDS = new Set(['note', 'document', 'table']);
+const TITLES = { note: 'Заметка', document: 'Документ', table: 'Таблица' };
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 function createStickyNotes({ baseUrl, preload, icon }) {
@@ -31,9 +35,10 @@ function createStickyNotes({ baseUrl, preload, icon }) {
         open: Array.isArray(data.open) ? data.open.map(String).filter((id) => ID_PATTERN.test(id)) : [],
         bounds: data.bounds && typeof data.bounds === 'object' ? data.bounds : {},
         onTop: data.onTop && typeof data.onTop === 'object' ? data.onTop : {},
+        kinds: data.kinds && typeof data.kinds === 'object' ? data.kinds : {},
       };
     } catch {
-      return { open: [], bounds: {}, onTop: {} };
+      return { open: [], bounds: {}, onTop: {}, kinds: {} };
     }
   }
 
@@ -61,22 +66,32 @@ function createStickyNotes({ baseUrl, preload, icon }) {
     return new URL(`/sticky/${encodeURIComponent(id)}`, baseUrl()).toString();
   }
 
+  /** Размер нового окна: заданный (например, «как у этой заметки») или обычный для вида материала. */
+  function sizeFor(kind, opts) {
+    const base = kind === 'note' ? NOTE_SIZE : WIDE_SIZE;
+    const min = kind === 'note' ? { width: 220, height: 160 } : { width: 420, height: 300 };
+    const pick = (value, fallback, floor) => (Number.isFinite(value) ? Math.max(floor, Math.round(value)) : fallback);
+    return { width: pick(opts && opts.width, base.width, min.width), height: pick(opts && opts.height, base.height, min.height) };
+  }
+
   /** Новое окно — в точке отпускания, иначе каскадом от последнего открытого, как у системных записок. */
-  function nextBounds(point) {
+  function nextBounds(point, size) {
     if (point && Number.isFinite(point.x) && Number.isFinite(point.y)) {
-      return onScreen({ x: Math.round(point.x - 40), y: Math.round(point.y - 18), ...NOTE_SIZE });
+      return onScreen({ x: Math.round(point.x - 40), y: Math.round(point.y - 18), ...size });
     }
     const last = [...windows.values()].filter((win) => !win.isDestroyed()).pop();
     if (last) {
       const b = last.getContentBounds();
-      return onScreen({ x: b.x + 28, y: b.y + 28, ...NOTE_SIZE });
+      return onScreen({ x: b.x + 28, y: b.y + 28, ...size });
     }
     const area = screen.getPrimaryDisplay().workArea;
-    return { x: area.x + area.width - NOTE_SIZE.width - 40, y: area.y + 60, ...NOTE_SIZE };
+    return { x: area.x + area.width - size.width - 40, y: area.y + 60, ...size };
   }
 
-  function open(id, point) {
+  function open(id, point, opts) {
     const key = String(id);
+    const kind = KINDS.has(opts && opts.kind) ? opts.kind : (state.kinds[key] || 'note');
+    if (state.kinds[key] !== kind) { state.kinds[key] = kind; save(); }
     const existing = windows.get(key);
     if (existing && !existing.isDestroyed()) {
       if (point) existing.setPosition(Math.round(point.x - 40), Math.round(point.y - 18));
@@ -86,11 +101,12 @@ function createStickyNotes({ baseUrl, preload, icon }) {
       return { ok: true };
     }
     const saved = state.bounds[key];
-    const bounds = saved && !point ? onScreen({ ...NOTE_SIZE, ...saved }) : nextBounds(point);
+    const size = sizeFor(kind, opts);
+    const bounds = saved && !point ? onScreen({ ...size, ...saved }) : nextBounds(point, size);
     const win = new BrowserWindow({
       ...bounds,
-      minWidth: 220,
-      minHeight: 160,
+      minWidth: kind === 'note' ? 220 : 420,
+      minHeight: kind === 'note' ? 160 : 300,
       frame: false,
       // Размеры — содержимого: у окна без рамки в Windows есть невидимая кромка, и внешние размеры при каждом
       // открытии прибавляли бы по несколько пикселей.
@@ -98,7 +114,7 @@ function createStickyNotes({ baseUrl, preload, icon }) {
       show: false,
       backgroundColor: '#2b2b2e',
       icon,
-      title: 'Заметка',
+      title: TITLES[kind],
       alwaysOnTop: Boolean(state.onTop[key]),
       autoHideMenuBar: true,
       webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: false, spellcheck: true },
@@ -140,11 +156,44 @@ function createStickyNotes({ baseUrl, preload, icon }) {
     for (const id of state.open) open(id);
   }
 
+  /** Окно показывает другой материал (выбрали из списка): окно, его размер и закрепление переходят на новый ключ. */
+  function switchTo(sender, newId, kind) {
+    const key = keyOf(sender);
+    const next = String(newId);
+    const win = windows.get(key);
+    if (!win || key === next) return { ok: Boolean(win) };
+    const other = windows.get(next);
+    if (other && !other.isDestroyed()) {
+      if (other.isMinimized()) other.restore();
+      other.show();
+      other.focus();
+      return { ok: true, focusedExisting: true };
+    }
+    windows.delete(key);
+    windows.set(next, win);
+    state.open = state.open.map((item) => (item === key ? next : item));
+    if (!state.open.includes(next)) state.open.push(next);
+    if (state.bounds[key]) state.bounds[next] = state.bounds[key];
+    if (state.onTop[key] !== undefined) state.onTop[next] = state.onTop[key];
+    delete state.bounds[key];
+    delete state.onTop[key];
+    delete state.kinds[key];
+    state.kinds[next] = KINDS.has(kind) ? kind : (state.kinds[next] || 'note');
+    save();
+    return { ok: true };
+  }
+
   function install({ focusMain }) {
-    ipcMain.handle('sticky:open', (_event, id, point) => {
+    ipcMain.handle('sticky:open', (_event, id, point, opts) => {
       const key = String(id || '');
       if (!ID_PATTERN.test(key)) return { ok: false, error: 'bad_note' };
-      return open(key, point && typeof point === 'object' ? { x: Number(point.x), y: Number(point.y) } : null);
+      const options = opts && typeof opts === 'object' ? { kind: String(opts.kind || ''), width: Number(opts.width), height: Number(opts.height) } : null;
+      return open(key, point && typeof point === 'object' ? { x: Number(point.x), y: Number(point.y) } : null, options);
+    });
+    ipcMain.handle('sticky:switch', (event, id, kind) => {
+      const key = String(id || '');
+      if (!ID_PATTERN.test(key)) return { ok: false, error: 'bad_note' };
+      return switchTo(event.sender, key, String(kind || ''));
     });
     ipcMain.handle('sticky:close', (event, id) => {
       close(id ? String(id) : keyOf(event.sender));
@@ -176,6 +225,7 @@ function createStickyNotes({ baseUrl, preload, icon }) {
       state.open = state.open.filter((item) => item !== key);
       delete state.bounds[key];
       delete state.onTop[key];
+      delete state.kinds[key];
       save();
       return { ok: true };
     });

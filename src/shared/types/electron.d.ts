@@ -69,7 +69,10 @@ export interface SharDesktop {
   };
   /** Заметки на рабочем столе: отдельные окна (desktop/electron/sticky-notes.cjs). */
   sticky?: {
-    open: (noteId: string, point?: { x: number; y: number }) => Promise<{ ok: boolean }>;
+    /** kind — вид материала (note | document | table), width/height — размер окна (по умолчанию свой у каждого вида). */
+    open: (noteId: string, point?: { x: number; y: number } | null, opts?: { kind?: string; width?: number; height?: number } | null) => Promise<{ ok: boolean }>;
+    /** Это окно теперь показывает другой материал. focusedExisting — он уже открыт в другом окне, показано то. */
+    switchTo: (noteId: string, kind?: string) => Promise<{ ok: boolean; focusedExisting?: boolean }>;
     close: (noteId?: string) => Promise<unknown>;
     forget: (noteId: string) => Promise<unknown>;
     setOnTop: (value?: boolean) => Promise<boolean>;
