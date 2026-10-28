@@ -22,7 +22,7 @@ import {
 } from './store';
 import { Spinner } from '@/shared/ui/Spinner';
 import { useProgressive } from '@/shared/ui/useProgressive';
-import { MailLink } from '@/features/mail/MailLink';
+import { MailLink } from '@/features/mail';
 
 const ImageViewer = lazyComponent(() => import('@/shared/ui/ImageViewer'));
 

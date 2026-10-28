@@ -9,7 +9,7 @@ import { SectionIcon } from '@/shared/ui/SectionIcon';
 import { createChat } from './actions';
 import { displayName, openChat, setPanel, useChatStore } from './store';
 import { Spinner } from '@/shared/ui/Spinner';
-import { MailLink } from '@/features/mail/MailLink';
+import { MailLink } from '@/features/mail';
 
 /**
  * Профиль человека внутри боковой панели — открывается нажатием на его

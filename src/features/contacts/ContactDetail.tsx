@@ -11,7 +11,7 @@ import { SectionIcon } from '@/shared/ui/SectionIcon';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { contactName, readMe, type Contact, type Department } from './data';
 import { Spinner } from '@/shared/ui/Spinner';
-import { MailLink } from '@/features/mail/MailLink';
+import { MailLink } from '@/features/mail';
 
 /**
  * Карточка сотрудника — правая область мастер-детали.

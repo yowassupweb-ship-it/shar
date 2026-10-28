@@ -13,7 +13,7 @@ import {
   type Lead, type LeadSettings, type LeadStatus,
 } from './api';
 import './leads.css';
-import { MailLink } from '@/features/mail/MailLink';
+import { MailLink } from '@/features/mail';
 
 const FILTERS: { id: LeadStatus | ''; label: string }[] = [
   { id: 'new', label: 'Новые' }, { id: 'work', label: 'В работе' }, { id: 'done', label: 'Закрытые' }, { id: '', label: 'Все' },

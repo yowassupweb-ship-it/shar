@@ -3,7 +3,7 @@ import { ArrowUpRight, Check, Globe, Hand, Mail, Phone, RotateCcw } from 'lucide
 import { showToast } from '@/shared/ui/Toast';
 import { changeLead, STATUS_LABEL, type LeadCardData, type LeadStatus } from './api';
 import './leads.css';
-import { MailLink } from '@/features/mail/MailLink';
+import { MailLink } from '@/features/mail';
 
 /**
  * Заявка с сайта в чате. Вид — как у карточек уведомлений (значок вида, тип и время, заголовок), плюс
