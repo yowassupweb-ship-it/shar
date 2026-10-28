@@ -23,7 +23,9 @@ export function viewKindOf(name: string): ViewKind | null {
 }
 
 /** «Открыть в редакторе» есть у Word, Excel и CSV (станут таблицей), Markdown и обычного текста; PDF, HTML и журналы — только просмотр. */
-export const canOpenInEditor = (name: string): boolean => /\.(docx|xlsx|xlsm|csv|md|markdown|txt)(?:[?#].*)?$/i.test(name);
+/** «Открыть в Шаре»: всё, что умеет импорт «Офиса» (IMPORT_RULES.all в lib/importFile.ts) — Word, Markdown и текст станут
+ *  документом, Excel и CSV — таблицей, PowerPoint и PDF — презентацией. */
+export const canOpenInEditor = (name: string): boolean => /\.(docx|xlsx|xlsm|csv|md|markdown|txt|pptx|pdf)(?:[?#].*)?$/i.test(name);
 
 export const KIND_LABEL: Record<ViewKind, string> = {
   pdf: 'PDF', html: 'HTML', docx: 'Word', xlsx: 'Excel', csv: 'CSV', markdown: 'Markdown', text: 'Текст',

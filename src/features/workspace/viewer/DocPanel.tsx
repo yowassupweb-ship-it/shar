@@ -68,9 +68,9 @@ export default function DocPanel({ file, onClose }: { file: FileRef; onClose: ()
       {editable && (
         <div className="npv-actions">
           <button type="button" className="nx-primary" disabled={opening} onClick={() => void edit()}>
-            {opening ? <Spinner size={14} /> : <PenLine size={14} aria-hidden="true" />} Открыть в редакторе
+            {opening ? <Spinner size={14} /> : <PenLine size={14} aria-hidden="true" />} Открыть в Шаре
           </button>
-          <span>Откроется копия — исходный файл в чате не изменится.</span>
+          <span>Откроется копия — исходный файл не изменится.</span>
         </div>
       )}
       <div className="cxp-body npv-body">{body}</div>

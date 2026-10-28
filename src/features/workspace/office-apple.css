@@ -1,0 +1,211 @@
+/*
+ * Документ и таблица в стиле Apple (Pages, Numbers): окно — одна поверхность «хрома» с волосяной линией,
+ * лента — парящая стеклянная капсула по центру, лист — белый на фоне окна. Подключается после workspace.css
+ * и переопределяет прежнюю «гугловскую» шапку (data-layout="gdocs").
+ *
+ * Корень материала помечен data-layout="gdocs" (ItemView), а не найден через :has(): :has в таких селекторах браузер
+ * проверял на каждом элементе редактора при каждом пересчёте стилей — протяжка окна заметно тормозила.
+ *
+ * Цвета интерфейса Univer (наведение, разделители, акцент) задаёт тема Apple в lib/univerTheme.ts — здесь только
+ * геометрия, материал и типографика. !important — там, где Univer ставит свои утилиты с !important.
+ */
+
+.nws-item[data-layout="gdocs"] {
+  --ap-hair: color-mix(in srgb, var(--text-main) 10%, transparent);
+  --ap-glass: color-mix(in srgb, var(--bg-raised) 72%, transparent);
+  --ap-glass-edge: color-mix(in srgb, var(--text-main) 9%, transparent);
+  --ap-specular: rgba(255, 255, 255, .7);
+  --ap-lift: 0 1px 1px rgba(0, 0, 0, .03), 0 6px 20px rgba(0, 0, 0, .07);
+  --ap-control: 28px;
+  /* Цвет полотна вокруг листа (styleDocSurface в univerTheme.ts): шапка и строка ленты того же цвета — капсула лежит
+     прямо на полотне, без своей полосы-подложки. */
+  --ap-canvas: var(--bg-color);
+  /* Капсула ленты: в светлой теме белая, в тёмных — темнее листа (цвет «хрома»), чтобы не сливаться с ним. */
+  --ap-pill: var(--bg-raised);
+  /* Тень капсулы — короткая и плотная, без широкого ореола. */
+  --ap-pill-shadow: rgba(0, 0, 0, .16);
+  background: var(--ap-canvas);
+}
+html:is([data-theme="graphite"], [data-theme="black"]) .nws-item[data-layout="gdocs"] {
+  --ap-canvas: var(--bg-sunken);
+  --ap-pill: var(--surface-chrome);
+  --ap-pill-shadow: rgba(0, 0, 0, .5);
+  --ap-specular: rgba(255, 255, 255, .07);
+  --ap-lift: 0 1px 1px rgba(0, 0, 0, .25), 0 8px 24px rgba(0, 0, 0, .35);
+}
+
+/* ── Шапка: значок-«сквиркл», название жирным, меню тихим текстом, справа — круглые кнопки и синяя капсула ── */
+.nws-head[data-layout="gdocs"] {
+  gap: 12px;
+  min-height: 58px;
+  /* Отступы сверху и снизу равные — кнопки окна и действия справа стоят ровно по центру шапки; зазор от меню до капсулы
+     ленты (2 px) держит её отрицательный margin-top. */
+  padding: calc(5px + env(safe-area-inset-top)) var(--space-4) 5px;
+  background: transparent;
+}
+.nws-head[data-layout="gdocs"] > .nws-kind-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  box-shadow: inset 0 0 0 .5px rgba(0, 0, 0, .08), 0 1px 2px rgba(0, 0, 0, .1);
+}
+.nws-head[data-layout="gdocs"] .nws-title {
+  padding: 1px 6px;
+  font-size: 15px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: -.01em;
+  line-height: 24px;
+}
+.nws-head[data-layout="gdocs"] .nws-title:hover:not(:read-only) { box-shadow: none; background: var(--surface-hover); }
+.nws-head[data-layout="gdocs"] .nws-title:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-fill) 35%, transparent);
+  background: var(--element-bg);
+}
+.nws-head[data-layout="gdocs"] .nws-bar { gap: 1px; margin-left: -1px; }
+.nws-head[data-layout="gdocs"] .nws-bar-btn {
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 6px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: var(--weight-regular, 400);
+  letter-spacing: 0;
+}
+@media (hover: hover) { .nws-head[data-layout="gdocs"] .nws-bar-btn:hover { background: var(--surface-hover); color: var(--text-main); } }
+.nws-head[data-layout="gdocs"] .nws-star { width: 24px; height: 24px; }
+.nws-head[data-layout="gdocs"] .nx-icon-btn { width: 32px; height: 32px; border-radius: 50%; color: var(--text-2); }
+@media (hover: hover) { .nws-head[data-layout="gdocs"] .nx-icon-btn:hover { background: var(--surface-hover); color: var(--text-main); } }
+.nws-head[data-layout="gdocs"] .nx-icon-btn[aria-pressed="true"] { background: var(--surface-selected); color: var(--accent-color); }
+.nws-head[data-layout="gdocs"] .nws-share-btn {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  font-weight: var(--weight-semibold);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 1px 2px rgba(0, 0, 0, .12);
+}
+.nws-head[data-layout="gdocs"] .nws-access { height: 26px; background: transparent; box-shadow: inset 0 0 0 1px var(--ap-hair); }
+
+/* ── Лента: стеклянная капсула по центру над листом ─────────────────────────────────────────────────── */
+.nws-item[data-layout="gdocs"] .nws-univer [data-u-comp="headerbar"] { background: var(--ap-canvas) !important; }
+/* Документ: капсула парит над листом, как в Pages, — лист прокручивается под ней, а не обрезается полосой ленты.
+   Строка ленты лежит поверх холста прозрачной и пропускает клики и колесо к листу; ловит их только сама капсула.
+   У таблицы так нельзя: под лентой строка формул. */
+.nws-item[data-layout="gdocs"] .nws-univer-doc [data-u-comp="headerbar"] {
+  position: absolute !important;
+  inset: 0 0 auto;
+  background: transparent !important;
+  pointer-events: none;
+}
+.nws-item[data-layout="gdocs"] .nws-univer-doc [data-u-comp="ribbon-toolbar"] { pointer-events: auto; }
+/* Фон вокруг листа: свою заливку Univer рисует прозрачной (styleDocSurface), а фон элемента холста потом сам ставит
+   цветом темы (gray-100) поверх нашего — и полотно выходило темнее шапки полосой. В тёмных темах цвета уже совпадают. */
+html:not([data-theme="graphite"], [data-theme="black"]) .nws-item[data-layout="gdocs"] .nws-univer-doc canvas[data-u-comp="render-canvas"] {
+  background-color: var(--ap-canvas) !important;
+}
+/* Капсула по ширине кнопок, но лента — во всю строку: сколько кнопок влезает, Univer считает по ширине ленты, и
+   лента по содержимому после первого сворачивания в «⋮» оставалась узкой — кнопки уже не возвращались. Поэтому
+   лента прозрачная на всю ширину, кнопки по центру, а капсулу рисуют сами группы кнопок (стоят вплотную): фон
+   на каждой, скругление у крайних, контур и короткая тень — тоже на группах (ниже). */
+.nws-item[data-layout="gdocs"] .nws-univer [data-u-comp="headerbar"] > div:has(> [data-u-comp="ribbon-toolbar"]) {
+  margin: -3px 16px 10px;
+  padding: 0 !important;
+  min-height: 42px;
+  /* Univer подводит под строкой ленты черту (в тёмных темах — заметную) — под капсулой она лишняя. */
+  border: 0 !important;
+  border-radius: 0;
+  background: transparent;
+}
+.nws-item[data-layout="gdocs"] .nws-univer [data-u-comp="ribbon-toolbar"] {
+  justify-content: center !important;
+  align-items: stretch;
+  /* Ячейка сетки Univer по умолчанию растягивается по содержимому шире строки — тогда кнопки вылезали за края,
+     а лишние не уходили в «⋮». Не шире строки: переполнение Univer видит и сворачивает. */
+  min-width: 0;
+  max-width: 100%;
+}
+.nws-item[data-layout="gdocs"] .nws-univer [data-u-comp="ribbon-toolbar"] > * {
+  display: flex !important;
+  align-items: center;
+  min-height: 42px;
+  padding-block: 4px !important;
+  /* Немного стекла: фон чуть прозрачный, под ним размытый лист. Тень и контур — на каждой группе: фильтр (drop-shadow)
+     на ленте выключил бы размытие внутри неё. Тень только вниз (отрицательный разброс гасит боковые края) — на стыках
+     групп швов нет; контур — сверху и снизу, у крайних групп ещё и сбоку. */
+  background: color-mix(in srgb, var(--ap-pill) 82%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  backdrop-filter: blur(14px) saturate(1.5);
+  box-shadow: inset 0 .5px 0 var(--ap-glass-edge), inset 0 -.5px 0 var(--ap-glass-edge), 0 2px 2px -2px var(--ap-pill-shadow);
+}
+/* Края — собственные отступы групп Univer (px-2): свои отступы сверх них Univer не учитывает, и кнопки вылезали за ленту. */
+.nws-item[data-layout="gdocs"] .nws-univer [data-u-comp="ribbon-toolbar"] > :first-child {
+  border-radius: 14px 0 0 14px;
+  box-shadow: inset 0 .5px 0 var(--ap-glass-edge), inset 0 -.5px 0 var(--ap-glass-edge), inset .5px 0 0 var(--ap-glass-edge), 0 2px 2px -2px var(--ap-pill-shadow);
+}
+.nws-item[data-layout="gdocs"] .nws-univer [data-u-comp="ribbon-toolbar"] > :last-child {
+  border-radius: 0 14px 14px 0;
+  box-shadow: inset 0 .5px 0 var(--ap-glass-edge), inset 0 -.5px 0 var(--ap-glass-edge), inset -.5px 0 0 var(--ap-glass-edge), 0 2px 2px -2px var(--ap-pill-shadow);
+}
+/* Группы разделяет короткая волосяная черта, а не линия во всю высоту. */
+.nws-item[data-layout="gdocs"] .nws-univer [data-u-comp="ribbon-toolbar"] > * { border-color: transparent !important; position: relative; }
+.nws-item[data-layout="gdocs"] .nws-univer [data-u-comp="ribbon-toolbar"] > * + *::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 18px;
+  border-left: 1px solid var(--ap-hair);
+  transform: translateY(-50%);
+}
+.nws-item[data-layout="gdocs"] .nws-univer [data-u-comp="ribbon-toolbar"] > * { gap: 4px !important; }
+/* Кнопки — высотой 28 px, скругление 7 px, как у сегментов macOS; выпадающие поля той же высоты. */
+.nws-item[data-layout="gdocs"] .nws-univer [data-u-comp="ribbon-toolbar"] button,
+.nws-item[data-layout="gdocs"] .nws-univer [data-u-comp="ribbon-toolbar"] .univer-toolbar-selector-root,
+.nws-item[data-layout="gdocs"] .nws-univer [data-u-comp="ribbon-toolbar"] .univer-toolbar-button-selector-root {
+  height: var(--ap-control) !important;
+  border-radius: 7px !important;
+}
+/* Ширину кнопок не трогаем: по ней Univer решает, что уходит в «⋮», — шире своих размеров кнопки вылезали за ленту. */
+.nws-item[data-layout="gdocs"] .nws-univer [data-u-comp="ribbon-toolbar"] .univerjs-icon { font-size: 17px; }
+.nws-item[data-layout="gdocs"] .nws-univer [data-u-comp="ribbon-toolbar"] .univer-text-sm { font-size: 13px !important; }
+
+/* ── Строка состояния: тихая, на поверхности окна, отделена волосяной линией ─────────────────────────── */
+.nws-item[data-layout="gdocs"] .nws-univer footer {
+  background: var(--ap-canvas) !important;
+  box-shadow: 0 -.5px 0 var(--ap-hair);
+}
+.nws-item[data-layout="gdocs"] .nws-univer footer > div { padding-block: 3px !important; }
+.nws-item[data-layout="gdocs"] .nws-univer footer button { border-radius: 6px !important; font-size: 12px !important; }
+
+/* ── Типографика Univer — шрифт Шара, а не системный по умолчанию ─────────────────────────────────── */
+.nws-univer, section.univer-popup, [data-u-comp="find-replace-dialog"] { font-family: var(--font-sans); }
+
+/* «Комментарий» в контекстном меню документа и таблицы (univerAPI.createMenu): значок, заданный через facade, Univer в
+   контекстном меню не рисует — пункт стоял без значка левее соседних. Значок Lucide «message-square-plus» маской. */
+button[title="Комментарий (Ctrl+Alt+M)"] > span::before {
+  content: "";
+  flex: none;
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z'/%3E%3Cpath d='M12 8v6'/%3E%3Cpath d='M9 11h6'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z'/%3E%3Cpath d='M12 8v6'/%3E%3Cpath d='M9 11h6'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+/* Контекстное меню Univer (правый клик в документе и таблице) — плотнее и как меню Шара (.nx-menu-item): ниже строки,
+   скругление и подсветка наведения тем же приглушённым синим, значок при наведении — акцентом. Значки — Univer.
+   Пункт меню Univer — кнопка с этими утилитами; других меток у контекстного меню нет. */
+button.univer-min-h-8.univer-justify-between.univer-rounded-md.univer-px-2 {
+  min-height: 30px !important;
+  padding: 4px 10px !important;
+  border-radius: var(--radius-sm) !important;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm) !important;
+}
+@media (hover: hover) {
+  button.univer-min-h-8.univer-justify-between.univer-rounded-md.univer-px-2:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-fill) 22%, transparent) !important;
+  }
+  button.univer-min-h-8.univer-justify-between.univer-rounded-md.univer-px-2:hover:not(:disabled) .univerjs-icon { color: var(--accent-color); }
+}
+button.univer-min-h-8.univer-justify-between.univer-rounded-md.univer-px-2 .univerjs-icon { color: var(--text-2); }

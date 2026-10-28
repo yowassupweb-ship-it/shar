@@ -5,7 +5,7 @@ import { BehaviorSubject } from 'rxjs';
 import { DocSelectionManagerService } from '@univerjs/docs';
 import { IUniverInstanceService, UniverInstanceType } from '@univerjs/core';
 import { IMenuManagerService, MenuItemType, RibbonStartGroup } from '@univerjs/ui';
-import { Background, Font, IRenderManagerService, Rect, UniverRenderingContext2D } from '@univerjs/engine-render';
+import { Background, Border, Font, IRenderManagerService, Rect, UniverRenderingContext2D } from '@univerjs/engine-render';
 import { DOCS_NORMAL_EDITOR_UNIT_ID_KEY } from '@univerjs/core';
 import { IEditorBridgeService } from '@univerjs/sheets-ui';
 import { defaultTheme, type Theme } from '@univerjs/themes';
@@ -19,8 +19,16 @@ export const isDarkTheme = (theme: string) => theme === 'graphite' || theme === 
 /** Цвет линий сетки в тёмных темах: Univer инвертирует цвета холста (255 − канал): на полотне эта линия выходит графитово-серой, #4b5057. */
 export const DARK_GRIDLINES = '#b4afa8';
 
+/**
+ * Палитра Apple для интерфейса Univer (лента, меню, строка состояния): его утилиты — hover gray-100, разделители
+ * gray-200, текст gray-900, акцент primary-* — берут цвета из темы. Синий — системный синий Apple, его 600 — акцент
+ * Шара (--accent-fill); серые — нейтральные системные серые macOS, без синевы стандартной темы Univer.
+ */
+const APPLE_BLUE = { 50: '#eef5ff', 100: '#dbeaff', 200: '#b3d4ff', 300: '#80b8ff', 400: '#409aff', 500: '#0a84ff', 600: '#0071e3', 700: '#0062c4', 800: '#004f9e', 900: '#003a75' };
+const APPLE_GRAY = { 0: '#ffffff', 50: '#f5f5f7', 100: '#ebebef', 200: '#e1e1e6', 300: '#d2d2d7', 400: '#aeaeb2', 500: '#8e8e93', 600: '#6e6e73', 700: '#48484a', 800: '#2c2c2e', 900: '#1d1d1f', 1000: '#000000' };
+
 export function univerTheme(theme: string): Theme {
-  const base = defaultTheme;
+  const base: Theme = { ...defaultTheme, primary: { ...defaultTheme.primary, ...APPLE_BLUE }, gray: { ...defaultTheme.gray, ...APPLE_GRAY } };
   if (!isDarkTheme(theme)) return base;
   if (theme === 'black') {
     return { ...base, gray: { ...base.gray, 700: '#17181b', 800: '#101013', 900: '#0b0b0d' } };
@@ -57,6 +65,21 @@ function parseColor(color: unknown): Rgb | null {
   return rgb ? [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])] : null;
 }
 
+/** Чисто белый цвет (заливка «по умолчанию» в импортированных таблицах). */
+function isWhite(color: unknown): boolean {
+  if (typeof color === 'string' && /^white$/i.test(color.trim())) return true;
+  const rgb = parseColor(color);
+  return Boolean(rgb && rgb[0] === 255 && rgb[1] === 255 && rgb[2] === 255);
+}
+
+/** Граница «чернилами»: чёрная или почти чёрная (так рисуют границы Excel и Google по умолчанию). */
+function isInk(color: unknown): boolean {
+  const rgb = parseColor(color);
+  return !rgb || (rgb[0] + rgb[1] + rgb[2]) / 3 < 64;
+}
+/** Цвет такой границы на экране в тёмной теме — уже готовый, без инверсии: чуть светлее линий сетки (#4b5057). */
+const DARK_BORDER = '#62676f';
+
 /** Ячейка закрашена настоящим цветом (не пусто и не белая заливка по умолчанию). */
 function isPainted(fill: unknown): boolean {
   if (typeof fill !== 'string' || !fill || /^(transparent|white|auto)$/i.test(fill.trim())) return false;
@@ -73,8 +96,10 @@ type Patched = { __keepFills?: boolean };
 function withoutInversion<T>(ctx: CanvasCtx, draw: () => T, keepWhite = false): T {
   const service = ctx._canvasColorService;
   if (!service) return draw();
+  // Белая заливка (её ставят импортированные таблицы «на всякий случай») в тёмной теме инвертировалась в чисто чёрную —
+  // ячейки выходили чёрными плашками темнее листа. Не рисуем её вовсе: ячейка как незакрашенная.
   ctx._canvasColorService = keepWhite
-    ? { getRenderColor: (color: string) => (isPainted(color) ? color : service.getRenderColor(color)) }
+    ? { getRenderColor: (color: string) => (isPainted(color) ? color : isWhite(color) ? 'rgba(0, 0, 0, 0)' : service.getRenderColor(color)) }
     : undefined;
   try { return draw(); } finally { ctx._canvasColorService = service; }
 }
@@ -93,6 +118,17 @@ export function keepFillColors() {
     const fill = (cached ?? matrix?.getValue?.(row, col))?.style?.bg?.rgb;
     if (ctx && isPainted(fill)) return withoutInversion(ctx, () => renderCell.apply(this, args));
     return renderCell.apply(this, args);
+  };
+
+  // Границы ячеек: в файлах они почти всегда чёрные, и тёмная инверсия делала их почти белыми — сетка из ярких линий
+  // резала глаз. В тёмной теме тёмные границы рисуем приглушённым серым, чуть заметнее линий сетки; цветные — как были.
+  const border = Border.prototype as unknown as { draw: (ctx: CanvasCtx, ...rest: unknown[]) => void };
+  const drawBorders = border.draw;
+  border.draw = function patched(this: unknown, ctx: CanvasCtx, ...rest: unknown[]) {
+    const service = ctx._canvasColorService;
+    if (!service || !isDarkTheme(currentTheme())) return drawBorders.call(this, ctx, ...rest);
+    ctx._canvasColorService = { getRenderColor: (color: string) => (isInk(color) ? DARK_BORDER : service.getRenderColor(color)) };
+    try { return drawBorders.call(this, ctx, ...rest); } finally { ctx._canvasColorService = service; }
   };
 
   const background = Background.prototype as unknown as { draw: (ctx: CanvasCtx, ...rest: unknown[]) => void };
@@ -140,6 +176,48 @@ function alignNumberRight(state: EditState, isNumber?: (row: number, column: num
   for (const paragraph of layout.documentModel?.getSnapshot?.()?.body?.paragraphs || []) {
     paragraph.paragraphStyle = { ...paragraph.paragraphStyle, horizontalAlign: ALIGN_RIGHT };
   }
+}
+
+/** Сколько кадров держать снимок: по записи экрана редактор рисует текст к ~50 мс, число у правого края — к ~80 мс. Дольше — вход в правку кажется
+ *  медленным (было 7 кадров, ~115 мс). */
+const HOLD_FRAMES = 5;
+
+/**
+ * Вход в правку ячейки: Univer сразу убирает текст из ячейки и открывает пустой белый редактор, а текст рисует в нём
+ * через пару кадров, а число сначала слева и лишь потом справа — ячейка на миг пустела («мигала белым»). На эти кадры
+ * кладём поверх таблицы её снимок за мгновение до правки и прячем редактор: видно прежнюю ячейку, затем сразу готовый редактор.
+ */
+export function holdSheetFrame() {
+  // Холстов несколько (строка формул, редактор ячейки) — сама таблица на самом большом.
+  const canvas = [...document.querySelectorAll<HTMLCanvasElement>('.nws-univer-sheet canvas[data-u-comp="render-canvas"]')]
+    .sort((a, b) => b.width * b.height - a.width * a.height)[0];
+  if (!canvas?.width || !canvas.height) return;
+  const box = canvas.getBoundingClientRect();
+  const still = document.createElement('canvas');
+  still.width = canvas.width;
+  still.height = canvas.height;
+  try { still.getContext('2d')?.drawImage(canvas, 0, 0); } catch { return; }
+  // Фон холста прозрачный: снимок без подложки ложился сглаженным текстом на тот же текст под ним — буквы жирнели.
+  let under = 'transparent';
+  for (let el: HTMLElement | null = canvas; el && under === 'transparent'; el = el.parentElement) {
+    const color = getComputedStyle(el).backgroundColor;
+    if (color && color !== 'transparent' && !/rgba\([^)]*,\s*0\)$/.test(color)) under = color;
+  }
+  Object.assign(still.style, {
+    position: 'fixed', left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px`,
+    zIndex: '1100', pointerEvents: 'none', background: under,
+  });
+  document.body.appendChild(still);
+  // Редактор ячейки (в раскладке таблицы) лежит выше снимка — на эти кадры прячем и его.
+  const editors = [...document.querySelectorAll<HTMLElement>('.nws-univer-sheet [data-u-comp="workbench-layout"] [data-u-comp="editor"]')];
+  for (const el of editors) el.style.visibility = 'hidden';
+  let left = HOLD_FRAMES;
+  const tick = () => {
+    if (--left > 0) { window.requestAnimationFrame(tick); return; }
+    still.remove();
+    for (const el of editors) el.style.visibility = '';
+  };
+  window.requestAnimationFrame(tick);
 }
 
 /** Подписка на правку ячейки: покрашенная — рисуем редактор без инверсии. Возвращает отписку. */
@@ -225,6 +303,8 @@ type DocBackground = { setFillColors?: (...colors: Array<string | undefined>) =>
 
 /** Скругление углов листа, px документа (масштабируется вместе с ним). */
 const PAGE_RADIUS = 6;
+/** Обводка листа в светлой теме: системный разделитель Apple, едва заметный на #f5f5f7. */
+const PAGE_STROKE_LIGHT = '#dcdce1';
 
 // Токены темы объявлены на корне приложения (.nx), а не на <html>: оттуда и читаем, иначе цвета пустые
 // и документ остаётся чёрным (так было в графитовой теме).
@@ -260,12 +340,14 @@ export function styleDocSurface(univer: unknown, unitId: string, modern: boolean
     if (background._noMarginMarks) return;
     const dark = isDarkTheme(currentTheme());
     const shownPage = dark ? cssColor('--container-bg') : undefined;
-    const shownWorkspace = dark ? (modern ? shownPage : cssColor('--bg-sunken')) : undefined;
+    // Светлая тема — как Pages: белый лист на фоне окна (#f5f5f7) с тонкой системной обводкой вместо серой рамки Univer.
+    const shownWorkspace = dark ? (modern ? shownPage : cssColor('--bg-sunken')) : (modern ? undefined : cssColor('--bg-color'));
     const page = forDarkCanvas(shownPage);
+    const pageStroke = dark || modern ? undefined : PAGE_STROKE_LIGHT;
     const original = background.setFillColors.bind(background);
-    // Подложку вокруг листа в тёмной теме даёт CSS-фон холста (ниже), а свою заливку Univer рисует прозрачной:
+    // Подложку вокруг листа даёт CSS-фон холста (ниже), а свою заливку Univer рисует прозрачной:
     // пересчёт цветов тёмной темы давал ей чуть другой оттенок, и от левого края листа вниз шла граница.
-    background.setFillColors = (fill, pageFill, stroke) => original(shownWorkspace ? 'transparent' : fill, page ?? pageFill, stroke, 'transparent');
+    background.setFillColors = (fill, pageFill, stroke) => original(shownWorkspace ? 'transparent' : fill, page ?? pageFill, pageStroke ?? stroke, 'transparent');
     background._noMarginMarks = true;
     background.setFillColors(undefined, undefined, undefined);
     // Углы листа: Univer рисует страницу через Rect.drawWith без радиуса, хотя Rect его умеет. На время отрисовки
@@ -288,6 +370,75 @@ export function styleDocSurface(univer: unknown, unitId: string, modern: boolean
   apply();
 }
 
+/** Высота парящей ленты с её отступами (office-apple.css) и зазор от неё до листа, экранные px. */
+const TOOLBAR_SPACE = 56;
+const TOOLBAR_GAP = 14;
+
+/**
+ * Лента документа парит над листом (office-apple.css), и в начале документа верх листа уходил под неё. Своего отступа
+ * сверху у Univer нет в настройках: сдвигаем лист отступом компонентов отрисовки (pageMarginTop основного слоя и фона;
+ * свойство открыто в типах engine-render, но ведёт его Univer — решение владельца от 2026-10-28). Побочно растёт и
+ * промежуток между листами: Univer берёт его из того же отступа.
+ */
+export function reserveToolbarSpace(univer: unknown, unitId: string, onCommand: (listener: (id: string) => void) => () => void): () => void {
+  const injector = (univer as { __getInjector: () => { get: <T>(token: unknown) => T } }).__getInjector();
+  type Layer = { pageMarginTop?: number; makeDirty?: (dirty?: boolean) => void; getParentScale?: () => { scaleY?: number } };
+  let tries = 0;
+  const apply = () => {
+    let unit: { components?: Map<string, Layer> } | null;
+    try { unit = injector.get<IRenderManagerService>(IRenderManagerService).getRenderUnitById(unitId) as unknown as typeof unit; } catch { return; }
+    const layers = [unit?.components?.get('__Document_Render_Main__'), unit?.components?.get('__Document_Render_Background__')];
+    if (layers.some((layer) => typeof layer?.pageMarginTop !== 'number')) { if (tries++ < 60) window.requestAnimationFrame(apply); return; }
+    // Отступ — в единицах документа и растёт с масштабом, а лента — нет: делим на масштаб, чтобы зазор был одинаковым.
+    let scale = 1;
+    try { scale = Number(layers[0]!.getParentScale?.().scaleY) || 1; } catch { /* масштаб по умолчанию */ }
+    const margin = Math.round((TOOLBAR_SPACE + TOOLBAR_GAP) / scale);
+    if (layers.every((layer) => layer!.pageMarginTop === margin)) return;
+    for (const layer of layers) { layer!.pageMarginTop = margin; layer!.makeDirty?.(true); }
+    // Размер сцены и прокрутку Univer пересчитывает по событию resize.
+    window.dispatchEvent(new Event('resize'));
+  };
+  apply();
+  // Масштаб сменили — пересчитать отступ под новый.
+  return onCommand((id) => { if (/zoom/i.test(id)) window.requestAnimationFrame(apply); });
+}
+
+/**
+ * Лист прокручивается под парящую ленту, и карточка ссылки (rect-popup Univer) у ссылки, уехавшей под ленту, висела
+ * над шапкой документа. Пока карточка целиком выше нижнего края ленты, прячем её; ссылка снова видна — карточка
+ * возвращается. Следим, только пока карточка есть на странице. Возвращает отписку.
+ */
+export function hidePopupsUnderToolbar(host: HTMLElement): () => void {
+  let raf = 0;
+  const check = () => {
+    raf = 0;
+    const popups = document.querySelectorAll<HTMLElement>('[data-u-comp="rect-popup"]');
+    if (!popups.length) return;
+    const bar = host.querySelector('[data-u-comp="ribbon-toolbar"]')?.getBoundingClientRect();
+    const limit = bar?.height ? bar.bottom : host.getBoundingClientRect().top;
+    for (const popup of popups) {
+      const hidden = popup.getBoundingClientRect().bottom <= limit + 1;
+      popup.style.visibility = hidden ? 'hidden' : '';
+    }
+    raf = window.requestAnimationFrame(check);
+  };
+  const start = () => { if (!raf) raf = window.requestAnimationFrame(check); };
+  // Следим только за добавлением карточки: проверять весь документ на каждое изменение страницы (каждое нажатие клавиши
+  // в документе меняет DOM) было лишней работой. Цикл кадров сам идёт, пока карточка на странице.
+  const POPUP = '[data-u-comp="rect-popup"]';
+  const observer = new MutationObserver((records) => {
+    if (raf) return;
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (node instanceof Element && (node.matches(POPUP) || node.querySelector(POPUP))) { start(); return; }
+      }
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  start();
+  return () => { observer.disconnect(); if (raf) window.cancelAnimationFrame(raf); };
+}
+
 /**
  * Убираем «ручку блока» (значок T с точками слева от абзаца): она сама выезжает к абзацу под курсором,
  * съезжает на соседние строки и закрывает текст. Всё, что она умеет (заголовки, списки, цвет), есть на панели.
@@ -308,6 +459,27 @@ export function disableBlockHandle(univer: unknown, unitId: string) {
     service.hideParagraphMenu(true);
   };
   apply();
+}
+
+/**
+ * Веб-шрифты для документов и таблиц: Inter (шрифт интерфейса Шара) и Roboto. Файлы — с Google Fonts, ссылка в
+ * index.html; в список Univer добавляются его штатным univerAPI.addFonts. Холст рисует текст тем шрифтом, что уже
+ * загружен, и не перерисовывается, когда шрифт догрузится, — поэтому начертания грузим заранее, при загрузке редактора.
+ */
+const WEB_FONTS = [
+  { value: 'Inter', label: 'Inter', category: 'sans-serif' as const },
+  { value: 'Roboto', label: 'Roboto', category: 'sans-serif' as const },
+];
+const WEB_FONT_NAMES = new Set(WEB_FONTS.map((font) => font.value));
+if (typeof document !== 'undefined' && document.fonts) {
+  for (const font of WEB_FONTS) {
+    for (const face of ['400', '700', 'italic 400', 'italic 700']) void document.fonts.load(`${face} 16px "${font.value}"`).catch(() => undefined);
+  }
+}
+
+/** Добавить веб-шрифты в список шрифтов редактора. */
+export function addWebFonts(univerAPI: { addFonts?: (fonts: typeof WEB_FONTS) => void }) {
+  try { univerAPI.addFonts?.(WEB_FONTS); } catch { /* старый facade без addFonts — остаются системные */ }
 }
 
 /** Шрифты-символы: в списке их названия рисуются кракозябрами, а в документе они не нужны. */
@@ -365,7 +537,8 @@ export function hideMissingFonts(univer: unknown) {
     try { service = injector.get(IFontService); } catch { service = null; }
     if (!service) { if (tries++ < 60) window.requestAnimationFrame(apply); return; }
     const all = service.getFonts();
-    const present = all.filter((font) => !SYMBOL_FONTS.test(font.value) && isInstalled(font.value));
+    // Веб-шрифты в системе не установлены и могут ещё грузиться — их не проверяем.
+    const present = all.filter((font) => WEB_FONT_NAMES.has(font.value) || (!SYMBOL_FONTS.test(font.value) && isInstalled(font.value)));
     // Если ни один не нашёлся (нестандартная среда), оставляем список как есть, а не опустошаем его.
     if (present.length && present.length < all.length) service.fonts$.next(present);
   };
@@ -392,7 +565,15 @@ export function tagFindDialog(): () => void {
         if (card && !card.classList.contains(FIND_CARD)) card.classList.add(FIND_CARD);
       }
     };
-    findObserver = new MutationObserver(tag);
+    // Ищем окно поиска, только когда на странице добавилось что-то с ним (а не на каждое изменение страницы).
+    const FIND = '[data-u-comp="find-replace-dialog"]';
+    findObserver = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (node instanceof Element && (node.matches(FIND) || node.querySelector(FIND))) { tag(); return; }
+        }
+      }
+    });
     findObserver.observe(document.body, { childList: true, subtree: true });
     tag();
   }
@@ -474,4 +655,106 @@ export function addLinkButton(
   const stop = watch(update);
   update();
   return () => { stop(); active$.complete(); };
+}
+
+/**
+ * Холст Univer пересчитывает размер по событию resize окна. Контейнер редактора меняется и без него (свернули список,
+ * открыли комментарии) — тогда событие даём сами. Но когда тянут само окно, Univer уже получил настоящее событие,
+ * и наше, синтетическое, на каждом кадре заставляло его перестраивать холст второй раз — тянуть окно было тяжело.
+ * Поэтому своё событие шлём, только если окно в этом кадре размер не меняло. Возвращает отписку.
+ */
+/** Когда окно последний раз само меняло размер (ставят relayoutOnHostResize и привратник throttleWindowResize). */
+let windowResizedAt = 0;
+
+export function relayoutOnHostResize(el: HTMLElement): () => void {
+  if (typeof ResizeObserver === 'undefined') return () => undefined;
+  let raf = 0;
+  const onWindow = (event: Event) => { if (event.isTrusted) windowResizedAt = performance.now(); };
+  window.addEventListener('resize', onWindow);
+  const observer = new ResizeObserver(() => {
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      if (performance.now() - windowResizedAt < 100) return;
+      window.dispatchEvent(new Event('resize'));
+    });
+  });
+  observer.observe(el);
+  return () => { cancelAnimationFrame(raf); observer.disconnect(); window.removeEventListener('resize', onWindow); };
+}
+
+/** Шаг ширины строки ленты, px: примерно одна кнопка. */
+const TOOLBAR_STEP = 48;
+
+/**
+ * Лента Univer на каждое изменение своей ширины заново меряет все кнопки (getBoundingClientRect каждой — это
+ * принудительная раскладка всей страницы), чтобы решить, что убрать в «⋮». Пока тянут окно, это шло каждый кадр и
+ * было главной тратой времени. Ширину строки ленты меняем ступенями (по кнопке): мерить ей приходится в разы реже.
+ * Капсула по центру строки, так что ступени не видны. Возвращает отписку.
+ */
+export function stepToolbarWidth(host: HTMLElement): () => void {
+  if (typeof ResizeObserver === 'undefined') return () => undefined;
+  let observer: ResizeObserver | null = null;
+  let tries = 0;
+  let raf = 0;
+  const attach = () => {
+    const bar = host.querySelector<HTMLElement>('[data-u-comp="headerbar"]');
+    const row = bar?.querySelector<HTMLElement>(':scope > div:has(> [data-u-comp="ribbon-toolbar"])');
+    if (!bar || !row) { if (tries++ < 120) raf = requestAnimationFrame(attach); return; }
+    observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? 0;
+      if (!width) return;
+      // Поля строки по бокам — 16 px (office-apple.css).
+      const stepped = Math.max(TOOLBAR_STEP, Math.floor((width - 32) / TOOLBAR_STEP) * TOOLBAR_STEP);
+      if (row.style.width !== `${stepped}px`) {
+        row.style.width = `${stepped}px`;
+        row.style.marginInline = 'auto';
+      }
+    });
+    observer.observe(bar);
+  };
+  attach();
+  return () => { cancelAnimationFrame(raf); observer?.disconnect(); };
+}
+
+/** Не чаще одного resize окна для холстов Univer за это время, мс, пока окно тянут. */
+const RESIZE_EVERY = 80;
+let resizeGate: { users: number; stop: () => void } | null = null;
+
+/**
+ * Univer на каждое событие resize окна заново раскладывает и рисует холст документа или таблицы (в профиле это
+ * основная доля времени протяжки окна), а пока окно тянут, событие приходит каждый кадр. Пока открыт хоть один
+ * редактор, настоящие события resize до остальных слушателей пропускаем не чаще раза в RESIZE_EVERY мс и всегда —
+ * последнее, по окончании протяжки. Раскладку страницы браузер делает сам и без них; реже перерисовывается только
+ * холст. Возвращает отписку (общий привратник снимается с последним редактором).
+ */
+export function throttleWindowResize(): () => void {
+  if (!resizeGate) {
+    let last = 0;
+    let timer = 0;
+    let passing = false;
+    const pass = () => {
+      timer = 0;
+      last = performance.now();
+      passing = true;
+      try { window.dispatchEvent(new Event('resize')); } finally { passing = false; }
+    };
+    // В фазе захвата на самом window — раньше слушателей Univer (они без capture).
+    const gate = (event: Event) => {
+      if (passing || !event.isTrusted) return;
+      windowResizedAt = performance.now();
+      event.stopImmediatePropagation();
+      const wait = RESIZE_EVERY - (performance.now() - last);
+      window.clearTimeout(timer);
+      if (wait <= 0) pass();
+      else timer = window.setTimeout(pass, wait);
+    };
+    window.addEventListener('resize', gate, true);
+    resizeGate = { users: 0, stop: () => { window.removeEventListener('resize', gate, true); window.clearTimeout(timer); } };
+  }
+  resizeGate.users += 1;
+  return () => {
+    if (!resizeGate) return;
+    resizeGate.users -= 1;
+    if (resizeGate.users <= 0) { resizeGate.stop(); resizeGate = null; }
+  };
 }

@@ -509,6 +509,22 @@ export function excelToUniver(book: ExcelWorkbook): Partial<IWorkbookData> {
   const filters: Record<string, SheetFilter> = {};
   const used = new Set<string>();
   const ids = new Map<string, string>();
+  // Стиль ячейки: ExcelJS отдаёт ячейкам с одинаковым оформлением один и тот же объект стиля. Перевод, ключ и id
+  // считаем раз на объект и формат числа, а не на каждую ячейку (раньше — два JSON.stringify на ячейку: на больших
+  // таблицах это заметная доля открытия).
+  const styleCache = new Map<unknown, Map<string, { style: IStyleData | null; key: string; id: string }>>();
+  const convertStyle = (raw: ExcelStyle | undefined, pattern: string | undefined) => {
+    let byPattern = styleCache.get(raw);
+    if (!byPattern) { byPattern = new Map(); styleCache.set(raw, byPattern); }
+    const p = pattern ?? '';
+    let hit = byPattern.get(p);
+    if (!hit) {
+      const style = styleFromExcel(raw, pattern);
+      hit = { style, key: styleKey(style), id: style ? styleId(styleBook, style) : '' };
+      byPattern.set(p, hit);
+    }
+    return hit;
+  };
   for (const [index, sheet] of book.worksheets.entries()) {
     let id = ex.sheetIds.get(sheet.name) || `sheet-${index + 1}`;
     if (used.has(id)) id = `sheet-${index + 1}-${used.size}`;
@@ -552,10 +568,10 @@ export function excelToUniver(book: ExcelWorkbook): Partial<IWorkbookData> {
         const value = cell.value && typeof cell.value === 'object' && 'sharedFormula' in cell.value && cell.formula
           ? ({ formula: cell.formula, result: (cell.value as { result?: unknown }).result } as CellValue) : cell.value;
         const parsed = isSlave ? null : valueToCell(value, cell.numFmt);
-        const style = styleFromExcel(cell.style, parsed?.pattern);
+        const { style, key, id: sid } = convertStyle(cell.style, parsed?.pattern);
         const out: ICellData = parsed ? { ...parsed.cell } : {};
-        if (style) out.s = styleId(styleBook, style);
-        ex.styleKeys.set(`${sheet.name}!${r}:${c}`, styleKey(style));
+        if (sid) out.s = sid;
+        ex.styleKeys.set(`${sheet.name}!${r}:${c}`, key);
         if (!parsed && !style) return;
         (cellData[r] ||= {})[c] = out;
       });

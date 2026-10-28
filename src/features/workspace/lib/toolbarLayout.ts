@@ -49,6 +49,8 @@ export const SHEET_TOOLBAR: MenuConfig = {
   'formula-ui.operation.insert-function.common': { title: 'Функции' },
   // Ссылка уже есть на панели своей кнопкой (nx.link.sheet).
   'sheet.operation.insert-hyper-link-toolbar': hide,
+  // Масштаб — в строке состояния внизу (ползунок и проценты), в ленте он дублировался.
+  'sheet.menu.zoom-ratio': hide,
 };
 
 /** Документ: ↶ ↷ кисть | стиль, шрифт, размер | Ж К Ч цвет, выделение, ссылка | выравнивание, списки. */

@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
-  AArrowDown, AArrowUp, ArrowDownAZ, ArrowUpDown, ArrowUpZA, Bold, BookOpen, Pencil, ClipboardPaste, Columns2, Eraser, Filter, FilterX, Grid3x3, Hash, Italic, Keyboard, List, ListChecks, ListOrdered, Maximize, MessageSquarePlus, Minus, PanelTop, Percent, Redo2, RefreshCw, RussianRuble, Scissors, Search, Settings2, Sigma, Strikethrough, Subscript, Superscript, Table, TableCellsMerge, TableCellsSplit, Underline, Undo2,
+  AArrowDown, AArrowUp, ArrowDownAZ, ArrowUpDown, ArrowUpZA, Bold, BookOpen, Pencil, ClipboardPaste, Columns2, Eraser, Filter, FilterX, Grid3x3, Hash, Italic, Keyboard, List, ListChecks, ListOrdered, Maximize, Minimize, MessageSquarePlus, Minus, PanelTop, Percent, Redo2, RefreshCw, RussianRuble, Scissors, Search, Settings2, Sigma, Strikethrough, Subscript, Superscript, Table, TableCellsMerge, TableCellsSplit, Underline, Undo2,
   AlertCircle, ArrowLeft, Check, Copy, Download, FilePlus, Globe2, History, Link2, Lock, Mail, MessageSquare, Star, MoreHorizontal, Pin, PinOff, MonitorUp, Printer, Send, Share2, Trash2, Upload, Users,
 } from 'lucide-react';
 import { useMailConnected, writeMail } from '@/features/mail';
@@ -110,9 +110,36 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen, windowC
   const getCommentAnchor = useCallback(() => commentsBridge.current?.anchor() ?? null, []);
   const jumpToComment = useCallback((anchor: Parameters<CommentsBridge['jump']>[0]) => commentsBridge.current?.jump(anchor), []);
   useEffect(() => { setCommentsOpen(false); }, [item?.id]);
+  // «Вид → Полный экран». Встроенный режим Univer — HTML requestFullscreen, в окне Shar OS без рамки он не срабатывает:
+  // в приложении окно само разворачивается на весь экран (как показ презентации), а материал занимает всё окно поверх
+  // списка и меню (data-fullscreen); в браузере — requestFullscreen самого материала. Выход — тот же пункт или Esc.
+  const itemRef = useRef<HTMLDivElement>(null);
+  const [fullScreen, setFullScreen] = useState(false);
+  useEffect(() => { setFullScreen(false); }, [item?.id]);
+  useEffect(() => {
+    if (!fullScreen) return undefined;
+    const desktop = window.sharDesktop?.windowControls?.setFullScreen;
+    if (desktop) void desktop(true);
+    else void itemRef.current?.requestFullscreen?.().catch(() => setFullScreen(false));
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.defaultPrevented) setFullScreen(false); };
+    const onChange = () => { if (!desktop && !document.fullscreenElement) setFullScreen(false); };
+    window.addEventListener('keydown', onKey);
+    document.addEventListener('fullscreenchange', onChange);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.removeEventListener('fullscreenchange', onChange);
+      if (desktop) void desktop(false);
+      else if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+    };
+  }, [fullScreen]);
   // Новый комментарий (контекстное меню, «Вставка → Комментарий», Ctrl+Alt+M): панель и сразу поле ввода.
   const [commentFocus, setCommentFocus] = useState(0);
   const addComment = useCallback(() => { setCommentsOpen(true); setCommentFocus((n) => n + 1); }, []);
+  // Таблица: выбрали ячейку с комментарием — панель открывается на его ветке.
+  // Документ: курсор встал в прокомментированный текст — то же для его цитаты.
+  const [commentCell, setCommentCell] = useState<{ sheet: string; cell: string; quote?: string; tick: number } | null>(null);
+  const showCellComment = useCallback((cell: { sheet: string; cell: string }) => { setCommentsOpen(true); setCommentCell({ ...cell, tick: Date.now() }); }, []);
+  const showQuoteComment = useCallback((quote: string) => { setCommentsOpen(true); setCommentCell({ sheet: '', cell: '', quote, tick: Date.now() }); }, []);
   useEffect(() => {
     if (!commentable) return undefined;
     const onKey = (event: KeyboardEvent) => {
@@ -122,6 +149,7 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen, windowC
     return () => window.removeEventListener('keydown', onKey, true);
   }, [commentable, addComment]);
   // Таблица: ячейки с открытыми ветками — отметка-уголок на листе.
+  const commentQuotes = useMemo(() => comments.open.flatMap((t) => (t.root.anchor && 'kind' in t.root.anchor && t.root.anchor.kind === 'text' && t.root.anchor.quote ? [t.root.anchor.quote] : [])), [comments.open]);
   const commentCells = useMemo(() => comments.open.flatMap((t) => (t.root.anchor && 'kind' in t.root.anchor && t.root.anchor.kind === 'cell' ? [{ sheet: t.root.anchor.sheet, cell: t.root.anchor.cell }] : [])), [comments.open]);
 
   // История посещений для поиска: открытый материал попадает в «Недавние».
@@ -360,7 +388,9 @@ ${absolute(links.office(item!.kind, item!.id))}` });
         { label: commentsOpen ? 'Скрыть комментарии' : 'Комментарии', onSelect: () => setCommentsOpen((v) => !v), icon: <MessageSquare size={15} /> },
         ...(isDoc ? [] : [cmd('Сетка', 'sheet.command.toggle-gridlines', <Grid3x3 size={15} />)]),
         'sep',
-        { ...cmd('Полный экран', 'base-ui.operation.toggle-fullscreen', <Maximize size={15} />), disabled: !can('base-ui.operation.toggle-fullscreen') },
+        fullScreen
+          ? { label: 'Выйти из полноэкранного режима', onSelect: () => setFullScreen(false), icon: <Minimize size={15} />, hint: 'Esc' }
+          : { label: 'Полный экран', onSelect: () => setFullScreen(true), icon: <Maximize size={15} /> },
       ] },
       { id: 'insert', label: 'Вставка', items: isDoc ? [
         cmd('Таблица', 'doc.operation.create-table', <Table size={15} />),
@@ -449,7 +479,7 @@ ${absolute(links.office(item!.kind, item!.id))}` });
   })();
 
   return (
-    <div className="nws-item" data-kind={item.kind}>
+    <div className="nws-item" ref={itemRef} data-kind={item.kind} data-layout={commentable ? 'gdocs' : undefined} data-fullscreen={fullScreen ? 'true' : undefined}>
       <header className="nws-head" data-layout={commentable ? 'gdocs' : undefined}>
         {onBack && <button type="button" className="nx-icon-btn nws-back" onClick={onBack} aria-label="К списку"><ArrowLeft size={18} /></button>}
         <span className="nws-kind-icon" style={{ '--a': info.tint[0], '--b': info.tint[1] } as React.CSSProperties} aria-hidden="true"><info.icon size={commentable ? 20 : 16} /></span>
@@ -539,11 +569,11 @@ ${absolute(links.office(item!.kind, item!.id))}` });
       <div className="nws-main">
         <div className="nws-editor">
           <Suspense fallback={<div className="nws-loading"><Spinner size={24} label="Загружаю редактор" /></div>}>
-            <Editor content={item.content} onContent={session.setContent} readOnly={readOnly} loadKey={loadKey} title={item.title} visible cursors={cursors} onCursor={sendCursor} live={session.live} commentsBridge={commentsBridge} commentCells={commentCells} onAddComment={commentable ? addComment : undefined} />
+            <Editor content={item.content} onContent={session.setContent} readOnly={readOnly} loadKey={loadKey} title={item.title} visible cursors={cursors} onCursor={sendCursor} live={session.live} commentsBridge={commentsBridge} commentCells={commentCells} onAddComment={commentable ? addComment : undefined} onCommentCell={commentable ? showCellComment : undefined} commentQuotes={commentQuotes} onCommentQuote={commentable ? showQuoteComment : undefined} />
           </Suspense>
         </div>
         {commentable && commentsOpen && (
-          <CommentsPanel comments={comments} kind={item.kind as 'document' | 'table'} canModerate={item.isOwner} getAnchor={getCommentAnchor} onJump={jumpToComment} focusTick={commentFocus} onClose={() => setCommentsOpen(false)} />
+          <CommentsPanel comments={comments} kind={item.kind as 'document' | 'table'} canModerate={item.isOwner} getAnchor={getCommentAnchor} onJump={jumpToComment} focusTick={commentFocus} focusCell={commentCell} onClose={() => setCommentsOpen(false)} />
         )}
       </div>
 

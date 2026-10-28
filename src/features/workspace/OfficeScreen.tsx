@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
-import { ChevronsDownUp, ChevronsUpDown, Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, UserPlus, LayoutGrid, Lock, MonitorUp, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
+import { Check, ChevronsDownUp, ChevronsUpDown, Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, UserPlus, LayoutGrid, Lock, MonitorUp, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
 import { useShellOptions } from '@/shared/shell/ShellContext';
 import { realtime } from '@/shared/realtime/realtime';
 import { SearchField } from '@/shared/ui/SearchField';
@@ -33,6 +33,7 @@ function writeOpenFolders(ids: Set<string>) {
 }
 import { Spinner } from '@/shared/ui/Spinner';
 import './workspace.css';
+import './office-apple.css';
 
 /**
  * «Офис» — заметки, документы, таблицы и презентации в одном месте. Слева список (поиск, виды,
@@ -42,6 +43,14 @@ import './workspace.css';
 
 const NARROW = '(max-width: 899px)';
 const LIST_FOLDED_KEY = 'nx:office-list-folded';
+/** Порядок материалов в папке — у каждой папки свой, помнится на этом устройстве. */
+const FOLDER_SORT_KEY = 'nx:office-folder-sort';
+type FolderSort = 'manual' | 'name' | 'updated';
+const FOLDER_SORTS: Array<{ id: FolderSort; label: string }> = [
+  { id: 'manual', label: 'Вручную' },
+  { id: 'name', label: 'По названию' },
+  { id: 'updated', label: 'Сначала изменённые' },
+];
 const subscribeMedia = (cb: () => void) => {
   const mq = window.matchMedia(NARROW);
   mq.addEventListener('change', cb);
@@ -124,7 +133,14 @@ const ItemRow = memo(function ItemRow({ item, active, terms, snippet, onOpen, on
               if (e.key === 'Enter') e.currentTarget.blur();
               if (e.key === 'Escape') { e.currentTarget.value = item.title; e.currentTarget.blur(); }
             }}
-            onBlur={(e) => { const v = e.currentTarget.value.trim(); onRename?.(item, v && v !== item.title ? v : null); }}
+            onBlur={(e) => {
+              // Меню строки, закрываясь, возвращает фокус на саму строку — уже после того, как поле получило его: поле
+              // сразу теряло фокус и переименование закрывалось, не начавшись. Фокус ушёл на свою строку — возвращаем его в поле.
+              const input = e.currentTarget;
+              if (e.relatedTarget && e.relatedTarget === input.closest('.nws-row')) { requestAnimationFrame(() => input.focus()); return; }
+              const v = input.value.trim();
+              onRename?.(item, v && v !== item.title ? v : null);
+            }}
           />
         ) : (
           <span className="nws-row-title">{item.isNew && <span className="nws-new">Новое</span>}<Highlight text={item.title || info.untitled} terms={terms ?? []} /></span>
@@ -193,9 +209,10 @@ export default function OfficeScreen() {
   }), []);
   const folded = listFolded && !narrow;
   useEffect(() => {
-    // Холсты документа и таблицы пересчитывают размер по resize окна — сообщаем, когда ширина доехала.
-    const timer = window.setTimeout(() => window.dispatchEvent(new Event('resize')), 300);
-    return () => window.clearTimeout(timer);
+    // Холсты документа и таблицы пересчитывают размер по resize окна — сообщаем один раз, в следующем кадре
+    // (ширина меняется сразу, без анимации).
+    const frame = window.requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    return () => window.cancelAnimationFrame(frame);
   }, [folded]);
   useEffect(() => {
     if (narrow) return undefined;
@@ -219,6 +236,15 @@ export default function OfficeScreen() {
   const [openFolders, setOpenFolders] = useState<Set<string>>(readOpenFolders);
   const [editingFolder, setEditingFolder] = useState<string | null>(null);
   const [folderMenu, setFolderMenu] = useState<{ folder: Folder; anchor: MenuAnchor } | null>(null);
+  const [folderSort, setFolderSort] = useState<Record<string, FolderSort>>(() => {
+    try { return JSON.parse(localStorage.getItem(FOLDER_SORT_KEY) || '{}') as Record<string, FolderSort>; } catch { return {}; }
+  });
+  const sortFolder = useCallback((folderId: string, sort: FolderSort) => setFolderSort((cur) => {
+    const next = { ...cur };
+    if (sort === 'manual') delete next[folderId]; else next[folderId] = sort;
+    try { localStorage.setItem(FOLDER_SORT_KEY, JSON.stringify(next)); } catch { /* приватное окно — просто не запомним */ }
+    return next;
+  }), []);
   const [moveMenu, setMoveMenu] = useState<{ item: Item; anchor: MenuAnchor } | null>(null);
   const [shareFolder, setShareFolder] = useState<Folder | null>(null);
   const [rootOver, setRootOver] = useState(false);
@@ -359,6 +385,17 @@ export default function OfficeScreen() {
     } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось создать', 'error'); } finally { setBusy(''); }
   }
 
+  // «Новый документ», «Новая таблица»… из меню значка Shar OS в панели задач: адрес /office?new=<вид> — создать и открыть.
+  const newParam = params.get('new');
+  const creatingFromUrl = useRef('');
+  useEffect(() => {
+    if (!newParam || creatingFromUrl.current === newParam) return;
+    if (!KIND_LIST.some((k) => k.kind === newParam)) return;
+    creatingFromUrl.current = newParam;
+    setParams((cur) => { const next = new URLSearchParams(cur); next.delete('new'); return next; }, { replace: true });
+    void createItem(newParam as Kind).finally(() => { creatingFromUrl.current = ''; });
+  }, [newParam]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [dropping, setDropping] = useState(false);
 
   async function importPicked(file: File | undefined) {
@@ -460,11 +497,18 @@ export default function OfficeScreen() {
   const byFolder = useMemo(() => {
     const map = new Map<string, Item[]>();
     for (const i of listed) if (foldered(i) && (search || !isFresh(i))) map.set(i.folderId!, [...(map.get(i.folderId!) || []), i]);
-    // Ручной порядок; ещё не расставленные — в конце, свежие выше. В поиске — найденное по совпадению.
+    // Ручной порядок; ещё не расставленные — в конце, свежие выше. Или выбранная в меню папки сортировка.
+    // В поиске — найденное по совпадению.
     const rank = (i: Item) => (i.folderPosition ?? Number.POSITIVE_INFINITY);
-    for (const list of map.values()) list.sort(search ? byRank : (a, b) => (rank(a) - rank(b)) || b.updatedAt.localeCompare(a.updatedAt));
+    const manual = (a: Item, b: Item) => (rank(a) - rank(b)) || b.updatedAt.localeCompare(a.updatedAt);
+    const byName = (a: Item, b: Item) => (a.title || '').localeCompare(b.title || '', 'ru', { numeric: true });
+    const byUpdated = (a: Item, b: Item) => b.updatedAt.localeCompare(a.updatedAt);
+    for (const [folderId, list] of map) {
+      const sort = folderSort[folderId];
+      list.sort(search ? byRank : sort === 'name' ? byName : sort === 'updated' ? byUpdated : manual);
+    }
     return map;
-  }, [listed, foldered, search]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [listed, foldered, search, folderSort]); // eslint-disable-line react-hooks/exhaustive-deps
   const folderPath = useMemo(() => {
     const byId = new Map(folders.map((f) => [f.id, f]));
     const path = (f: Folder, seen = new Set<string>()): string => {
@@ -825,6 +869,14 @@ export default function OfficeScreen() {
           {folderMenu.folder.parentId && (
             <MenuItem icon={<FolderUp size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void placeFolder(f.id, null); }}>Вынести на верхний уровень</MenuItem>
           )}
+          <div className="nx-menu-sep" />
+          {FOLDER_SORTS.map((sort) => (
+            <MenuItem key={sort.id} icon={(folderSort[folderMenu.folder.id] || 'manual') === sort.id ? <Check size={15} /> : <span className="nws-bar-noicon" />}
+              onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); sortFolder(f.id, sort.id); }}>
+              {sort.label}
+            </MenuItem>
+          ))}
+          <div className="nx-menu-sep" />
           <MenuItem icon={<Trash2 size={15} />} tone="danger" onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void removeFolder(f); }}>Удалить папку</MenuItem>
           </>)}
         </Menu>

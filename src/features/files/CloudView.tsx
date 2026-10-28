@@ -3,8 +3,7 @@ import { realtime } from '@/shared/realtime/realtime';
 import { lazyComponent } from '@/shared/ui/lazy';
 import {
   AlertCircle, ArrowUpDown, Check, ChevronRight, Copy, Download, ExternalLink, Folder, FolderInput, FolderPlus, LayoutGrid, Link2, List,
-  Mail, MoreHorizontal, Pencil, Pin, PinOff, RotateCw, Send, Trash2, Upload, Users,
-} from 'lucide-react';
+  Mail, MoreHorizontal, Pencil, Pin, PinOff, RotateCw, Send, Trash2, Upload, Users, PenLine } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
 import { SearchField } from '@/shared/ui/SearchField';
 import { useChatStore, displayName } from '@/features/chat';
@@ -22,7 +21,7 @@ import { FolderTile } from './FolderTile';
 import { AccessSheet, MoveSheet, SendSheet } from './sheets';
 import { absolute, links } from '@/shared/navigation/routes';
 import { downloadFile } from '@/shared/platform/download';
-import { viewKindOf, type FileRef } from '@/features/workspace';
+import { canOpenInEditor, openInEditor, viewKindOf, type FileRef } from '@/features/workspace';
 import { DocOverlay } from './DocOverlay';
 
 const ImageViewer = lazyComponent(() => import('@/shared/ui/ImageViewer'));
@@ -482,6 +481,9 @@ ${url}` });
           ) : (
             <>
               <MenuItem icon={<ExternalLink size={16} />} onSelect={() => { setMenu(null); openFile(t.item); }}>Открыть</MenuItem>
+              {canOpenInEditor(t.item.name) && (
+                <MenuItem icon={<PenLine size={16} />} onSelect={() => { const item = t.item; setMenu(null); void openInEditor({ url: fileUrl(item.url), name: item.name, size: item.size ?? undefined }); }}>Открыть в Шаре</MenuItem>
+              )}
               <MenuItem icon={<Download size={16} />} onSelect={() => { setMenu(null); downloadFile(fileUrl(t.item.url), t.item.name); }}>Скачать</MenuItem>
             </>
           )}

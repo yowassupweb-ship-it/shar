@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { workspaceApi } from './api';
 import { ItemView } from './ItemView';
 import './workspace.css';
+import './office-apple.css';
 
 /**
  * Материал по ссылке (/n/…, /d/…, /t/…, /p/…): открывается без входа в Шар. Что можно — решает ссылка:

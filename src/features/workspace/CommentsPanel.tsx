@@ -139,7 +139,7 @@ function ThreadCard({ thread, comments, canModerate, active, onJump, onActivate 
   };
 
   return (
-    <article className="nws-cm-thread" data-resolved={root.resolved || undefined} data-active={active || undefined} onClick={onActivate}>
+    <article className="nws-cm-thread" data-thread={root.id} data-resolved={root.resolved || undefined} data-active={active || undefined} onClick={onActivate}>
       {anchor && <AnchorChip anchor={anchor} onJump={onJump ? () => onJump(anchor) : undefined} />}
       <div className="nws-cm-resolve-row">
         <Message comment={root} canModerate={canModerate} editing={editingId === root.id} onEdit={() => setEditingId(root.id)} onDelete={() => void remove(root)} onDoneEdit={finishEdit(root)} />
@@ -162,11 +162,14 @@ function ThreadCard({ thread, comments, canModerate, active, onJump, onActivate 
  * Панель комментариев документа и таблицы, как в Google Docs: новый комментарий к выделенному тексту или ячейке,
  * ветки с ответами, «Решено» убирает ветку в архив, у каждой — переход к месту в материале.
  */
-export function CommentsPanel({ comments, canModerate, getAnchor, onJump, onClose, kind, focusTick = 0 }: {
+export function CommentsPanel({ comments, canModerate, getAnchor, onJump, onClose, kind, focusTick = 0, focusCell = null }: {
   comments: Comments; canModerate: boolean; kind: 'document' | 'table';
   getAnchor: () => CommentAnchor | null; onJump?: (anchor: CommentAnchor) => void; onClose: () => void;
   /** Меняется — поставить курсор в поле нового комментария. */
   focusTick?: number;
+  /** Выбрали ячейку (таблица) или прокомментированный текст (документ, quote) — ветка становится активной и прокручивается
+   *  в вид (tick — каждый выбор). */
+  focusCell?: { sheet: string; cell: string; quote?: string; tick: number } | null;
 }) {
   const newBox = useRef<HTMLDivElement>(null);
   useEffect(() => { if (focusTick) newBox.current?.querySelector('textarea')?.focus(); }, [focusTick]);
@@ -175,6 +178,20 @@ export function CommentsPanel({ comments, canModerate, getAnchor, onJump, onClos
   const [activeId, setActiveId] = useState<string | null>(null);
   const resolved = useMemo(() => comments.threads.filter((t) => t.root.resolved), [comments.threads]);
   const shown = tab === 'open' ? comments.open : resolved;
+  const list = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!focusCell) return;
+    const thread = comments.open.find((t) => {
+      const at = t.root.anchor;
+      if (!isAnchor(at)) return false;
+      if (focusCell.quote) return at.kind === 'text' && at.quote === focusCell.quote;
+      return at.kind === 'cell' && at.cell === focusCell.cell && (!at.sheet || !focusCell.sheet || at.sheet === focusCell.sheet);
+    });
+    if (!thread) return;
+    setTab('open');
+    setActiveId(thread.root.id);
+    window.requestAnimationFrame(() => list.current?.querySelector(`[data-thread="${CSS.escape(thread.root.id)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+  }, [focusCell]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Привязку читаем у редактора, пока панель открыта: выделили текст или ячейку — она тут же в поле нового комментария.
   useEffect(() => {
@@ -208,7 +225,7 @@ export function CommentsPanel({ comments, canModerate, getAnchor, onJump, onClos
             <button type="button" role="tab" aria-selected={tab === 'open'} onClick={() => setTab('open')}>Открытые{comments.open.length ? ` · ${comments.open.length}` : ''}</button>
             <button type="button" role="tab" aria-selected={tab === 'resolved'} onClick={() => setTab('resolved')}>Решённые{resolved.length ? ` · ${resolved.length}` : ''}</button>
           </div>
-          <div className="nws-cm-list nx-scroll-y">
+          <div className="nws-cm-list nx-scroll-y" ref={list}>
             {!comments.loaded && <p className="nws-cm-empty">Загружаю…</p>}
             {comments.loaded && !shown.length && (
               <div className="nws-cm-empty">

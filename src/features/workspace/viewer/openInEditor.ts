@@ -6,8 +6,8 @@ import { importFile } from '../lib/importFile';
 import type { FileRef } from './kinds';
 
 /**
- * Вложение чата → новый материал «Офиса» (Word и текст — документ, Excel — таблица) и переход в редактор.
- * Исходный файл остаётся в чате нетронутым: правится копия, которая принадлежит нажавшему.
+ * «Открыть в Шаре»: файл из чата или «Файлов» → новый материал «Офиса» (Word и текст — документ, Excel и CSV — таблица,
+ * PowerPoint и PDF — презентация) и переход в редактор. Исходный файл не трогается: правится копия нажавшего.
  */
 export async function openInEditor(file: FileRef): Promise<boolean> {
   try {
@@ -16,11 +16,11 @@ export async function openInEditor(file: FileRef): Promise<boolean> {
     const blob = await res.blob();
     const imported = await importFile(new File([blob], file.name, { type: blob.type }));
     const item = await workspaceApi.create({ kind: imported.kind, title: imported.title, content: imported.content });
-    showToast('Открыто в редакторе — это копия файла из чата', 'success');
+    showToast('Открыто в Шаре — это копия, исходный файл не изменится', 'success');
     navigate(links.office(item.kind, item.id));
     return true;
   } catch (cause) {
-    showToast(cause instanceof Error ? cause.message : 'Не удалось открыть в редакторе', 'error');
+    showToast(cause instanceof Error ? cause.message : 'Не удалось открыть в Шаре', 'error');
     return false;
   }
 }

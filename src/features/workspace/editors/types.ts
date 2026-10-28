@@ -41,4 +41,10 @@ export interface EditorProps {
   commentCells?: Array<{ sheet: string; cell: string }>;
   /** «Комментарий» в контекстном меню редактора: открыть панель с новым комментарием к выделенному. */
   onAddComment?: () => void;
+  /** Документ: цитаты открытых комментариев — этот текст подсвечивается. */
+  commentQuotes?: string[];
+  /** Документ: курсор встал в прокомментированный текст — показать ветку. */
+  onCommentQuote?: (quote: string) => void;
+  /** Таблица: выбрали ячейку с открытым комментарием — показать его ветку. */
+  onCommentCell?: (cell: { sheet: string; cell: string }) => void;
 }

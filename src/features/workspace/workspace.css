@@ -13,12 +13,18 @@
   background: var(--surface-panel);
 }
 .nws > .nx-splitter { left: var(--nws-list); }
-/* Список свёрнут: вместо него — узкая полоска с «развернуть» и «создать»; ширина меняется плавно. */
-.nws { transition: grid-template-columns 0.24s var(--ease-out); }
+/* Список свёрнут: вместо него — узкая полоска с «развернуть» и «создать». Ширина меняется сразу, без анимации: плавная
+   смена колонок сетки перекладывала всю страницу каждый кадр, а редактор документа или таблицы на каждое изменение
+   размера заново раскладывал и рисовал холст Univer — сворачивание заметно тормозило. */
 .nws[data-list="folded"] { grid-template-columns: 52px minmax(0, 1fr); }
 .nws[data-list="folded"] > .nws-list { padding-inline: 0; overflow: hidden; }
 .nws[data-list="folded"] > .nws-list > :not(.nws-rail) { display: none; }
-.nws-rail { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
+/* Кнопка «скрыть / показать список» стоит в одной точке в обоих видах: у левого края с отступом списка
+   (--space-3) и вровень с его верхом — свёрнутая полоска не сдвигает её ни вбок, ни вниз. */
+.nws-rail { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); padding-left: var(--space-3); }
+.nws-list-head:has(> .nws-fold) { justify-content: flex-start; }
+.nws-list-head > .nws-fold { align-self: flex-start; }
+.nws-list-head > .nws-fold + * { margin-left: auto; }
 .nws-rail-btn, .nws-fold {
   display: inline-grid;
   place-items: center;
@@ -35,7 +41,6 @@
 .nws-rail-btn:hover, .nws-fold:hover { background: var(--surface-hover); color: var(--text-main); }
 .nws-rail-btn:focus-visible, .nws-fold:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 1px; }
 .nws-rail-btn:disabled { opacity: 0.5; cursor: default; }
-@media (prefers-reduced-motion: reduce) { .nws { transition: none; } }
 
 /* ── Список ───────────────────────────────────────────────────────────── */
 .nws-list {
@@ -282,10 +287,12 @@
 .nws-note-view h1 { font-size: 1.6em; } .nws-note-view h2 { font-size: 1.3em; } .nws-note-view h3 { font-size: 1.1em; }
 .nws-note-view ul { padding-left: 1.4em; list-style: disc; }
 .nws-note-view ol { padding-left: 1.4em; list-style: decimal; }
-.nws-note-view li > input[type="checkbox"] { margin-left: -1.2em; }
-.nws-note-view ul:has(> li > input[type="checkbox"]) { list-style: none; }
+.nws-note-view li + li { margin-top: .2em; }
+.nws-note-view li > p { margin: 0; }
 .nws-note-view p, .nws-note-view ul, .nws-note-view ol, .nws-note-view pre, .nws-note-view blockquote, .nws-note-view table { margin: 0 0 .8em; }
-.nws-note-view img { max-width: 100%; border-radius: var(--radius-md); }
+.nws-note-view img { display: block; max-width: 100%; margin: var(--space-2) 0 var(--space-3); border-radius: var(--radius-md); box-shadow: 0 0 0 1px var(--border-color); }
+/* Разделитель (---) — волосяная линия с воздухом, а не браузерная двойная рамка вплотную к тексту. */
+.nws-note-view hr { height: 1px; margin: 1.1em 0; border: 0; background: var(--border-color); }
 .nws-note-view a { color: var(--accent-color); }
 .nws-note-view code { padding: 1px 5px; border-radius: 5px; background: var(--surface-hover); font-family: var(--font-mono); font-size: .9em; }
 .nws-note-view pre { padding: var(--space-3); border-radius: var(--radius-md); background: var(--surface-hover); overflow-x: auto; }
@@ -306,7 +313,31 @@
 .nws-md-table > table { margin: 0; }
 .nws-md-table th, .nws-md-table td { min-width: 7em; overflow-wrap: normal; word-break: normal; }
 .nws-note-view th, .nws-note-view td { padding: 4px 8px; border: 1px solid var(--border-color); }
-.nws-note-view input[type="checkbox"] { margin-right: 6px; accent-color: var(--accent-fill); }
+/* Задачи — как в «Заметках» Apple: круглая отметка в своей колонке, перенесённые строки текста идут ровно под текстом,
+   а не под галочкой. Отмеченная — залитый акцентом кружок с галкой, текст приглушён. */
+.nws-note-view ul:has(> li > input[type="checkbox"], > li > p > input[type="checkbox"]) { padding-left: 0; list-style: none; }
+.nws-note-view li:has(> input[type="checkbox"], > p > input[type="checkbox"]) { position: relative; padding-left: 1.85em; }
+.nws-note-view li input[type="checkbox"] {
+  position: absolute;
+  left: 0;
+  top: calc((1.6em - 1.15em) / 2);
+  width: 1.15em;
+  height: 1.15em;
+  margin: 0;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+  background: transparent;
+  appearance: none;
+  cursor: pointer;
+  transition: background-color .15s, border-color .15s;
+}
+.nws-note-view li input[type="checkbox"]:checked {
+  border-color: var(--accent-fill);
+  background: var(--accent-fill) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.4l2.6 2.6L12 5.6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 80% no-repeat;
+}
+.nws-note-view li input[type="checkbox"]:disabled { cursor: default; }
+.nws-note-view li input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 2px; }
+.nws-note-view li:has(> input:checked, > p > input:checked) { color: var(--text-muted); }
 
 /* ── Univer: документы и таблицы ──────────────────────────────────────── */
 .nws-univer { position: relative; height: 100%; min-height: 0; }
@@ -668,6 +699,9 @@ html.is-sticky, html.is-sticky body, html.is-sticky #root { height: 100%; overfl
 .nws-sticky-note[data-kind="table"] { --tone: #34a853; }
 .nws-sticky-head { display: flex; align-items: center; gap: 2px; flex: none; min-height: 38px; padding: 4px 6px 4px 12px; background: color-mix(in srgb, var(--tone, #e8b60c) 30%, var(--container-bg)); border-bottom: 2px solid var(--tone, #e8b60c); -webkit-app-region: drag; }
 .nws-sticky-fill { flex: 1; align-self: stretch; min-width: 12px; }
+/* Пустая полоса для перетаскивания окна делила место с меню поровну, и «Файл … Справка» обрезались при свободном месте:
+   шапка с меню сперва берёт свою ширину, полоса — остаток. */
+.nws-head:has(> .nws-sticky-fill) > .nws-head-main { flex: 0 1 auto; }
 .nws-sticky-title { flex: 0 1 auto; min-width: 0; max-width: calc(100% - 210px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 28px; color: var(--text-main); font-size: var(--text-sm); font-weight: var(--weight-semibold); cursor: default; -webkit-app-region: no-drag; }
 .nws-sticky-title.is-editing { flex: 1 1 auto; height: 28px; padding: 0 6px; border: 1px solid var(--accent-color); border-radius: var(--radius-sm); background: var(--element-bg); font: inherit; font-size: var(--text-sm); font-weight: var(--weight-semibold); outline: none; }
 .nws-sticky-btn { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-2); cursor: pointer; -webkit-app-region: no-drag; }
@@ -882,7 +916,9 @@ button.nws-cm-anchor { cursor: pointer; }
 }
 /* Уголок на ячейке с открытым комментарием (как в Google Таблицах) */
 .nws-cell-mark { position: absolute; pointer-events: none; }
-.nws-cell-mark::after { content: ""; position: absolute; top: 0; right: 0; border-top: 8px solid #f5a623; border-left: 8px solid transparent; }
+/* Уголок комментария — заметный на любой заливке (как в Google Таблицах): крупнее, системный оранжевый, тонкая тень.
+   Клик по ячейке с ним открывает ветку в панели (SheetEditor → onCommentCell). */
+.nws-cell-mark::after { content: ""; position: absolute; top: 0; right: 0; border-top: 11px solid #ff9f0a; border-left: 11px solid transparent; filter: drop-shadow(0 0 .5px rgba(0, 0, 0, .45)); }
 .nws-cm-msg-head time { white-space: nowrap; }
 .nws-cm-msg-head b { flex: 0 1 auto; min-width: 0; }
 .nws-cm { width: 340px; }
@@ -1007,3 +1043,18 @@ div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) .univer-rounded-lg.uni
 div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) > .univer-mt-4 button { padding: 0 10px !important; }
 div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) > .univer-mt-4 > button:first-child { padding: 0 2px !important; }
 div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) > .univer-mt-4 > span { gap: 6px !important; }
+
+/* «Вид → Полный экран» (ItemView): материал занимает всё окно поверх списка, шапки Шара и нижнего меню. */
+/* Ниже листов (200) и меню (240): они открываются из самого материала и должны быть поверх. */
+.nws-item[data-fullscreen] { position: fixed; inset: 0; z-index: 190; }
+/* Папка открывается и закрывается без «вдавливания» (общее нажатие кнопок Шара — scale(.97)). */
+.nws-folder-toggle { --press: none; }
+/* Колонка сетки панели комментариев растягивалась по самой длинной строке (цитата в плашке не переносится) — поле
+   ввода и кнопка «Комментировать» уезжали за край панели, отправить было нельзя. Колонки — по ширине панели. */
+.nws-cm-new, .nws-cm-composer, .nws-cm-list, .nws-cm-thread { grid-template-columns: minmax(0, 1fr); }
+.nws-cm { min-width: 0; max-width: 100%; }
+/* Прокомментированный текст в документе — жёлтая подложка, как в Google Docs (DocEditor, слой поверх холста). Клики
+   проходят в текст; курсор в таком тексте открывает ветку в панели. */
+.nws-text-marks { position: absolute; z-index: 8; overflow: hidden; pointer-events: none; }
+.nws-text-marks > span { position: absolute; border-radius: 2px; background: color-mix(in srgb, #f5c518 32%, transparent); mix-blend-mode: multiply; }
+html:is([data-theme="graphite"], [data-theme="black"]) .nws-text-marks > span { background: color-mix(in srgb, #f5c518 30%, transparent); mix-blend-mode: screen; }

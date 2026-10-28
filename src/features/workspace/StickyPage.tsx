@@ -17,6 +17,7 @@ import { stickyBridge } from './lib/sticky';
 import { useItemSession } from './useItemSession';
 import { Spinner } from '@/shared/ui/Spinner';
 import './workspace.css';
+import './office-apple.css';
 
 
 /**

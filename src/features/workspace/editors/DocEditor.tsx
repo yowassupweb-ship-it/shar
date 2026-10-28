@@ -13,6 +13,10 @@ import { UniverDocsDrawingPlugin, UniverDocsDrawingUIPlugin, UniverDrawingPlugin
 import UniverPresetDocsDrawingRuRU from '@univerjs/preset-docs-drawing/locales/ru-RU';
 import { UniverDocsHyperLinkPreset } from '@univerjs/preset-docs-hyper-link';
 import UniverPresetDocsHyperLinkRuRU from '@univerjs/preset-docs-hyper-link/locales/ru-RU';
+// Facade интерфейса (univerAPI.createMenu и др.) пресет документов сам не подключает: без этого импорта метод
+// появлялся, только если раньше в той же сборке загрузилась таблица.
+import '@univerjs/ui/facade';
+import '@univerjs/docs-ui/facade';
 import '@univerjs/preset-docs-hyper-link/lib/index.css';
 import '@univerjs/preset-docs-core/lib/index.css';
 import '@univerjs/preset-docs-drawing/lib/index.css';
@@ -20,7 +24,7 @@ import '@univerjs/find-replace/lib/index.css';
 import { UploadingImageIoService, uploadPastedImages } from '../lib/imageIo';
 import { SharEmojiPicker } from '@/shared/emoji/SharEmojiPicker';
 import { emptySnapshot, ensureDrawingResource, fingerprint, localizeImages, parseSnapshot, type DocSnapshot } from '../lib/docSnapshot';
-import { addLinkButton, disableBlockHandle, docLinkProbe, hideMissingFonts, isDarkTheme, overrideComponent, styleDocSurface, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
+import { addLinkButton, addWebFonts, relayoutOnHostResize, stepToolbarWidth, throttleWindowResize, disableBlockHandle, reserveToolbarSpace, hidePopupsUnderToolbar, docLinkProbe, hideMissingFonts, isDarkTheme, overrideComponent, styleDocSurface, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
 import type { EditorProps } from './types';
 import { CursorLayer, type CursorShape } from '../CursorLayer';
 import { bindDoc } from '../live/docOps';
@@ -30,9 +34,34 @@ import type { CursorPos, RemoteCursor } from '../useCursors';
 type DocCursor = { s: number; e: number; seg: string; pg: number; b: 0 | 1 };
 
 type Injector = { get: <T>(token: unknown) => T };
+const NO_QUOTES: string[] = [];
+
+/**
+ * Где в тексте документа цитаты комментариев. Цитату при сохранении нормализуют (управляющие символы → пробел,
+ * пробелы склеены, обрезано по краям — DocEditor.anchor): ищем её в так же нормализованном тексте и переводим
+ * найденное обратно в смещения исходного. Берём первое вхождение — как и переход к ветке (jump).
+ */
+function findQuotes(stream: string, quotes: string[]): Array<{ quote: string; s: number; e: number }> {
+  if (!quotes.length || !stream) return [];
+  let flat = '';
+  const at: number[] = [];
+  let space = true;
+  for (let i = 0; i < stream.length; i += 1) {
+    const ch = stream.charCodeAt(i) < 32 || /\s/.test(stream[i]) ? ' ' : stream[i];
+    if (ch === ' ') { if (space) continue; space = true; } else space = false;
+    flat += ch;
+    at.push(i);
+  }
+  const out: Array<{ quote: string; s: number; e: number }> = [];
+  for (const quote of quotes) {
+    const i = quote ? flat.indexOf(quote) : -1;
+    if (i >= 0) out.push({ quote, s: at[i], e: at[i + quote.length - 1] + 1 });
+  }
+  return out;
+}
 
 /** Чужие курсоры → точки слоя поверх холста. Univer сам учитывает прокрутку и масштаб (getRangeBounds). */
-function measureCursors(injector: Injector, unitId: string, host: HTMLElement, cursors: RemoteCursor[]) {
+function measureCursors(injector: Injector, unitId: string, host: HTMLElement, cursors: RemoteCursor[], quotes: Array<{ s: number; e: number }> = []) {
   const render = injector.get<{ getRenderUnitById: (id: string) => { engine: { getCanvasElement: () => HTMLCanvasElement | null } } | null }>(IRenderManagerService).getRenderUnitById(unitId);
   const canvas = render?.engine.getCanvasElement();
   if (!canvas) return null;
@@ -61,7 +90,14 @@ function measureCursors(injector: Injector, unitId: string, host: HTMLElement, c
       boxes: (rects ?? []).map((r) => ({ x: r.left - box.left, y: r.top - box.top, w: r.right - r.left, h: r.bottom - r.top })),
     });
   }
-  return { shapes, frame: { left: box.left - hostBox.left, top: box.top - hostBox.top, width: box.width, height: box.height } };
+  // Прокомментированный текст — подложкой, как в Google Docs.
+  const marks: Array<{ x: number; y: number; w: number; h: number }> = [];
+  for (const q of quotes) {
+    let rects: Array<{ left: number; right: number; top: number; bottom: number }> | undefined;
+    try { rects = pop.getRangeBounds({ segmentId: '', startOffset: q.s, endOffset: q.e, collapsed: false }, unitId); } catch { rects = undefined; }
+    for (const r of rects ?? []) marks.push({ x: r.left - box.left, y: r.top - box.top, w: r.right - r.left, h: r.bottom - r.top });
+  }
+  return { shapes, marks, frame: { left: box.left - hostBox.left, top: box.top - hostBox.top, width: box.width, height: box.height } };
 }
 
 /**
@@ -69,7 +105,14 @@ function measureCursors(injector: Injector, unitId: string, host: HTMLElement, c
  * Google Docs. Правка отдаёт снимок целиком, сервер хранит его как есть. Загружается отдельным куском —
  * Univer тяжёлый, и остальной Шар ради него не ждёт.
  */
-export default function DocEditor({ content, onContent, readOnly, loadKey, visible = true, cursors = [], onCursor, live, commentsBridge, onAddComment }: EditorProps) {
+export default function DocEditor({ content, onContent, readOnly, loadKey, visible = true, cursors = [], onCursor, live, commentsBridge, onAddComment, commentQuotes = NO_QUOTES, onCommentQuote }: EditorProps) {
+  const onCommentQuoteRef = useRef(onCommentQuote);
+  onCommentQuoteRef.current = onCommentQuote;
+  const quotesRef = useRef(commentQuotes);
+  quotesRef.current = commentQuotes;
+  /** Где сейчас цитаты в тексте (считает слой отметок) — по ним курсор в прокомментированном тексте открывает ветку. */
+  const quoteSpots = useRef<Array<{ quote: string; s: number; e: number }>>([]);
+  const streamRef = useRef<() => string>(() => '');
   const onAddCommentRef = useRef(onAddComment);
   onAddCommentRef.current = onAddComment;
   const host = useRef<HTMLDivElement>(null);
@@ -113,6 +156,10 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
         UniverDocsHyperLinkPreset(),
       ],
     });
+    // Ширина строки ленты — ступенями: Univer реже перемеряет кнопки, пока тянут окно (stepToolbarWidth).
+    const stopToolbarStep = stepToolbarWidth(mount);
+    // Протяжка окна: холст перерисовывается не на каждый кадр (throttleWindowResize).
+    const stopResizeGate = throttleWindowResize();
     // Поиск по документу (Ctrl+F): официальные плагины Univer. Регистрируем до создания документа.
     univer.registerPlugin(UniverFindReplacePlugin);
     univer.registerPlugin(UniverDocsFindReplacePlugin);
@@ -149,6 +196,16 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
     const doc = univerAPI.createDocument(ensureDrawingResource(structuredClone(initial.current)) as unknown as IDocumentData);
     styleDocSurface(univer, doc.getId(), initial.current.documentStyle?.documentFlavor === 2);
     disableBlockHandle(univer, doc.getId());
+    // Парящая лента — только у редактора с лентой и у документа с листами.
+    const stopToolbarSpace = !readOnly && initial.current.documentStyle?.documentFlavor !== 2
+      ? reserveToolbarSpace(univer, doc.getId(), (listener) => {
+        const sub = univerAPI.addEvent(univerAPI.Event.CommandExecuted, (event) => listener(event.id));
+        return () => sub.dispose();
+      })
+      : () => undefined;
+    // Карточка ссылки, уехавшей под парящую ленту, не висит над шапкой.
+    const stopPopupGuard = readOnly ? () => undefined : hidePopupsUnderToolbar(el);
+    addWebFonts(univerAPI);
     hideMissingFonts(univer);
     const untagFind = tagFindDialog();
     const probe = docLinkProbe(univer);
@@ -165,6 +222,8 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
         .appendTo(['contextMenu.mainArea', 'contextMenu.others']);
     }
     engine.current = { injector, unitId };
+    kickCursors.current();
+    const anyCommand = univerAPI.addEvent(univerAPI.Event.CommandExecuted, () => kickCursors.current());
     const selectionSub = injector.get<{ textSelection$: { subscribe: (fn: (p: { unitId: string; textRanges?: Array<{ startOffset: number; endOffset: number; segmentId?: string; segmentPage?: number; direction?: string; isActive?: boolean }> }) => void) => { unsubscribe: () => void } } }>(DocSelectionManagerService)
       .textSelection$.subscribe((p) => {
         if (p.unitId !== unitId) return;
@@ -173,11 +232,17 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
         onCursorRef.current?.(pos as CursorPos | null);
         if (r && r.startOffset !== r.endOffset) lastRange = { s: Math.min(r.startOffset, r.endOffset), e: Math.max(r.startOffset, r.endOffset) };
         else if (r) lastRange = null;
+        // Курсор встал в прокомментированный текст — показать ветку (как клик по подсвеченному тексту в Google Docs).
+        if (r && r.startOffset === r.endOffset && !r.segmentId && onCommentQuoteRef.current) {
+          const hit = quoteSpots.current.find((q) => r.startOffset >= q.s && r.startOffset <= q.e);
+          if (hit) onCommentQuoteRef.current(hit.quote);
+        }
       });
 
     // Комментарии: привязка — выделенный текст (последнее непустое выделение, пока курсор не поставили в другое место);
     // переход к ветке — найти цитату в тексте и выделить её.
     const streamOf = () => String((doc as unknown as { getDocumentDataModel: () => { getSnapshot: () => { body?: { dataStream?: string } } } }).getDocumentDataModel().getSnapshot()?.body?.dataStream || '');
+    streamRef.current = streamOf;
     if (commentsBridge) {
       commentsBridge.current = {
         anchor: () => {
@@ -237,12 +302,17 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
       // Пересоздание (тема, просмотр ↔ правка) открывает документ из initial — пусть в нём будет всё, что уже есть.
       if (ready) { try { initial.current = localizeImages(doc.save() as unknown as DocSnapshot); } catch { /* уже разобран */ } }
       subscription.dispose();
+      anyCommand.dispose();
       selectionSub.unsubscribe();
       if (commentsBridge) commentsBridge.current = null;
       engine.current = null;
       // Univer снимает свои React-деревья синхронно; внутри фазы рендера нашего компонента React на это жалуется.
       untagFind();
       stopLinkButton();
+      stopToolbarSpace();
+      stopPopupGuard();
+      stopToolbarStep();
+      stopResizeGate();
       window.setTimeout(() => { univer.dispose(); mount.remove(); }, 0);
     };
   }, [loadKey, readOnly, theme, live]);
@@ -252,38 +322,55 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
   // Univer пересчитывает холст по событию resize — даём его сами, иначе холст оставался прежнего размера.
   useEffect(() => {
     const el = host.current;
-    if (!el || typeof ResizeObserver === 'undefined') return undefined;
-    let raf = 0;
-    const observer = new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => window.dispatchEvent(new Event('resize'))); });
-    observer.observe(el);
-    return () => { cancelAnimationFrame(raf); observer.disconnect(); };
+    if (!el) return undefined;
+    return relayoutOnHostResize(el);
   }, []);
 
-  // Чужие курсоры следят за прокруткой, масштабом и раскладкой: пересчитываем каждый кадр, пока они есть,
-  // а состояние меняем, только если что-то сдвинулось.
+  // Чужие курсоры следят за прокруткой, масштабом и раскладкой. Пересчитываем по событию — любой команде Univer (правка,
+  // прокрутка, масштаб), смене размера окна или самих курсоров — и ещё 300 мс после него, а не каждый кадр, пока коллеги
+  // в документе (тот цикл всё время грузил процессор). Состояние меняем, только если что-то сдвинулось.
   const cursorsRef = useRef(cursors);
   cursorsRef.current = cursors;
   const hasCursors = cursors.length > 0;
+  const hasQuotes = commentQuotes.length > 0;
+  const kickCursors = useRef<() => void>(() => undefined);
   useEffect(() => {
-    if (!hasCursors) { setOverlay(null); return undefined; }
+    if (!hasCursors && !hasQuotes) { kickCursors.current = () => undefined; quoteSpots.current = []; setOverlay(null); return undefined; }
     let raf = 0;
+    let until = 0;
     let last = '';
     const tick = () => {
-      raf = requestAnimationFrame(tick);
-      if (document.hidden || !engine.current || !host.current) return;
-      let next: ReturnType<typeof measureCursors> = null;
-      // Редактор пересоздаётся (новая версия, смена темы) — между dispose и новым экземпляром сервисов нет.
-      try { next = measureCursors(engine.current.injector, engine.current.unitId, host.current, cursorsRef.current); } catch { return; }
-      const key = JSON.stringify(next);
-      if (key !== last) { last = key; setOverlay(next); }
+      raf = 0;
+      if (!document.hidden && engine.current && host.current) {
+        let next: ReturnType<typeof measureCursors> = null;
+        // Редактор пересоздаётся (новая версия, смена темы) — между dispose и новым экземпляром сервисов нет.
+        try {
+          let stream = '';
+          try { stream = streamRef.current(); } catch { stream = ''; }
+          quoteSpots.current = findQuotes(stream, quotesRef.current);
+          next = measureCursors(engine.current.injector, engine.current.unitId, host.current, cursorsRef.current, quoteSpots.current);
+        } catch { next = null; }
+        const key = JSON.stringify(next);
+        if (key !== last) { last = key; setOverlay(next); }
+      }
+      if (performance.now() < until) raf = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [hasCursors]);
+    const kick = () => { until = performance.now() + 300; if (!raf) raf = requestAnimationFrame(tick); };
+    kickCursors.current = kick;
+    kick();
+    window.addEventListener('resize', kick);
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', kick); kickCursors.current = () => undefined; };
+  }, [hasCursors, hasQuotes]);
+  useEffect(() => { kickCursors.current(); }, [cursors, commentQuotes]);
 
   if (broken) return <div className="nws-missing" role="alert">Не удалось прочитать содержимое документа: файл повреждён.</div>;
   return (
     <div className="nws-univer nws-univer-doc" ref={host} aria-label="Редактор документа">
+      {overlay && overlay.marks.length > 0 && (
+        <div className="nws-text-marks" style={overlay.frame} aria-hidden="true">
+          {overlay.marks.map((m, i) => <span key={i} style={{ left: m.x, top: m.y, width: m.w, height: m.h }} />)}
+        </div>
+      )}
       {overlay && <CursorLayer shapes={overlay.shapes} style={overlay.frame} />}
     </div>
   );

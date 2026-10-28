@@ -16,7 +16,8 @@ export interface BarMenu {
   items: Array<BarItem | 'sep'>;
 }
 
-const OPEN_DELAY = 120;
+/** Наведение открывает меню не сразу: курсор, идущий через строку к ленте, его не раскрывает. Нажатие — сразу. */
+const OPEN_DELAY = 350;
 const CLOSE_DELAY = 350;
 
 /**

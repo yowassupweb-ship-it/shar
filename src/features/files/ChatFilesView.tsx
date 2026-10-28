@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { lazyComponent } from '@/shared/ui/lazy';
-import { AlertCircle, ChevronLeft, ChevronRight, Download, MessageSquareText, RotateCw, Search } from 'lucide-react';
+import { AlertCircle, ChevronLeft, ChevronRight, Download, MessageSquareText, RotateCw, Search, PenLine } from 'lucide-react';
 import type { ViewerItem } from '@/shared/ui/ImageViewer';
 import { SearchField } from '@/shared/ui/SearchField';
 import { Avatar } from '@/shared/ui/Avatar';
@@ -8,7 +8,7 @@ import { thumbUrl } from '@/shared/ui/media';
 import { cachedChatFiles, cachedChatFolders, fileUrl, fmtBytes, fmtDate, kindOf, loadChatFiles, loadChatFolders, type ChatAttachment, type ChatFolder } from './api';
 import { FileGlyph } from './FileGlyph';
 import { downloadOnClick } from '@/shared/platform/download';
-import { viewKindOf, type FileRef } from '@/features/workspace';
+import { canOpenInEditor, openInEditor, viewKindOf, type FileRef } from '@/features/workspace';
 import { DocOverlay } from './DocOverlay';
 
 const ImageViewer = lazyComponent(() => import('@/shared/ui/ImageViewer'));
@@ -199,6 +199,9 @@ export function ChatFiles({ lead, chat, onBack }: { lead?: ReactNode; chat: { ch
                         <span className="nf-meta">{[a.authorName, fmtBytes(a.size), fmtDate(a.createdAt)].filter(Boolean).join(' · ')}</span>
                       </a>
                       <button type="button" className="nx-icon-btn" onClick={jump} aria-label="Показать в чате" title="Показать в чате"><MessageSquareText size={16} /></button>
+                      {canOpenInEditor(a.filename) && (
+                        <button type="button" className="nx-icon-btn" onClick={() => void openInEditor({ url: fileUrl(a.url), name: a.filename, size: a.size ?? undefined })} aria-label={`Открыть в Шаре: ${a.filename}`} title="Открыть в Шаре — копия, исходный файл не изменится"><PenLine size={16} /></button>
+                      )}
                       <a className="nx-icon-btn" href={fileUrl(a.url)} download={a.filename} onClick={downloadOnClick(fileUrl(a.url), a.filename)} aria-label="Скачать" title="Скачать"><Download size={16} /></a>
                     </div>
                   ))}

@@ -482,15 +482,15 @@ function fmtSize(b?: number): string {
 }
 
 /**
- * Файл в переписке. Скачать — по карточке. У файлов, которые умеет показывать панель просмотра, в карточке справа
- * кнопки-иконки: просмотр (в боковой панели) и — для Word, Excel, CSV, Markdown и текста — открыть в редакторе.
- * PDF и HTML открываются только на просмотр.
+ * Файл в переписке. Скачать — по карточке. Справа кнопки-иконки: просмотр (в боковой панели) — у файлов, которые она
+ * умеет показать, и «Открыть в Шаре» — у всего, что умеет импорт «Офиса» (Word, Excel, CSV, Markdown, текст,
+ * PowerPoint, PDF).
  */
 export function FileCard({ att }: { att: Att }) {
   const name = att.name || decodeURIComponent(att.url.split('/').pop() || 'Файл');
   const ext = (name.match(/\.([a-z0-9]{1,5})$/i)?.[1] || 'файл').toUpperCase();
   const viewable = viewKindOf(name) !== null;
-  const editable = viewable && canOpenInEditor(name);
+  const editable = canOpenInEditor(name);
   const [opening, setOpening] = useState(false);
   const card = (
     <a className="cxm-file" href={att.url} target="_blank" rel="noopener noreferrer" download={name} onClick={downloadOnClick(att.url, name)}>
@@ -501,19 +501,21 @@ export function FileCard({ att }: { att: Att }) {
       </span>
     </a>
   );
-  if (!viewable) return card;
+  if (!viewable && !editable) return card;
   return (
-    <div className="cxm-file-wrap" style={{ '--file-actions': editable ? 2 : 1 } as React.CSSProperties}>
+    <div className="cxm-file-wrap" style={{ '--file-actions': (viewable ? 1 : 0) + (editable ? 1 : 0) } as React.CSSProperties}>
       {card}
       <div className="cxm-file-actions">
-        <button type="button" title="Просмотр" aria-label={`Просмотр: ${name}`} onClick={(e) => { e.stopPropagation(); openDocument({ url: att.url, name, size: att.size }); }}>
-          <Eye size={17} aria-hidden="true" />
-        </button>
+        {viewable && (
+          <button type="button" title="Просмотр" aria-label={`Просмотр: ${name}`} onClick={(e) => { e.stopPropagation(); openDocument({ url: att.url, name, size: att.size }); }}>
+            <Eye size={17} aria-hidden="true" />
+          </button>
+        )}
         {editable && (
           <button
             type="button"
-            title="Открыть в редакторе — копия, исходный файл не изменится"
-            aria-label={`Открыть в редакторе: ${name}`}
+            title="Открыть в Шаре — копия, исходный файл не изменится"
+            aria-label={`Открыть в Шаре: ${name}`}
             disabled={opening}
             onClick={(e) => { e.stopPropagation(); setOpening(true); void openInEditor({ url: att.url, name, size: att.size }).finally(() => setOpening(false)); }}
           >
