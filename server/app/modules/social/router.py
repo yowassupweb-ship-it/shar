@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -281,7 +282,7 @@ def _card(account: dict, inc: P.Incoming, status: str = "new", answers: Optional
         "kind": "social", "platform": account["platform"], "platformLabel": PLATFORMS[account["platform"]],
         "account": account.get("title") or "", "sourceTitle": inc.chat_title, "sourceType": inc.chat_type,
         "sourceLabel": SOURCE_TYPES.get(inc.chat_type, ""), "authorName": inc.author_name, "authorUsername": inc.author_username,
-        "text": inc.text, "media": inc.media, "context": inc.context, "link": inc.link,
+        "text": inc.text, "media": inc.media, "authorAvatar": inc.author_avatar, "context": inc.context, "link": inc.link,
         "canReply": inc.can_reply, "status": status, "answers": answers or [],
     }
 
@@ -369,12 +370,105 @@ async def _vk_hook(account: dict, event: dict) -> PlainTextResponse:
         raise HTTPException(status_code=404, detail="Not found")
 
     def handle() -> None:
+        if event.get("type") == "message_reply":
+            record_sent(account, event)
+            return
         inc = vk.parse(event, _decrypt(account["token_enc"]), account.get("title") or "")
         if inc:
             receive(account, inc)
 
     await anyio.to_thread.run_sync(handle)
     return PlainTextResponse("ok")  # иначе ВКонтакте повторит событие
+
+
+def _default_chat(account: dict) -> Optional[str]:
+    chat_id = account.get("default_chat_id")
+    return chat_id if chat_id and _get_chat_cached(chat_id) else None
+
+
+def record_sent(account: dict, event: dict) -> None:
+    """Сообщение, отправленное от имени сообщества не из Шара (из ВКонтакте, мобильного приложения, другого
+    сервиса): кладём в переписку, чтобы в диалоге была вся история. Своё, из Шара, уже записано — не задвоится."""
+    token = _decrypt(account["token_enc"])
+    msg = event.get("object") or {}
+    msg = msg.get("message") or msg
+    peer = int(msg.get("peer_id") or 0)
+    if not peer:
+        return
+    group_id = int((account.get("extra") or {}).get("groupId") or 0)
+    chat = peer >= 2_000_000_000
+    person = {} if chat else vk._person(token, peer)  # noqa: SLF001
+    admin = int(msg.get("admin_author_id") or 0)
+    inc = vk.sent_incoming(msg, vk._person(token, admin) if admin else {}, group_id)  # noqa: SLF001
+    if not inc:
+        return
+    dialog_id = D.ensure_private(account, str(peer), "Беседа ВКонтакте" if chat else vk._name(person, peer),  # noqa: SLF001
+                                 person.get("screen_name") or "", _default_chat(account), "group" if chat else "private", person.get("photo_100") or "")
+    if D.record_history(account["id"], dialog_id, inc, "out", vk.stamp(msg), inc.author_name):
+        D.refresh_last(dialog_id)
+        D.notify(dialog_id)
+
+
+# ─── Подгрузка истории ───────────────────────────────────────────────────────
+
+IMPORTS: Dict[str, Dict[str, Any]] = {}
+
+
+def _import_history(account: dict) -> None:
+    state = IMPORTS[account["id"]]
+    token = _decrypt(account["token_enc"])
+    group_id = int((account.get("extra") or {}).get("groupId") or 0)
+    default_chat = _default_chat(account)
+    last_dialog = None
+    try:
+        for peer, title, people in vk.conversations(token):
+            chat = peer >= 2_000_000_000
+            person = people.get(peer) or {}
+            name = (title or "Беседа ВКонтакте") if chat else vk._name(person, peer)  # noqa: SLF001
+            dialog_id = D.ensure_private(account, str(peer), name, person.get("screen_name") or "", default_chat, "group" if chat else "private", person.get("photo_100") or "")
+            fresh = 0
+            for msg, profiles in vk.history(token, peer):
+                author = int(msg.get("from_id") or 0)
+                if msg.get("out") or author < 0:
+                    admin = int(msg.get("admin_author_id") or 0)
+                    inc = vk.sent_incoming(msg, profiles.get(admin) or {}, group_id, name)
+                    direction = "out"
+                else:
+                    inc = vk.message_incoming(msg, profiles.get(author) or people.get(author) or {}, group_id, title)
+                    direction = "in"
+                if inc and D.record_history(account["id"], dialog_id, inc, direction, vk.stamp(msg), inc.author_name if direction == "out" else ""):
+                    fresh += 1
+            state["dialogs"] += 1
+            state["messages"] += fresh
+            if fresh:
+                D.refresh_last(dialog_id)
+                last_dialog = dialog_id
+        state["state"] = "done"
+    except P.PlatformError as e:
+        state.update(state="error", error=str(e))
+    except Exception as e:  # noqa: BLE001 — фоновая задача не должна пропасть молча
+        log.exception("social import %s failed", account["id"])
+        state.update(state="error", error=f"Сбой при загрузке: {type(e).__name__}")
+    if last_dialog:
+        D.notify(last_dialog)
+
+
+@router.post("/api/social/accounts/{account_id}/import")
+def start_import(account_id: str, me: Identity = Depends(require_tool)):
+    """Подгрузить старую переписку сообщества (ВКонтакте) в фоне. Повторный запуск дописывает только новое."""
+    account = _account(account_id)
+    if account["platform"] != "vk":
+        raise HTTPException(status_code=409, detail="Историю можно подгрузить только из ВКонтакте")
+    if (IMPORTS.get(account_id) or {}).get("state") == "running":
+        raise HTTPException(status_code=409, detail="Загрузка уже идёт")
+    IMPORTS[account_id] = {"state": "running", "dialogs": 0, "messages": 0, "error": ""}
+    threading.Thread(target=_import_history, args=(account,), daemon=True, name=f"social-import-{account_id}").start()
+    return {"import": IMPORTS[account_id]}
+
+
+@router.get("/api/social/accounts/{account_id}/import")
+def import_status(account_id: str, me: Identity = Depends(require_tool)):
+    return {"import": IMPORTS.get(account_id) or {"state": "idle", "dialogs": 0, "messages": 0, "error": ""}}
 
 
 # ─── Лента и ответ ──────────────────────────────────────────────────────────
@@ -511,7 +605,7 @@ def list_dialogs(kind: str = "", filter: str = "", platform: str = "", q: str = 
     elif kind == "dialogs":
         where.append("d.kind <> 'comments'")
     if filter == "waiting":
-        where.append("d.last_dir = 'in'")
+        where.append("d.last_dir = 'in' AND d.handled_at IS NULL")
     if platform in PLATFORMS:
         where.append("a.platform = %s")
         params.append(platform)
@@ -524,7 +618,7 @@ def list_dialogs(kind: str = "", filter: str = "", platform: str = "", q: str = 
     accounts = _accounts()
     waiting = db.conn.fetch_one(
         "SELECT count(*) FILTER (WHERE kind <> 'comments') AS dialogs, count(*) FILTER (WHERE kind = 'comments') AS comments "
-        "FROM social_dialogs WHERE last_dir = 'in'") or {}
+        "FROM social_dialogs WHERE " + D.WAITING_SQL) or {}
     return {"dialogs": [D.view(dict(r), PLATFORMS, accounts.get(r["account_id"], {})) for r in (db.conn.fetch_all(sql, tuple(params)) or [])],
             "waiting": {"dialogs": int(waiting.get("dialogs") or 0), "comments": int(waiting.get("comments") or 0)}}
 
@@ -552,15 +646,18 @@ def get_dialog(dialog_id: str, me: Identity = Depends(require_tool)):
         author = users.get(str(it.get("author_user_id") or "")) if out else None
         messages.append({
             "id": it["id"], "direction": it.get("direction") or "in",
-            "text": data.get("text") or "", "media": data.get("media") or [], "link": data.get("link"),
+            "text": data.get("text") or "", "media": data.get("media") or [], "images": data.get("images") or [], "link": data.get("link"),
             "context": data.get("context") or "", "canReply": data.get("can_reply", True),
             "authorName": ((author or {}).get("name") or data.get("author_name") or "") if out else (data.get("author_name") or ""),
             "authorUserId": it.get("author_user_id"),
             "at": it["created_at"].isoformat() if hasattr(it.get("created_at"), "isoformat") else None,
         })
     last_in = next((m for m in reversed(messages) if m["direction"] == "in"), None)
-    return {"dialog": D.view(row, PLATFORMS, accounts.get(row["account_id"], {})), "messages": messages,
-            "canReply": bool(last_in and last_in["canReply"] and row["account_id"] in accounts)}
+    account = accounts.get(row["account_id"], {})
+    return {"dialog": D.view(row, PLATFORMS, account), "messages": messages,
+            "canReply": bool(last_in and last_in["canReply"] and row["account_id"] in accounts),
+            # Автору комментария во ВКонтакте сообщество может написать в личные (если он не закрыл сообщения).
+            "canPrivate": bool(row["kind"] == "comments" and account.get("platform") == "vk" and last_in)}
 
 
 @router.post("/api/social/dialogs/{dialog_id}/messages")
@@ -577,6 +674,49 @@ async def send_to_dialog(dialog_id: str, body: Dict[str, Any] = Body(...), me: I
     if not (row.get("data") or {}).get("can_reply", True):
         raise HTTPException(status_code=409, detail="На этот комментарий площадка даёт ответить только на самом сайте")
     return await _answer(dict(row), text, me, files)
+
+
+@router.post("/api/social/dialogs/{dialog_id}/handled")
+def mark_handled(dialog_id: str, body: Dict[str, Any] = Body(...), me: Identity = Depends(require_tool)):
+    """Отметить диалог «ответ дан» (или снять отметку): ответили не из Шара — диалог перестаёт «ждать ответа»."""
+    _dialog(dialog_id)
+    D.set_handled(dialog_id, bool(body.get("handled", True)), me.user_id)
+    D.notify(dialog_id)
+    row = _dialog(dialog_id)
+    return {"dialog": D.view(row, PLATFORMS, _accounts().get(row["account_id"], {}))}
+
+
+@router.post("/api/social/dialogs/{dialog_id}/private")
+async def write_private(dialog_id: str, body: Dict[str, Any] = Body(...), me: Identity = Depends(require_tool)):
+    """Написать автору комментария в личные сообщения от имени сообщества (ВКонтакте). Переписка
+    ложится в личный диалог с ним (вкладка «Диалоги»), а комментарий считается отвеченным."""
+    files = _files(body)
+    text = _check_text(body, allow_empty=bool(files))
+    dialog = _dialog(dialog_id)
+    account_row = db.conn.fetch_one("SELECT * FROM social_accounts WHERE id = %s", (dialog["account_id"],))
+    if not account_row or account_row["platform"] != "vk" or dialog["kind"] != "comments":
+        raise HTTPException(status_code=409, detail="В личные можно написать автору комментария во ВКонтакте")
+    account = dict(account_row)
+    last = db.conn.fetch_one("SELECT data FROM social_items WHERE dialog_id = %s AND direction = 'in' ORDER BY created_at DESC LIMIT 1", (dialog_id,))
+    author_id = str(((last or {}).get("data") or {}).get("author_id") or "")
+    if not author_id.isdigit():
+        raise HTTPException(status_code=409, detail="Не знаю, кому писать — у комментария нет автора")
+    target = {"kind": "message", "peer_id": int(author_id)}
+    token = _decrypt(account["token_enc"])
+    try:
+        sent_id = await anyio.to_thread.run_sync(lambda: vk.send_files(token, target, text, files) if files else vk.reply(token, target, text))
+    except P.PlatformError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from None
+    chat_id = dialog.get("chat_id") or account.get("default_chat_id")
+    if chat_id and not _get_chat_cached(chat_id):
+        chat_id = None
+    private_id = D.ensure_private(account, author_id, dialog.get("client_name") or dialog.get("title") or f"id{author_id}",
+                                  dialog.get("client_username") or "", chat_id)
+    D.record_out(private_id, account["id"], author_id, sent_id, text, me.user_id, me.display_name, [n for n, _, _ in files])
+    D.set_handled(dialog_id, True, me.user_id)
+    D.notify(private_id)
+    D.notify(dialog_id)
+    return {"ok": True, "dialogId": private_id}
 
 
 # ─── Уведомления ─────────────────────────────────────────────────────────────
@@ -603,6 +743,6 @@ def waiting_count(me: Identity = Depends(current_identity)):
     mine = {kind: me.user_id in N.recipients(kind) for kind in ("dialogs", "comments")}
     row = db.conn.fetch_one(
         "SELECT count(*) FILTER (WHERE kind <> 'comments') AS dialogs, count(*) FILTER (WHERE kind = 'comments') AS comments "
-        "FROM social_dialogs WHERE last_dir = 'in'") or {}
+        "FROM social_dialogs WHERE " + D.WAITING_SQL) or {}
     counts = {k: int(row.get(k) or 0) if mine[k] else 0 for k in ("dialogs", "comments")}
     return {**counts, "total": counts["dialogs"] + counts["comments"]}

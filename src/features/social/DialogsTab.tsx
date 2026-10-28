@@ -1,15 +1,17 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { AlertCircle, ArrowLeft, ArrowUp, ArrowUpRight, CornerDownRight, MessageSquare, MessagesSquare, Paperclip, Plus, Smile, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowUp, ArrowUpRight, CheckCircle2, Circle, CornerDownRight, Mail, MessageSquare, MessagesSquare, Paperclip, Plus, Smile, X } from 'lucide-react';
 import RichInput, { type RichInputHandle } from '@/features/chat/RichInput';
 import { uploadFileWithProgress } from '@/shared/api/uploadFile';
-import { links } from '@/shared/navigation/routes';
+import { links, paths } from '@/shared/navigation/routes';
 import { realtime } from '@/shared/realtime/realtime';
 import { SearchField } from '@/shared/ui/SearchField';
+import { Sheet } from '@/shared/ui/overlay';
 import { Spinner } from '@/shared/ui/Spinner';
 import { showToast } from '@/shared/ui/Toast';
-import { listDialogs, loadDialog, sendToDialog, type DialogMessage, type OutFile, type Platform, type SocialDialog } from './api';
-import { PlatformMark } from './PlatformMark';
+import { listDialogs, loadDialog, markHandled, sendToDialog, writePrivate, type DialogMessage, type OutFile, type Platform, type SocialDialog } from './api';
+import { Linkified } from './Linkified';
+import { SocialAvatar } from './SocialAvatar';
 
 // Панель эмодзи — та же, что в чате (без стикеров: их во ВКонтакте и MAX из Шара не отправить).
 const EmojiTab = lazy(() => import('@/features/chat/EmojiPanel').then((m) => ({ default: m.EmojiTab })));
@@ -20,6 +22,8 @@ const subscribeNarrow = (cb: () => void) => {
   mq.addEventListener('change', cb);
   return () => mq.removeEventListener('change', cb);
 };
+
+const PICTURE_LABELS = new Set(['Фото', 'Стикер', 'Граффити']);
 
 const KIND_LABEL: Record<SocialDialog['kind'], string> = { private: 'Личные сообщения', business: 'Личные сообщения', group: 'Беседа', comments: 'Комментарии' };
 
@@ -32,6 +36,34 @@ function when(iso: string | null): string {
 }
 
 const timeOf = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '');
+
+/**
+ * Где остановились, как в чатах Шара: какой диалог был открыт на каждой вкладке и до какого сообщения
+ * дочитали в каждом диалоге. В памяти — для мгновенного возврата из другого раздела, в sessionStorage — на
+ * случай перезагрузки. Внизу переписки позицию не храним: туда диалог и так открывается.
+ */
+type Spot = { id: string; offset: number };
+const memory = new Map<string, string>();
+function remember(key: string, value: string | null) {
+  if (value) memory.set(key, value); else memory.delete(key);
+  try {
+    if (value) sessionStorage.setItem(key, value); else sessionStorage.removeItem(key);
+  } catch { /* ignore */ }
+}
+function recall(key: string): string | null {
+  const mem = memory.get(key);
+  if (mem) return mem;
+  try { return sessionStorage.getItem(key); } catch { return null; }
+}
+const openKey = (mode: string) => `nx:social-open:${mode}`;
+const spotKey = (dialogId: string) => `nx:social-scroll:${dialogId}`;
+function readSpot(dialogId: string): Spot | null {
+  try { return JSON.parse(recall(spotKey(dialogId)) || 'null'); } catch { return null; }
+}
+const NEAR_BOTTOM = 40;
+const nearBottom = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM;
+/** Верх строки в координатах содержимого ленты. */
+const topIn = (scroller: HTMLElement, el: HTMLElement) => el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
 
 /**
  * Диалоги с клиентами — все площадки в одной системе: слева список (ВКонтакте и MAX вместе, свежие
@@ -68,23 +100,51 @@ export default function DialogsTab({ mode }: { mode: 'dialogs' | 'comments' }) {
     setParams(next, { replace: !narrow });
   };
 
+  // Вернулись в раздел без диалога в адресе — открываем тот, на котором ушли. Закрыли диалог сами
+  // (назад к списку на телефоне) — забываем.
+  const restoring = useRef(!openId && Boolean(recall(openKey(mode))));
+  useEffect(() => {
+    if (restoring.current) {
+      restoring.current = false;
+      const last = recall(openKey(mode));
+      if (last) {
+        const next = new URLSearchParams(params);
+        next.set('dialog', last);
+        setParams(next, { replace: true });
+        return;
+      }
+    }
+    remember(openKey(mode), openId);
+  }, [openId, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Открытый диалог виден в списке, даже если до него надо листать.
+  const rows = useRef<HTMLDivElement>(null);
+  const shownOpen = useRef<string | null>(null);
+  useEffect(() => {
+    if (!list || !openId || shownOpen.current === openId) return;
+    shownOpen.current = openId;
+    rows.current?.querySelector<HTMLElement>('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
+  }, [list, openId]);
+
   const listPane = (
     <aside className="nsd-list" aria-label={mode === 'comments' ? 'Комментарии' : 'Диалоги'}>
       <div className="nsd-filters">
-        <div className="nx-segment" role="group" aria-label="Какие диалоги">
-          <button type="button" aria-pressed={!waitingOnly} onClick={() => setWaitingOnly(false)}>Все</button>
-          <button type="button" aria-pressed={waitingOnly} onClick={() => setWaitingOnly(true)}>
-            Ждут ответа{list && list.waiting[mode] > 0 && <span className="nsd-count">{list.waiting[mode]}</span>}
-          </button>
-        </div>
-        <div className="nx-segment" role="group" aria-label="Площадка">
-          <button type="button" aria-pressed={platform === ''} onClick={() => setPlatform('')}>Все</button>
-          <button type="button" aria-pressed={platform === 'vk'} onClick={() => setPlatform('vk')}>ВК</button>
-          <button type="button" aria-pressed={platform === 'max'} onClick={() => setPlatform('max')}>MAX</button>
+        <div className="nsd-filter-row">
+          <div className="nx-segment" role="group" aria-label="Какие диалоги">
+            <button type="button" aria-pressed={!waitingOnly} onClick={() => setWaitingOnly(false)}>Все</button>
+            <button type="button" aria-pressed={waitingOnly} onClick={() => setWaitingOnly(true)}>
+              Ждут ответа{list && list.waiting[mode] > 0 && <span className="nsd-count">{list.waiting[mode]}</span>}
+            </button>
+          </div>
+          <div className="nx-segment" role="group" aria-label="Площадка">
+            <button type="button" aria-pressed={platform === ''} onClick={() => setPlatform('')}>Все</button>
+            <button type="button" aria-pressed={platform === 'vk'} onClick={() => setPlatform('vk')}>ВК</button>
+            <button type="button" aria-pressed={platform === 'max'} onClick={() => setPlatform('max')}>MAX</button>
+          </div>
         </div>
         <SearchField value={q} onChange={setQ} placeholder={mode === 'comments' ? 'Автор, текст, пост' : 'Клиент, текст'} label="Поиск" />
       </div>
-      <div className="nsd-rows nx-scroll-y">
+      <div className="nsd-rows nx-scroll-y" ref={rows}>
         {error ? (
           <div className="nx-state" data-tone="danger" role="alert"><AlertCircle size={22} aria-hidden="true" /><p>{error}</p></div>
         ) : !list ? (
@@ -93,11 +153,11 @@ export default function DialogsTab({ mode }: { mode: 'dialogs' | 'comments' }) {
           <div className="nx-state"><MessagesSquare size={24} aria-hidden="true" /><p>{q ? 'Ничего не нашлось.' : waitingOnly ? 'Все ответы даны.' : mode === 'comments' ? 'Комментариев пока нет — они появятся с первым комментарием под постом.' : 'Диалогов пока нет — они появятся с первым сообщением клиента.'}</p></div>
         ) : list.dialogs.map((d) => (
           <button key={d.id} type="button" className="nsd-row" aria-current={d.id === openId ? 'true' : undefined} data-waiting={d.waiting ? 'true' : undefined} onClick={() => open(d.id)}>
-            <PlatformMark platform={d.platform} size={34} />
+            <SocialAvatar platform={d.platform} name={d.title || d.clientName} seed={d.id} src={d.avatar} size={38} />
             <span className="nsd-row-text">
               <span className="nsd-row-top"><b>{d.title || d.clientName}</b><time>{when(d.lastAt)}</time></span>
               <span className="nsd-row-src">{mode === 'comments' ? (d.context ? `Пост: ${d.context}` : d.sourceTitle) : `${KIND_LABEL[d.kind]}${d.kind === 'group' && d.sourceTitle && d.sourceTitle !== d.title ? ` · ${d.sourceTitle}` : ''}`}</span>
-              <span className="nsd-row-last">{d.lastDir === 'out' && <span className="nsd-you">Вы: </span>}{d.lastText}</span>
+              <span className="nsd-row-last">{d.lastDir === 'out' && <span className="nsd-you">Вы: </span>}{d.lastDir === 'in' && d.handled && <span className="nsd-you">Ответ дан · </span>}{d.lastText}</span>
             </span>
             {d.waiting && <span className="nsd-dot" aria-label="Ждёт ответа" />}
           </button>
@@ -127,6 +187,7 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
   const scroller = useRef<HTMLDivElement>(null);
   const input = useRef<RichInputHandle>(null);
   const [emoji, setEmoji] = useState(false);
+  const [privateOpen, setPrivateOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const coarse = window.matchMedia('(pointer: coarse)').matches;
   const picker = useRef<HTMLInputElement>(null);
@@ -137,11 +198,48 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
   useEffect(() => {
     loadDialog(id).then((d) => { setData(d); setError(''); }).catch((e: Error) => setError(e.message));
   }, [id, tick]);
-  // Новое сообщение — к низу переписки.
+  // Открыли диалог — туда, где остановились (нет записи — вниз). Новое сообщение — к низу, если и так были внизу:
+  // дочитывающего выше не сдёргиваем.
+  const placed = useRef(false);
+  const atBottom = useRef(true);
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [data?.messages.length]);
+    if (!el) return;
+    if (!placed.current) {
+      placed.current = true;
+      const spot = readSpot(id);
+      const row = spot && el.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(spot.id)}"]`);
+      if (row) {
+        el.scrollTop = topIn(el, row) - spot.offset;
+        atBottom.current = nearBottom(el);
+        return;
+      }
+    }
+    if (atBottom.current) el.scrollTop = el.scrollHeight;
+  }, [data?.messages.length, id]);
+  // Позицию пишем, пока листают (не чаще раза в 150 мс): первое видимое сообщение и его отступ от верха.
+  const saveTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(saveTimer.current), []);
+  const onScroll = () => {
+    const el = scroller.current;
+    if (!el) return;
+    atBottom.current = nearBottom(el);
+    if (saveTimer.current) return;
+    saveTimer.current = window.setTimeout(() => {
+      saveTimer.current = 0;
+      const box = scroller.current;
+      if (!box) return;
+      if (nearBottom(box)) { remember(spotKey(id), null); return; }
+      const top = box.getBoundingClientRect().top;
+      const first = Array.from(box.querySelectorAll<HTMLElement>('[data-msg-id]')).find((r) => r.getBoundingClientRect().bottom > top);
+      if (first) remember(spotKey(id), JSON.stringify({ id: first.dataset.msgId, offset: topIn(box, first) - box.scrollTop }));
+    }, 150);
+  };
+  // Картинка догрузилась и сдвинула переписку — кто был внизу, остаётся внизу.
+  const keepBottom = () => {
+    const el = scroller.current;
+    if (el && atBottom.current) el.scrollTop = el.scrollHeight;
+  };
   // Эмодзи из панели — в поле, в место курсора.
   useEffect(() => {
     const onEmoji = (e: Event) => input.current?.insertEmoji(String((e as CustomEvent).detail || ''));
@@ -161,13 +259,20 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
     if (picker.current) picker.current.value = '';
   };
 
+  const toggleHandled = () => {
+    if (!data) return;
+    markHandled(id, !data.dialog.handled)
+      .then(({ dialog }) => { setData((cur) => (cur ? { ...cur, dialog } : cur)); onSent(); })
+      .catch((e: Error) => showToast(e.message, 'error'));
+  };
+
   const send = () => {
     const body = text.trim();
     const ready = files.filter((f) => f.file).map((f) => f.file!);
     if ((!body && !ready.length) || busy || uploading) return;
     setBusy(true);
     sendToDialog(id, body, ready)
-      .then(() => { setText(''); setFiles([]); setEmoji(false); onSent(); return loadDialog(id).then(setData); })
+      .then(() => { setText(''); setFiles([]); setEmoji(false); onSent(); atBottom.current = true; return loadDialog(id).then(setData); })
       .catch((e: Error) => showToast(e.message, 'error'))
       .finally(() => setBusy(false));
   };
@@ -190,27 +295,44 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
     >
       <header className="nsd-head">
         {onBack && <button type="button" className="nx-icon-btn" onClick={onBack} aria-label="К списку диалогов"><ArrowLeft size={18} /></button>}
-        <PlatformMark platform={d.platform} size={36} />
+        <SocialAvatar platform={d.platform} name={d.title || d.clientName} seed={d.id} src={d.avatar} size={40} />
         <div className="nsd-head-text">
           <b>{d.title}{d.clientUsername && d.kind !== 'group' ? <span> · @{d.clientUsername}</span> : null}</b>
           <span>{d.platformLabel} · {KIND_LABEL[d.kind]}{d.kind !== 'private' && d.kind !== 'business' && d.sourceTitle ? ` · ${d.sourceTitle}` : ''}{d.account && !d.sourceTitle.startsWith(d.account) ? ` · ${d.account}` : ''}</span>
         </div>
         <span className="nsd-head-links">
+          {data.canPrivate && <button type="button" onClick={() => setPrivateOpen(true)}><Mail size={13} aria-hidden="true" /> Написать в ЛС</button>}
+          {d.lastDir === 'in' && (
+            <button type="button" onClick={toggleHandled} aria-pressed={d.handled} title="Ответили не из Шара — убрать из «Ждут ответа»">
+              {d.handled ? <CheckCircle2 size={13} aria-hidden="true" /> : <Circle size={13} aria-hidden="true" />} Ответ дан
+            </button>
+          )}
           {d.link && <a href={d.link} target="_blank" rel="noopener noreferrer">Открыть в {d.platformLabel}<ArrowUpRight size={13} aria-hidden="true" /></a>}
           {d.chatId && <button type="button" onClick={() => navigate(links.chat(d.chatId!))}><MessageSquare size={13} aria-hidden="true" /> Чат</button>}
         </span>
       </header>
+      {privateOpen && (
+        <PrivateSheet dialog={d} onClose={() => setPrivateOpen(false)}
+          onSent={(dialogId) => { setPrivateOpen(false); onSent(); showToast('Сообщение ушло в личные', 'success'); navigate(`${paths.social}?dialog=${encodeURIComponent(dialogId)}`); }} />
+      )}
       {d.kind === 'comments' && d.context && <div className="nsd-context"><CornerDownRight size={13} aria-hidden="true" /><span>Пост: {d.context}</span></div>}
-      <div className="nsd-messages nx-scroll-y" ref={scroller}>
+      <div className="nsd-messages nx-scroll-y" ref={scroller} onScroll={onScroll}>
         {data.messages.map((m: DialogMessage, i) => {
           const prev = data.messages[i - 1];
           const showName = m.direction === 'out' ? prev?.direction !== 'out' || prev?.authorUserId !== m.authorUserId : group && (prev?.direction !== 'in' || prev?.authorName !== m.authorName);
           return (
-            <div key={m.id} className="nsd-msg" data-dir={m.direction}>
+            <div key={m.id} className="nsd-msg" data-dir={m.direction} data-msg-id={m.id}>
               {showName && <span className="nsd-msg-name">{m.direction === 'out' ? m.authorName || 'Сотрудник' : m.authorName}</span>}
               <div className="nsd-bubble">
-                {m.text && <span className="nsd-msg-text">{m.text}</span>}
-                {m.media.length > 0 && <span className="nsd-msg-media">{m.media.join(' · ')}{m.link ? <> — <a href={m.link} target="_blank" rel="noopener noreferrer">открыть</a></> : null}</span>}
+                {m.images?.length > 0 && (
+                  <span className="nsd-msg-images">
+                    {m.images.map((src) => (
+                      <a key={src} href={src} target="_blank" rel="noopener noreferrer"><img src={src} alt="Вложение" loading="lazy" referrerPolicy="no-referrer" onLoad={keepBottom} /></a>
+                    ))}
+                  </span>
+                )}
+                {m.text && <span className="nsd-msg-text"><Linkified text={m.text} /></span>}
+                {m.media.length > 0 && <span className="nsd-msg-media">{(m.images?.length ? m.media.filter((x) => !PICTURE_LABELS.has(x)) : m.media).join(' · ')}{m.link ? <> — <a href={m.link} target="_blank" rel="noopener noreferrer">открыть</a></> : null}</span>}
                 <time>{timeOf(m.at)}</time>
               </div>
             </div>
@@ -278,5 +400,47 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
         <p className="nsd-noreply">Сюда {d.platformLabel} не даёт ответить из Шара — ответьте на сайте по ссылке «Открыть в {d.platformLabel}».</p>
       )}
     </section>
+  );
+}
+
+/** Личное сообщение автору комментария от имени сообщества. ВКонтакте пропустит его, только если человек
+ *  разрешил сообщения от сообщества или уже писал ему, — иначе покажем причину. */
+function PrivateSheet({ dialog, onClose, onSent }: { dialog: SocialDialog; onClose: () => void; onSent: (dialogId: string) => void }) {
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const send = () => {
+    if (!text.trim() || busy) return;
+    setBusy(true);
+    writePrivate(dialog.id, text.trim())
+      .then((r) => onSent(r.dialogId))
+      .catch((e: Error) => { showToast(e.message, 'error'); setBusy(false); });
+  };
+  return (
+    <Sheet
+      title={`В личные: ${dialog.clientName || dialog.title}`}
+      onClose={onClose}
+      busy={busy}
+      footer={(
+        <>
+          <button type="button" className="nx-ghost" onClick={onClose}>Отмена</button>
+          <button type="button" className="nx-primary" disabled={busy || !text.trim()} onClick={send}>{busy ? 'Отправляю…' : 'Отправить в личные'}</button>
+        </>
+      )}
+    >
+      <div className="cxs-social-reply">
+        {dialog.lastText && <blockquote>{dialog.lastText}</blockquote>}
+        <textarea
+          className="nx-field"
+          rows={5}
+          maxLength={4000}
+          value={text}
+          autoFocus
+          placeholder="Текст сообщения"
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send(); }}
+        />
+        <p className="cxs-social-hint">Уйдёт в личные сообщения {dialog.platformLabel} от имени {dialog.account || 'сообщества'}. Комментарий будет отмечен как отвеченный. Ctrl+Enter — отправить.</p>
+      </div>
+    </Sheet>
   );
 }

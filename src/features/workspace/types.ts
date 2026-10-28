@@ -1,3 +1,5 @@
+import type { LiveStart } from './live/channel';
+
 /** Материалы рабочего пространства: заметки, документы, таблицы, презентации. */
 
 export type Kind = 'note' | 'document' | 'table' | 'presentation';
@@ -23,22 +25,51 @@ export interface Item {
   updatedAt: string;
   sizeBytes: number;
   snippet: string;
-  /** Мне открыли доступ, а я ещё не открывал (свой материал новым не бывает). */
-  isNew?: boolean;
-  /** В какой моей папке лежит (папки личные). */
-  folderId?: string | null;
   /** Права текущего человека (считает сервер). */
   isOwner: boolean;
   canEdit: boolean;
   role: Role | null;
   /** Только у карточки (GET /items/{id}); в списке содержимого нет. */
   content?: string;
+  /** Материал ещё не открывали (выделяется в списке). */
+  isNew?: boolean;
+  /** Своя папка, куда человек положил материал; у каждого своя раскладка. */
+  folderId?: string | null;
+  /** Место материала в папке (ручной порядок); null — в конце, по дате. */
+  folderPosition?: number | null;
+  /** Место в ручном порядке вне папок (нет — материал ещё не расставляли, он выше расставленных). */
+  rootPosition?: number | null;
+  /** Кто сейчас в материале (кроме смотрящего) — аватарки на строке списка. */
+  viewers?: Viewer[];
+  /** Документ и таблица (GET /items/{id}): совместная правка — с какой версии журнала содержимое и что после неё. */
+  live?: LiveStart;
+}
+
+/** Папка «Офиса» — личная: раскладывает материалы только для её владельца. Папки вкладываются друг в друга. */
+export interface Folder {
+  id: string;
+  parentId: string | null;
+  title: string;
+  createdAt: string;
+  /** Ручной порядок среди соседей; null — после упорядоченных, по названию. */
+  position?: number | null;
+  /** Сколько материалов каждого вида лежит прямо в папке (считает сервер, с учётом прав). */
+  counts?: Partial<Record<Kind, number>>;
+  ownerId?: string;
+  /** Владелец чужой папки, открытой вам (у своих — пусто). */
+  ownerName?: string;
+  /** owner — своя; edit/view — папка открыта вам (править документы / только смотреть). */
+  role?: 'owner' | 'edit' | 'view';
+  /** Своя папка: скольким людям и отделам она открыта. */
+  shares?: number;
 }
 
 export interface ShareEntry { userId: string; role: 'view' | 'edit'; name: string }
 /** Доступ, выданный отделу: его сотрудники (и подразделов) получают материал в свой «Офис» сразу. */
 export interface DeptShareEntry { departmentId: string; role: 'view' | 'edit'; name: string; members: number }
-export interface SharesState { shares: ShareEntry[]; departments: DeptShareEntry[] }
+/** Доступ, пришедший от папки выше: действует, но снимается в той папке, где выдан. */
+export interface InheritedShare { kind: 'user' | 'department'; id: string; name: string; role: 'view' | 'edit'; members?: number; folderId: string; folderTitle: string }
+export interface SharesState { shares: ShareEntry[]; departments: DeptShareEntry[]; inherited?: InheritedShare[] }
 export interface LinkEntry { token: string; mode: 'view' | 'edit'; createdAt: string; lastUsedAt: string | null }
 
 /** Материал, открытый по ссылке: без прав на другие материалы и без владельца. */
@@ -55,13 +86,11 @@ export interface SharedItem {
 export interface Viewer { userId: string; name: string; avatar: string; editing: boolean }
 
 /** Строка истории версий: состояние материала до очередной правки и кто его сохранил. */
-export interface VersionRow { id: string; title: string; label: string; size: number; createdAt: string; savedBy: string; savedByName: string }
+/** Версия — состояние материала: кто его сделал (savedBy) и как (savedVia: '' — сам, иначе «агент «…»»). */
+export interface VersionRow { id: string; title: string; label: string; size: number; createdAt: string; savedBy: string; savedByName: string; savedVia?: string }
 export interface VersionsState {
   versions: VersionRow[];
-  /** Нынешнее состояние: когда и кем сохранено последний раз. */
-  current: { updatedAt: string; title: string; savedBy: string; savedByName: string };
+  /** Нынешнее состояние: когда, кем и как сохранено последний раз. */
+  current: { updatedAt: string; title: string; savedBy: string; savedByName: string; savedVia?: string };
   canRestore: boolean;
 }
-
-/** Личная папка «Офиса»: раскладка своя у каждого, коллеги её не видят. */
-export interface Folder { id: string; title: string; createdAt: string }

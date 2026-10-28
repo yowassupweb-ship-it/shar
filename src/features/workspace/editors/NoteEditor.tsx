@@ -2,14 +2,16 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
-import { Bold, CheckSquare, Plus, X, Code2, Eye, Heading2, ImagePlus, Italic, Link2, List, ListOrdered, Pencil, Quote, Smile } from 'lucide-react';
+import { Bold, CheckSquare, Plus, Redo2, Undo2, X, Code2, Eye, Heading2, ImagePlus, Italic, Link2, List, ListOrdered, Pencil, Quote, Smile, Strikethrough, Underline } from 'lucide-react';
 import { uploadFileWithProgress } from '@/shared/api/uploadFile';
 import { renderTextWithEmoji } from '@/shared/emoji/emojiText';
 import { SharEmojiPicker } from '@/shared/emoji/SharEmojiPicker';
 import { askConfirm, Menu, type MenuAnchor } from '@/shared/ui/overlay';
 import { merge3, shiftCaret } from '../lib/merge';
 import { highlightMarkdown } from '../lib/mdHighlight';
+import remarkUnderline from '../lib/remarkUnderline';
 import { cleanTabTitle, parseTabs, serializeTabs } from '../lib/noteTabs';
+import { applyText, diffText, TEXT_OP } from '../live/textOps';
 import { FindBar, findAll } from './FindBar';
 import type { EditorProps } from './types';
 import type { RemoteCursor } from '../useCursors';
@@ -71,6 +73,9 @@ const withEmoji = (children: React.ReactNode, key: string): React.ReactNode =>
 const TOOLS: Array<{ id: string; label: string; icon: typeof Bold; wrap: Wrap }> = [
   { id: 'bold', label: 'Жирный', icon: Bold, wrap: { before: '**', after: '**', placeholder: 'жирный' } },
   { id: 'italic', label: 'Курсив', icon: Italic, wrap: { before: '*', after: '*', placeholder: 'курсив' } },
+  // В Markdown подчёркивания нет — общепринятый <u>…</u> (GitHub, Obsidian); просмотр рисует его (remarkUnderline).
+  { id: 'underline', label: 'Подчёркнутый', icon: Underline, wrap: { before: '<u>', after: '</u>', placeholder: 'подчёркнутый' } },
+  { id: 'strike', label: 'Зачёркнутый', icon: Strikethrough, wrap: { before: '~~', after: '~~', placeholder: 'зачёркнутый' } },
   { id: 'h2', label: 'Заголовок', icon: Heading2, wrap: { before: '## ', line: true, placeholder: 'Заголовок' } },
   { id: 'ul', label: 'Список', icon: List, wrap: { before: '- ', line: true, placeholder: 'пункт' } },
   { id: 'ol', label: 'Нумерованный список', icon: ListOrdered, wrap: { before: '1. ', line: true, placeholder: 'пункт' } },
@@ -80,7 +85,7 @@ const TOOLS: Array<{ id: string; label: string; icon: typeof Bold; wrap: Wrap }>
   { id: 'link', label: 'Ссылка', icon: Link2, wrap: { before: '[', after: '](https://)', placeholder: 'текст' } },
 ];
 
-export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = [], onCursor }: EditorProps) {
+export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = [], onCursor, live }: EditorProps) {
   // full — заметка целиком (все вкладки), text — открытая вкладка: с ней работают поле, просмотр, поиск и панель.
   const [full, setFull] = useState(content);
   const fullRef = useRef(full);
@@ -115,37 +120,154 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
   const count = editing ? matches.length : domRanges.length;
   const current = count ? Math.min(findIndex, count - 1) : 0;
 
+  // Совместная правка (live/channel.ts): своя правка — коллегам сразу, их правка — прямо в поле, в том же такте,
+  // что и наша последняя буква: иначе следующая буква сравнивалась бы с устаревшим текстом.
+  const liveRef = useRef(live);
+  liveRef.current = live;
+  const sendLive = (before: string, after: string) => {
+    const op = liveRef.current ? diffText(before, after) : null;
+    if (op) liveRef.current!.local([{ id: TEXT_OP, params: { o: op } }]);
+  };
+  useEffect(() => {
+    if (!live) return undefined;
+    return live.attach({
+      apply: (ops) => {
+        const before = fullRef.current;
+        let next = before;
+        for (const op of ops) next = applyText(next, op.params.o as Array<number | string>);
+        if (next === before) return;
+        fullRef.current = next;
+        syncedRef.current = next;
+        const field = area.current;
+        const tab = tabRef.current;
+        const oldTab = parseTabs(before)[tab]?.content ?? '';
+        const newTab = parseTabs(next)[tab]?.content ?? '';
+        if (field && oldTab !== newTab && field.value === oldTab) {
+          const { selectionStart: s, selectionEnd: e, selectionDirection: d } = field;
+          field.value = newTab;
+          if (document.activeElement === field) field.setSelectionRange(shiftCaret(oldTab, newTab, s), shiftCaret(oldTab, newTab, e), d ?? undefined);
+        }
+        setFull(next);
+        onContent(next);
+      },
+      serialize: async () => fullRef.current,
+    });
+  }, [live]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Общая точка с сессией: последний текст, который редактор отдал ей (onContent) или принял от неё.
   // Материал перечитали с сервера (чужая правка, конфликт) — берём присланное.
   const syncedRef = useRef(content);
   useEffect(() => { setFull(content); syncedRef.current = content; }, [loadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Коллега печатает в той же заметке: его правка вливается на месте — без перезагрузки редактора и без прыжка
-  // курсора. Свои несохранённые правки сливаются с чужими; не слились — остаётся своё, а решение за сессией (баннер).
+  // Коллега печатает в той же заметке: сессия сливает его правку с нашими и присылает итог — он вливается на месте,
+  // без перезагрузки редактора и без прыжка курсора. Набранное, пока шло слияние, доливается поверх; не слилось —
+  // берём присланное, а решение за сессией (баннер).
   useEffect(() => {
     if (content === syncedRef.current) return;
-    const previous = syncedRef.current;
+    const base = syncedRef.current;
+    const own = fullRef.current;
     syncedRef.current = content;
-    setFull((own) => {
-      if (own === content) return own;
-      const merged = own === previous ? { text: content, conflict: false } : merge3(previous, own, content);
-      const next = merged.conflict ? content : merged.text;
-      const field = area.current;
-      if (field && document.activeElement === field) {
-        const tab = tabRef.current;
-        const caret = shiftCaret(parseTabs(own)[tab]?.content ?? '', parseTabs(next)[tab]?.content ?? '', field.selectionStart);
-        requestAnimationFrame(() => { if (area.current) area.current.setSelectionRange(caret, caret); });
-      }
-      return next;
-    });
-  }, [content]);
+    if (own === content) return;
+    const merged = own === base ? { text: content, conflict: false } : merge3(base, own, content);
+    const next = merged.conflict ? content : merged.text;
+    const field = area.current;
+    if (field && document.activeElement === field) {
+      const tab = tabRef.current;
+      const caret = shiftCaret(parseTabs(own)[tab]?.content ?? '', parseTabs(next)[tab]?.content ?? '', field.selectionStart);
+      requestAnimationFrame(() => { if (area.current) area.current.setSelectionRange(caret, caret); });
+    }
+    fullRef.current = next;
+    setFull(next);
+    if (next !== content) { syncedRef.current = next; onContent(next); sendLive(content, next); }
+  }, [content]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const commit = useCallback((nextFull: string) => { fullRef.current = nextFull; setFull(nextFull); onContent(nextFull); }, [onContent]);
+  // ── Отмена и повтор ──
+  // Своя история, а не браузера: та живёт в поле ввода и пропадает при «Просмотр ↔ Правка», а правки кнопками панели,
+  // вкладками и вставками в неё не попадают вовсе. Шаг — пара «до/после» всей заметки; набор подряд (пауза < 1 с)
+  // склеивается в один шаг. Отмена снимает только свой шаг поверх того, что есть сейчас (merge3): правки коллег,
+  // влитые с тех пор, остаются.
+  type Step = { before: string; after: string; tab: number; caret: number; at: number; typing: boolean };
+  const undoStack = useRef<Step[]>([]);
+  const redoStack = useRef<Step[]>([]);
+  const [, setHistoryTick] = useState(0);
+  useEffect(() => { undoStack.current = []; redoStack.current = []; setHistoryTick((n) => n + 1); }, [loadKey]);
+
+  const record = (before: string, after: string, typing: boolean) => {
+    if (before === after) return;
+    const stack = undoStack.current;
+    const last = stack[stack.length - 1];
+    const now = Date.now();
+    const caret = area.current?.selectionStart ?? 0;
+    if (typing && last?.typing && last.after === before && last.tab === tabRef.current && now - last.at < 1000) {
+      last.after = after;
+      last.at = now;
+    } else {
+      stack.push({ before, after, tab: tabRef.current, caret, at: now, typing });
+    }
+    // Потолок по объёму: длинная заметка × сотня шагов не должна съесть память.
+    let total = stack.reduce((sum, s) => sum + s.before.length + s.after.length, 0);
+    while (stack.length > 1 && (stack.length > 200 || total > 8_000_000)) {
+      const dropped = stack.shift()!;
+      total -= dropped.before.length + dropped.after.length;
+    }
+    redoStack.current = [];
+    setHistoryTick((n) => n + 1);
+  };
+
+  const commit = useCallback((nextFull: string, typing = false) => {
+    const before = fullRef.current;
+    record(before, nextFull, typing);
+    fullRef.current = nextFull;
+    syncedRef.current = nextFull;
+    setFull(nextFull);
+    onContent(nextFull);
+    sendLive(before, nextFull);
+  }, [onContent]);
   /** Правка открытой вкладки: остальные вкладки остаются как были. */
-  const change = useCallback((next: string) => {
+  const change = useCallback((next: string, typing = false) => {
     const all = parseTabs(fullRef.current);
     all[tabRef.current] = { ...all[tabRef.current], content: next };
-    commit(serializeTabs(all));
+    commit(serializeTabs(all), typing);
   }, [commit]);
+
+  /** Отменить (back) или повторить шаг: снять его поверх текущего текста, курсор — туда, где правили. */
+  const travel = (back: boolean) => {
+    const step = (back ? undoStack : redoStack).current.pop();
+    if (!step) return;
+    const [from, to] = back ? [step.after, step.before] : [step.before, step.after];
+    const current = fullRef.current;
+    const merged = current === from ? { text: to, conflict: false } : merge3(from, current, to);
+    const next = merged.conflict ? to : merged.text;
+    (back ? redoStack : undoStack).current.push({ ...step, at: 0 });
+    fullRef.current = next;
+    syncedRef.current = next;
+    setFull(next);
+    onContent(next);
+    sendLive(current, next);
+    setHistoryTick((n) => n + 1);
+    if (step.tab !== tabRef.current) setActiveTab(step.tab);
+    requestAnimationFrame(() => {
+      const el = area.current;
+      if (el && mode === 'edit') { el.focus(); const at = Math.min(step.caret, el.value.length); el.setSelectionRange(at, at); }
+    });
+  };
+  const canUndo = undoStack.current.length > 0;
+  const canRedo = redoStack.current.length > 0;
+  // В просмотре поля нет — Ctrl+Z ловим на окне, пока заметка на экране и фокус не в другом поле ввода.
+  const travelRef = useRef(travel);
+  travelRef.current = travel;
+  useEffect(() => {
+    if (readOnly || mode !== 'preview') return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || (e.code !== 'KeyZ' && e.code !== 'KeyY')) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('input, textarea, [contenteditable="true"]') || !root.current || root.current.offsetParent === null) return;
+      e.preventDefault();
+      travelRef.current(e.code === 'KeyZ' && !e.shiftKey);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mode, readOnly]);
 
   // ── Вкладки (снизу, как листы таблицы) ──
   const addTab = () => {
@@ -312,9 +434,17 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (!(e.ctrlKey || e.metaKey)) return;
-    const key = e.key.toLowerCase();
-    if (key === 'b') { e.preventDefault(); apply(TOOLS[0].wrap); }
-    if (key === 'i') { e.preventDefault(); apply(TOOLS[1].wrap); }
+    // Отмена и повтор — по физической клавише (в русской раскладке на Z — «я»); браузерную историю не используем.
+    if (e.code === 'KeyZ' || e.code === 'KeyY') {
+      e.preventDefault();
+      travel(e.code === 'KeyZ' && !e.shiftKey);
+      return;
+    }
+    // Тоже по физической клавише: в русской раскладке e.key у B, I, U — «и», «ш», «г», и сочетания не срабатывали.
+    // Ctrl+B, Ctrl+I, Ctrl+U и Ctrl+Shift+X (зачеркнуть, как в Google Docs).
+    const tool = e.shiftKey ? (e.code === 'KeyX' ? 'strike' : undefined) : ({ KeyB: 'bold', KeyI: 'italic', KeyU: 'underline' } as Record<string, string>)[e.code];
+    const wrap = tool ? TOOLS.find((t) => t.id === tool)?.wrap : undefined;
+    if (wrap && !e.altKey) { e.preventDefault(); apply(wrap); }
   }
 
   // Галочки в предпросмотре работают: клик переписывает «- [ ]» ↔ «- [x]» в исходнике.
@@ -348,6 +478,12 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
           <button type="button" aria-pressed={mode === 'edit'} onClick={() => setMode('edit')} disabled={readOnly}><Pencil size={13} aria-hidden="true" /> Правка</button>
           <button type="button" aria-pressed={mode === 'preview'} onClick={() => setMode('preview')}><Eye size={13} aria-hidden="true" /> Просмотр</button>
         </div>
+        {!readOnly && (
+          <div className="nws-note-history" role="group" aria-label="История правок">
+            <button type="button" className="nx-icon-btn" title="Отменить (Ctrl+Z)" aria-label="Отменить" disabled={!canUndo} onClick={() => travel(true)}><Undo2 size={16} /></button>
+            <button type="button" className="nx-icon-btn" title="Повторить (Ctrl+Shift+Z)" aria-label="Повторить" disabled={!canRedo} onClick={() => travel(false)}><Redo2 size={16} /></button>
+          </div>
+        )}
         {!readOnly && mode === 'edit' && (
           <div className="nws-tools">
             {TOOLS.map(({ id, label, icon: Icon, wrap }) => (
@@ -388,7 +524,7 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
           onSelect={reportCursor}
           placeholder="Пишите. Markdown: **жирный**, # заголовок, - список, - [ ] задача"
           spellCheck
-          onChange={(e) => change(e.target.value)}
+          onChange={(e) => change(e.target.value, true)}
           onKeyDown={onKeyDown}
           onPaste={(e) => {
             const pasted = Array.from(e.clipboardData.files);
@@ -405,7 +541,7 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
         <article ref={view} className="nws-note-view nx-scroll-y">
           {text.trim() ? (
             <Markdown
-              remarkPlugins={[remarkGfm, remarkBreaks]}
+              remarkPlugins={[remarkGfm, remarkBreaks, remarkUnderline]}
               components={{
                 p: ({ children }) => <p>{withEmoji(children, 'p')}</p>,
                 li: ({ children, ...rest }) => <li {...rest}>{withEmoji(children, 'li')}</li>,

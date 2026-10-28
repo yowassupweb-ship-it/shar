@@ -12,6 +12,8 @@
 from __future__ import annotations
 
 import secrets
+import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -21,7 +23,7 @@ from app.modules.social.tls import ca_bundle
 
 VK_API = "https://api.vk.com/method/"
 VK_VERSION = "5.199"
-VK_EVENTS = ["message_new", "wall_reply_new", "photo_comment_new", "video_comment_new", "market_comment_new", "board_post_new"]
+VK_EVENTS = ["message_new", "message_reply", "wall_reply_new", "photo_comment_new", "video_comment_new", "market_comment_new", "board_post_new"]
 
 # Частые отказы ВКонтакте — по-русски и с тем, что делать.
 _ERRORS = {
@@ -85,7 +87,7 @@ def disconnect(token: str, group_id: int, server_id: int) -> None:
 def _person(token: str, user_id: int) -> dict:
     """В событиях ВКонтакте только id автора — имя спрашиваем отдельно (не вышло — покажем id)."""
     try:
-        got = call(token, "users.get", user_ids=user_id, fields="screen_name") or []
+        got = call(token, "users.get", user_ids=user_id, fields="screen_name,photo_100") or []
         return got[0] if got else {}
     except PlatformError:
         return {}
@@ -99,6 +101,35 @@ def _media(attachments: Any) -> List[str]:
     labels = {"photo": "Фото", "video": "Видео", "audio": "Аудио", "doc": "Файл", "sticker": "Стикер", "audio_message": "Голосовое",
               "wall": "Запись", "link": "Ссылка", "market": "Товар", "poll": "Опрос", "graffiti": "Граффити"}
     return [labels.get(a.get("type"), "Вложение") for a in (attachments or []) if isinstance(a, dict)]
+
+
+def _best(sizes: Any) -> str:
+    sizes = [x for x in (sizes or []) if isinstance(x, dict) and x.get("url")]
+    return max(sizes, key=lambda x: int(x.get("width") or 0) * int(x.get("height") or 0), default={}).get("url") or ""
+
+
+def _images(attachments: Any) -> List[str]:
+    """Адреса картинок во вложениях: фото, стикеры, граффити, картинки-документы, фото в ссылках."""
+    out: List[str] = []
+    for a in attachments or []:
+        if not isinstance(a, dict):
+            continue
+        kind = a.get("type")
+        obj = a.get(kind) or {}
+        url = ""
+        if kind == "photo":
+            url = _best(obj.get("sizes"))
+        elif kind == "sticker":
+            url = _best(obj.get("images"))
+        elif kind == "graffiti":
+            url = obj.get("url") or ""
+        elif kind == "doc" and str(obj.get("ext") or "").lower() in ("jpg", "jpeg", "png", "gif", "webp"):
+            url = obj.get("url") or ""
+        elif kind == "link":
+            url = _best((obj.get("photo") or {}).get("sizes"))
+        if url.startswith("https://"):
+            out.append(url)
+    return out
 
 
 def _post_text(token: str, owner_id: int, post_id: int) -> str:
@@ -120,6 +151,24 @@ _COMMENTS = {
 }
 
 
+def message_incoming(msg: dict, person: dict, group_id: int, title: str = "") -> Optional[Incoming]:
+    """Сообщение клиента (событие или строка истории) → входящее. Пустое — None."""
+    author = int(msg.get("from_id") or 0)
+    text, media = msg.get("text") or "", _media(msg.get("attachments"))
+    if not text and not media:
+        return None
+    peer = int(msg.get("peer_id") or author)
+    chat = peer >= 2_000_000_000  # беседа, а не личный диалог
+    return Incoming(
+        ext_chat_id=str(peer), ext_message_id=str(msg.get("id") or msg.get("conversation_message_id")),
+        chat_title=(title or "Беседа ВКонтакте") if chat else _name(person, author), chat_type="group" if chat else "private",
+        author_id=str(author), author_name=_name(person, author), author_username=person.get("screen_name") or "",
+        author_avatar=person.get("photo_100") or "", text=text, media=media, images=_images(msg.get("attachments")),
+        link=f"https://vk.com/gim{group_id}?sel={peer}" if group_id else None,
+        reply={"kind": "message", "peer_id": peer},
+    )
+
+
 def parse(event: dict, token: str, group_name: str = "") -> Optional[Incoming]:
     kind = event.get("type")
     obj = event.get("object") or {}
@@ -130,19 +179,7 @@ def parse(event: dict, token: str, group_name: str = "") -> Optional[Incoming]:
         author = int(msg.get("from_id") or 0)
         if author <= 0:
             return None  # ответ самого сообщества
-        text, media = msg.get("text") or "", _media(msg.get("attachments"))
-        if not text and not media:
-            return None
-        peer = int(msg.get("peer_id") or author)
-        person = _person(token, author)
-        chat = peer >= 2_000_000_000  # беседа, а не личный диалог
-        return Incoming(
-            ext_chat_id=str(peer), ext_message_id=str(msg.get("id") or msg.get("conversation_message_id")),
-            chat_title="Беседа ВКонтакте" if chat else _name(person, author), chat_type="group" if chat else "private",
-            author_id=str(author), author_name=_name(person, author), author_username=person.get("screen_name") or "",
-            text=text, media=media, link=f"https://vk.com/gim{group_id}?sel={peer}" if group_id else None,
-            reply={"kind": "message", "peer_id": peer},
-        )
+        return message_incoming(msg, _person(token, author), group_id)
 
     if kind not in _COMMENTS:
         return None
@@ -166,7 +203,7 @@ def parse(event: dict, token: str, group_name: str = "") -> Optional[Incoming]:
         ext_chat_id=f"{area}{owner}", ext_message_id=f"{item}_{cid}",
         chat_title=f"{group_name or 'Сообщество'} — {label}", chat_type="comments",
         author_id=str(author), author_name=_name(person, author), author_username=person.get("screen_name") or "",
-        text=text, media=media, link=links[area],
+        author_avatar=person.get("photo_100") or "", text=text, media=media, images=_images(obj.get("attachments")), link=links[area],
         context=_post_text(token, owner, item) if area == "wall" else "",
         reply={"kind": "wall", "owner_id": owner, "post_id": item, "comment_id": cid} if area == "wall" else {},
         can_reply=area == "wall", thread=str(item),
@@ -227,3 +264,62 @@ def send_files(token: str, target: Dict[str, Any], text: str, files: List[tuple]
     if text:
         params["message"] = text
     return str(call(token, "messages.send", **params) or "")
+
+
+# ─── История ─────────────────────────────────────────────────────────────────
+# Callback API присылает только новое. Старые диалоги Шар забирает сам: messages.getConversations
+# (все диалоги сообщества) и messages.getHistory (переписка с каждым). Комментарии ВКонтакте
+# сообществу задним числом не отдаёт — они приходят только по мере появления.
+
+def _pages(token: str, method: str, limit: int, **params: Any):
+    """Постранично (по 200) до конца или до limit записей."""
+    offset = 0
+    while offset < limit:
+        got = call(token, method, count=200, offset=offset, **params) or {}
+        items = got.get("items") or []
+        yield got, items
+        if len(items) < 200:
+            return
+        offset += 200
+        time.sleep(0.1)  # лимит ВКонтакте — 20 запросов в секунду у сообщества, не торопимся
+
+
+def conversations(token: str, limit: int = 5000):
+    """Диалоги сообщества: (peer_id, название беседы, профили). Только личные и беседы."""
+    for got, items in _pages(token, "messages.getConversations", limit, extended=1, fields="screen_name,photo_100", filter="all"):
+        people = {int(p["id"]): p for p in (got.get("profiles") or []) if p.get("id")}
+        for it in items:
+            conv = it.get("conversation") or {}
+            peer = conv.get("peer") or {}
+            if peer.get("type") not in ("user", "chat"):
+                continue
+            yield int(peer["id"]), ((conv.get("chat_settings") or {}).get("title") or ""), people
+
+
+def history(token: str, peer_id: int, limit: int = 3000):
+    """Переписка с собеседником от старых к новым: (сообщение, профили)."""
+    rows: List[tuple] = []
+    for got, items in _pages(token, "messages.getHistory", limit, peer_id=peer_id, extended=1, fields="screen_name,photo_100"):
+        people = {int(p["id"]): p for p in (got.get("profiles") or []) if p.get("id")}
+        rows += [(m, people) for m in items]
+    return sorted(rows, key=lambda r: (int(r[0].get("date") or 0), int(r[0].get("id") or 0)))
+
+
+def sent_incoming(msg: dict, person: dict, group_id: int, title: str = "") -> Optional[Incoming]:
+    """Сообщение, отправленное от имени сообщества не из Шара (из ВКонтакте, другим сервисом)."""
+    peer = int(msg.get("peer_id") or 0)
+    text, media = msg.get("text") or "", _media(msg.get("attachments"))
+    if not peer or (not text and not media):
+        return None
+    admin = int(msg.get("admin_author_id") or 0)
+    return Incoming(
+        ext_chat_id=str(peer), ext_message_id=str(msg.get("id") or msg.get("conversation_message_id")),
+        chat_title=title, chat_type="group" if peer >= 2_000_000_000 else "private",
+        author_id=str(admin or msg.get("from_id") or ""), author_name=_name(person, admin) if admin else "Сообщество",
+        text=text, media=media, images=_images(msg.get("attachments")),
+        link=f"https://vk.com/gim{group_id}?sel={peer}" if group_id else None, reply={"kind": "message", "peer_id": peer},
+    )
+
+
+def stamp(msg: dict) -> datetime:
+    return datetime.fromtimestamp(int(msg.get("date") or time.time()), tz=timezone.utc)

@@ -5,7 +5,8 @@ import { paths } from '@/shared/navigation/routes';
 import { Sheet } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
 import { replyToClient, type SocialCardData } from './api';
-import { PlatformMark } from './PlatformMark';
+import { Linkified } from './Linkified';
+import { SocialAvatar } from './SocialAvatar';
 import './social.css';
 
 const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
@@ -21,7 +22,7 @@ export function SocialCard({ card, time, createdAt }: { card: SocialCardData; ti
   const who = card.authorUsername ? `${card.authorName} · @${card.authorUsername}` : card.authorName;
   return (
     <article className="cxm-notice cxs-social" data-platform={card.platform} data-status={card.status} onClick={(e) => e.stopPropagation()}>
-      <PlatformMark platform={card.platform} size={36} />
+      <SocialAvatar platform={card.platform} name={card.authorName} seed={`${card.platform}:${card.authorUsername || card.authorName}`} src={card.authorAvatar} size={40} />
       <div className="cxm-notice-main">
         <div className="cxm-notice-top">
           <span className="cxm-notice-type">{card.platformLabel} · {card.sourceLabel}{card.sourceTitle && card.sourceType !== 'private' && card.sourceType !== 'business' ? ` · ${card.sourceTitle}` : ''}</span>
@@ -29,7 +30,7 @@ export function SocialCard({ card, time, createdAt }: { card: SocialCardData; ti
         </div>
         <div className="cxm-notice-title">{who}</div>
         {card.context && <div className="cxs-social-context">↳ {card.context}</div>}
-        {card.text && <div className="cxs-social-text">{card.text}</div>}
+        {card.text && <div className="cxs-social-text"><Linkified text={card.text} /></div>}
         {card.media.length > 0 && <div className="cxs-social-media">{card.media.join(' · ')}{card.link ? ' — открыть в мессенджере' : ''}</div>}
         {card.answers.length > 0 && (
           <ul className="cxs-social-answers">

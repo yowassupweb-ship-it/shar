@@ -1,22 +1,10 @@
-/* ── Дни рождения ────────────────────────────────────────────────────────── */
-.nbd-banner {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  margin: 0 var(--space-2) var(--space-1);
-  padding: 4px 4px 4px var(--space-1);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--accent-fill) 12%, var(--glass));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-fill) 22%, transparent);
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
-}
-.nbd-banner-main { display: flex; align-items: center; gap: var(--space-2); flex: 1; min-width: 0; padding: 4px; border: 0; background: transparent; color: var(--text-main); text-align: left; cursor: pointer; }
-.nbd-banner-icon { flex: none; font-size: 22px; line-height: 1; }
-.nbd-banner-text { display: flex; flex-direction: column; min-width: 0; font-size: var(--text-xs); color: var(--text-2); }
-.nbd-banner-text b { font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text-main); }
-.nbd-banner-text > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nbd-banner-close { flex: none; }
-.nbd-note { margin: 0 0 var(--space-3); color: var(--text-2); font-size: var(--text-sm); line-height: 1.45; }
-.nbd-row { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: var(--space-2); }
-.nbd-year { grid-column: 1 / -1; }
+.nbd-banner{display:flex;align-items:center;gap:var(--space-1);margin:0 var(--space-2) var(--space-1);padding:4px 4px 4px var(--space-1);border-radius:var(--radius-lg);background:color-mix(in srgb,var(--accent-fill) 12%,var(--glass));box-shadow:0 0 0 1px color-mix(in srgb,var(--accent-fill) 22%,transparent);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+.nbd-banner-main{display:flex;align-items:center;gap:var(--space-2);flex:1;min-width:0;padding:4px;border:0;background:transparent;color:var(--text-main);text-align:left;cursor:pointer}
+.nbd-banner-icon{flex:none;font-size:22px;line-height:1}
+.nbd-banner-text{display:flex;flex-direction:column;min-width:0;font-size:var(--text-xs);color:var(--text-2)}
+.nbd-banner-text b{font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--text-main)}
+.nbd-banner-text>*{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nbd-banner-close{flex:none}
+.nbd-note{margin:0 0 var(--space-3);color:var(--text-2);font-size:var(--text-sm);line-height:1.45}
+.nbd-row{display:grid;grid-template-columns:90px minmax(0,1fr);gap:var(--space-2)}
+.nbd-year{grid-column:1 / -1}

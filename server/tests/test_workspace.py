@@ -423,3 +423,132 @@ def test_personal_folders(anna, boris, users):
     assert anna.delete(f"/api/workspace/folders/{folder['id']}").status_code == 200
     row = next(i for i in anna.get("/api/workspace/items").json()["items"] if i["id"] == note["id"])
     assert row["folderId"] is None
+
+
+def test_root_order_is_personal_and_takes_items_out_of_folders(anna, boris):
+    a, b, c = (_create(anna, "note", title=t) for t in ("А", "Б", "В"))
+    folder = anna.post("/api/workspace/folders", json={"title": "Временная"}).json()["folder"]
+    assert anna.put(f"/api/workspace/items/{c['id']}/folder", json={"folderId": folder["id"]}).status_code == 200
+    # ручной порядок вне папок: В выходит из папки и встаёт первой
+    assert anna.put("/api/workspace/root/order", json={"ids": [c["id"], a["id"], b["id"]]}).status_code == 200
+    rows = {i["id"]: i for i in anna.get("/api/workspace/items?kind=note").json()["items"]}
+    assert [rows[x["id"]]["rootPosition"] for x in (c, a, b)] == [0, 1, 2]
+    assert rows[c["id"]]["folderId"] is None
+    # чужое переставить нельзя, а свой порядок у каждого свой
+    assert boris.put("/api/workspace/root/order", json={"ids": [a["id"]]}).status_code == 404
+
+
+def test_search_words_forms_tables_and_snippet(anna):
+    import base64
+    import io
+
+    from openpyxl import Workbook
+
+    _create(anna, "note", title="Туры по Татарстану", content="Программа: Казань, потом Свияжск. " + "текст " * 80 + "Итог: скидка для групп")
+    _create(anna, "note", title="Казань зимой", content="Без лишнего")
+    book = Workbook()
+    book.active.append(["Город", "Цена"])
+    book.active.append(["Иннополис", 15000])
+    out = io.BytesIO()
+    book.save(out)
+    table = _create(anna, "table", title="Цены", content=base64.b64encode(out.getvalue()).decode())
+
+    def titles(q):
+        return [i["title"] for i in anna.get("/api/workspace/items", params={"q": q}).json()["items"]]
+
+    # слова в любом порядке и в другой форме; совпадение в названии — выше
+    assert titles("казани туры")[0] == "Туры по Татарстану"
+    assert "Казань зимой" not in titles("казани туры")  # нужны все слова
+    assert titles("казань")[0] == "Казань зимой" and "Туры по Татарстану" in titles("казань")
+    # таблица ищется по ячейкам
+    assert table["title"] in titles("иннополис")
+    # кусок текста — у совпадения, а не начало
+    hit = next(i for i in anna.get("/api/workspace/items", params={"q": "скидка групп"}).json()["items"] if i["title"] == "Туры по Татарстану")
+    assert "скидка для групп" in hit["snippet"] and hit["snippet"].startswith("…")
+
+
+def test_access_window_shows_what_is_inherited_from_parent_folders(anna, boris, users):
+    """Папку открыли выше — человек видит и вложенную папку, и материал в ней; в окнах доступа он значится «через папку»."""
+    parent = anna.post("/api/workspace/folders", json={"title": "Многодневные"}).json()["folder"]
+    child = anna.post("/api/workspace/folders", json={"title": "Готово", "parentId": parent["id"]}).json()["folder"]
+    note = _create(anna, "note", title="Маршрут", content="x")
+    assert anna.put(f"/api/workspace/items/{note['id']}/folder", json={"folderId": child["id"]}).status_code == 200
+    assert anna.put(f"/api/workspace/folders/{parent['id']}/shares", json={"userId": users.ids["boris"], "role": "view"}).status_code == 200
+    # доступ действует вниз по дереву
+    assert note["id"] in {i["id"] for i in boris.get("/api/workspace/items").json()["items"]}
+    # окно папки: у вложенной своих выдач нет, зато есть унаследованная, у верхней — только своя
+    low = anna.get(f"/api/workspace/folders/{child['id']}/shares").json()
+    assert low["shares"] == [] and [(e["id"], e["folderTitle"], e["role"]) for e in low["inherited"]] == [(users.ids["boris"], "Многодневные", "view")]
+    assert anna.get(f"/api/workspace/folders/{parent['id']}/shares").json()["inherited"] == []
+    # окно материала: он лежит во вложенной папке — тот же человек, через ту же папку
+    item_window = anna.get(f"/api/workspace/items/{note['id']}/shares").json()
+    assert item_window["shares"] == [] and [e["folderTitle"] for e in item_window["inherited"]] == ["Многодневные"]
+
+
+def test_live_collaboration_orders_ops_and_saves_without_conflicts(anna, boris, clara, users):
+    """Совместная правка документа: правки по сокету получают общий порядок и доходят до всех, отставший получает
+    недостающее, сохранение с номером версии не конфликтует, запись мимо журнала начинает новое поколение."""
+    item = _create(anna, "document", title="Вместе", content=DOC)
+    url = f"/api/workspace/items/{item['id']}"
+    anna.put(f"{url}/shares", json={"userId": users.ids["boris"], "role": "edit"})
+    anna.put(f"{url}/shares", json={"userId": users.ids["clara"], "role": "view"})
+
+    def wait_for(ws, kind, limit=20):
+        for _ in range(limit):
+            ev = json.loads(ws.receive_text())
+            if ev["type"] == kind:
+                return ev
+        return None
+
+    a = anna.get(url).json()["item"]["live"]
+    b = boris.get(url).json()["item"]["live"]
+    assert a["epoch"] == b["epoch"] and a["rev"] == 0 and a["ops"] == []
+    epoch = a["epoch"]
+    op = lambda text: [{"id": "doc.mutation.rich-text-editing", "params": {"text": text}}]  # noqa: E731
+
+    with anna.websocket_connect(f"/api/ws/{users.ids['anna']}") as ws_a, boris.websocket_connect(f"/api/ws/{users.ids['boris']}") as ws_b, \
+            clara.websocket_connect(f"/api/ws/{users.ids['clara']}") as ws_c:
+        assert {"ops", "live"} <= set(json.loads(ws_a.receive_text())["features"])
+        ws_b.receive_text()
+        ws_c.receive_text()
+        ws_c.send_text(json.dumps({"type": "live", "itemId": item["id"], "state": "join"}))
+        # Анна печатает от версии 0 — принято как 1, дошло до Бориса, Клары (только смотрит) и до самой Анны.
+        ws_a.send_text(json.dumps({"type": "ops", "itemId": item["id"], "epoch": epoch, "base": 0, "cid": "a1", "bid": 1, "ops": op("А")}))
+        got_b = wait_for(ws_b, "workspace_ops")
+        assert got_b and got_b["rev"] == 1 and got_b["cid"] == "a1" and got_b["ops"] == op("А")
+        assert wait_for(ws_a, "workspace_ops")["rev"] == 1
+        assert wait_for(ws_c, "workspace_ops")["rev"] == 1
+        # Борис печатал одновременно, тоже от версии 0: отказ с недостающей правкой Анны, после переноса — принято.
+        ws_b.send_text(json.dumps({"type": "ops", "itemId": item["id"], "epoch": epoch, "base": 0, "cid": "b1", "bid": 1, "ops": op("Б")}))
+        behind = wait_for(ws_b, "workspace_ops_behind")
+        assert behind["rev"] == 1 and [e["cid"] for e in behind["ops"]] == ["a1"]
+        ws_b.send_text(json.dumps({"type": "ops", "itemId": item["id"], "epoch": epoch, "base": 1, "cid": "b1", "bid": 1, "ops": op("Б")}))
+        assert wait_for(ws_a, "workspace_ops")["rev"] == 2
+        # Ответ потерялся, Борис прислал ту же пачку снова — повтор не применяется второй раз.
+        ws_b.send_text(json.dumps({"type": "ops", "itemId": item["id"], "epoch": epoch, "base": 2, "cid": "b1", "bid": 1, "ops": op("Б")}))
+        dup = wait_for(ws_b, "workspace_ops_behind")
+        assert dup["rev"] == 2 and dup["ops"] == []
+        # Клара может только смотреть — её правки не принимаются.
+        ws_c.send_text(json.dumps({"type": "ops", "itemId": item["id"], "epoch": epoch, "base": 2, "cid": "c1", "bid": 1, "ops": op("К")}))
+        assert wait_for(ws_c, "workspace_ops_denied")["cid"] == "c1"
+
+    # Догоняющий запрос: всё после версии 0 по порядку.
+    caught = boris.get(f"{url}/live", params={"epoch": epoch, "since": 0}).json()
+    assert caught["rev"] == 2 and [e["rev"] for e in caught["ops"]] == [1, 2]
+
+    # Сохранение версии 2 — без конфликта; повтор той же версии от другого — «уже сохранено», не 409.
+    content2 = json.dumps({"body": {"dataStream": "АБПривет\r\n", "paragraphs": [{"startIndex": 8}]}})
+    assert anna.patch(url, json={"content": content2, "live": {"epoch": epoch, "rev": 2}}).status_code == 200
+    again = boris.patch(url, json={"content": content2, "live": {"epoch": epoch, "rev": 1}})
+    assert again.status_code == 200 and again.json()["live"] == "already"
+    # Номер из будущего или чужое поколение — 409.
+    assert boris.patch(url, json={"content": content2, "live": {"epoch": epoch, "rev": 9}}).status_code == 409
+    # Открывающий получает сохранённую версию 2 и пустой хвост журнала.
+    fresh = clara.get(url).json()["item"]
+    assert fresh["content"] == content2 and fresh["live"]["rev"] == 2 and fresh["live"]["ops"] == []
+
+    # Запись мимо журнала (как агент по MCP или старый клиент) начинает новое поколение.
+    assert anna.patch(url, json={"content": DOC}).status_code == 200
+    after = boris.get(url).json()["item"]["live"]
+    assert after["epoch"] != epoch and after["rev"] == 0
+    assert boris.get(f"{url}/live", params={"epoch": epoch, "since": 0}).json() == {"reset": True}

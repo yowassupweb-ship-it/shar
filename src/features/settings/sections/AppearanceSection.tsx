@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { Check, Moon, Plus, Sun } from 'lucide-react';
 import { useTheme } from '@/shared/theme/ThemeContext';
 import { ThemePicker } from '@/shared/theme/ThemePicker';
@@ -9,7 +9,8 @@ import {
 } from '@/shared/settings/chatAppearance';
 import { askConfirm } from '@/shared/ui/overlay';
 import { loadChatAssets, type ChatAssets } from '../api';
-import { Group, Row, Slider } from '@/shared/ui/controls';
+import { Group, Row, Slider, Switch } from '@/shared/ui/controls';
+import { chatFrameEnabled, setChatFrameEnabled, subscribeChatFrame } from '@/features/chat';
 
 const PALETTE_NAMES = { light: 'светлая', gray: 'серая', graphite: 'графитовая', black: 'чёрная' } as const;
 const EMPTY_ASSETS: ChatAssets = { light: { backgrounds: [], overlays: [] }, dark: { backgrounds: [], overlays: [] } };
@@ -122,11 +123,16 @@ export default function AppearanceSection() {
     change({ ...DEFAULT_APPEARANCE, light: { ...DEFAULT_APPEARANCE.light }, dark: { ...DEFAULT_APPEARANCE.dark } });
   };
 
+  const chatFrame = useSyncExternalStore(subscribeChatFrame, chatFrameEnabled, () => false);
+
   return (
     <>
       <Group title="Оформление">
         <Row label="Тема" hint={themePref === 'system' ? `Как в системе — сейчас ${PALETTE_NAMES[palette]}` : undefined}>
           <ThemePicker />
+        </Row>
+        <Row label="Плавающий чат" hint="Кнопка чатов поверх любого раздела: переписка, не уходя из документа или задач. Её можно перетащить. На этом устройстве.">
+          <Switch checked={chatFrame} onChange={setChatFrameEnabled} label="Плавающий чат" />
         </Row>
       </Group>
 

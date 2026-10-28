@@ -152,6 +152,7 @@ def _push_task_sse(task: dict, event: str = 'task_updated') -> None:
 
 _TASK_STATUS_RU = {
     'in-progress': 'в работе', 'pending': 'в ожидании', 'todo': 'в ожидании', 'review': 'на проверке',
+    'approval': 'на согласовании', 'approved': 'согласовано',
     'stuck': 'застряла', 'cancelled': 'отменена', 'completed': 'выполнена', 'done': 'выполнена',
 }
 
@@ -234,7 +235,7 @@ def _notify_task_change(before: Optional[dict], after: Optional[dict], actor: st
                         watchers.add(str(v))
                 watchers -= {actor, ''}
                 watchers -= added
-                icon = '✅' if st_after == 'completed' else '🔄'
+                icon = '✅' if st_after in ('completed', 'approved') else '🔄'
                 text = f"{icon} {actor_name}: «{title}» — {_TASK_STATUS_RU.get(st_after, st_after)}"
                 for uid in watchers:
                     _send_task_notice(uid, 'task_status_changed', task_id, text, actor)

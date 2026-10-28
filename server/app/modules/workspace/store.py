@@ -20,7 +20,9 @@ import json
 import logging
 import re
 import secrets
+import time
 import uuid
+from contextvars import ContextVar
 from typing import Any, Optional
 
 from app.core import schema
@@ -110,6 +112,15 @@ CREATE TABLE IF NOT EXISTS workspace_item_seen (
 ALTER TABLE workspace_items ADD COLUMN IF NOT EXISTS shared_all_at TIMESTAMPTZ;
 """)
 
+# Через что сделана правка: '' — человек сам, в интерфейсе; иначе — например «агент «Claude»» (ставит MCP на время своей
+# правки). Хранится у материала (кто и как сделал текущее состояние) и у версии: история показывает, что правил агент,
+# а новая версия заводится и тогда, когда после агента правит сам человек.
+schema.register("workspace_edit_via", """
+ALTER TABLE workspace_items ADD COLUMN IF NOT EXISTS updated_via TEXT NOT NULL DEFAULT '';
+ALTER TABLE workspace_item_versions ADD COLUMN IF NOT EXISTS saved_via TEXT NOT NULL DEFAULT '';
+""")
+EDIT_VIA: ContextVar[str] = ContextVar("workspace_edit_via", default="")
+
 # В списке содержимого нет: снимок документа весит сотни килобайт, а списку нужны название, дата и фрагмент.
 LIST_COLUMNS = """id::text AS id, kind, title, pinned, is_template, meta, owner_id, access_level, access_mode,
     created_at::text AS created_at, updated_at::text AS updated_at,
@@ -149,7 +160,94 @@ def text_of(kind: str, content: str) -> str:
             return "\n".join(p for p in parts if p)
     except (ValueError, TypeError, AttributeError):
         return ""
-    return ""  # таблица лежит файлом xlsx: по ячейкам не ищем
+    if kind == "table":
+        return _table_text(content)
+    return ""
+
+
+MAX_TABLE_TEXT = 200_000
+
+
+def _table_text(content: str) -> str:
+    """Текст таблицы для поиска: значения ячеек по строкам. Большие книги не разбираем — поиск не должен тормозить запись."""
+    if not content or len(content) > 4 * 1024 * 1024:
+        return ""
+    try:
+        import base64
+        import io
+
+        from openpyxl import load_workbook
+
+        book = load_workbook(io.BytesIO(base64.b64decode(content)), read_only=True, data_only=True)
+        lines: list[str] = []
+        size = 0
+        for sheet in book.worksheets:
+            for row in sheet.iter_rows(values_only=True):
+                line = " | ".join(str(v) for v in row if v not in (None, ""))
+                if line:
+                    lines.append(line)
+                    size += len(line)
+                if size > MAX_TABLE_TEXT:
+                    return "\n".join(lines)
+        return "\n".join(lines)
+    except Exception as exc:  # noqa: BLE001 — битая книга: без текста для поиска, но сохраняется
+        log.debug("workspace: table text failed: %s", exc)
+        return ""
+
+
+# ── поиск ────────────────────────────────────────────────────────────────────
+# Один поиск для «Офиса», Spotlight и агента: все слова запроса (в любом порядке) — в названии или тексте; слово
+# без окончания («казани» → «каза», «туры» → «тур»), чтобы находилась любая форма; совпадение в названии выше.
+
+_WORD = re.compile(r"\w+", re.UNICODE)
+
+
+def search_terms(query: str) -> list[str]:
+    terms: list[str] = []
+    for word in _WORD.findall(query.lower())[:8]:
+        stem = word if word.isdigit() or len(word) <= 4 else word[:-2] if len(word) > 6 else word[:-1]
+        if stem not in terms:
+            terms.append(stem)
+    return terms
+
+
+def _like(term: str) -> str:
+    return "%" + re.sub(r"([!%_])", r"!\1", term) + "%"
+
+
+def search_sql(query: str, alias: str = "i") -> tuple[str, list[Any], str, list[Any], str, list[Any]]:
+    """(условие, параметры; ранг, параметры; кусок текста у первого совпадения, параметры). Пустой запрос — ('', …)."""
+    terms = search_terms(query)
+    if not terms:
+        return "", [], "0", [], "''", []
+    a = alias
+    where = " AND ".join(f"({a}.title ILIKE %s ESCAPE '!' OR {a}.text_content ILIKE %s ESCAPE '!')" for _ in terms)
+    where_params: list[Any] = [p for t in terms for p in (_like(t), _like(t))]
+    phrase = _like(query.strip().lower())
+    rank = (f"(CASE WHEN {a}.title ILIKE %s ESCAPE '!' THEN 100 ELSE 0 END)"
+            + "".join(f" + (CASE WHEN {a}.title ILIKE %s ESCAPE '!' THEN 10 ELSE 0 END)" for _ in terms)
+            + f" + (CASE WHEN {a}.text_content ILIKE %s ESCAPE '!' THEN 5 ELSE 0 END)")
+    rank_params: list[Any] = [phrase, *[_like(t) for t in terms], phrase]
+    hit = f"substring({a}.text_content from greatest(1, strpos(lower({a}.text_content), %s) - 80) for 260)"
+    return where, where_params, rank, rank_params, hit, [terms[0]]
+
+
+def search_snippet(hit: str | None, fallback: str) -> str:
+    """Кусок у совпадения — без переносов, с «…» по краям обрезанного."""
+    text = re.sub(r"\s+", " ", hit or "").strip()
+    return f"…{text}…" if text else fallback
+
+
+def reindex_text(kinds: tuple[str, ...] = ("table",)) -> int:
+    """Пересчитать текст для поиска у уже сохранённых материалов (таблицам он раньше не считался). Возвращает число строк."""
+    done = 0
+    for row in db.conn.fetch_all("SELECT id::text AS id FROM workspace_items WHERE kind = ANY(%s)", (list(kinds),)) or []:
+        full = get_row(row["id"])
+        if not full:
+            continue
+        db.conn.execute_query("UPDATE workspace_items SET text_content = %s WHERE id = %s", (text_of(full["kind"], full["content"] or ""), int(row["id"])))
+        done += 1
+    return done
 
 
 def slide_count(content: str) -> int | None:
@@ -218,14 +316,114 @@ def dept_members(dept_ids: list[str]) -> set[str]:
 
 
 def visible_sql(alias: str = "i") -> str:
-    """Условие «пользователь видит материал»; параметры — visible_params(user_id)."""
+    """Условие «пользователь видит материал»; параметры — visible_params(user_id). Через открытую папку виден
+    только материал её владельца, который он сам туда положил: папкой нельзя раздать чужое."""
     return (f"({alias}.owner_id = %s OR {alias}.access_level = 'all' "
             f"OR EXISTS (SELECT 1 FROM workspace_item_shares s WHERE s.item_id = {alias}.id AND s.user_id = %s) "
-            f"OR EXISTS (SELECT 1 FROM workspace_item_dept_shares d WHERE d.item_id = {alias}.id AND d.department_id = ANY(%s)))")
+            f"OR EXISTS (SELECT 1 FROM workspace_item_dept_shares d WHERE d.item_id = {alias}.id AND d.department_id = ANY(%s)) "
+            f"OR EXISTS (SELECT 1 FROM workspace_item_folder fx WHERE fx.item_id = {alias}.id AND fx.user_id = {alias}.owner_id "
+            f"AND fx.folder_id = ANY(%s)))")
 
 
 def visible_params(user_id: str) -> list[Any]:
-    return [user_id, user_id, user_dept_ids(user_id)]
+    depts = user_dept_ids(user_id)
+    return [user_id, user_id, depts, list(shared_folder_roles(user_id, depts))]
+
+
+def shared_folder_roles(user_id: str, depts: list[str] | None = None) -> dict[int, str]:
+    """Чужие папки, открытые человеку (поимённо или его отделу), вместе со всеми вложенными: {id папки: право}.
+    Право наследуется вниз; если папка открыта и на чтение, и на правку — правка."""
+    if depts is None:
+        depts = user_dept_ids(user_id)
+    try:
+        rows = db.conn.fetch_all(
+            """WITH RECURSIVE base AS (
+                   SELECT s.folder_id AS id, s.role FROM workspace_folder_shares s WHERE s.user_id = %s
+                   UNION ALL
+                   SELECT d.folder_id, d.role FROM workspace_folder_dept_shares d WHERE d.department_id = ANY(%s)
+               ), tree AS (
+                   SELECT id, role FROM base
+                   UNION
+                   SELECT f.id, t.role FROM workspace_folders f JOIN tree t ON f.parent_id = t.id
+               )
+               SELECT t.id, t.role FROM tree t JOIN workspace_folders f ON f.id = t.id WHERE f.owner_id <> %s""",
+            (user_id, depts, user_id),
+        ) or []
+    except Exception as exc:  # таблиц ещё нет (старая база до папок) — открытых папок просто нет
+        log.debug("workspace: folder shares unavailable (%s)", exc)
+        return {}
+    out: dict[int, str] = {}
+    for r in rows:
+        fid = int(r["id"])
+        out[fid] = "edit" if r["role"] == "edit" or out.get(fid) == "edit" else "view"
+    return out
+
+
+def inherited_shares(start_folder_id: int | None) -> list[dict[str, Any]]:
+    """Кому открыты папки от start_folder_id (включительно) и выше: доступ к папке наследуют вложенные папки и
+    материалы в них, поэтому в окне доступа они должны быть видны, хоть выданы не здесь. Каждая запись знает, через
+    какую папку пришла: {kind: user|department, id, name, role, members?, folderId, folderTitle}."""
+    if start_folder_id is None:
+        return []
+    try:
+        chain = db.conn.fetch_all(
+            """WITH RECURSIVE up AS (
+                   SELECT id, parent_id, title, 0 AS depth FROM workspace_folders WHERE id = %s
+                   UNION ALL
+                   SELECT p.id, p.parent_id, p.title, up.depth + 1 FROM workspace_folders p JOIN up ON p.id = up.parent_id
+               ) SELECT id, title FROM up ORDER BY depth""", (int(start_folder_id),)) or []
+        if not chain:
+            return []
+        ids = [int(r["id"]) for r in chain]
+        titles = {int(r["id"]): r["title"] or "" for r in chain}
+        order = {fid: i for i, fid in enumerate(ids)}
+        users = db.conn.fetch_all("SELECT folder_id, user_id, role FROM workspace_folder_shares WHERE folder_id = ANY(%s)", (ids,)) or []
+        depts = db.conn.fetch_all("SELECT folder_id, department_id, role FROM workspace_folder_dept_shares WHERE folder_id = ANY(%s)", (ids,)) or []
+    except Exception as exc:  # таблиц папок ещё нет — наследовать нечего
+        log.debug("workspace: inherited shares unavailable (%s)", exc)
+        return []
+    out: list[dict[str, Any]] = []
+    for r in sorted(users, key=lambda r: order[int(r["folder_id"])]):
+        user = db.get_user_by_id(str(r["user_id"])) or {}
+        out.append({"kind": "user", "id": str(r["user_id"]), "name": user.get("name") or user.get("username") or "", "role": r["role"],
+                    "folderId": str(r["folder_id"]), "folderTitle": titles[int(r["folder_id"])]})
+    names = {str(d["id"]): d["name"] for d in (db.get_departments() or [])} if depts else {}
+    for r in sorted(depts, key=lambda r: order[int(r["folder_id"])]):
+        dept = str(r["department_id"])
+        out.append({"kind": "department", "id": dept, "name": names.get(dept, dept), "role": r["role"], "members": len(dept_members([dept])),
+                    "folderId": str(r["folder_id"]), "folderTitle": titles[int(r["folder_id"])]})
+    return out
+
+
+def folder_audience(owner_id: str) -> set[str]:
+    """Кому открыта хоть одна папка владельца (поимённо и через отделы): им тоже приходят изменения раскладки."""
+    try:
+        users = {str(r["user_id"]) for r in db.conn.fetch_all(
+            "SELECT s.user_id FROM workspace_folder_shares s JOIN workspace_folders f ON f.id = s.folder_id WHERE f.owner_id = %s", (owner_id,)) or []}
+        depts = [str(r["department_id"]) for r in db.conn.fetch_all(
+            "SELECT d.department_id FROM workspace_folder_dept_shares d JOIN workspace_folders f ON f.id = d.folder_id WHERE f.owner_id = %s", (owner_id,)) or []]
+    except Exception:
+        return set()
+    return users | dept_members(depts)
+
+
+def item_folder_audience(row: dict[str, Any]) -> set[str]:
+    """Кому материал виден через открытые папки владельца (папка, куда он его положил, и все выше неё)."""
+    try:
+        chain = [int(r["id"]) for r in db.conn.fetch_all(
+            """WITH RECURSIVE up AS (
+                   SELECT f.id, f.parent_id FROM workspace_item_folder x JOIN workspace_folders f ON f.id = x.folder_id
+                   WHERE x.item_id = %s AND x.user_id = %s
+                   UNION ALL
+                   SELECT p.id, p.parent_id FROM workspace_folders p JOIN up ON p.id = up.parent_id
+               ) SELECT id FROM up""", (int(row["id"]), str(row["owner_id"]))) or []]
+        if not chain:
+            return set()
+        users = {str(r["user_id"]) for r in db.conn.fetch_all("SELECT user_id FROM workspace_folder_shares WHERE folder_id = ANY(%s)", (chain,)) or []}
+        depts = [str(r["department_id"]) for r in db.conn.fetch_all("SELECT department_id FROM workspace_folder_dept_shares WHERE folder_id = ANY(%s)", (chain,)) or []]
+    except Exception:
+        return set()
+    return users | dept_members(depts)
 
 
 NEW_SINCE_KEY = "workspace:new-since"
@@ -266,9 +464,11 @@ def mark_seen(item_id: str, user_id: str) -> None:
     )
 
 
-def permissions(row: dict[str, Any], user_id: str, depts: list[str] | None = None) -> dict[str, Any]:
-    """Что может человек с этим материалом. Правка: владелец; выданное поимённо или его отделу (если есть
-    право на правку хоть где — правит); остальные, кто видит материал по уровню доступа, — по режиму материала."""
+def permissions(row: dict[str, Any], user_id: str, depts: list[str] | None = None,
+                folder_roles: dict[int, str] | None = None) -> dict[str, Any]:
+    """Что может человек с этим материалом. Правка: владелец; выданное поимённо, его отделу или через открытую
+    папку владельца (если есть право на правку хоть где — правит); остальные, кто видит материал по уровню
+    доступа, — по режиму материала. folder_roles — заранее посчитанные открытые папки (для списка)."""
     if str(row["owner_id"]) == user_id:
         return {"isOwner": True, "canEdit": True, "role": "owner"}
     roles = [s["role"] for s in db.conn.fetch_all("SELECT role FROM workspace_item_shares WHERE item_id = %s AND user_id = %s", (row["id"], user_id)) or []]
@@ -276,6 +476,16 @@ def permissions(row: dict[str, Any], user_id: str, depts: list[str] | None = Non
         depts = user_dept_ids(user_id)
     if depts:
         roles += [s["role"] for s in db.conn.fetch_all("SELECT role FROM workspace_item_dept_shares WHERE item_id = %s AND department_id = ANY(%s)", (row["id"], depts)) or []]
+    # Через открытую папку: куда владелец сам положил материал (список передаёт owner_folder_id готовым).
+    if "owner_folder_id" in row:
+        owner_folder = row.get("owner_folder_id")
+    else:
+        placed = db.conn.fetch_one("SELECT folder_id FROM workspace_item_folder WHERE item_id = %s AND user_id = %s", (row["id"], str(row["owner_id"])))
+        owner_folder = placed["folder_id"] if placed else None
+    if owner_folder is not None:
+        via_folder = (folder_roles if folder_roles is not None else shared_folder_roles(user_id, depts)).get(int(owner_folder))
+        if via_folder:
+            roles.append(via_folder)
     if roles:
         role = "edit" if "edit" in roles else "view"
         return {"isOwner": False, "canEdit": role == "edit", "role": role}
@@ -286,7 +496,8 @@ def permissions(row: dict[str, Any], user_id: str, depts: list[str] | None = Non
 
 
 def present(row: dict[str, Any], user_id: str | None = None, *, with_content: bool = False,
-            depts: list[str] | None = None, owners: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+            depts: list[str] | None = None, owners: dict[str, dict[str, Any]] | None = None,
+            folder_roles: dict[int, str] | None = None) -> dict[str, Any]:
     """depts и owners — заранее посчитанные отделы смотрящего и владельцы: список не ходит за ними на каждую строку."""
     owner = owners.get(str(row["owner_id"])) if owners is not None else None
     if owner is None:
@@ -299,19 +510,52 @@ def present(row: dict[str, Any], user_id: str | None = None, *, with_content: bo
         "sizeBytes": row.get("size_bytes") or 0, "snippet": row.get("snippet") or "",
         "isNew": bool(row.get("is_new")),
         "folderId": row.get("folder_id"),
+        "folderPosition": row.get("folder_position"),
+        "rootPosition": row.get("root_position"),
     }
     if user_id is not None:
-        out.update(permissions(row, user_id, depts))
+        out.update(permissions(row, user_id, depts, folder_roles))
     if with_content:
         out["content"] = row["content"]
     return out
+
+
+_tables_seen: dict[str, float] = {}
+
+
+def table_ready(name: str) -> bool:
+    """Есть ли таблица в базе. На проде схему применяют вручную (SHAR_AUTO_MIGRATE=0): код, вышедший раньше своей
+    таблицы, не должен ломать то, что работало без неё. Есть — помним навсегда, нет — перепроверяем раз в минуту."""
+    seen = _tables_seen.get(name)
+    if seen == float("inf") or (seen is not None and time.monotonic() - seen < 60):
+        return seen == float("inf")
+    row = db.conn.fetch_one("SELECT to_regclass(%s) IS NOT NULL AS ok", (name,))
+    ok = bool(row and row.get("ok"))
+    _tables_seen[name] = float("inf") if ok else time.monotonic()
+    return ok
+
+
+def column_ready(table: str, column: str) -> bool:
+    """Есть ли столбец (как table_ready: код, вышедший раньше схемы, работает и без него)."""
+    name = f"{table}.{column}"
+    seen = _tables_seen.get(name)
+    if seen == float("inf") or (seen is not None and time.monotonic() - seen < 60):
+        return seen == float("inf")
+    row = db.conn.fetch_one("SELECT 1 AS ok FROM information_schema.columns WHERE table_name = %s AND column_name = %s", (table, column))
+    _tables_seen[name] = float("inf") if row else time.monotonic()
+    return bool(row)
+
+
+def via_ready() -> bool:
+    return column_ready("workspace_items", "updated_via") and column_ready("workspace_item_versions", "saved_via")
 
 
 def get_row(item_id: str, *, full: bool = True, content: bool = True) -> Optional[dict[str, Any]]:
     """content=False: все поля, кроме содержимого из S3 (для проверки прав и служебных запросов)."""
     if not str(item_id).isdigit():
         return None
-    row = db.conn.fetch_one(f"SELECT {FULL_COLUMNS if full else LIST_COLUMNS} FROM workspace_items i WHERE id = %s", (int(item_id),))
+    columns = (FULL_COLUMNS + (", updated_via" if via_ready() else "")) if full else LIST_COLUMNS
+    row = db.conn.fetch_one(f"SELECT {columns} FROM workspace_items i WHERE id = %s", (int(item_id),))
     if row and full and content and row.get("content_key"):
         row["content"] = read_object(row["content_key"])
     return row
@@ -402,7 +646,7 @@ def audience(row: dict[str, Any]) -> set[str]:
     users.add(str(row["owner_id"]))
     users |= {str(r["user_id"]) for r in db.conn.fetch_all("SELECT user_id FROM workspace_item_shares WHERE item_id = %s", (row["id"],)) or []}
     depts = [str(r["department_id"]) for r in db.conn.fetch_all("SELECT department_id FROM workspace_item_dept_shares WHERE item_id = %s", (row["id"],)) or []]
-    return users | dept_members(depts)
+    return users | dept_members(depts) | item_folder_audience(row)
 
 
 def announce(users: set[str], row: dict[str, Any], reason: str, *, actor: str = "", exclude: str = "") -> None:
@@ -429,11 +673,14 @@ VERSION_GAP_SECONDS = 600
 MAX_VERSIONS = 60
 
 
-def snapshot(row: dict[str, Any], editor: str, *, force: bool = False, label: str = "", keep_object: bool = False) -> bool:
+def snapshot(row: dict[str, Any], editor: str, *, force: bool = False, label: str = "", keep_object: bool = False,
+             together: bool = False) -> bool:
     """Положить в историю содержимое `row` (то, что только что перезаписано новым). Зовут ПОСЛЕ успешной записи.
 
     Возвращает True, если версия забрала себе объект S3 (`content_key`): вызывающий тогда не должен его удалять.
-    keep_object=True — материал продолжает ссылаться на тот же объект (ручная версия): для версии делается копия."""
+    keep_object=True — материал продолжает ссылаться на тот же объект (ручная версия): для версии делается копия.
+    together=True — совместная правка: сохраняют по очереди все, кто печатает, и версии копятся по времени, а не по
+    смене сохранившего (иначе десять человек давали бы новую версию на каждое сохранение)."""
     content = row.get("content") or ""
     key = row.get("content_key") or ""
     if not content and not key:
@@ -445,9 +692,11 @@ def snapshot(row: dict[str, Any], editor: str, *, force: bool = False, label: st
         (row["updated_at"], item_id),
     )
     previous_author = row.get("updated_by") or str(row["owner_id"])
+    previous_via = row.get("updated_via") or ""
     if not force and last:
         gap = float(last["gap"] or 0)
-        if previous_author == editor and gap < VERSION_GAP_SECONDS:
+        # Тот же человек тем же способом — правки копятся в одну версию; сменился человек или способ (сам ↔ агент) — новая.
+        if (previous_author == editor or together) and previous_via == EDIT_VIA.get() and gap < VERSION_GAP_SECONDS:
             return False
         if not key and last["content"] == content:
             return False  # то же состояние уже записано
@@ -460,11 +709,12 @@ def snapshot(row: dict[str, Any], editor: str, *, force: bool = False, label: st
             log.error("workspace: S3 copy failed for %s: %s", copy_key, exc)
             raise WorkspaceError(502, "Не удалось сохранить версию в хранилище") from exc
         key, content, taken = copy_key, "", False
+    via = via_ready()
     db.conn.execute_query(
-        """INSERT INTO workspace_item_versions (item_id, title, content, content_key, content_size, saved_by, label, created_at)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s::timestamptz)""",
+        f"""INSERT INTO workspace_item_versions (item_id, title, content, content_key, content_size, saved_by, label, created_at{', saved_via' if via else ''})
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s::timestamptz{', %s' if via else ''})""",
         (item_id, row.get("title") or "", "" if key else content, key, len(content.encode("utf-8")) if content else int(row.get("size_bytes") or 0),
-         previous_author, label[:80], row["updated_at"]),
+         previous_author, label[:80], row["updated_at"], *([previous_via] if via else [])),
     )
     stale = db.conn.fetch_all(
         "SELECT id, content_key FROM workspace_item_versions WHERE item_id = %s ORDER BY id DESC OFFSET %s", (item_id, MAX_VERSIONS),
@@ -552,6 +802,52 @@ class Presence:
 
 
 presence = Presence()
+
+
+def viewers_many(item_ids: list[str], *, exclude: str = "") -> dict[str, list[dict[str, Any]]]:
+    """Кто сейчас в каждом из материалов — одним походом в Redis (для строк списка). Только непустые."""
+    if not item_ids:
+        return {}
+    raw: dict[str, list[tuple[str, bool]]] = {}
+    if presence._redis is not None:
+        try:
+            now = presence._now()
+            pipe = presence._redis.pipeline()
+            for item_id in item_ids:
+                pipe.zrangebyscore(f"shar:wsp:{item_id}", now - PRESENCE_TTL, "+inf")
+                pipe.hgetall(f"shar:wspe:{item_id}")
+            res = pipe.execute()
+            for index, item_id in enumerate(item_ids):
+                members, flags = res[2 * index] or [], res[2 * index + 1] or {}
+                raw[item_id] = [(m, flags.get(m) == "1") for m in members]
+        except Exception as exc:
+            log.debug("workspace presence: redis unavailable (%s)", exc)
+            raw = {}
+    if not raw:
+        raw = {item_id: presence.viewers(item_id) for item_id in item_ids}
+    user_ids = sorted({uid for pairs in raw.values() for uid, _ in pairs if uid != exclude})
+    if not user_ids:
+        return {}
+    users = {str(u["id"]): u for u in (db.conn.fetch_all("SELECT id, name, username, avatar FROM users WHERE id = ANY(%s)", (user_ids,)) or [])}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for item_id, pairs in raw.items():
+        people = [{"userId": uid, "name": (users.get(uid) or {}).get("name") or (users.get(uid) or {}).get("username") or uid,
+                   "avatar": (users.get(uid) or {}).get("avatar") or "", "editing": editing} for uid, editing in pairs if uid != exclude]
+        if people:
+            out[item_id] = people
+    return out
+
+
+def announce_presence(row: dict[str, Any], viewers: list[dict[str, Any]]) -> None:
+    """Состав присутствующих изменился — всем, кто видит материал: строка списка обновит аватарки. Не ломает запрос."""
+    try:
+        from app.core.realtime import sse_manager
+
+        payload = {"type": "workspace_presence_list", "itemId": str(row["id"]), "viewers": viewers}
+        for uid in audience(row):
+            sse_manager.push(uid, payload)
+    except Exception as exc:
+        log.debug("workspace: presence announce failed: %s", exc)
 
 
 def viewer_list(item_id: str) -> list[dict[str, Any]]:

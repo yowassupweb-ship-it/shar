@@ -1,11 +1,13 @@
 /**
  * Готовит web/ для установщика: сборка Vite (../dist) + маленький локальный сервер.
  *
- * Раньше сюда копировался standalone-сервер Next; теперь клиент — статическая
- * сборка, и серверу нужно только раздать её и проксировать /api (HTTP и сокет)
- * на бэкенд. Сервер — web/server.js, без зависимостей (только модули Node).
+ * Правило выпуска — одна сборка везде: в установщик кладётся ТОТ ЖЕ ../dist, что уходит на сервер, поэтому
+ * по умолчанию сборка не пересобирается, а копируется (иначе у сайта и Shar OS разные index-*.js).
+ * `--build` — сначала собрать ../dist (npm run build): для проверочной сборки, не для выпуска.
+ *
+ * Сервер — web/server.js, без зависимостей (только модули Node): раздаёт сборку и проксирует /api на бэкенд.
  */
-const { cpSync, existsSync, mkdirSync, rmSync } = require('fs');
+const { cpSync, existsSync, mkdirSync, readFileSync, rmSync } = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
@@ -14,12 +16,15 @@ const appDir = path.resolve(desktopDir, '..');
 const outputDir = path.join(desktopDir, 'web');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
-const build = spawnSync(npm, ['run', 'build'], { cwd: appDir, stdio: 'inherit', shell: process.platform === 'win32' });
-if (build.error) throw build.error;
-if (build.status !== 0) process.exit(build.status || 1);
+if (process.argv.includes('--build')) {
+  const build = spawnSync(npm, ['run', 'build'], { cwd: appDir, stdio: 'inherit', shell: process.platform === 'win32' });
+  if (build.error) throw build.error;
+  if (build.status !== 0) process.exit(build.status || 1);
+}
 
 const dist = path.join(appDir, 'dist');
-if (!existsSync(path.join(dist, 'index.html'))) throw new Error(`Vite build not found at ${dist}`);
+const index = path.join(dist, 'index.html');
+if (!existsSync(index)) throw new Error(`Сборки нет: ${dist}. Соберите её (npm run build в корне) или запустите с --build.`);
 
 rmSync(outputDir, { recursive: true, force: true });
 mkdirSync(outputDir, { recursive: true });
@@ -28,4 +33,6 @@ mkdirSync(outputDir, { recursive: true });
 cpSync(dist, path.join(outputDir, 'dist'), { recursive: true, filter: (src) => !src.includes(`${path.sep}emojis${path.sep}`) });
 cpSync(path.join(__dirname, 'web-server.cjs'), path.join(outputDir, 'server.js'));
 
-console.log(`Electron web prepared at ${outputDir}`);
+// Какая сборка внутри — сверить с сайтом: тот же index-*.js, что в dist/index.html на сервере.
+const entry = (readFileSync(index, 'utf8').match(/assets\/index-[\w-]+\.js/) || ['?'])[0];
+console.log(`Electron web prepared at ${outputDir} (сборка ${entry})`);

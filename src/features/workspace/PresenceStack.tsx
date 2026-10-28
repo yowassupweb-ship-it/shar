@@ -14,19 +14,19 @@ export function hueOf(id: string): number {
  * Кто сейчас в материале — стопка аватарок в шапке, как в Google Docs. Тот, кто печатает, подсвечен
  * пульсирующим кольцом; подсказка называет имя и что человек делает.
  */
-export function PresenceStack({ viewers }: { viewers: Viewer[] }) {
+export function PresenceStack({ viewers, size = 26 }: { viewers: Viewer[]; size?: number }) {
   if (!viewers.length) return null;
   const shown = viewers.slice(0, MAX_SHOWN);
   const more = viewers.length - shown.length;
   const label = viewers.map((v) => `${v.name} — ${v.editing ? 'печатает' : 'смотрит'}`).join('\n');
   return (
-    <div className="nws-presence" role="group" aria-label={`Сейчас в материале: ${viewers.map((v) => v.name).join(', ')}`} title={label}>
+    <span className="nws-presence" role="group" aria-label={`Сейчас в материале: ${viewers.map((v) => v.name).join(', ')}`} title={label}>
       {shown.map((v) => (
         <span key={v.userId} className="nws-presence-one" data-editing={v.editing || undefined} style={{ '--ring': `hsl(${hueOf(String(v.userId))} 70% 60%)` } as React.CSSProperties}>
-          <Avatar name={v.name} seed={String(v.userId)} src={v.avatar || undefined} person size={26} />
+          <Avatar name={v.name} seed={String(v.userId)} src={v.avatar || undefined} person size={size} />
         </span>
       ))}
       {more > 0 && <span className="nws-presence-more">+{more}</span>}
-    </div>
+    </span>
   );
 }

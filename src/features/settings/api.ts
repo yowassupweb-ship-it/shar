@@ -108,6 +108,30 @@ export async function loadDevices(): Promise<Device[]> {
 export const revokeDevice = (id: string) => call(`/api/auth/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
 export const revokeOtherDevices = () => call('/api/auth/devices/revoke-others', { method: 'POST' });
 
+// ── Ключи MCP ───────────────────────────────────────────────────────────────
+
+export type McpAccess = 'read' | 'edit' | 'create';
+export type McpKind = 'note' | 'document' | 'table' | 'presentation';
+/** Куда пускает ключ: уровень, виды, папки (null — весь «Офис», иначе выбранные и вложенные в них), чужие материалы. */
+export interface McpScope { access: McpAccess; kinds: McpKind[]; folders: string[] | null; shared: boolean }
+/** Личный ключ MCP: самого ключа сервер не хранит и не отдаёт — только начало для узнавания. */
+export interface McpKey {
+  id: string; name: string; start: string; scope: McpScope;
+  createdAt: string; lastUsedAt: string | null; expiresAt: string | null; expired: boolean;
+}
+export interface McpLogEntry { at: string; tool: string; itemId: string; title: string; ok: boolean; error: string }
+/** Папка «Офиса» — для выбора, куда пускать агента (свои и открытые мне). */
+export interface OfficeFolder { id: string; title: string; parentId: string | null; role?: string }
+
+export const loadMcpKeys = () => call<{ keys: McpKey[] }>('/api/mcp/keys').then((r) => r.keys);
+export const createMcpKey = (name: string, scope: McpScope, expiresInDays: number | null) =>
+  call<{ key: McpKey; token: string }>('/api/mcp/keys', json('POST', { name, scope, expiresInDays }));
+export const updateMcpKey = (id: string, patch: { name?: string; scope?: McpScope }) =>
+  call<{ key: McpKey }>(`/api/mcp/keys/${encodeURIComponent(id)}`, json('PATCH', patch)).then((r) => r.key);
+export const revokeMcpKey = (id: string) => call(`/api/mcp/keys/${encodeURIComponent(id)}`, { method: 'DELETE' });
+export const loadMcpLog = (id: string) => call<{ log: McpLogEntry[] }>(`/api/mcp/keys/${encodeURIComponent(id)}/log`).then((r) => r.log);
+export const loadOfficeFolders = () => call<{ folders: OfficeFolder[] }>('/api/workspace/folders').then((r) => r.folders);
+
 // ── Пуши ───────────────────────────────────────────────────────────────────
 
 export async function loadReactionPush(): Promise<boolean | null> {

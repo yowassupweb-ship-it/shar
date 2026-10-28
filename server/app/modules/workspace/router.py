@@ -3,7 +3,8 @@
   GET    /api/workspace/items?kind=&q=&templates=      список (без содержимого)
   POST   /api/workspace/items                          создать {kind, title?, content?, meta?, templateId?}
   GET    /api/workspace/items/{id}                     целиком
-  PATCH  /api/workspace/items/{id}                     {title?, content?, meta?, pinned?, isTemplate?, accessLevel?, accessMode?, baseUpdatedAt?}
+  PATCH  /api/workspace/items/{id}                     {title?, content?, meta?, pinned?, isTemplate?, accessLevel?, accessMode?, baseUpdatedAt?, live?}
+  GET    /api/workspace/items/{id}/live?epoch=&since=  правки совместной правки после версии since (live.py)
   DELETE /api/workspace/items/{id}                     только владелец
   GET    /api/workspace/items/{id}/shares              кому выдано: поимённо и отделам
   PUT    /api/workspace/items/{id}/shares              {userId | departmentId, role: "view"|"edit"|null}
@@ -25,11 +26,11 @@ from __future__ import annotations
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core.db import db
 from app.core.security import Identity, current_identity
-from app.modules.workspace import store
+from app.modules.workspace import live, store
 from app.modules.workspace.store import WorkspaceError, ACCESS_LEVELS, ACCESS_MODES, KINDS
 
 router = APIRouter()
@@ -47,6 +48,11 @@ class ItemCreate(BaseModel):
     templateId: Optional[str] = None
 
 
+class LiveMark(BaseModel):
+    epoch: str
+    rev: int
+
+
 class ItemPatch(BaseModel):
     title: Optional[str] = None
     content: Optional[str] = None
@@ -56,6 +62,8 @@ class ItemPatch(BaseModel):
     accessLevel: Optional[str] = None
     accessMode: Optional[str] = None
     baseUpdatedAt: Optional[str] = None
+    # Сохранение от живого редактора (документ, таблица): содержимое соответствует версии rev журнала правок.
+    live: Optional[LiveMark] = None
 
 
 class ShareBody(BaseModel):
@@ -89,22 +97,58 @@ def list_items(kind: Optional[str] = None, q: str = "", templates: bool = False,
         params.append(kind)
     if templates:
         where.append("i.is_template")
-    query = q.strip()
-    if query:
-        where.append("(i.title ILIKE %s OR i.text_content ILIKE %s)")
-        params += [f"%{query}%", f"%{query}%"]
-    depts = params[2]  # visible_params уже посчитал отделы смотрящего
+    # Поиск: все слова в любом порядке и форме, совпадение в названии выше, кусок текста — у совпадения (store.search_sql).
+    match, match_params, rank, rank_params, hit, hit_params = store.search_sql(q)
+    if match:
+        where.append(match)
+        params += match_params
+    depts = params[2]  # visible_params уже посчитал отделы смотрящего…
+    shared_ids = params[3]  # …и открытые ему чужие папки
+    folder_roles = store.shared_folder_roles(me.user_id, depts) if shared_ids else {}
     params.append(max(1, min(limit, 1000)))
+    # Ручной порядок вне папок — когда его таблица уже есть в базе (на проде схему применяют вручную).
+    root_order = store.table_ready("workspace_item_root_order")
+    root_select = "ro.position AS root_position" if root_order else "NULL::float AS root_position"
+    root_join = "LEFT JOIN workspace_item_root_order ro ON ro.item_id = i.id AND ro.user_id = %s " if root_order else ""
     # Новое (мне открыли доступ, а я ещё не открывал) — первым, выше закреплённого.
+    order = f"{rank} DESC, i.updated_at DESC" if match else "is_new DESC, i.pinned DESC, i.updated_at DESC"
     rows = db.conn.fetch_all(
-        f"SELECT {store.LIST_COLUMNS}, {store.is_new_sql('i')} AS is_new, "
-        "(SELECT f.folder_id::text FROM workspace_item_folder f WHERE f.item_id = i.id AND f.user_id = %s) AS folder_id "
-        f"FROM workspace_items i WHERE {' AND '.join(where)} ORDER BY is_new DESC, i.pinned DESC, i.updated_at DESC LIMIT %s",
-        tuple(store.is_new_params(me.user_id, depts) + [me.user_id] + params),
+        f"SELECT {store.LIST_COLUMNS}, {store.is_new_sql('i')} AS is_new, {hit} AS hit, "
+        # Своя раскладка; нет её — место в открытой мне папке владельца (общая раскладка у всех, кому открыта).
+        "COALESCE(f.folder_id, CASE WHEN ofo.folder_id = ANY(%s) THEN ofo.folder_id END)::text AS folder_id, "
+        "CASE WHEN f.folder_id IS NOT NULL THEN f.position ELSE ofo.position END AS folder_position, "
+        f"ofo.folder_id AS owner_folder_id, {root_select} "
+        f"FROM workspace_items i LEFT JOIN workspace_item_folder f ON f.item_id = i.id AND f.user_id = %s "
+        f"LEFT JOIN workspace_item_folder ofo ON ofo.item_id = i.id AND ofo.user_id = i.owner_id {root_join}"
+        f"WHERE {' AND '.join(where)} ORDER BY {order} LIMIT %s",
+        tuple(store.is_new_params(me.user_id, depts) + hit_params + [shared_ids, me.user_id] + ([me.user_id] if root_order else [])
+              + params[:-1] + (rank_params if match else []) + params[-1:]),
     ) or []
     owner_ids = sorted({str(r["owner_id"]) for r in rows})
     owners = {str(u["id"]): u for u in (db.conn.fetch_all("SELECT id, name, username FROM users WHERE id = ANY(%s)", (owner_ids,)) or [])} if owner_ids else {}
-    return {"items": [store.present(row, me.user_id, depts=depts, owners=owners) for row in rows]}
+    # Кто сейчас в материале — аватарки на строке списка (себя не показываем).
+    present_now = store.viewers_many([str(r["id"]) for r in rows], exclude=me.user_id)
+    return {"items": [{**store.present(row, me.user_id, depts=depts, owners=owners, folder_roles=folder_roles),
+                       "viewers": present_now.get(str(row["id"]), []),
+                       **({"snippet": store.search_snippet(row.get("hit"), row.get("snippet") or "")} if match and row.get("hit") else {})}
+                      for row in rows]}
+
+
+class PresenceListBody(BaseModel):
+    ids: list[str] = Field(max_length=1000)
+
+
+@router.post("/api/workspace/presence")
+def presence_for_list(body: PresenceListBody, me: Identity = Depends(current_identity)):
+    """Кто сейчас в материалах списка — для периодического обновления аватарок (присутствие истекает без события)."""
+    ids = [i for i in body.ids if str(i).isdigit()]
+    if not ids:
+        return {"viewers": {}}
+    visible = db.conn.fetch_all(
+        f"SELECT i.id::text AS id FROM workspace_items i WHERE i.id = ANY(%s) AND {store.visible_sql('i')}",
+        (list(map(int, ids)), *store.visible_params(me.user_id)),
+    ) or []
+    return {"viewers": store.viewers_many([r["id"] for r in visible], exclude=me.user_id)}
 
 
 @router.post("/api/workspace/items", status_code=201)
@@ -131,6 +175,8 @@ def create_item(body: ItemCreate, me: Identity = Depends(current_identity)):
     item_id = int(row["id"])
     try:
         sets, values, new_key = store.content_sets(item_id, content)
+        if store.via_ready() and store.EDIT_VIA.get():
+            sets, values = [*sets, "updated_via = %s"], [*values, store.EDIT_VIA.get()]
         db.conn.execute_query(f"UPDATE workspace_items SET {', '.join(sets)} WHERE id = %s", tuple(values + [item_id]))
     except WorkspaceError as exc:
         db.conn.execute_query("DELETE FROM workspace_items WHERE id = %s", (item_id,))
@@ -144,9 +190,27 @@ def get_item(item_id: str, me: Identity = Depends(current_identity)):
         row = store.get_visible(item_id, me.user_id)
         if str(row["owner_id"]) != me.user_id:
             store.mark_seen(item_id, me.user_id)
-        return {"item": store.present(row, me.user_id, with_content=True)}
+        item = store.present(row, me.user_id, with_content=True)
+        joined = live.join(row)
+        if joined is not None:
+            item["live"] = joined
+            live.subscribe(item_id, me.user_id)
+        return {"item": item}
     except WorkspaceError as exc:
         raise _raise(exc) from exc
+
+
+@router.get("/api/workspace/items/{item_id}/live")
+def live_ops(item_id: str, epoch: str, since: int, me: Identity = Depends(current_identity)):
+    """Догнать журнал совместной правки: правки после версии since (переподключение, свёрнутое окно)."""
+    try:
+        row = store.get_visible(item_id, me.user_id, content=False)
+    except WorkspaceError as exc:
+        raise _raise(exc) from exc
+    if row["kind"] not in live.LIVE_KINDS:
+        raise HTTPException(status_code=400, detail="Совместная правка — только для документов, таблиц и заметок")
+    live.subscribe(item_id, me.user_id)
+    return live.catch_up(item_id, epoch, since)
 
 
 @router.patch("/api/workspace/items/{item_id}")
@@ -155,6 +219,10 @@ def patch_item(item_id: str, body: ItemPatch, me: Identity = Depends(current_ide
         row = store.get_visible(item_id, me.user_id)
         perms = store.permissions(row, me.user_id)
         fields = body.model_dump(exclude_unset=True)
+        mark = body.live if "content" in fields and fields["content"] is not None and row["kind"] in live.LIVE_KINDS else None
+        fields.pop("live", None)
+        if mark is not None:
+            live.check_save(item_id, mark.epoch, mark.rev)
         owner_only = {"pinned", "isTemplate", "accessLevel", "accessMode"} & fields.keys()
         if owner_only and not perms["isOwner"]:
             raise WorkspaceError(403, "Это может менять только владелец")
@@ -173,9 +241,15 @@ def patch_item(item_id: str, body: ItemPatch, me: Identity = Depends(current_ide
             params += content_values + [store.text_of(row["kind"], fields["content"])]
             sets.append("updated_by = %s")
             params.append(me.user_id)
+            if store.via_ready():
+                sets.append("updated_via = %s")
+                params.append(store.EDIT_VIA.get())
         if "meta" in fields and fields["meta"] is not None:
             sets.append("meta = %s")
             params.append(store.as_json({**(row["meta"] or {}), **store.clean_meta(row["kind"], fields["meta"])}))
+        elif mark is not None:
+            sets.append("meta = COALESCE(meta, '{}'::jsonb) || %s")
+            params.append(store.as_json({"live": {"epoch": mark.epoch, "rev": mark.rev}}))
         if "pinned" in fields and fields["pinned"] is not None:
             sets.append("pinned = %s")
             params.append(fields["pinned"])
@@ -203,22 +277,36 @@ def patch_item(item_id: str, body: ItemPatch, me: Identity = Depends(current_ide
             sets.append("updated_at = now()")
         sql = f"UPDATE workspace_items SET {', '.join(sets)} WHERE id = %s"
         params.append(int(item_id))
-        # Пока человек печатал, материал мог записать другой (по ссылке, коллега): тогда 409, решает человек.
-        if body.baseUpdatedAt and ("content" in fields):
+        # Живой редактор: правки коллег уже в его содержимом (журнал live.py), конфликтовать нечему — записываем,
+        # если в базе не лежит та же или более новая версия. Остальные: пока человек печатал, материал мог записать
+        # другой (по ссылке, коллега): тогда 409, решает человек.
+        if mark is not None:
+            sql += " AND " + live.save_condition()
+            params += [mark.epoch, mark.rev]
+        elif body.baseUpdatedAt and ("content" in fields):
             sql += " AND updated_at::text = %s"
             params.append(body.baseUpdatedAt)
         updated = db.conn.fetch_one(sql + " RETURNING id", tuple(params))
         taken = False
         if updated and "content" in fields:
-            taken = store.snapshot(row, me.user_id)  # прежнее содержимое — в историю версий
+            taken = store.snapshot(row, me.user_id, together=mark is not None)  # прежнее содержимое — в историю версий
         if new_key:
             store.finish_content(new_key, "" if taken else (row.get("content_key") or ""), saved=bool(updated))
+        if not updated and mark is not None:
+            # Эту версию (или новее) уже сохранил коллега — у всех одно и то же содержимое.
+            return {"item": store.present(store.get_row(item_id, full=False), me.user_id), "live": "already"}
         if not updated:
             raise WorkspaceError(409, "Материал изменили, пока вы правили")
-        if "content" in fields or "title" in fields:
-            live = store.get_row(item_id, full=False)
-            store.push_to_viewers(item_id, {"type": "workspace_changed", "reason": "content", "itemId": item_id, "kind": row["kind"], "updatedAt": live["updated_at"],
+        if mark is not None:
+            live.announce_saved(item_id, mark.epoch, mark.rev)
+        elif "content" in fields and row["kind"] in live.LIVE_KINDS:
+            live.reset(item_id)
+        if ("content" in fields and mark is None) or "title" in fields:
+            fresh_row = store.get_row(item_id, full=False)
+            store.push_to_viewers(item_id, {"type": "workspace_changed", "reason": "content", "itemId": item_id, "kind": row["kind"], "updatedAt": fresh_row["updated_at"],
                                             "by": me.display_name, "byId": me.user_id}, exclude=me.user_id)
+        if {"accessLevel", "accessMode"} & fields.keys():
+            live.forget_access(item_id)
         if {"accessLevel", "accessMode", "title"} & fields.keys():
             fresh = store.get_row(item_id, full=False)
             reason = "shared" if fresh["access_level"] == "all" and "accessLevel" in fields else "changed"
@@ -270,7 +358,9 @@ def _shares_payload(item_id: str) -> dict[str, Any]:
     depts = db.conn.fetch_all("SELECT department_id, role FROM workspace_item_dept_shares WHERE item_id = %s ORDER BY created_at", (int(item_id),)) or []
     departments = [{"departmentId": d["department_id"], "role": d["role"], "name": names.get(str(d["department_id"]), d["department_id"]),
                     "members": len(store.dept_members([str(d["department_id"])]))} for d in depts]
-    return {"shares": out, "departments": departments}
+    placed = db.conn.fetch_one("SELECT x.folder_id FROM workspace_item_folder x JOIN workspace_items i ON i.id = x.item_id "
+                               "WHERE x.item_id = %s AND x.user_id = i.owner_id", (int(item_id),)) or {}
+    return {"shares": out, "departments": departments, "inherited": store.inherited_shares(placed.get("folder_id"))}
 
 
 @router.put("/api/workspace/items/{item_id}/shares")
@@ -298,6 +388,7 @@ def set_share(item_id: str, body: ShareBody, me: Identity = Depends(current_iden
                ON CONFLICT (item_id, {column}) DO UPDATE SET role = EXCLUDED.role""",
             (int(item_id), key, body.role),
         )
+    live.forget_access(item_id)
     # Человек (или весь отдел) получает материал в свой список сразу, без обновления страницы.
     store.announce(affected, row, "shared" if body.role else "changed", actor=me.user_id, exclude=me.user_id)
     return _shares_payload(item_id)
@@ -318,13 +409,24 @@ def set_presence(item_id: str, body: PresenceBody, me: Identity = Depends(curren
     viewers = store.viewer_list(item_id)
     if before != sorted((v["userId"], v["editing"]) for v in viewers):
         store.push_to_viewers(item_id, {"type": "workspace_presence", "itemId": item_id, "viewers": viewers}, exclude=me.user_id)
+        # И всем, кто видит материал в своём списке, — аватарки на строке обновятся сразу.
+        store.announce_presence(row, viewers)
     return {"viewers": viewers}
 
 
+def _who(user_id: str, names: dict[str, str]) -> str:
+    if user_id == "link":
+        return "По ссылке"
+    if user_id not in names:
+        names[user_id] = ((db.get_user_by_id(user_id) or {}).get("name") if user_id else "") or ""
+    return names[user_id]
+
+
 def _version_view(row: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
+    """Версия — состояние материала: кто его сделал (savedBy) и как (savedVia: '' — сам, иначе «агент «…»»)."""
     by = str(row["saved_by"] or "")
     return {"id": str(row["id"]), "title": row["title"], "label": row["label"], "size": row["content_size"], "createdAt": row["created_at"],
-            "savedBy": by, "savedByName": "По ссылке" if by == "link" else names.get(by) or ((db.get_user_by_id(by) or {}).get("name") if by else "") or ""}
+            "savedBy": by, "savedByName": _who(by, names), "savedVia": row.get("saved_via") or ""}
 
 
 @router.get("/api/workspace/items/{item_id}/versions")
@@ -333,15 +435,16 @@ def list_versions(item_id: str, me: Identity = Depends(current_identity)):
         row = store.get_visible(item_id, me.user_id, content=False)
     except WorkspaceError as exc:
         raise _raise(exc) from exc
+    via = ", saved_via" if store.via_ready() else ""
     rows = db.conn.fetch_all(
-        """SELECT id, title, label, content_size, saved_by, created_at::text AS created_at FROM workspace_item_versions
+        f"""SELECT id, title, label, content_size, saved_by, created_at::text AS created_at{via} FROM workspace_item_versions
            WHERE item_id = %s ORDER BY id DESC LIMIT 80""", (int(item_id),)) or []
     names: dict[str, str] = {}
     editor = str(row.get("updated_by") or row["owner_id"])
     return {
         "versions": [_version_view(r, names) for r in rows],
-        "current": {"updatedAt": row["updated_at"], "title": row["title"], "savedBy": editor,
-                    "savedByName": "По ссылке" if editor == "link" else (db.get_user_by_id(editor) or {}).get("name") or ""},
+        "current": {"updatedAt": row["updated_at"], "title": row["title"], "savedBy": editor, "savedByName": _who(editor, names),
+                    "savedVia": row.get("updated_via") or ""},
         "canRestore": bool(store.permissions(row, me.user_id)["canEdit"]),
     }
 
@@ -349,8 +452,9 @@ def list_versions(item_id: str, me: Identity = Depends(current_identity)):
 def _version(item_id: str, version_id: str) -> dict[str, Any]:
     if not version_id.isdigit():
         raise HTTPException(status_code=404, detail="Версия не найдена")
+    via = ", saved_via" if store.via_ready() else ""
     row = db.conn.fetch_one(
-        """SELECT id, title, label, content, content_key, content_size, saved_by, created_at::text AS created_at
+        f"""SELECT id, title, label, content, content_key, content_size, saved_by, created_at::text AS created_at{via}
            FROM workspace_item_versions WHERE id = %s AND item_id = %s""", (int(version_id), int(item_id)))
     if not row:
         raise HTTPException(status_code=404, detail="Версия не найдена")
@@ -389,13 +493,17 @@ def restore_version(item_id: str, version_id: str, me: Identity = Depends(curren
         content = store.version_content(version)
         store.validate_content(row["kind"], content)
         parts, values, new_key = store.content_sets(int(item_id), content)
+        via = ", updated_via = %s" if store.via_ready() else ""
         updated = db.conn.fetch_one(
-            f"UPDATE workspace_items SET {', '.join(parts)}, text_content = %s, title = %s, updated_by = %s, updated_at = now() WHERE id = %s RETURNING id",
-            tuple(values + [store.text_of(row["kind"], content), version["title"] or row["title"], me.user_id, int(item_id)]),
+            f"UPDATE workspace_items SET {', '.join(parts)}, text_content = %s, title = %s, updated_by = %s, updated_at = now(){via} WHERE id = %s RETURNING id",
+            tuple(values + [store.text_of(row["kind"], content), version["title"] or row["title"], me.user_id,
+                            *([store.EDIT_VIA.get()] if via else []), int(item_id)]),
         )
         taken = bool(updated) and store.snapshot(row, me.user_id, force=True, label="Перед восстановлением")
         if new_key:
             store.finish_content(new_key, "" if taken else (row.get("content_key") or ""), saved=bool(updated))
+        if row["kind"] in live.LIVE_KINDS:
+            live.reset(item_id)
         fresh = store.get_row(item_id, full=False)
         store.push_to_viewers(item_id, {"type": "workspace_changed", "reason": "content", "itemId": item_id, "kind": row["kind"], "updatedAt": fresh["updated_at"],
                                         "by": me.display_name, "byId": me.user_id}, exclude=me.user_id)

@@ -68,6 +68,8 @@ class Incoming:
     reply: Dict[str, Any] = field(default_factory=dict)
     can_reply: bool = True
     thread: str = ""  # пост, под которым комментарий: диалог — автор под этим постом
+    author_avatar: str = ""  # фото собеседника на площадке
+    images: List[str] = field(default_factory=list)  # адреса картинок вложений — показываются прямо в переписке
 
 
 # ─── Telegram ────────────────────────────────────────────────────────────────
@@ -239,6 +241,11 @@ def _max_name(sender: dict) -> str:
     return sender.get("name") or " ".join(x for x in (sender.get("first_name"), sender.get("last_name")) if x) or sender.get("username") or ""
 
 
+def _max_avatar(sender: dict) -> str:
+    url = str(sender.get("full_avatar_url") or sender.get("avatar_url") or "")
+    return url if url.startswith("https://") else ""
+
+
 def _max_comment(update: dict) -> Optional[Incoming]:
     """Комментарий под постом канала. Пост — recipient.post_id, сам комментарий — body.mid; диалог —
     автор под этим постом, ответ — комментарием-ответом на его последний комментарий."""
@@ -255,7 +262,7 @@ def _max_comment(update: dict) -> Optional[Incoming]:
     return Incoming(
         ext_chat_id=str(recipient.get("chat_id") or ""), ext_message_id=mid, chat_title="", chat_type="comments",
         author_id=str(sender.get("user_id") or ""), author_name=name or "Без имени", author_username=sender.get("username") or "",
-        text=text, link=None, thread=post_id, reply={"kind": "comment", "post_id": post_id, "mid": mid},
+        author_avatar=_max_avatar(sender), text=text, link=None, thread=post_id, reply={"kind": "comment", "post_id": post_id, "mid": mid},
     )
 
 
@@ -284,7 +291,7 @@ def max_parse(update: dict) -> Optional[Incoming]:
         ext_chat_id=str(recipient.get("chat_id") or ""), ext_message_id=str(body.get("mid") or ""),
         chat_title=name if kind == "private" else "", chat_type=kind,
         author_id=str(sender.get("user_id") or ""), author_name=name or "Без имени", author_username=sender.get("username") or "",
-        text=text, media=media, link=msg.get("url") or (f"https://max.ru/{sender['username']}" if kind == "private" and sender.get("username") else None),
+        author_avatar=_max_avatar(sender), text=text, media=media, link=msg.get("url") or (f"https://max.ru/{sender['username']}" if kind == "private" and sender.get("username") else None),
     )
 
 

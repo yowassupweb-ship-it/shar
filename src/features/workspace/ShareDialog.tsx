@@ -10,7 +10,8 @@ import { showToast } from '@/shared/ui/Toast';
 import { myId } from '@/shared/session/session';
 import { workspaceApi } from './api';
 import { KINDS, sharedUrl } from './kinds';
-import type { AccessLevel, AccessMode, DeptShareEntry, Item, LinkEntry, ShareEntry } from './types';
+import { InheritedShares } from './InheritedShares';
+import type { AccessLevel, AccessMode, DeptShareEntry, InheritedShare, Item, LinkEntry, ShareEntry } from './types';
 
 /**
  * «Поделиться» — одно на все виды материалов. Три способа, от широкого к узкому:
@@ -46,6 +47,7 @@ export function ShareDialog({ item, onClose, onChanged }: {
   const [links, setLinks] = useState<LinkEntry[]>([]);
   const [shares, setShares] = useState<ShareEntry[]>([]);
   const [deptShares, setDeptShares] = useState<DeptShareEntry[]>([]);
+  const [inherited, setInherited] = useState<InheritedShare[]>([]);
   const { departments } = useContacts();
   const [pick, setPick] = useState('');
   const [role, setRole] = useState<'view' | 'edit'>('edit');
@@ -54,7 +56,7 @@ export function ShareDialog({ item, onClose, onChanged }: {
   const [error, setError] = useState('');
 
   const fail = (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause));
-  const applyShares = (next: { shares: ShareEntry[]; departments: DeptShareEntry[] }) => { setShares(next.shares); setDeptShares(next.departments); };
+  const applyShares = (next: { shares: ShareEntry[]; departments: DeptShareEntry[]; inherited?: InheritedShare[] }) => { setShares(next.shares); setDeptShares(next.departments); setInherited(next.inherited ?? []); };
 
   useEffect(() => {
     if (!owner) return;
@@ -282,7 +284,8 @@ ${absolute(routeLinks.office(item.kind, item.id))}`);
                   </div>
                 </div>
               ))}
-              {!shares.length && !deptShares.length && <div className="nx-row"><span className="nx-row-hint">Пока никому не выдан — ни людям, ни отделам</span></div>}
+              <InheritedShares entries={inherited} />
+              {!shares.length && !deptShares.length && !inherited.length && <div className="nx-row"><span className="nx-row-hint">Пока никому не выдан — ни людям, ни отделам</span></div>}
             </Group>
           </>
         )}

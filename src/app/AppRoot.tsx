@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import type { User } from '@/shared/types/chat';
 import { boot, isMuted, shutdown, unreadChatsTotal, useChatStore } from '@/features/chat';
@@ -18,8 +18,10 @@ import LoginScreen from './LoginScreen';
 import ElectronTitlebar from './electron/ElectronTitlebar';
 import { startWorkspaceToasts } from '@/features/workspace/live';
 import { checkMailAccess, useMail } from '@/features/mail/api';
+import { startMailBadge, useMailBadge } from '@/features/mail/badge';
 import { showToast } from '@/shared/ui/Toast';
 import { SpotlightHost, useVisitTracker } from '@/features/spotlight';
+import { ChatFrame, chatFrameEnabled, subscribeChatFrame } from '@/features/chat';
 
 /**
  * Корень Шара v2 — живёт над всеми разделами и не пересоздаётся при переходе
@@ -60,6 +62,7 @@ function Workspace({ me }: { me: User }) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const section = sectionFor(pathname);
+  const chatFrame = useSyncExternalStore(subscribeChatFrame, chatFrameEnabled, () => false);
   const [opts, setOpts] = useState<ShellOptions>({});
   const unreadChats = useChatStore((s) => unreadChatsTotal(s.chats));
   // Невзятые заявки и диалоги «Соцсетей» без ответа — тоже непрочитанное: на логотипе вместе с чатами,
@@ -85,6 +88,9 @@ function Workspace({ me }: { me: User }) {
     return () => shutdown();
   }, [me]);
   useEffect(() => startToolBadges(), [me]);
+  // Непрочитанные во «Входящих» — единичка на «Почте» в меню (на значок приложения не идут: там чаты и заявки).
+  useEffect(() => startMailBadge(), [me]);
+  const unreadMail = useMailBadge((s) => s.unread);
 
   // Шар выбило из почтового ящика (пароль сменили или его нечем расшифровать) — сразу видно:
   // красный «!» на «Почте» и предупреждение при входе, а не плашка, которую замечаешь через неделю.
@@ -178,7 +184,7 @@ function Workspace({ me }: { me: User }) {
     <ShellContext.Provider value={setOpts}>
       <AppShell
         section={section.id}
-        badges={{ chats: unreadChats, more: moreCount }}
+        badges={{ chats: unreadChats, mail: unreadMail, more: moreCount }}
         alerts={alerts}
         navTools={navTools}
         onNavToolDrop={(id) => void addNavTool(id)}
@@ -200,6 +206,8 @@ function Workspace({ me }: { me: User }) {
           </Suspense>
         </div>
       </AppShell>
+      {/* Плавающий чат (Настройки → Внешний вид): в самом разделе «Чаты» он не нужен. */}
+      {chatFrame && section.id !== 'chats' && <ChatFrame unread={unreadChats} />}
       <OverlayHost />
       <SpotlightHost />
       <EventEditorHost />

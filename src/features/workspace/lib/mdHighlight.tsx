@@ -9,10 +9,12 @@ import type { ReactNode } from 'react';
 const INLINE = new RegExp([
   '(`+)([^`\\n]+?)\\1',                                   // 1-2   `код`
   '(!?\\[)([^\\]\\n]*)(\\]\\()([^)\\s]*)(\\))',            // 3-7   [текст](адрес), ![картинка](адрес)
-  '(\\*\\*|__)(?=\\S)([^\\n]+?)(?<=\\S)\\8',               // 8-9   **жирный**
-  '(~~)(?=\\S)([^\\n]+?)(?<=\\S)\\10',                     // 10-11 ~~зачёркнутый~~
-  '(?<![\\w*])([*_])(?=[^\\s*_])([^*_\\n]+?)(?<=\\S)\\12(?![\\w*])', // 12-13 *курсив*
-  '(https?:\\/\\/[^\\s)<>]+)',                             // 14    голый адрес
+  '(\\*\\*)(?=\\S)([^\\n]+?)(?<=\\S)\\8',                  // 8-9   **жирный**
+  '(__|\\+\\+)(?=\\S)([^\\n]+?)(?<=\\S)\\10',              // 10-11 __подчёркнутый__, ++подчёркнутый++
+  '(<u>)([^\\n]+?)(<\\/u>)',                               // 12-14 <u>подчёркнутый</u>
+  '(~~)(?=\\S)([^\\n]+?)(?<=\\S)\\15',                     // 15-16 ~~зачёркнутый~~
+  '(?<![\\w*])([*_])(?=[^\\s*_])([^*_\\n]+?)(?<=\\S)\\17(?![\\w*])', // 17-18 *курсив*
+  '(https?:\\/\\/[^\\s)<>]+)',                             // 19    голый адрес
 ].join('|'), 'g');
 
 const mark = (text: string, key: string) => <span key={key} className="nmd-mark">{text}</span>;
@@ -34,9 +36,11 @@ function inline(text: string, key: string): ReactNode[] {
         </span>,
       );
     } else if (m[8]) out.push(<span key={k} className="nmd-strong">{mark(m[8], 'a')}{inline(m[9], `${k}s`)}{mark(m[8], 'b')}</span>);
-    else if (m[10]) out.push(<span key={k} className="nmd-strike">{mark(m[10], 'a')}{inline(m[11], `${k}s`)}{mark(m[10], 'b')}</span>);
-    else if (m[12]) out.push(<span key={k} className="nmd-em">{mark(m[12], 'a')}{inline(m[13], `${k}s`)}{mark(m[12], 'b')}</span>);
-    else if (m[14]) out.push(<span key={k} className="nmd-link-url">{m[14]}</span>);
+    else if (m[10]) out.push(<span key={k} className="nmd-u">{mark(m[10], 'a')}<span className="nmd-u-text">{inline(m[11], `${k}s`)}</span>{mark(m[10], 'b')}</span>);
+    else if (m[12]) out.push(<span key={k} className="nmd-u">{mark(m[12], 'a')}<span className="nmd-u-text">{inline(m[13], `${k}s`)}</span>{mark(m[14], 'b')}</span>);
+    else if (m[15]) out.push(<span key={k} className="nmd-strike">{mark(m[15], 'a')}{inline(m[16], `${k}s`)}{mark(m[15], 'b')}</span>);
+    else if (m[17]) out.push(<span key={k} className="nmd-em">{mark(m[17], 'a')}{inline(m[18], `${k}s`)}{mark(m[17], 'b')}</span>);
+    else if (m[19]) out.push(<span key={k} className="nmd-link-url">{m[19]}</span>);
     at = i + m[0].length;
   }
   if (at < text.length) out.push(text.slice(at));

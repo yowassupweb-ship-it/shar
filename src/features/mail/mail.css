@@ -102,7 +102,8 @@
   background: var(--accent-color);
   box-shadow: 0 0 0 2px var(--surface-panel);
 }
-.nml-text { display: grid; gap: 1px; flex: 1; min-width: 0; }
+/* Колонка — minmax(0, 1fr): иначе длинная тема в одну строку растягивала её за край списка и выталкивала дату. */
+.nml-text { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; flex: 1; min-width: 0; }
 .nml-top { display: flex; align-items: baseline; gap: var(--space-2); }
 .nml-who { flex: 1; min-width: 0; font-size: var(--text-md); font-weight: var(--weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nml-row[data-unread="true"] .nml-who { font-weight: var(--weight-semibold); }

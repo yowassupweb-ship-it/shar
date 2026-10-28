@@ -1,0 +1,20 @@
+# This is only the future upstream fragment. Do not replace the current server
+# block until http://127.0.0.1:18080 and its API smoke tests pass.
+upstream shar_next_web {
+    server 127.0.0.1:18080;
+    keepalive 16;
+}
+
+# Keep the existing /updates/ location unchanged. The Electron feed must stay
+# outside containers and must not be switched with the web application.
+location / {
+    proxy_pass http://shar_next_web;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 1h;
+}

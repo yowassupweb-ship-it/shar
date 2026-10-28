@@ -6,6 +6,8 @@ import { initTelemetry } from '@/shared/platform/telemetry';
 import { applyChatPrefs } from '@/shared/settings/chatPrefs';
 import { routes } from '@/app/routes';
 import '@/app/styles.css';
+// Последним: правила живой сборки прода, которых не было в исходниках (см. комментарий в файле).
+import '@/app/restored-live.css';
 
 initTelemetry();
 applyChatPrefs();

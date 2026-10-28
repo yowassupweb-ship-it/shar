@@ -22,6 +22,7 @@ export interface SocialCardData {
   sourceLabel: string;
   authorName: string;
   authorUsername: string;
+  authorAvatar?: string;
   text: string;
   media: string[];
   context: string;
@@ -97,6 +98,8 @@ export interface SocialDialog {
   title: string;
   clientName: string;
   clientUsername: string;
+  /** Фото собеседника на площадке. */
+  avatar: string;
   sourceTitle: string;
   context: string;
   link: string | null;
@@ -105,6 +108,8 @@ export interface SocialDialog {
   lastDir: 'in' | 'out';
   lastAt: string | null;
   waiting: boolean;
+  /** Отмечен «ответ дан» — ответили не из Шара; новое сообщение клиента отметку снимает. */
+  handled: boolean;
 }
 
 export interface DialogMessage {
@@ -112,6 +117,8 @@ export interface DialogMessage {
   direction: 'in' | 'out';
   text: string;
   media: string[];
+  /** Адреса картинок во вложениях — показываются в переписке. */
+  images: string[];
   link: string | null;
   context: string;
   authorName: string;
@@ -129,7 +136,7 @@ export function listDialogs(mode: 'dialogs' | 'comments', filter: { waiting?: bo
 }
 
 export const loadDialog = (id: string) =>
-  call<{ dialog: SocialDialog; messages: DialogMessage[]; canReply: boolean }>(`/api/social/dialogs/${encodeURIComponent(id)}`);
+  call<{ dialog: SocialDialog; messages: DialogMessage[]; canReply: boolean; canPrivate: boolean }>(`/api/social/dialogs/${encodeURIComponent(id)}`);
 
 /** Вложение ответа — файл, уже загруженный в Шар (/api/upload). */
 export interface OutFile { url: string; name: string; type: string }
@@ -144,3 +151,15 @@ export interface NotifyPerson { id: string; name: string; admin: boolean }
 
 export const loadNotify = () => call<{ settings: NotifySettings; people: NotifyPerson[] }>('/api/social/notify');
 export const saveNotify = (settings: NotifySettings) => call<{ settings: NotifySettings }>('/api/social/notify', 'PUT', settings);
+
+export const markHandled = (id: string, handled: boolean) =>
+  call<{ dialog: SocialDialog }>(`/api/social/dialogs/${encodeURIComponent(id)}/handled`, 'POST', { handled });
+
+/** Написать автору комментария в личные от имени сообщества. Возвращает личный диалог с ним. */
+export const writePrivate = (id: string, text: string) =>
+  call<{ ok: boolean; dialogId: string }>(`/api/social/dialogs/${encodeURIComponent(id)}/private`, 'POST', { text });
+
+/** Подгрузка старой переписки сообщества (ВКонтакте) — в фоне, прогресс опрашивается. */
+export interface ImportState { state: 'idle' | 'running' | 'done' | 'error'; dialogs: number; messages: number; error: string }
+export const startImport = (accountId: string) => call<{ import: ImportState }>(`/api/social/accounts/${accountId}/import`, 'POST', {});
+export const importStatus = (accountId: string) => call<{ import: ImportState }>(`/api/social/accounts/${accountId}/import`);

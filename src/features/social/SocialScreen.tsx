@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { AlertCircle, ChevronLeft, MessageCircle, MessagesSquare, Plug, Plus, RefreshCw, Settings2, Trash2 } from 'lucide-react';
+import { AlertCircle, ChevronLeft, History, MessageCircle, MessagesSquare, Plug, Plus, RefreshCw, Settings2, Trash2 } from 'lucide-react';
 import { chatTitle, isGroupChat, useChatStore } from '@/features/chat';
 import { paths } from '@/shared/navigation/routes';
 import { askConfirm, Sheet } from '@/shared/ui/overlay';
 import { Spinner } from '@/shared/ui/Spinner';
 import { showToast } from '@/shared/ui/Toast';
 import {
-  addAccount, checkAccount, listAccounts, removeAccount, routeSource, setDefaultChat,
-  type Platform, type SocialAccount,
+  addAccount, checkAccount, importStatus, listAccounts, removeAccount, routeSource, setDefaultChat, startImport,
+  type ImportState, type Platform, type SocialAccount,
 } from './api';
 import DialogsTab from './DialogsTab';
 import NotifySettings from './NotifySettings';
@@ -112,6 +112,7 @@ function AccountsTab() {
             </span>
           </div>
           {a.status.ok === false && a.status.error && <p className="nsc-muted" role="alert">{a.status.error}</p>}
+          {a.platform === 'vk' && <HistoryImport accountId={a.id} />}
           <div className="nsc-route">
             <div><b>Дублировать в чат Шара</b><span className="nsc-muted">Необязательно: уведомление со ссылкой на диалог в выбранный чат. Переписка всё равно в этом модуле.</span></div>
             <ChatSelect value={a.defaultChat?.id || null} fallbackTitle={a.defaultChat?.title} empty="Не дублировать" onChange={(id) => run(a.id, setDefaultChat(a.id, id))} />
@@ -127,6 +128,35 @@ function AccountsTab() {
         </section>
       ))}
       {adding && <AddSheet onClose={() => setAdding(false)} onAdded={(a) => { setAccounts((l) => [...(l || []), a]); setAdding(false); }} />}
+    </div>
+  );
+}
+
+/** Подгрузка старой переписки сообщества: идёт в фоне, пока экран открыт — показываем, сколько уже загружено. */
+function HistoryImport({ accountId }: { accountId: string }) {
+  const [st, setSt] = useState<ImportState | null>(null);
+  useEffect(() => { importStatus(accountId).then((r) => setSt(r.import)).catch(() => undefined); }, [accountId]);
+  useEffect(() => {
+    if (st?.state !== 'running') return undefined;
+    const t = window.setInterval(() => { importStatus(accountId).then((r) => setSt(r.import)).catch(() => undefined); }, 2000);
+    return () => window.clearInterval(t);
+  }, [accountId, st?.state]);
+  const run = () => startImport(accountId).then((r) => setSt(r.import)).catch((e: Error) => showToast(e.message, 'error'));
+  const running = st?.state === 'running';
+  return (
+    <div className="nsc-route">
+      <div>
+        <b>История переписки</b>
+        <span className="nsc-muted">
+          {running ? `Загружаю… диалогов ${st!.dialogs}, сообщений ${st!.messages}`
+            : st?.state === 'done' ? `Готово: диалогов ${st.dialogs}, новых сообщений ${st.messages}`
+            : st?.state === 'error' ? st.error
+            : 'Старые личные диалоги и беседы сообщества. Комментарии ВКонтакте задним числом не отдаёт — они приходят по мере появления.'}
+        </span>
+      </div>
+      <button type="button" className="nx-ghost" disabled={running} onClick={() => void run()}>
+        {running ? <Spinner size={14} label="Загружаю" /> : <History size={14} aria-hidden="true" />} {running ? 'Идёт…' : 'Подгрузить историю'}
+      </button>
     </div>
   );
 }

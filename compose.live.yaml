@@ -1,0 +1,81 @@
+name: shar-live
+
+# New backend on the LIVE database/Redis, standby mode, loopback only (18081/18101).
+# Old systemd stack keeps serving traffic. Built on the server from the same
+# context as compose.preview.yaml (/opt/shar-next/{dist,server,docker}).
+# SHAR_SECRET_KEY must stay unset: the old backend reads mailbox passwords as base64.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: shar-live-api:local
+    restart: unless-stopped
+    init: true
+    user: "33:33"
+    network_mode: host
+    env_file:
+      - ./api.prod.env
+    environment:
+      SHAR_V2_HOST: 127.0.0.1
+      SHAR_V2_PORT: 18101
+      SHAR_DATA_DIR: /app/data
+      SHAR_UPLOADS_DIR: /app/uploads
+      SHAR_AUTO_MIGRATE: "0"
+      SHAR_STARTUP_MAINTENANCE: "0"
+      SHAR_SCHEDULED_JOBS: "0"
+      SHAR_MAIL_WATCH: "0"
+      SHAR_ENFORCE_AUTH: "1"
+      SHAR_LEGACY_ADOPT: "0"
+    volumes:
+      - type: bind
+        source: /var/www/shar/data
+        target: /app/data
+      - type: bind
+        source: /var/www/shar/backend/uploads
+        target: /app/uploads
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18101/api/v2/health', timeout=4).read()"]
+      interval: 15s
+      timeout: 5s
+      start_period: 45s
+      retries: 4
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web-runtime.Dockerfile
+    image: shar-live-web:local
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      SHAR_WEB_LISTEN: 127.0.0.1:18081
+      SHAR_API_UPSTREAM: 127.0.0.1:18101
+    depends_on:
+      api:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:18081/healthz || exit 1"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 4
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"

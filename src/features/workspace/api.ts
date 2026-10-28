@@ -37,11 +37,12 @@ const enc = encodeURIComponent;
 export interface SharedResult { mode: 'view' | 'edit'; item: SharedItem }
 
 export const workspaceApi = {
-  list: (kind: Kind | null, q = '', templates = false) => {
+  list: (kind: Kind | null, q = '', templates = false, limit?: number) => {
     const qs = new URLSearchParams();
     if (kind) qs.set('kind', kind);
     if (q.trim()) qs.set('q', q.trim());
     if (templates) qs.set('templates', '1');
+    if (limit) qs.set('limit', String(limit));
     return call<{ items: Item[] }>(`/api/workspace/items?${qs}`).then((r) => r.items);
   },
   get: (id: string) => call<{ item: Item }>(`/api/workspace/items/${enc(id)}`).then((r) => r.item),
@@ -49,12 +50,29 @@ export const workspaceApi = {
     call<{ item: Item }>('/api/workspace/items', { method: 'POST', json: body }).then((r) => r.item),
   patch: (id: string, body: Record<string, unknown>) =>
     call<{ item: Item }>(`/api/workspace/items/${enc(id)}`, { method: 'PATCH', json: body }).then((r) => r.item),
+  /** Сохранение от живого редактора (документ, таблица): содержимое версии rev журнала совместной правки. */
+  saveLive: (id: string, content: string, live: { epoch: string; rev: number }) =>
+    call<{ item: Item; live?: 'already' }>(`/api/workspace/items/${enc(id)}`, { method: 'PATCH', json: { content, live } }),
   remove: (id: string) => call<{ ok: boolean }>(`/api/workspace/items/${enc(id)}`, { method: 'DELETE' }),
 
   folders: () => call<{ folders: Folder[] }>('/api/workspace/folders').then((r) => r.folders),
-  createFolder: (title: string) => call<{ folder: Folder; folders: Folder[] }>('/api/workspace/folders', { method: 'POST', json: { title } }),
+  createFolder: (title: string, parentId: string | null = null) =>
+    call<{ folder: Folder; folders: Folder[] }>('/api/workspace/folders', { method: 'POST', json: { title, parentId } }),
   renameFolder: (id: string, title: string) =>
     call<{ folders: Folder[] }>(`/api/workspace/folders/${enc(id)}`, { method: 'PATCH', json: { title } }).then((r) => r.folders),
+  /** Кому открыта папка; открыть (или закрыть, role = null) человеку либо отделу. */
+  folderShares: (id: string) => call<SharesState>(`/api/workspace/folders/${enc(id)}/shares`),
+  setFolderShare: (id: string, target: { userId: string } | { departmentId: string }, role: 'view' | 'edit' | null) =>
+    call<SharesState>(`/api/workspace/folders/${enc(id)}/shares`, { method: 'PUT', json: { ...target, role } }),
+  /** Порядок папок на уровне parentId (null — верхний); папка из другого места переносится сюда. */
+  orderFolders: (parentId: string | null, ids: string[]) =>
+    call<{ folders: Folder[] }>('/api/workspace/folders/order', { method: 'PUT', json: { parentId, ids } }).then((r) => r.folders),
+  /** Порядок материалов в папке; материал из другого места кладётся в неё. */
+  orderItems: (folderId: string, ids: string[]) => call<{ ok: boolean }>(`/api/workspace/folders/${enc(folderId)}/order`, { method: 'PUT', json: { ids } }),
+  /** Порядок материалов вне папок (из папки материал при этом выходит). */
+  orderRoot: (ids: string[]) => call<{ ok: boolean }>('/api/workspace/root/order', { method: 'PUT', json: { ids } }),
+  /** Кто сейчас в материалах списка (присутствие истекает без события — обновляем периодически). */
+  listPresence: (ids: string[]) => call<{ viewers: Record<string, Viewer[]> }>('/api/workspace/presence', { method: 'POST', json: { ids } }).then((r) => r.viewers),
   deleteFolder: (id: string) => call<{ folders: Folder[] }>(`/api/workspace/folders/${enc(id)}`, { method: 'DELETE' }).then((r) => r.folders),
   /** Положить материал в свою папку или вынуть (null). */
   placeItem: (id: string, folderId: string | null) =>

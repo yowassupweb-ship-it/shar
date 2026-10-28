@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkUnderline from './remarkUnderline';
 import remarkBreaks from 'remark-breaks';
 import { base64ToBytes, bookFromBase64, cellText } from './workbook';
 
@@ -21,7 +22,7 @@ a { color: #0b57d0; } img { max-width: 100%; }
 const escape = (text: string) => text.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c] as string);
 
 export function markdownHtml(title: string, markdown: string): string {
-  const body = renderToStaticMarkup(<article><Markdown remarkPlugins={[remarkGfm, remarkBreaks]}>{markdown}</Markdown></article>);
+  const body = renderToStaticMarkup(<article><Markdown remarkPlugins={[remarkGfm, remarkBreaks, remarkUnderline]}>{markdown}</Markdown></article>);
   return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>${escape(title)}</title><style>${PAPER_CSS}</style></head><body><h1>${escape(title)}</h1>${body}</body></html>`;
 }
 

@@ -123,7 +123,9 @@ export function continueList(event: KeyboardEvent<HTMLTextAreaElement>) {
   return true;
 }
 
-type ToolItem = { key: MarkdownAction | 'image'; title: string; icon: ReactNode; group: number };
+type ToolItem = { key: MarkdownAction | 'image' | `extra:${string}`; title: string; icon: ReactNode; group: number; onClick?: () => void };
+/** Своя кнопка в панели (например «Прикрепить»): встаёт отдельной группой в конце и так же уходит в «⋯», если тесно. */
+export type ExtraTool = { key: string; title: string; icon: ReactNode; onClick: () => void };
 
 const TOOLS: ToolItem[] = [
   { key: 'h1', title: 'Заголовок (Ctrl+1)', icon: <Heading1 size={16} />, group: 0 },
@@ -145,15 +147,16 @@ const IMAGE_TOOL: ToolItem = { key: 'image', title: 'Картинка — или
 const BUTTON = 32;
 const GAP = 9;
 
-export function MarkdownToolbar({ targetRef, onPickImages }: { targetRef: RefObject<HTMLTextAreaElement | null>; onPickImages?: (files: File[]) => void }) {
+export function MarkdownToolbar({ targetRef, onPickImages, extra = [] }: { targetRef: RefObject<HTMLTextAreaElement | null>; onPickImages?: (files: File[]) => void; extra?: ExtraTool[] }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
-  const run = (key: ToolItem['key']) => {
-    if (key === 'image') { fileRef.current?.click(); return; }
+  const run = (item: ToolItem) => {
+    if (item.onClick) { item.onClick(); return; }
+    if (item.key === 'image') { fileRef.current?.click(); return; }
     const el = targetRef.current;
-    if (el) applyMarkdownAction(el, key);
+    if (el && !item.key.startsWith('extra:')) applyMarkdownAction(el, item.key as MarkdownAction);
   };
 
   useLayoutEffect(() => {
@@ -166,7 +169,10 @@ export function MarkdownToolbar({ targetRef, onPickImages }: { targetRef: RefObj
     return () => observer.disconnect();
   }, []);
 
-  const items = onPickImages ? [...TOOLS, IMAGE_TOOL] : TOOLS;
+  const items: ToolItem[] = [
+    ...TOOLS, ...(onPickImages ? [IMAGE_TOOL] : []),
+    ...extra.map((t): ToolItem => ({ key: `extra:${t.key}`, title: t.title, icon: t.icon, group: 3, onClick: t.onClick })),
+  ];
 
   const widthOf = (count: number) => items.slice(0, count).reduce((sum, item, i) => sum + BUTTON + (i > 0 && item.group !== items[i - 1].group ? GAP : 0), 0);
   let visible = items.length;
@@ -181,7 +187,7 @@ export function MarkdownToolbar({ targetRef, onPickImages }: { targetRef: RefObj
       {items.slice(0, visible).map((item, i) => (
         <span key={item.key} className="ntd-tool-slot">
           {i > 0 && item.group !== items[i - 1].group && <i aria-hidden="true" />}
-          <button type="button" className="nx-icon-btn" title={item.title} aria-label={item.title} onMouseDown={(e) => e.preventDefault()} onClick={() => run(item.key)}>
+          <button type="button" className="nx-icon-btn" title={item.title} aria-label={item.title} onMouseDown={(e) => e.preventDefault()} onClick={() => run(item)}>
             {item.icon}
           </button>
         </span>
@@ -201,7 +207,7 @@ export function MarkdownToolbar({ targetRef, onPickImages }: { targetRef: RefObj
       {menu && (
         <Menu anchor={menu} label="Форматирование" onClose={() => setMenu(null)}>
           {hidden.map((item) => (
-            <MenuItem key={item.key} icon={item.icon} onSelect={() => { setMenu(null); run(item.key); }}>{item.title}</MenuItem>
+            <MenuItem key={item.key} icon={item.icon} onSelect={() => { setMenu(null); run(item); }}>{item.title}</MenuItem>
           ))}
         </Menu>
       )}

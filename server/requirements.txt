@@ -14,3 +14,4 @@ Pillow>=10
 imap-tools>=1.7
 cryptography>=42
 pywebpush>=2.0
+openpyxl>=3.1

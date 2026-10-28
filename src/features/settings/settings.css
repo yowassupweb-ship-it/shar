@@ -97,6 +97,59 @@
   white-space: nowrap;
 }
 
+/* MCP: адрес, ключ и готовые настройки — моноширинным блоком с кнопкой копирования */
+.nst-mono { font-family: var(--font-mono); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.nst-code {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-hover);
+}
+.nst-code code, .nst-code pre {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding-top: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.nst-mcp-fresh { padding: var(--space-4); border-radius: var(--radius-lg); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--state-ok) 55%, transparent); }
+.nst-mcp-fresh .nx-block-title { display: flex; align-items: center; gap: 6px; color: var(--state-ok); }
+.nst-mcp-key[data-expired] .nx-row-label { color: var(--text-muted); }
+.nst-badge-bad { margin-left: 6px; background: color-mix(in srgb, var(--state-danger) 14%, transparent); color: var(--state-danger); }
+.nst-mcp-log { display: grid; gap: 4px; margin: 0; padding: 0 var(--space-4) var(--space-3) calc(var(--space-4) + 48px); list-style: none; font-size: var(--text-xs); color: var(--text-2); }
+.nst-mcp-log li { display: flex; gap: var(--space-2); }
+.nst-mcp-log time { flex: none; min-width: 108px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.nst-mcp-log li[data-tone="bad"] span { color: var(--state-danger); }
+
+/* Форма ключа: что можно, какие материалы, где */
+.nst-mcp-form { display: grid; gap: var(--space-4); }
+.nst-mcp-part { display: grid; gap: var(--space-2); }
+.nst-mcp-part h3 { margin: 0; font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text-2); }
+.nst-mcp-part .nx-segment { justify-self: start; }
+.nst-mcp-choice { width: 100%; border: 0; background: transparent; font: inherit; text-align: left; color: var(--text-main); cursor: pointer; }
+@media (hover: hover) { .nst-mcp-choice:hover { background: var(--surface-hover); } }
+.nst-mcp-radio { flex: none; width: 18px; height: 18px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--border-strong); transition: box-shadow var(--duration-fast) var(--ease-out); }
+.nst-mcp-choice[aria-checked="true"] .nst-mcp-radio { box-shadow: inset 0 0 0 5px var(--accent-fill); }
+.nst-mcp-kinds { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.nst-mcp-kind, .nst-mcp-folder {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 12px 0 8px;
+  border: 0; border-radius: var(--radius-md); background: var(--surface-hover); color: var(--text-main); font: inherit; font-size: var(--text-sm); cursor: pointer;
+}
+.nst-mcp-folders { display: grid; gap: 2px; max-height: 280px; overflow-y: auto; padding: 4px; border-radius: var(--radius-md); box-shadow: inset 0 0 0 1px var(--border-color); }
+.nst-mcp-folder { width: 100%; min-height: 32px; background: transparent; text-align: left; }
+@media (hover: hover) { .nst-mcp-folder:not(:disabled):hover { background: var(--surface-hover); } }
+.nst-mcp-folder:disabled { cursor: default; color: var(--text-2); }
+.nst-mcp-folder-icon { flex: none; color: #e8a33d; }
+.nst-mcp-folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nst-mcp-folder-note { flex: none; font-size: var(--text-2xs); color: var(--text-muted); }
+
 /* Рингтоны */
 .nst-choice { padding-left: var(--space-2); }
 .nst-choice-label {

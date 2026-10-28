@@ -12,7 +12,7 @@ import { htmlToMarkdown, markdownToHtml } from './markdown';
  * HTML в markdown — при первой правке markdown сохранится рядом.
  */
 
-export type Status = 'pending' | 'in-progress' | 'review' | 'stuck' | 'cancelled' | 'todo';
+export type Status = 'pending' | 'in-progress' | 'review' | 'approval' | 'approved' | 'stuck' | 'cancelled' | 'todo';
 export type Priority = 'low' | 'medium' | 'high';
 
 export interface Task {
@@ -57,6 +57,8 @@ export const STATUSES: { id: Status; label: string; tone: string }[] = [
   { id: 'in-progress', label: 'В работе', tone: 'var(--note-blue)' },
   { id: 'pending', label: 'В ожидании', tone: 'var(--note-orange)' },
   { id: 'review', label: 'На проверке', tone: 'var(--note-green)' },
+  { id: 'approval', label: 'На согласовании', tone: 'var(--note-purple)' },
+  { id: 'approved', label: 'Согласовано', tone: 'var(--note-cyan)' },
   { id: 'stuck', label: 'Застряла', tone: 'var(--note-red)' },
   { id: 'cancelled', label: 'Отменена', tone: 'var(--note-gray)' },
 ];

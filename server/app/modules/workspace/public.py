@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.core.db import db
+from app.modules.workspace import live as live_edit
 from app.modules.workspace import store
 from app.modules.workspace.store import WorkspaceError
 
@@ -75,7 +76,7 @@ def save_shared(token: str, body: SharedPatch):
         if body.content is not None:
             store.validate_content(row["kind"], body.content, shared=True)
             parts, values, new_key = store.content_sets(int(row["id"]), body.content)
-            sets += parts + ["text_content = %s", "updated_by = 'link'"]
+            sets += parts + ["text_content = %s", "updated_by = 'link'"] + (["updated_via = ''"] if store.via_ready() else [])
             params += values + [store.text_of(row["kind"], body.content)]
     except WorkspaceError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.message) from exc
@@ -93,6 +94,8 @@ def save_shared(token: str, body: SharedPatch):
         store.finish_content(new_key, "" if taken else (row.get("content_key") or ""), saved=bool(saved))
     if not saved:
         raise HTTPException(status_code=409, detail="Материал изменили, пока вы правили")
+    if body.content is not None and row["kind"] in live_edit.LIVE_KINDS:
+        live_edit.reset(str(row["id"]))
     if body.content is not None or body.title is not None:
         live = store.get_row(str(row["id"]), full=False)
         store.push_to_viewers(str(row["id"]), {"type": "workspace_changed", "reason": "content", "itemId": str(row["id"]), "kind": row["kind"],

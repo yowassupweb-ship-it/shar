@@ -23,3 +23,5 @@ export { requestJump } from './jump';
 export { sendText, openDocument } from './store';
 export { createChat } from './actions';
 export type { ChatRow } from './store';
+export { default as ChatFrame } from './frame/ChatFrame';
+export { chatFrameEnabled, setChatFrameEnabled, subscribeChatFrame } from './frame/prefs';
