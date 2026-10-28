@@ -2,7 +2,10 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { ExternalLink, List, Minus, Pin, PinOff, Plus, StickyNote, X } from 'lucide-react';
 import { links } from '@/shared/navigation/routes';
+import LinkChooserHost from '@/shared/navigation/LinkChooser';
+import { installInternalLinks, officeItemOf, setLinkRouter } from '@/shared/navigation/internalLinks';
 import { useSession, verifySession } from '@/shared/session/session';
+import { realtime } from '@/shared/realtime/realtime';
 import ToastContainer, { showToast } from '@/shared/ui/Toast';
 import { workspaceApi } from './api';
 import { KINDS } from './kinds';
@@ -27,6 +30,36 @@ const SheetEditor = lazy(() => import('./editors/SheetEditor'));
 export default function StickyPage() {
   const { id = '' } = useParams();
   const { status, me } = useSession();
+  const navigate = useNavigate();
+
+  // Своё соединение окна с сервером. Совместная правка таблицы и документа шлёт и принимает правки по сокету; без него
+  // окно видело чужие правки только через мост главного процесса и само ничего не отправляло — документ в окне и в Шаре
+  // расходились, а в шапке висело «Сохраняю…». Окно — такой же участник правки, как и любой другой экран.
+  const userId = me ? String(me.id) : '';
+  useEffect(() => (userId ? realtime.start(userId) : undefined), [userId]);
+
+  // Ссылки на Шар в окне материала: простой клик — в главном окне Шара, Ctrl/⌘+клик спрашивает «здесь или в новом окне».
+  // «Здесь» — это окно становится окном того материала (его размер и закрепление переходят на новый адрес).
+  useEffect(() => {
+    const bridge = stickyBridge();
+    const showHere = async (path: string) => {
+      const item = officeItemOf(path);
+      if (!item || !bridge) { void bridge?.focusMain(path); return; }
+      let kind = item.kind;
+      if (!kind || !['note', 'document', 'table'].includes(kind)) {
+        try {
+          const found = await fetch(`/api/workspace/items/${encodeURIComponent(item.id)}`, { cache: 'no-store' }).then((r) => r.json());
+          kind = String(found?.item?.kind || '');
+        } catch { kind = null; }
+      }
+      if (!kind || !['note', 'document', 'table'].includes(kind)) { void bridge.focusMain(path); return; }
+      const result = await bridge.switchTo(item.id, kind);
+      if (!result.focusedExisting) navigate(`/sticky/${encodeURIComponent(item.id)}`, { replace: true });
+    };
+    setLinkRouter({ here: (path) => void showHere(path), plain: (path) => void bridge?.focusMain(path) });
+    const stop = installInternalLinks();
+    return () => { stop(); setLinkRouter(null); };
+  }, [navigate]);
 
   useEffect(() => {
     document.documentElement.classList.add('is-sticky');
@@ -41,6 +74,7 @@ export default function StickyPage() {
     <div className="nx nws-sticky">
       {status === 'checking' ? null : me ? <ItemWindow id={id} /> : <SignedOut />}
       <ToastContainer />
+      <LinkChooserHost />
     </div>
   );
 }

@@ -43,6 +43,16 @@ export function officeItemOf(path: string): { id: string; kind: string | null } 
   } catch { return null; }
 }
 
+/**
+ * Куда вести ссылку на Шар. В основном окне — переход в нём (router по умолчанию); окно материала на рабочем столе
+ * подставляет свой: простой клик открывает ссылку в главном окне, «здесь» — показывает материал в этом же окне.
+ */
+export interface LinkRouter { here: (path: string) => void; plain?: (path: string) => void }
+let router: LinkRouter = { here: (path) => navigate(path) };
+export function setLinkRouter(next: LinkRouter | null) { router = next ?? { here: (path) => navigate(path) }; }
+/** Открыть здесь, вместо того, что на экране (для окна выбора и для обычного клика). */
+export function openHere(path: string) { router.here(path); }
+
 /** Куда спросили открыть ссылку (покажет LinkChooserHost). */
 export const useLinkChooser = create<{ pending: { path: string; at: { x: number; y: number } } | null }>(() => ({ pending: null }));
 
@@ -63,7 +73,7 @@ export function openSharLink(raw: string, opts: { choose?: boolean; at?: { x: nu
     useLinkChooser.setState({ pending: { path: target, at: opts.at ?? { x: lastPointer.x, y: lastPointer.y } } });
     return true;
   }
-  navigate(target);
+  (router.plain ?? router.here)(target);
   return true;
 }
 
