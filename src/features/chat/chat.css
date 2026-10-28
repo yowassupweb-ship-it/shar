@@ -445,8 +445,8 @@
   z-index: 60;
   display: grid;
   place-items: center;
-  width: 56px;
-  height: 56px;
+  width: 39px;
+  height: 39px;
   border: 0;
   border-radius: 50%;
   background: var(--accent-fill);
@@ -461,17 +461,17 @@
 .nxcf-bubble:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 3px; }
 .nxcf-badge {
   position: absolute;
-  top: -2px;
-  right: -2px;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 5px;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
   border-radius: var(--radius-pill);
   background: var(--danger-fill);
   color: #fff;
-  font-size: var(--text-xs);
+  font-size: var(--text-2xs);
   font-weight: var(--weight-bold);
-  line-height: 20px;
+  line-height: 16px;
   text-align: center;
   box-shadow: 0 0 0 2px var(--surface-panel);
 }
@@ -486,6 +486,20 @@
   background: var(--surface-panel);
   box-shadow: var(--glass-shadow);
   animation: nxcf-in 0.18s var(--ease-out);
+}
+/* Ручки размера: полоски по краям и квадраты в углах — внутри окна (у него overflow: hidden). */
+.nxcf-grip { position: absolute; z-index: 3; touch-action: none; }
+.nxcf-grip[data-edge="n"], .nxcf-grip[data-edge="s"] { left: 14px; right: 14px; height: 7px; }
+.nxcf-grip[data-edge="e"], .nxcf-grip[data-edge="w"] { top: 14px; bottom: 14px; width: 7px; }
+.nxcf-grip[data-edge="n"] { top: 0; } .nxcf-grip[data-edge="s"] { bottom: 0; }
+.nxcf-grip[data-edge="e"] { right: 0; } .nxcf-grip[data-edge="w"] { left: 0; }
+.nxcf-grip[data-edge$="e"][data-edge^="n"], .nxcf-grip[data-edge$="w"][data-edge^="n"],
+.nxcf-grip[data-edge$="e"][data-edge^="s"], .nxcf-grip[data-edge$="w"][data-edge^="s"] { width: 14px; height: 14px; }
+.nxcf-grip[data-edge="ne"] { top: 0; right: 0; } .nxcf-grip[data-edge="nw"] { top: 0; left: 0; }
+.nxcf-grip[data-edge="se"] { bottom: 0; right: 0; } .nxcf-grip[data-edge="sw"] { bottom: 0; left: 0; }
+@media (pointer: coarse) {
+  .nxcf-grip[data-edge="n"], .nxcf-grip[data-edge="s"] { height: 12px; }
+  .nxcf-grip[data-edge="e"], .nxcf-grip[data-edge="w"] { width: 12px; }
 }
 @keyframes nxcf-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
 .nxcf-head {
@@ -519,4 +533,8 @@
 /* Внутри окна список и переписка — одной колонкой, как на телефоне. */
 .nxcf-body.cxn { display: flex; flex-direction: column; flex: 1; min-height: 0; height: auto; --cxv-max: 100%; --cxn-bubble-max: 82%; }
 .nxcf-body > * { flex: 1; min-height: 0; width: 100%; }
+/* Композер на всю ширину окна: в разделе «Чаты» он ограничен --cxv-max и обёрнут отступом, а здесь окно узкое —
+   двойной отступ (обёртка 16 px + поля композера 16 px) съедал по 32 px с каждой стороны. */
+.nxcf-body .cxn-composer-wrap { padding-left: var(--space-2); padding-right: var(--space-2); }
+.nxcf-body .cxn-composer { max-width: none; margin-left: 0; margin-right: 0; }
 @media (prefers-reduced-motion: reduce) { .nxcf-window { animation: none; } .nxcf-bubble { transition: none; } }

@@ -23,14 +23,15 @@ export function subscribeChatFrame(fn: () => void): () => void {
 }
 
 /** Состояние окна: где стоит, раскрыто ли, какой чат открыт. */
-export interface FrameState { x: number; y: number; open: boolean; chatId: string | null }
+export interface FrameState { x: number; y: number; open: boolean; chatId: string | null; /** Размер раскрытого окна, поставленный вручную. */ w?: number; h?: number }
 const STATE_KEY = 'nx:chat-frame-state';
 
 export function readFrameState(): FrameState | null {
   try {
     const raw = JSON.parse(localStorage.getItem(STATE_KEY) || 'null') as Partial<FrameState> | null;
     if (!raw || typeof raw.x !== 'number' || typeof raw.y !== 'number') return null;
-    return { x: raw.x, y: raw.y, open: Boolean(raw.open), chatId: typeof raw.chatId === 'string' ? raw.chatId : null };
+    const size = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined);
+    return { x: raw.x, y: raw.y, open: Boolean(raw.open), chatId: typeof raw.chatId === 'string' ? raw.chatId : null, w: size(raw.w), h: size(raw.h) };
   } catch { return null; }
 }
 

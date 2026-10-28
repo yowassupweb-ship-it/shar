@@ -8,8 +8,20 @@ import { readFrameState, writeFrameState, type FrameState } from './prefs';
 
 const W = 400;
 const H = 600;
-const BUBBLE = 56;
+const MIN_W = 300;
+const MIN_H = 320;
+const BUBBLE = 39; // было 56: при крупном масштабе кнопка закрывала содержимое
 const MARGIN = 12;
+
+type Edge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
+const EDGES: Edge[] = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
+const CURSOR: Record<Edge, string> = { n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', ne: 'nesw-resize', sw: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize' };
+
+/** Размер раскрытого окна: заданный вручную или обычный, но не больше экрана. */
+const sizeOf = (state: FrameState) => ({
+  w: Math.max(Math.min(MIN_W, window.innerWidth - 2 * MARGIN), Math.min(state.w ?? W, window.innerWidth - 2 * MARGIN)),
+  h: Math.max(Math.min(MIN_H, window.innerHeight - 2 * MARGIN), Math.min(state.h ?? H, window.innerHeight - 2 * MARGIN)),
+});
 
 /** Не дать окну уехать за край экрана (после смены размера окна — тоже). */
 function clamp(x: number, y: number, w: number, h: number) {
@@ -21,7 +33,8 @@ function clamp(x: number, y: number, w: number, h: number) {
 
 /**
  * Плавающий чат поверх любого раздела, как в старом Шаре: круглая кнопка с числом непрочитанных; нажал — окно со
- * списком чатов и перепиской. И кнопку, и окно можно перетащить (за кнопку или заголовок окна) — место помнится.
+ * списком чатов и перепиской. И кнопку, и окно можно перетащить (за кнопку или заголовок окна), у окна — потянуть
+ * за край или угол, чтобы задать ширину и высоту; место и размер помнятся.
  * Открытый здесь чат читается так же, как в разделе «Чаты» (openChat): отметки «прочитано», новые сообщения.
  */
 export default function ChatFrame({ unread }: { unread: number }) {
@@ -40,8 +53,9 @@ export default function ChatFrame({ unread }: { unread: number }) {
     });
   }, []);
 
-  const w = state.open ? Math.min(W, window.innerWidth - 2 * MARGIN) : BUBBLE;
-  const h = state.open ? Math.min(H, window.innerHeight - 2 * MARGIN) : BUBBLE;
+  const size = sizeOf(state);
+  const w = state.open ? size.w : BUBBLE;
+  const h = state.open ? size.h : BUBBLE;
   const pos = clamp(state.x, state.y, w, h);
 
   useEffect(() => {
@@ -81,8 +95,7 @@ export default function ChatFrame({ unread }: { unread: number }) {
 
   // Раскрываемся от кнопки: окно встаёт так, чтобы кнопка оказалась в его углу, и не вылезает за экран.
   const expand = () => {
-    const ww = Math.min(W, window.innerWidth - 2 * MARGIN);
-    const wh = Math.min(H, window.innerHeight - 2 * MARGIN);
+    const { w: ww, h: wh } = sizeOf(state);
     const right = pos.x + BUBBLE / 2 > window.innerWidth / 2;
     const bottom = pos.y + BUBBLE / 2 > window.innerHeight / 2;
     update({ open: true, ...clamp(right ? pos.x + BUBBLE - ww : pos.x, bottom ? pos.y + BUBBLE - wh : pos.y, ww, wh) });
@@ -91,6 +104,42 @@ export default function ChatFrame({ unread }: { unread: number }) {
     const right = pos.x + w / 2 > window.innerWidth / 2;
     const bottom = pos.y + h / 2 > window.innerHeight / 2;
     update({ open: false, ...clamp(right ? pos.x + w - BUBBLE : pos.x, bottom ? pos.y + h - BUBBLE : pos.y, BUBBLE, BUBBLE) });
+  };
+
+  // Размер руками: тянем за край или угол окна. Левый и верхний края двигают и само окно — противоположная
+  // сторона остаётся на месте. Размер не меньше MIN и не больше экрана; запоминается вместе с местом.
+  const onResizeDown = (edge: Edge) => (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const start = { sx: e.clientX, sy: e.clientY, x: pos.x, y: pos.y, w, h };
+    // Движение слушаем на окне, а не на ручке: захват указателя на узкой полоске теряется, стоит курсору
+    // уйти за её край или оказаться над другим окном.
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - start.sx;
+      const dy = ev.clientY - start.sy;
+      const maxW = window.innerWidth - 2 * MARGIN;
+      const maxH = window.innerHeight - 2 * MARGIN;
+      let { x, y } = start;
+      let nw = start.w + (edge.includes('e') ? dx : edge.includes('w') ? -dx : 0);
+      let nh = start.h + (edge.includes('s') ? dy : edge.includes('n') ? -dy : 0);
+      nw = Math.min(Math.max(nw, Math.min(MIN_W, maxW)), maxW);
+      nh = Math.min(Math.max(nh, Math.min(MIN_H, maxH)), maxH);
+      if (edge.includes('w')) x = start.x + start.w - nw;
+      if (edge.includes('n')) y = start.y + start.h - nh;
+      setState((cur) => ({ ...cur, ...clamp(x, y, nw, nh), w: nw, h: nh }));
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      document.body.style.removeProperty('user-select');
+      writeFrameState(stateRef.current);
+    };
+    document.body.style.userSelect = 'none'; // пока тянем, текст под курсором не выделяется
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
   };
 
   if (!state.open) {
@@ -106,7 +155,7 @@ export default function ChatFrame({ unread }: { unread: number }) {
         onPointerUp={(e) => { if (!onPointerUp() && e.button === 0) expand(); }}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expand(); } }}
       >
-        <MessageCircle size={24} aria-hidden="true" />
+        <MessageCircle size={17} aria-hidden="true" />
         {unread > 0 && <span className="nxcf-badge">{unread > 99 ? '99+' : unread}</span>}
       </button>,
     );
@@ -134,6 +183,16 @@ export default function ChatFrame({ unread }: { unread: number }) {
           <ChatsPanel activeChatId={null} onOpen={(id) => update({ chatId: id })} />
         )}
       </div>
+      {EDGES.map((edge) => (
+        <span
+          key={edge}
+          className="nxcf-grip"
+          data-edge={edge}
+          style={{ cursor: CURSOR[edge] }}
+          onPointerDown={onResizeDown(edge)}
+          aria-hidden="true"
+        />
+      ))}
     </section>,
   );
 }
