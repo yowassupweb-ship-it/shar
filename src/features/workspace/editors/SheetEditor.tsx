@@ -161,7 +161,7 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
     const workbook = univerAPI.createWorkbook(excelToUniver(book));
     hideMissingFonts(univer);
     const untagFind = tagFindDialog();
-    const stopEditorFill = keepEditorFill(univer);
+    const stopEditorFill = keepEditorFill(univer, (row, column) => workbook.getActiveSheet().getRange(row, column).getBackground() || undefined);
     workbook.setEditable(!readOnly);
 
     // Ctrl+клик по ячейке со ссылкой (или просто с адресом) — открыть в браузере, как в Excel и Google Таблицах.

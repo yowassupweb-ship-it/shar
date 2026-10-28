@@ -122,17 +122,25 @@ function patchEditorContext() {
 }
 
 /** Подписка на правку ячейки: покрашенная — рисуем редактор без инверсии. Возвращает отписку. */
-export function keepEditorFill(univer: unknown): () => void {
+export function keepEditorFill(univer: unknown, cellFill?: (row: number, column: number) => string | undefined): () => void {
   patchEditorContext();
   const injector = (univer as { __getInjector: () => { get: <T>(token: unknown) => T } }).__getInjector();
   const bridge = injector.get<IEditorBridgeService>(IEditorBridgeService);
   const renders = injector.get<IRenderManagerService>(IRenderManagerService);
+  let editing = false;
   const sub = bridge.currentEditCellState$.subscribe((state) => {
-    const painted = isPainted(state?.documentLayoutObject?.fill);
-    if (painted === plainEditor) return;
-    plainEditor = painted;
-    // Уже нарисованное в прежних цветах — перерисовать.
-    try { (renders.getRenderUnitById(DOCS_NORMAL_EDITOR_UNIT_ID_KEY) as unknown as { scene?: { makeDirty: (dirty?: boolean) => void } } | null)?.scene?.makeDirty(true); } catch { /* редактор ещё не создан */ }
+    // Заливка в первом событии правки ещё не известна (приходит вторым): берём её у самой ячейки, чтобы переключить
+    // цвета до первой отрисовки редактора, а не перерисовывать его уже после (это тоже было видно как мигание).
+    let fill: unknown = state?.documentLayoutObject?.fill;
+    if (!fill && state && cellFill) { try { fill = cellFill(state.row, state.column); } catch { fill = undefined; } }
+    const painted = isPainted(fill);
+    const started = Boolean(state) && !editing;
+    editing = Boolean(state);
+    if (painted !== plainEditor) {
+      plainEditor = painted;
+      // Правка уже идёт и нарисована в прежних цветах — перерисовать; при входе в правку рисовать ещё нечего.
+      if (!started) { try { (renders.getRenderUnitById(DOCS_NORMAL_EDITOR_UNIT_ID_KEY) as unknown as { scene?: { makeDirty: (dirty?: boolean) => void } } | null)?.scene?.makeDirty(true); } catch { /* редактор ещё не создан */ } }
+    }
   });
   return () => { sub.unsubscribe(); plainEditor = false; };
 }

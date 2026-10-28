@@ -10,6 +10,7 @@ import { BrowserPushService } from '@/shared/platform/push/browserPushService';
 import { OverlayHost } from '@/shared/ui/overlay';
 import { setNavigator } from '@/shared/navigation/navigate';
 import { fromLegacyUrl, links, paths } from '@/shared/navigation/routes';
+import { installInternalLinks } from '@/shared/navigation/internalLinks';
 import AppShell from './shell/AppShell';
 import { ShellContext, type ShellOptions } from '@/shared/shell/ShellContext';
 import { sectionFor } from './shell/sections';
@@ -88,6 +89,8 @@ function Workspace({ me }: { me: User }) {
     return () => shutdown();
   }, [me]);
   useEffect(() => startToolBadges(), [me]);
+  // Ссылки на Шар (любой домен семейства) открываются в этом же окне, а не во внешнем браузере.
+  useEffect(() => installInternalLinks(), []);
   // Непрочитанные во «Входящих» — единичка на «Почте» в меню (на значок приложения не идут: там чаты и заявки).
   useEffect(() => startMailBadge(), [me]);
   const unreadMail = useMailBadge((s) => s.unread);
