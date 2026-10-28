@@ -11,3 +11,6 @@ desktop/release-beta/
 
 # Архивы ручных выкладок и бэкапов — не в репозиторий
 /*.tgz
+
+# Сессии локального dev-сервера
+server/app/core/.dev_sessions.json

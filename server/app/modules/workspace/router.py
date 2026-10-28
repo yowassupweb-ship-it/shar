@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from app.core.db import db
 from app.core.security import Identity, current_identity
+from app.modules.workspace import comments as cm
 from app.modules.workspace import live, store
 from app.modules.workspace.store import WorkspaceError, ACCESS_LEVELS, ACCESS_MODES, KINDS
 
@@ -128,7 +129,9 @@ def list_items(kind: Optional[str] = None, q: str = "", templates: bool = False,
     owners = {str(u["id"]): u for u in (db.conn.fetch_all("SELECT id, name, username FROM users WHERE id = ANY(%s)", (owner_ids,)) or [])} if owner_ids else {}
     # Кто сейчас в материале — аватарки на строке списка (себя не показываем).
     present_now = store.viewers_many([str(r["id"]) for r in rows], exclude=me.user_id)
-    return {"items": [{**store.present(row, me.user_id, depts=depts, owners=owners, folder_roles=folder_roles),
+    # Чужие материалы: кто и как ими поделился — одним запросом на список, а не по два на строку.
+    roles = store.share_roles([r["id"] for r in rows if str(r["owner_id"]) != me.user_id], me.user_id, depts)
+    return {"items": [{**store.present(row, me.user_id, depts=depts, owners=owners, folder_roles=folder_roles, roles=roles.get(str(row["id"]))),
                        "viewers": present_now.get(str(row["id"]), []),
                        **({"snippet": store.search_snippet(row.get("hit"), row.get("snippet") or "")} if match and row.get("hit") else {})}
                       for row in rows]}
@@ -216,7 +219,7 @@ def live_ops(item_id: str, epoch: str, since: int, me: Identity = Depends(curren
 @router.patch("/api/workspace/items/{item_id}")
 def patch_item(item_id: str, body: ItemPatch, me: Identity = Depends(current_identity)):
     try:
-        row = store.get_visible(item_id, me.user_id)
+        row = store.get_visible(item_id, me.user_id, content=False)
         perms = store.permissions(row, me.user_id)
         fields = body.model_dump(exclude_unset=True)
         mark = body.live if "content" in fields and fields["content"] is not None and row["kind"] in live.LIVE_KINDS else None
@@ -320,7 +323,7 @@ def patch_item(item_id: str, body: ItemPatch, me: Identity = Depends(current_ide
 @router.delete("/api/workspace/items/{item_id}")
 def delete_item(item_id: str, me: Identity = Depends(current_identity)):
     try:
-        row = store.get_visible(item_id, me.user_id)
+        row = store.get_visible(item_id, me.user_id, content=False)
         if not store.permissions(row, me.user_id)["isOwner"]:
             raise WorkspaceError(403, "Удалить может только владелец")
     except WorkspaceError as exc:
@@ -486,7 +489,7 @@ def save_version(item_id: str, body: VersionBody, me: Identity = Depends(current
 @router.post("/api/workspace/items/{item_id}/versions/{version_id}/restore")
 def restore_version(item_id: str, version_id: str, me: Identity = Depends(current_identity)):
     try:
-        row = store.get_visible(item_id, me.user_id)
+        row = store.get_visible(item_id, me.user_id, content=False)
         if not store.permissions(row, me.user_id)["canEdit"]:
             raise WorkspaceError(403, "Материал открыт только для просмотра")
         version = _version(item_id, version_id)
@@ -552,3 +555,58 @@ def revoke_link(item_id: str, mode: str, me: Identity = Depends(current_identity
         raise HTTPException(status_code=400, detail="Режим — view или edit")
     db.conn.execute_query("DELETE FROM workspace_item_links WHERE item_id = %s AND mode = %s", (int(item_id), mode))
     return {"links": _links(item_id)}
+
+
+# ── комментарии (как в Google Docs) ──────────────────────────────────────────────────────────────────────
+
+class CommentBody(BaseModel):
+    body: str = Field(max_length=cm.MAX_BODY * 2)
+    anchor: Optional[dict[str, Any]] = None
+    parentId: Optional[str] = None
+
+
+class CommentPatch(BaseModel):
+    body: Optional[str] = Field(default=None, max_length=cm.MAX_BODY * 2)
+    resolved: Optional[bool] = None
+
+
+@router.get("/api/workspace/items/{item_id}/comments")
+def list_item_comments(item_id: str, me: Identity = Depends(current_identity)):
+    try:
+        store.get_visible(item_id, me.user_id, content=False)
+    except WorkspaceError as exc:
+        raise _raise(exc) from exc
+    return {"comments": cm.list_comments(item_id), "ready": cm.ready()}
+
+
+@router.post("/api/workspace/items/{item_id}/comments", status_code=201)
+def add_item_comment(item_id: str, body: CommentBody, me: Identity = Depends(current_identity)):
+    try:
+        row = store.get_visible(item_id, me.user_id, content=False)
+        comment = cm.add_comment(item_id, me.user_id, body.body, body.anchor, body.parentId)
+    except WorkspaceError as exc:
+        raise _raise(exc) from exc
+    cm.announce(item_id, "added", comment, by=me.display_name, by_id=me.user_id)
+    return {"comment": comment, "kind": row["kind"]}
+
+
+@router.patch("/api/workspace/items/{item_id}/comments/{comment_id}")
+def change_item_comment(item_id: str, comment_id: str, body: CommentPatch, me: Identity = Depends(current_identity)):
+    try:
+        store.get_visible(item_id, me.user_id, content=False)
+        comment = cm.change_comment(item_id, comment_id, me.user_id, body=body.body, resolved=body.resolved)
+    except WorkspaceError as exc:
+        raise _raise(exc) from exc
+    cm.announce(item_id, "changed", comment, by=me.display_name, by_id=me.user_id)
+    return {"comment": comment}
+
+
+@router.delete("/api/workspace/items/{item_id}/comments/{comment_id}")
+def delete_item_comment(item_id: str, comment_id: str, me: Identity = Depends(current_identity)):
+    try:
+        row = store.get_visible(item_id, me.user_id, content=False)
+        cm.delete_comment(item_id, comment_id, me.user_id, is_owner=str(row["owner_id"]) == me.user_id)
+    except WorkspaceError as exc:
+        raise _raise(exc) from exc
+    cm.announce(item_id, "deleted", {"id": comment_id}, by=me.display_name, by_id=me.user_id)
+    return {"ok": True}

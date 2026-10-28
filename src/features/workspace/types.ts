@@ -94,3 +94,21 @@ export interface VersionsState {
   current: { updatedAt: string; title: string; savedBy: string; savedByName: string; savedVia?: string };
   canRestore: boolean;
 }
+
+/** К чему привязан комментарий: документ — выделенный текст, таблица — ячейка листа. */
+export type CommentAnchor = { kind: 'text'; quote: string } | { kind: 'cell'; sheet: string; cell: string };
+
+/** Комментарий верхнего уровня (ветка, parentId = null) или ответ в ветке. */
+export interface Comment {
+  id: string;
+  parentId: string | null;
+  body: string;
+  anchor: CommentAnchor | Record<string, never>;
+  authorId: string;
+  authorName: string;
+  authorAvatar: string;
+  resolved: boolean;
+  resolvedByName: string;
+  createdAt: string;
+  updatedAt: string;
+}

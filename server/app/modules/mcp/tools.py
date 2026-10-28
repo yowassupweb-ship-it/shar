@@ -29,6 +29,7 @@ from fastapi import HTTPException
 from app.core.db import db
 from app.modules.mcp import docformat
 from app.modules.mcp.keys import KeyContext
+from app.modules.workspace import comments as ws_comments
 from app.modules.workspace import folders as ws_folders
 from app.modules.workspace import router as ws
 from app.modules.workspace import store
@@ -471,6 +472,53 @@ def update_table(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     return {"id": item["id"], "sheet": sheet.title, "cells": len(cells), "appendedRows": len(rows), "deletedRows": len(set(drop))}
 
 
+def _threads(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Плоский список комментариев — ветками: у каждой привязка, автор, решено ли и ответы."""
+    replies: dict[str, list[dict[str, Any]]] = {}
+    for c in comments:
+        if c["parentId"]:
+            replies.setdefault(c["parentId"], []).append({"id": c["id"], "author": c["authorName"], "text": c["body"], "createdAt": c["createdAt"]})
+    return [{"id": c["id"], "anchor": c["anchor"], "author": c["authorName"], "text": c["body"], "resolved": c["resolved"],
+             "createdAt": c["createdAt"], "replies": replies.get(c["id"], [])} for c in comments if not c["parentId"]]
+
+
+def list_comments(access: Access, args: dict[str, Any]) -> dict[str, Any]:
+    item = access.load(args.get("id"), content=False)
+    threads = _threads(ws_comments.list_comments(item["id"]))
+    if not args.get("include_resolved"):
+        threads = [t for t in threads if not t["resolved"]]
+    return {"id": item["id"], "threads": threads}
+
+
+def _comment_call(fn: Callable[[], Any]) -> Any:
+    try:
+        return fn()
+    except store.WorkspaceError as exc:
+        raise ToolError(exc.message) from None
+
+
+def add_comment(access: Access, args: dict[str, Any]) -> dict[str, Any]:
+    access.need("edit", "оставлять комментарии")
+    item = access.load(args.get("id"), content=False)
+    anchor: dict[str, Any] | None = None
+    if item["kind"] == "table" and args.get("cell"):
+        anchor = {"kind": "cell", "sheet": str(args.get("sheet") or ""), "cell": str(args["cell"])}
+    elif args.get("quote"):
+        anchor = {"kind": "text", "quote": str(args["quote"])}
+    comment = _comment_call(lambda: ws_comments.add_comment(item["id"], access.me.user_id, str(args.get("text") or ""), anchor, args.get("thread_id")))
+    ws_comments.announce(item["id"], "added", comment, by=f"агент «{access.ctx.key_name}»", by_id=access.me.user_id)
+    return {"id": comment["id"], "threadId": comment["parentId"] or comment["id"]}
+
+
+def resolve_comment(access: Access, args: dict[str, Any]) -> dict[str, Any]:
+    access.need("edit", "закрывать комментарии")
+    item = access.load(args.get("id"), content=False)
+    resolved = args.get("resolved", True) is not False
+    comment = _comment_call(lambda: ws_comments.change_comment(item["id"], str(args.get("thread_id") or ""), access.me.user_id, resolved=resolved))
+    ws_comments.announce(item["id"], "changed", comment, by=f"агент «{access.ctx.key_name}»", by_id=access.me.user_id)
+    return {"threadId": comment["id"], "resolved": comment["resolved"]}
+
+
 def rename_item(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     access.need("edit", "править материалы")
     item = access.load(args.get("id"), content=False)
@@ -559,6 +607,18 @@ TOOLS: list[dict[str, Any]] = [
          "append_rows": {"type": "array", "items": {"type": "array", "items": {}}},
          "delete_rows": {"type": "array", "items": {"type": "integer"}},
          "create_sheet": {"type": "boolean"}}, "required": ["id"]}},
+    {"name": "list_comments", "handler": list_comments, "level": "read",
+     "description": "Комментарии документа или таблицы ветками: к чему привязаны (anchor: text — цитата, cell — лист и ячейка), автор, ответы, решено ли. "
+                    "По умолчанию только открытые ветки; include_resolved=true — и закрытые.",
+     "inputSchema": {"type": "object", "properties": {"id": _ID, "include_resolved": {"type": "boolean"}}, "required": ["id"]}},
+    {"name": "add_comment", "handler": add_comment, "level": "edit",
+     "description": "Оставить комментарий. Новая ветка: у документа — quote (точная цитата из текста), у таблицы — cell (например B3) и sheet (название листа). "
+                    "Ответ в существующую ветку — thread_id (id из list_comments). Содержимое материала не меняется.",
+     "inputSchema": {"type": "object", "properties": {"id": _ID, "text": {"type": "string"}, "quote": {"type": "string"}, "cell": {"type": "string"},
+                                                       "sheet": {"type": "string"}, "thread_id": {"type": "string"}}, "required": ["id", "text"]}},
+    {"name": "resolve_comment", "handler": resolve_comment, "level": "edit",
+     "description": "Закрыть ветку комментариев («решено») или открыть снова (resolved=false).",
+     "inputSchema": {"type": "object", "properties": {"id": _ID, "thread_id": {"type": "string"}, "resolved": {"type": "boolean"}}, "required": ["id", "thread_id"]}},
     {"name": "rename_item", "handler": rename_item, "level": "edit", "description": "Переименовать материал.",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "title": {"type": "string"}}, "required": ["id", "title"]}},
     {"name": "create_note", "handler": create_note, "level": "create",

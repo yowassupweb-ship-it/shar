@@ -697,7 +697,9 @@ html.is-sticky, html.is-sticky body, html.is-sticky #root { height: 100%; overfl
 .nws-sticky-item .nws-head { -webkit-app-region: drag; user-select: none; }
 .nws-sticky-item .nws-head button, .nws-sticky-item .nws-head input, .nws-sticky-item .nws-head a, .nws-sticky-item .nws-head .nws-sticky-window, .nws-sticky-item .nws-head .nws-presence, .nws-sticky-item .nws-head .nws-save, .nws-sticky-item .nws-head .nws-owner { -webkit-app-region: no-drag; }
 /* Название — не на всю ширину: свободное место шапки остаётся «ручкой» окна. */
-.nws-sticky-item .nws-title { flex: 0 1 320px; min-width: 120px; }
+.nws-sticky-item .nws-title { flex: 0 1 320px; min-width: 72px; }
+/* Окно узкое — шапка не переносится (иначе кнопки окна уезжали бы на вторую строку влево): название сжимается, подписи прячутся. */
+.nws-sticky-item .nws-head { flex-wrap: nowrap; }
 .nws-sticky-window { display: inline-flex; align-items: center; gap: 2px; margin-left: var(--space-2); padding-left: var(--space-2); border-left: 1px solid var(--border-color); }
 .nws-sticky-foot { flex: none; padding: 4px 12px; color: var(--text-muted); font-size: var(--text-xs); text-align: right; }
 .nws-sticky-foot .is-error { color: var(--state-danger); }
@@ -815,3 +817,193 @@ html.dark .nws-note-syntax{--md-strong: #fdba74;--md-em: #d8b4fe;--md-code: #86e
 
 /* Папка открыта (вам или вами) — значок рядом с названием. */
 .nws-folder-shared { display: inline-flex; flex: none; align-items: center; color: var(--accent-color); }
+
+/* ── Комментарии документа и таблицы (как в Google Docs) ────────────────────────────────────────── */
+.nws-main { display: flex; flex: 1; min-height: 0; }
+.nws-main > .nws-editor { min-width: 0; }
+.nws-cm {
+  display: flex; flex-direction: column; flex: none; width: 320px; min-height: 0;
+  border-left: 1px solid var(--border-color); background: var(--surface-panel);
+}
+.nws-cm-head { display: flex; align-items: center; justify-content: space-between; padding: var(--space-3) var(--space-3) var(--space-2) var(--space-4); }
+.nws-cm-head h2 { margin: 0; font-size: var(--text-md, 15px); font-weight: var(--weight-semibold); color: var(--text-main); }
+.nws-cm-new { display: grid; gap: var(--space-2); padding: 0 var(--space-3) var(--space-3); }
+.nws-cm-hint { margin: 0; color: var(--text-muted); font-size: var(--text-xs); }
+.nws-cm-tabs { margin: 0 var(--space-3) var(--space-2); }
+.nws-cm-list { display: grid; align-content: start; gap: var(--space-2); flex: 1; min-height: 0; padding: var(--space-1) var(--space-3) var(--space-4); overflow-y: auto; }
+.nws-cm-empty { display: grid; justify-items: center; gap: var(--space-2); margin: var(--space-5) 0; color: var(--text-muted); font-size: var(--text-sm); text-align: center; }
+.nws-cm-empty p { margin: 0; }
+.nws-cm-composer { display: grid; gap: var(--space-2); }
+.nws-cm-composer textarea {
+  width: 100%; min-height: 36px; max-height: 160px; padding: 8px 10px; resize: none; box-sizing: border-box;
+  border: 1px solid var(--border-color); border-radius: 10px; background: var(--element-bg); color: var(--text-main);
+  font: inherit; font-size: var(--text-sm); line-height: 1.4; transition: border-color .15s, box-shadow .15s;
+}
+.nws-cm-composer textarea:focus { outline: none; border-color: var(--accent-color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 22%, transparent); }
+.nws-cm-composer-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
+.nws-cm-thread {
+  display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border-color); border-radius: 14px;
+  background: var(--bg-raised, var(--surface-panel)); box-shadow: 0 1px 2px rgba(0, 0, 0, .04); transition: box-shadow .15s, border-color .15s;
+}
+.nws-cm-thread[data-active] { border-color: color-mix(in srgb, var(--accent-color) 55%, var(--border-color)); box-shadow: 0 2px 10px rgba(0, 0, 0, .1); }
+.nws-cm-thread[data-resolved] { opacity: .78; }
+.nws-cm-anchor {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 8px; border: 0; border-radius: 6px;
+  background: color-mix(in srgb, #f5c518 26%, transparent); color: var(--text-2); font: inherit; font-size: var(--text-xs); text-align: left; cursor: default;
+}
+.nws-cm-anchor[data-kind="cell"] { background: color-mix(in srgb, #34a853 20%, transparent); }
+.nws-cm-anchor span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.nws-cm-anchor { cursor: pointer; }
+@media (hover: hover) { button.nws-cm-anchor:hover { color: var(--text-main); filter: brightness(1.08); } }
+.nws-cm-resolve-row { display: flex; align-items: flex-start; gap: var(--space-2); }
+.nws-cm-resolve-row > .nws-cm-msg { flex: 1; min-width: 0; }
+.nws-cm-resolve {
+  display: grid; place-items: center; flex: none; width: 28px; height: 28px; border: 0; border-radius: 50%; background: transparent; color: var(--text-muted); cursor: pointer;
+}
+@media (hover: hover) { .nws-cm-resolve:hover { background: color-mix(in srgb, #34a853 18%, transparent); color: #34a853; } }
+.nws-cm-resolved-note { margin: 0; color: var(--text-muted); font-size: var(--text-xs); }
+.nws-cm-msg { display: flex; gap: var(--space-2); min-width: 0; }
+.nws-cm-msg-body { flex: 1; min-width: 0; }
+.nws-cm-msg-head { display: flex; align-items: center; gap: 6px; min-height: 22px; font-size: var(--text-xs); color: var(--text-muted); }
+.nws-cm-msg-head b { overflow: hidden; color: var(--text-main); font-size: var(--text-sm); font-weight: var(--weight-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.nws-cm-edited { font-style: italic; }
+.nws-cm-more { margin-left: auto; display: grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; }
+@media (hover: hover) { .nws-cm-more:hover { background: var(--surface-hover); color: var(--text-main); } }
+.nws-cm-text { margin: 2px 0 0; color: var(--text-main); font-size: var(--text-sm); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.nws-cm-reply { justify-self: start; padding: 2px 0; border: 0; background: transparent; color: var(--accent-color); font: inherit; font-size: var(--text-xs); font-weight: var(--weight-medium); cursor: pointer; }
+.nws-comment-btn { position: relative; }
+.nws-comment-count {
+  position: absolute; top: -2px; right: -2px; min-width: 15px; height: 15px; padding: 0 4px; box-sizing: border-box; border-radius: 8px;
+  background: var(--accent-fill, #0a66d6); color: #fff; font-size: 10px; font-weight: var(--weight-semibold); line-height: 15px; text-align: center;
+}
+@media (max-width: 760px) {
+  .nws-cm { position: absolute; inset: 0 0 0 auto; width: min(100%, 360px); z-index: 5; box-shadow: -8px 0 24px rgba(0, 0, 0, .2); }
+  .nws-main { position: relative; }
+}
+/* Уголок на ячейке с открытым комментарием (как в Google Таблицах) */
+.nws-cell-mark { position: absolute; pointer-events: none; }
+.nws-cell-mark::after { content: ""; position: absolute; top: 0; right: 0; border-top: 8px solid #f5a623; border-left: 8px solid transparent; }
+.nws-cm-msg-head time { white-space: nowrap; }
+.nws-cm-msg-head b { flex: 0 1 auto; min-width: 0; }
+.nws-cm { width: 340px; }
+
+/* ── Строка меню под названием, как в Google Документах и Таблицах ───────────────────────────────── */
+.nws-bar { display: flex; flex: none; align-items: center; gap: 1px; padding: 0 var(--space-3) var(--space-1); background: var(--surface-panel); border-bottom: 1px solid var(--border-color); overflow-x: auto; scrollbar-width: none; }
+.nws-bar::-webkit-scrollbar { display: none; }
+.nws-bar-btn { flex: none; height: 26px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text-main); font: inherit; font-size: var(--text-sm); cursor: default; white-space: nowrap; }
+@media (hover: hover) { .nws-bar-btn:hover { background: var(--surface-hover); } }
+.nws-bar-btn[aria-expanded="true"] { background: color-mix(in srgb, var(--accent-color) 14%, transparent); }
+.nws-bar-item { display: flex; align-items: center; justify-content: space-between; gap: var(--space-5); width: 100%; }
+.nws-bar-hint { color: var(--text-muted); font: inherit; font-size: var(--text-xs); }
+.nws-sticky-item .nws-bar { -webkit-app-region: no-drag; }
+
+/* Ячейка в режиме правки: чёткая рамка в 2 пикселя цветом акцента с мягкой тенью (как в Google Таблицах и Numbers),
+   а не тонкая линия, теряющаяся на сетке. Рамка снаружи ячейки — текст не сдвигается. */
+.nws-univer [data-u-comp="editor"] {
+  box-shadow: 0 0 0 2px var(--accent-color, #0a66d6), 0 6px 20px rgba(0, 0, 0, .22) !important;
+  border-radius: 1px;
+  outline: none !important;
+}
+
+/* ── Шапка документа и таблицы как в Google: значок на две строки, название + звезда + статус, под ними меню ── */
+.nws-head[data-layout="gdocs"] { align-items: center; padding-top: calc(var(--space-2) + env(safe-area-inset-top)); padding-bottom: 2px; min-height: 64px; }
+.nws-head[data-layout="gdocs"] > .nws-kind-icon { width: 40px; height: 40px; border-radius: 10px; align-self: center; }
+.nws-head-main { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 0; }
+.nws-head-titlerow { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.nws-head[data-layout="gdocs"] .nws-title { flex: 0 1 auto; min-width: 120px; max-width: 520px; field-sizing: content; padding: 2px 6px; font-size: 18px; font-weight: var(--weight-regular, 400); }
+.nws-head[data-layout="gdocs"] .nws-bar { padding: 0; border-bottom: 0; background: transparent; margin-left: -3px; }
+.nws-head[data-layout="gdocs"] .nws-bar-btn { height: 24px; padding: 0 7px; font-size: 14px; }
+.nws-star { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 50%; background: transparent; color: var(--text-muted); cursor: pointer; }
+@media (hover: hover) { .nws-star:hover { background: var(--surface-hover); color: var(--text-main); } }
+.nws-star[aria-pressed="true"] { color: #f5b400; }
+.nws-star[aria-pressed="true"] svg { fill: currentColor; }
+.nws-head-titlerow .nws-save { margin-left: 4px; }
+
+/* ── Панель инструментов как в Google: одна строка без вкладок (ribbonType: 'simple'), прижата влево, «таблеткой» ── */
+.nws-univer [data-u-comp="ribbon-header-menu"]:not(:has([role="tablist"])) { display: none !important; }
+.nws-univer [data-u-comp="headerbar"] > div:has(> [data-u-comp="ribbon-toolbar"]) {
+  margin: 6px 12px 8px; padding: 3px 8px !important; min-height: 40px; box-sizing: border-box;
+  border-radius: 24px; background: color-mix(in srgb, var(--text-main) 5.5%, transparent);
+}
+.nws-univer [data-u-comp="ribbon-toolbar"] { justify-content: flex-start !important; }
+
+/* Переименование материала прямо в строке списка */
+.nws-row-rename { width: 100%; min-width: 0; padding: 2px 6px; margin: -2px -6px; border: 1px solid var(--accent-color); border-radius: 6px; background: var(--element-bg); color: var(--text-main); font: inherit; font-weight: var(--weight-semibold); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 22%, transparent); }
+.nx-menu-item > span:has(> .nws-bar-item) { flex: 1; min-width: 0; }
+.nws-bar-noicon { display: inline-block; width: 15px; flex: none; }
+
+/* Документ в тёмной теме: Univer инвертирует цвета холста — страница становилась чисто чёрной, текст чисто белым.
+   Белое на абсолютно чёрном (холст без субпиксельного сглаживания) читается заметно жирнее обычного. Сжимаем
+   контраст холста: страница — #121212, текст — #EDEDED, как в тёмном режиме macOS. */
+html:is([data-theme="graphite"], [data-theme="black"]) .nws-univer-doc canvas { filter: contrast(.86); }
+
+/* ── Причёсываем шапку и панель под Google ─────────────────────────────────────────────────────────── */
+/* Между меню и панелью инструментов нет линии — их разделяет «таблетка» панели. */
+.nws-head[data-layout="gdocs"] { border-bottom: 0; gap: 10px; padding-left: var(--space-4); padding-right: var(--space-3); }
+.nws-head[data-layout="gdocs"] .nws-title { line-height: 26px; border-radius: 6px; }
+.nws-head[data-layout="gdocs"] .nws-title:hover:not(:read-only) { box-shadow: inset 0 0 0 1px var(--border-color); background: transparent; }
+.nws-head[data-layout="gdocs"] .nws-title:focus-visible { box-shadow: inset 0 0 0 2px var(--accent-color); background: var(--element-bg); outline: none; }
+.nws-head-titlerow .nws-save { font-size: 12px; color: var(--text-muted); }
+.nws-bar-btn { letter-spacing: .005em; }
+/* Поле шрифта не растягивается на пол-панели (у Google — около 100 пикселей). */
+.nws-univer [data-u-command="sheet.command.set-range-font-family"],
+.nws-univer [data-u-command="doc.command.set-inline-format-font-family"] { max-width: 132px !important; }
+.nws-univer [data-u-command="sheet.command.set-range-font-family"] > *,
+.nws-univer [data-u-command="doc.command.set-inline-format-font-family"] > * { max-width: 132px !important; }
+/* Шапка редактора Univer под «таблеткой» — без собственной линии и фона, как у Google. */
+.nws-univer [data-u-comp="headerbar"] { border-bottom: 0 !important; background: var(--surface-panel) !important; }
+
+/* ── Узкое окно: шапка и панель сжимаются аккуратно (ширина — самого материала, .nws-item — контейнер) ──── */
+@container (max-width: 1180px) {
+  .nws-head[data-layout="gdocs"] .nws-bar-btn { padding: 0 5px; font-size: 13px; }
+  .nws-head[data-layout="gdocs"] .nws-share-btn span { display: none; }
+  .nws-head-titlerow .nws-save .nws-label { display: none; }
+  .nws-univer [data-u-command="sheet.command.set-range-font-family"],
+  .nws-univer [data-u-command="doc.command.set-inline-format-font-family"],
+  .nws-univer [data-u-command="sheet.command.set-range-font-family"] > *,
+  .nws-univer [data-u-command="doc.command.set-inline-format-font-family"] > * { max-width: 100px !important; }
+}
+@container (max-width: 860px) {
+  .nws-head[data-layout="gdocs"] > .nws-kind-icon { display: none; }
+  .nws-head[data-layout="gdocs"] .nws-title { font-size: 16px; }
+  .nws-head[data-layout="gdocs"] .nws-bar-btn { padding: 0 4px; font-size: 12.5px; }
+}
+/* «⋮» панели: оставшиеся кнопки — рядом, с переносом, а не по группе на строку. */
+section.univer-popup div.univer-grid.univer-gap-1.univer-py-1:has([data-u-command]) {
+  display: flex !important; flex-wrap: wrap; align-items: center; gap: 2px 6px !important; max-width: 340px; padding: 4px 6px !important;
+}
+
+/* ── Панель фильтра: компактная и аккуратная (как у Google: ~300px, 13px, низкие кнопки, список по содержимому) ── */
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) {
+  width: 300px !important; max-height: 440px !important; padding: 10px !important; border-radius: 12px !important;
+  font-size: 13px; box-shadow: 0 10px 30px rgba(0, 0, 0, .18), 0 0 0 .5px var(--border-color, rgba(0, 0, 0, .12));
+}
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) button { height: 28px !important; font-size: 13px !important; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) > .univer-grid.univer-mb-3 { margin-bottom: 8px !important; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) > .univer-grid.univer-mb-3 button { gap: 6px !important; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) .univer-rounded-lg.univer-bg-gray-100.univer-p-1 { height: 28px; padding: 2px !important; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) .univer-rounded-lg.univer-bg-gray-100.univer-p-1 button { height: 24px !important; font-size: 12px !important; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) .univer-rounded-lg.univer-bg-gray-100.univer-p-1 > .univer-absolute { height: 24px !important; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) input { height: 28px !important; font-size: 13px !important; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) .univer-min-h-\[300px\] { min-height: 0 !important; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) .univer-pt-2 { padding-top: 6px !important; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) .univer-mt-2.univer-flex-grow { margin-top: 6px !important; max-height: 220px; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) .univer-h-8.univer-w-full { height: 26px !important; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) .univer-h-7 { height: 26px !important; padding-left: 8px !important; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) .univer-text-sm { font-size: 13px !important; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) > .univer-mt-4 { margin-top: 10px !important; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) > .univer-mt-4 > button:first-child { padding: 0 4px !important; }
+
+/* ── «⋮» панели: оставшиеся кнопки одним блоком в ряд с переносом, группы — через тонкий разделитель ── */
+div.univer-grid.univer-gap-2.univer-p-2:has(> .univer-flex.univer-items-center.univer-gap-2 .univer-toolbar-selector-root, > .univer-flex.univer-items-center.univer-gap-2 [data-u-command]) {
+  display: flex !important; flex-wrap: wrap; align-items: center; gap: 4px 0 !important; max-width: 320px; padding: 6px !important;
+}
+div.univer-grid.univer-gap-2.univer-p-2:has(> .univer-flex.univer-items-center.univer-gap-2 [data-u-command]) > .univer-flex.univer-items-center.univer-gap-2 {
+  gap: 2px !important; padding: 0 6px; border-left: 1px solid var(--border-color, rgba(0, 0, 0, .12));
+}
+div.univer-grid.univer-gap-2.univer-p-2:has(> .univer-flex.univer-items-center.univer-gap-2 [data-u-command]) > .univer-flex.univer-items-center.univer-gap-2:first-child { border-left: 0; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) { width: 324px !important; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) .univer-rounded-lg.univer-bg-gray-100.univer-p-1 button { padding: 0 4px !important; text-overflow: clip !important; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) > .univer-mt-4 button { padding: 0 10px !important; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) > .univer-mt-4 > button:first-child { padding: 0 2px !important; }
+div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) > .univer-mt-4 > span { gap: 6px !important; }

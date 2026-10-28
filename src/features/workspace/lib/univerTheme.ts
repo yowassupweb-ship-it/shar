@@ -16,6 +16,8 @@ import { defaultTheme, type Theme } from '@univerjs/themes';
  */
 /** Univer рисуется тёмным только в Графите и Чёрной; Серая — светлая тема. */
 export const isDarkTheme = (theme: string) => theme === 'graphite' || theme === 'black';
+/** Цвет линий сетки в тёмных темах: Univer инвертирует цвета холста (255 − канал): на полотне эта линия выходит графитово-серой, #4b5057. */
+export const DARK_GRIDLINES = '#b4afa8';
 
 export function univerTheme(theme: string): Theme {
   const base = defaultTheme;
@@ -125,8 +127,23 @@ function patchEditorContext() {
   }
 }
 
+/** В ячейке число без явного выравнивания стоит у правого края, а редактор по умолчанию рисовал его слева (текст «переезжал»
+ *  при входе в правку) — ставим выравнивание вправо и редактору. */
+type EditState = { row: number; column: number; documentLayoutObject?: { horizontalAlign?: number; documentModel?: { getSnapshot?: () => { body?: { paragraphs?: Array<{ paragraphStyle?: { horizontalAlign?: number } }> } } } } } | null;
+const ALIGN_UNSPECIFIED = 0;
+const ALIGN_RIGHT = 3;
+function alignNumberRight(state: EditState, isNumber?: (row: number, column: number) => boolean) {
+  const layout = state?.documentLayoutObject;
+  if (!state || !layout || !isNumber || layout.horizontalAlign !== ALIGN_UNSPECIFIED) return;
+  try { if (!isNumber(state.row, state.column)) return; } catch { return; }
+  layout.horizontalAlign = ALIGN_RIGHT;
+  for (const paragraph of layout.documentModel?.getSnapshot?.()?.body?.paragraphs || []) {
+    paragraph.paragraphStyle = { ...paragraph.paragraphStyle, horizontalAlign: ALIGN_RIGHT };
+  }
+}
+
 /** Подписка на правку ячейки: покрашенная — рисуем редактор без инверсии. Возвращает отписку. */
-export function keepEditorFill(univer: unknown, cellFill?: (row: number, column: number) => string | undefined): () => void {
+export function keepEditorFill(univer: unknown, cellFill?: (row: number, column: number) => string | undefined, isNumber?: (row: number, column: number) => boolean): () => void {
   patchEditorContext();
   const injector = (univer as { __getInjector: () => { get: <T>(token: unknown) => T } }).__getInjector();
   const bridge = injector.get<IEditorBridgeService>(IEditorBridgeService);
@@ -137,6 +154,7 @@ export function keepEditorFill(univer: unknown, cellFill?: (row: number, column:
     // цвета до первой отрисовки редактора, а не перерисовывать его уже после (это тоже было видно как мигание).
     let fill: unknown = state?.documentLayoutObject?.fill;
     if (!fill && state && cellFill) { try { fill = cellFill(state.row, state.column); } catch { fill = undefined; } }
+    alignNumberRight((state ?? null) as EditState, isNumber);
     const painted = isPainted(fill);
     const started = Boolean(state) && !editing;
     editing = Boolean(state);
@@ -147,6 +165,47 @@ export function keepEditorFill(univer: unknown, cellFill?: (row: number, column:
     }
   });
   return () => { sub.unsubscribe(); plainEditor = false; };
+}
+
+// ── Кнопки фильтра ──────────────────────────────────────────────────────────────────────────────────────
+// Кнопку Univer рисует на холсте белой плашкой с воронкой цвета primary.600; в тёмной теме холст инвертирует цвета,
+// и плашка становилась чёрным квадратом на цветной шапке. Рисуем её как есть (светлая плашка с синей воронкой — читается
+// на любой заливке), с акцентом Шара. Класс кнопки наружу не экспортируется — берём его у первой созданной кнопки.
+const FILTER_ACCENT = '#0a66d6';
+const FILTER_HOVER = '#e6eefb';
+type FilterShape = { _themeService?: { getColorFromTheme: (key: string) => string }; _draw: (ctx: CanvasCtx) => void; __polished?: boolean };
+type SceneLike = { getAllObjects?: () => unknown[]; makeDirty?: (dirty?: boolean) => void };
+
+export function polishFilterButtons(univer: unknown): () => void {
+  const injector = (univer as { __getInjector: () => { get: <T>(token: unknown) => T } }).__getInjector();
+  const renders = injector.get<IRenderManagerService>(IRenderManagerService);
+  let done = false;
+  const patch = () => {
+    if (done) return;
+    try {
+      for (const [, render] of (renders as unknown as { getRenderAll: () => Map<string, { scene?: SceneLike }> }).getRenderAll()) {
+        const scene = render.scene;
+        const shape = (scene?.getAllObjects?.() || []).find((o) => /^SheetsFilterButtonShape/.test((o as { constructor?: { name?: string } })?.constructor?.name || '')) as FilterShape | undefined;
+        if (!shape) continue;
+        const proto = Object.getPrototypeOf(shape) as FilterShape;
+        if (!proto.__polished) {
+          proto.__polished = true;
+          const draw = proto._draw;
+          proto._draw = function polished(this: FilterShape, ctx: CanvasCtx) {
+            const theme = this._themeService;
+            if (!theme) return draw.call(this, ctx);
+            const original = theme.getColorFromTheme;
+            theme.getColorFromTheme = (key: string) => (key === 'primary.600' ? FILTER_ACCENT : key === 'gray.50' ? FILTER_HOVER : original.call(theme, key));
+            try { return withoutInversion(ctx, () => draw.call(this, ctx)); } finally { delete (theme as { getColorFromTheme?: unknown }).getColorFromTheme; }
+          };
+        }
+        done = true;
+        scene?.makeDirty?.(true);
+      }
+    } catch { /* сцена ещё не создана — попробуем при следующей операции */ }
+  };
+  const timer = window.setInterval(() => { patch(); if (done) window.clearInterval(timer); }, 400);
+  return () => window.clearInterval(timer);
 }
 
 const currentTheme = () => document.documentElement.dataset.theme || 'light';

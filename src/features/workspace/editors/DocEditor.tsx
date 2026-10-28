@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { DocSelectionManagerService } from '@univerjs/docs';
 import { DocCanvasPopManagerService } from '@univerjs/docs-ui';
 import { IRenderManagerService } from '@univerjs/engine-render';
-import { createUniver, IImageIoService, LocaleType, mergeLocales, type IDocumentData } from '@univerjs/presets';
+import { DOC_TOOLBAR } from '../lib/toolbarLayout';
+import { createUniver, ICommandService, IImageIoService, LocaleType, mergeLocales, type IDocumentData } from '@univerjs/presets';
 import { UniverDocsCorePreset } from '@univerjs/preset-docs-core';
 import UniverPresetDocsCoreRuRU from '@univerjs/preset-docs-core/locales/ru-RU';
 import { UniverFindReplacePlugin } from '@univerjs/find-replace';
@@ -68,7 +69,9 @@ function measureCursors(injector: Injector, unitId: string, host: HTMLElement, c
  * Google Docs. Правка отдаёт снимок целиком, сервер хранит его как есть. Загружается отдельным куском —
  * Univer тяжёлый, и остальной Шар ради него не ждёт.
  */
-export default function DocEditor({ content, onContent, readOnly, loadKey, visible = true, cursors = [], onCursor, live }: EditorProps) {
+export default function DocEditor({ content, onContent, readOnly, loadKey, visible = true, cursors = [], onCursor, live, commentsBridge, onAddComment }: EditorProps) {
+  const onAddCommentRef = useRef(onAddComment);
+  onAddCommentRef.current = onAddComment;
   const host = useRef<HTMLDivElement>(null);
   const theme = useUniverTheme();
   const initial = useRef<DocSnapshot>(parseSnapshot(content) ?? emptySnapshot());
@@ -103,7 +106,7 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
       darkMode: isDarkTheme(theme),
       theme: univerTheme(theme),
       presets: [
-        UniverDocsCorePreset({ container: mount, ribbonType: 'classic', toc: false, header: !readOnly, toolbar: !readOnly, contextMenu: !readOnly }),
+        UniverDocsCorePreset({ container: mount, ribbonType: 'simple', menu: DOC_TOOLBAR, toc: false, header: !readOnly, toolbar: !readOnly, contextMenu: !readOnly }),
         // Картинки: то же, что UniverDocsDrawingPreset, но вставленный файл уходит на сервер, а не в снимок base64.
         { plugins: [[UniverDrawingPlugin, { override: [[IImageIoService, { useClass: UploadingImageIoService }]] }], UniverDrawingUIPlugin, UniverDocsDrawingPlugin, UniverDocsDrawingUIPlugin] },
         // Ссылки: клик — карточка ссылки, Ctrl+клик — открыть в браузере (в приложении — в системном).
@@ -155,6 +158,12 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
     // Своя позиция — коллегам (useCursors). Берём активный диапазон выделения.
     const injector = (univer as unknown as { __getInjector: () => Injector }).__getInjector();
     const unitId = doc.getId();
+    let lastRange: { s: number; e: number } | null = null;
+    // «Комментарий» в контекстном меню, как в Google: панель открывается с полем нового комментария к выделенному.
+    if (onAddCommentRef.current) {
+      univerAPI.createMenu({ id: 'nx.comment.add', title: 'Комментарий', tooltip: 'Комментарий (Ctrl+Alt+M)', action: () => onAddCommentRef.current?.() })
+        .appendTo(['contextMenu.mainArea', 'contextMenu.others']);
+    }
     engine.current = { injector, unitId };
     const selectionSub = injector.get<{ textSelection$: { subscribe: (fn: (p: { unitId: string; textRanges?: Array<{ startOffset: number; endOffset: number; segmentId?: string; segmentPage?: number; direction?: string; isActive?: boolean }> }) => void) => { unsubscribe: () => void } } }>(DocSelectionManagerService)
       .textSelection$.subscribe((p) => {
@@ -162,7 +171,37 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
         const r = p.textRanges?.find((x) => x.isActive) ?? p.textRanges?.[0];
         const pos: DocCursor | null = r ? { s: r.startOffset, e: r.endOffset, seg: r.segmentId || '', pg: r.segmentPage ?? -1, b: r.direction === 'backward' ? 1 : 0 } : null;
         onCursorRef.current?.(pos as CursorPos | null);
+        if (r && r.startOffset !== r.endOffset) lastRange = { s: Math.min(r.startOffset, r.endOffset), e: Math.max(r.startOffset, r.endOffset) };
+        else if (r) lastRange = null;
       });
+
+    // Комментарии: привязка — выделенный текст (последнее непустое выделение, пока курсор не поставили в другое место);
+    // переход к ветке — найти цитату в тексте и выделить её.
+    const streamOf = () => String((doc as unknown as { getDocumentDataModel: () => { getSnapshot: () => { body?: { dataStream?: string } } } }).getDocumentDataModel().getSnapshot()?.body?.dataStream || '');
+    if (commentsBridge) {
+      commentsBridge.current = {
+        anchor: () => {
+          if (!lastRange) return null;
+          const quote = [...streamOf().slice(lastRange.s, lastRange.e)].map((ch) => (ch.charCodeAt(0) < 32 ? ' ' : ch)).join('').replace(/\s+/g, ' ').trim().slice(0, 300);
+          return quote ? { kind: 'text', quote } : null;
+        },
+        jump: (anchor) => {
+          if (anchor.kind !== 'text') return;
+          const at = streamOf().indexOf(anchor.quote);
+          if (at < 0) return;
+          try {
+            injector.get<DocSelectionManagerService>(DocSelectionManagerService).replaceDocRanges([{ startOffset: at, endOffset: at + anchor.quote.length }], { unitId, subUnitId: unitId }, true);
+          } catch { /* документ уже разобран */ }
+        },
+        has: (id) => injector.get<ICommandService>(ICommandService).hasCommand(id),
+        exec: (id) => {
+          const commands = injector.get<ICommandService>(ICommandService);
+          if (!commands.hasCommand(id)) return false;
+          void commands.executeCommand(id);
+          return true;
+        },
+      };
+    }
 
     // Правки текста, форматирования и полей страницы идут мутациями; мутация без реальной разницы
     // (фокус, выделение) отсеивается сравнением с сохранённым отпечатком.
@@ -199,6 +238,7 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
       if (ready) { try { initial.current = localizeImages(doc.save() as unknown as DocSnapshot); } catch { /* уже разобран */ } }
       subscription.dispose();
       selectionSub.unsubscribe();
+      if (commentsBridge) commentsBridge.current = null;
       engine.current = null;
       // Univer снимает свои React-деревья синхронно; внутри фазы рендера нашего компонента React на это жалуется.
       untagFind();

@@ -1,23 +1,29 @@
-import { lazy, Suspense, useEffect, useRef, useState, type ComponentType } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
-  AlertCircle, ArrowLeft, Check, Copy, Download, FilePlus, Globe2, History, Link2, Lock, MoreHorizontal, Pin, PinOff, MonitorUp, Printer, Send, Share2, Trash2, Upload, Users,
+  AArrowDown, AArrowUp, ArrowDownAZ, ArrowUpDown, ArrowUpZA, Bold, BookOpen, Pencil, ClipboardPaste, Columns2, Eraser, Filter, FilterX, Grid3x3, Hash, Italic, Keyboard, List, ListChecks, ListOrdered, Maximize, MessageSquarePlus, Minus, PanelTop, Percent, Redo2, RefreshCw, RussianRuble, Scissors, Search, Settings2, Sigma, Strikethrough, Subscript, Superscript, Table, TableCellsMerge, TableCellsSplit, Underline, Undo2,
+  AlertCircle, ArrowLeft, Check, Copy, Download, FilePlus, Globe2, History, Link2, Lock, Mail, MessageSquare, Star, MoreHorizontal, Pin, PinOff, MonitorUp, Printer, Send, Share2, Trash2, Upload, Users,
 } from 'lucide-react';
+import { useMailConnected, writeMail } from '@/features/mail';
 import { recordVisit } from '@/features/spotlight/history';
-import { absolute, links } from '@/shared/navigation/routes';
+import { absolute, links, paths } from '@/shared/navigation/routes';
+import { navigate } from '@/shared/navigation/navigate';
 import { askConfirm, Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
 import { workspaceApi } from './api';
 import { KINDS } from './kinds';
 import { NoteEditor } from './editors/NoteEditor';
-import type { EditorProps } from './editors/types';
+import type { CommentsBridge, EditorProps } from './editors/types';
 import { downloadBase64, downloadBlob, downloadText, markdownHtml, printHtml, safeFileName, workbookHtml, XLSX_MIME } from './lib/exportDoc';
 import { markdownToSnapshot, parseSnapshot, snapshotToMarkdown } from './lib/docSnapshot';
 import { tabsAsSections } from './lib/noteTabs';
 import { IMPORT_RULES, importFile } from './lib/importFile';
 import { canSticky, forgetSticky, openSticky, stickyLabel } from './lib/sticky';
 import { PresenceStack } from './PresenceStack';
+import { CommentsPanel } from './CommentsPanel';
+import { MenuBar, type BarMenu } from './MenuBar';
 import { SendToChatSheet } from './SendToChatSheet';
 import { usePresence } from './usePresence';
+import { useComments } from './useComments';
 import { useCursors } from './useCursors';
 import { VersionsSheet } from './VersionsSheet';
 import { ShareDialog } from './ShareDialog';
@@ -70,6 +76,7 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen, windowC
   // Кому открыт материал: свои доступы, отделы и пришедшие от папки выше — чтобы подпись не говорила «Только я» при чужом доступе.
   const [reach, setReach] = useState<{ count: number; names: string[] } | null>(null);
   const [sendToChat, setSendToChat] = useState(false);
+  const mailConnected = useMailConnected();
   const [versionsOpen, setVersionsOpen] = useState(false);
   const importInput = useRef<HTMLInputElement>(null);
   const importMode = useRef<'replace' | 'append'>('replace');
@@ -93,6 +100,30 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen, windowC
   // Курсоры коллег, как в Google Docs.
   const { cursors, send: sendCursor } = useCursors('token' in source ? null : String(source.id), viewers);
 
+  // Комментарии (документ и таблица, не по ссылке): панель справа, привязка — к выделению или ячейке редактора.
+  const commentable = !shared && item && (item.kind === 'document' || item.kind === 'table');
+  const comments = useComments(commentable ? item.id : null);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const commentsBridge = useRef<CommentsBridge | null>(null);
+  const fileMenuAnchor = useRef<HTMLElement | null>(null);
+  const titleRef = useRef<HTMLInputElement>(null); // кнопка «Файл» — от неё открывается «Скачать…»
+  const getCommentAnchor = useCallback(() => commentsBridge.current?.anchor() ?? null, []);
+  const jumpToComment = useCallback((anchor: Parameters<CommentsBridge['jump']>[0]) => commentsBridge.current?.jump(anchor), []);
+  useEffect(() => { setCommentsOpen(false); }, [item?.id]);
+  // Новый комментарий (контекстное меню, «Вставка → Комментарий», Ctrl+Alt+M): панель и сразу поле ввода.
+  const [commentFocus, setCommentFocus] = useState(0);
+  const addComment = useCallback(() => { setCommentsOpen(true); setCommentFocus((n) => n + 1); }, []);
+  useEffect(() => {
+    if (!commentable) return undefined;
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.altKey && event.code === 'KeyM') { event.preventDefault(); addComment(); }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [commentable, addComment]);
+  // Таблица: ячейки с открытыми ветками — отметка-уголок на листе.
+  const commentCells = useMemo(() => comments.open.flatMap((t) => (t.root.anchor && 'kind' in t.root.anchor && t.root.anchor.kind === 'cell' ? [{ sheet: t.root.anchor.sheet, cell: t.root.anchor.cell }] : [])), [comments.open]);
+
   // История посещений для поиска: открытый материал попадает в «Недавние».
   const visitTitle = useRef('');
   visitTitle.current = item?.title || '';
@@ -102,6 +133,15 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen, windowC
     if (!visitId || !visitKind) return;
     recordVisit({ id: visitId, kind: 'office', sub: visitKind, title: visitTitle.current || KINDS[visitKind].untitled, subtitle: KINDS[visitKind].plural, path: links.office(visitKind, visitId) });
   }, [visitId, visitKind]);
+
+  // Отдельное окно материала: название документа — заголовок окна (в панели задач окна не называются все «Шар»).
+  const windowTitle = windowControls && item ? item.title || KINDS[item.kind].untitled : '';
+  useEffect(() => {
+    if (!windowTitle) return undefined;
+    const previous = document.title;
+    document.title = windowTitle;
+    return () => { document.title = previous; };
+  }, [windowTitle]);
 
   // Ctrl+P печатает открытый материал, а не всё окно приложения. В фазе захвата — раньше, чем редактор
   // (Univer) успеет забрать сочетание себе. Сама печать — ниже, после загрузки материала (printRef).
@@ -265,6 +305,137 @@ ${added}`;
     } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось загрузить', 'error'); } finally { setImporting(false); }
   }
 
+  /** Через подключённую почту: тема — название, в тексте ссылка; адресата выбирают в письме. */
+  function sendByMail() {
+    const title = item!.title || KINDS[item!.kind].untitled;
+    writeMail({ subject: title, body: `${title}
+${absolute(links.office(item!.kind, item!.id))}` });
+  }
+
+  // Строка меню, как в Google Документах и Таблицах. Команды правки и форматирования выполняет сам редактор.
+  const editorDo = (commandId: string) => () => {
+    if (!commentsBridge.current?.exec(commandId)) showToast('Эта команда здесь пока недоступна', 'info');
+  };
+  const barMenus = (): BarMenu[] => {
+    const isDoc = item.kind === 'document';
+    const mac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
+    const mod = mac ? '⌘' : 'Ctrl+';
+    const can = (id: string) => Boolean(commentsBridge.current?.has(id));
+    // Пункт-команда редактора: недоступная в этой сборке или в режиме просмотра — серая, как у Google.
+    const cmd = (label: string, id: string, icon: React.ReactNode = <span className="nws-bar-noicon" />, hint?: string) => ({ label, icon, hint, onSelect: editorDo(id), disabled: readOnly || !can(id) });
+    const comment = { label: 'Комментарий', onSelect: addComment, icon: <MessageSquarePlus size={15} />, hint: mac ? '⌥⌘M' : 'Ctrl+Alt+M' };
+    const menus: BarMenu[] = [
+      { id: 'file', label: 'Файл', items: [
+        { label: 'Поделиться…', onSelect: () => setShare(true), icon: <Share2 size={15} /> },
+        { label: 'Отправить в чат', onSelect: () => setSendToChat(true), icon: <Send size={15} /> },
+        ...(mailConnected ? [{ label: 'Отправить по почте', onSelect: sendByMail, icon: <Mail size={15} /> }] : []),
+        { label: 'Скопировать ссылку', onSelect: () => void copyLink(), icon: <Link2 size={15} /> },
+        'sep',
+        ...(!readOnly ? [{ label: 'Переименовать', onSelect: () => { titleRef.current?.focus(); titleRef.current?.select(); }, icon: <Pencil size={15} /> }] : []),
+        { label: 'Создать копию', onSelect: () => void duplicate(), icon: <Copy size={15} /> },
+        { label: 'Скачать…', onSelect: () => { if (fileMenuAnchor.current) setDownloadMenu({ element: fileMenuAnchor.current, align: 'start' }); }, icon: <Download size={15} /> },
+        ...(!readOnly ? [{ label: 'Импортировать (заменить)…', onSelect: () => pickImport('replace'), icon: <Upload size={15} /> }] : []),
+        ...(!readOnly && isDoc ? [{ label: 'Добавить из файла в конец…', onSelect: () => pickImport('append'), icon: <FilePlus size={15} /> }] : []),
+        'sep',
+        { label: 'История версий', onSelect: () => setVersionsOpen(true), icon: <History size={15} /> },
+        ...(canSticky(item.kind) ? [{ label: stickyLabel(item.kind), onSelect: () => void openSticky(item.id, null, { kind: item.kind }), icon: <MonitorUp size={15} /> }] : []),
+        ...(canPrint ? ['sep' as const, { label: 'Печать', onSelect: () => void print(), hint: `${mod}P`, icon: <Printer size={15} /> }] : []),
+        ...(item.isOwner ? ['sep' as const, { label: 'Удалить', onSelect: () => void remove(), tone: 'danger' as const, icon: <Trash2 size={15} /> }] : []),
+      ] },
+      { id: 'edit', label: 'Правка', items: [
+        cmd('Отменить', 'univer.command.undo', <Undo2 size={15} />, `${mod}Z`),
+        cmd('Повторить', 'univer.command.redo', <Redo2 size={15} />, mac ? '⇧⌘Z' : 'Ctrl+Y'),
+        'sep',
+        cmd('Вырезать', 'univer.command.cut', <Scissors size={15} />, `${mod}X`),
+        cmd('Скопировать', 'univer.command.copy', <Copy size={15} />, `${mod}C`),
+        cmd('Вставить', 'univer.command.paste', <ClipboardPaste size={15} />, `${mod}V`),
+        ...(isDoc ? [] : [
+          cmd('Вставить только значения', 'sheet.command.paste-value', <ClipboardPaste size={15} />, mac ? '⇧⌘V' : 'Ctrl+Shift+V'),
+          cmd('Вставить только формат', 'sheet.command.paste-format', <ClipboardPaste size={15} />),
+        ]),
+        'sep',
+        cmd('Найти и заменить', 'ui.operation.open-find-dialog', <Search size={15} />, `${mod}H`),
+      ] },
+      { id: 'view', label: 'Вид', items: [
+        { label: commentsOpen ? 'Скрыть комментарии' : 'Комментарии', onSelect: () => setCommentsOpen((v) => !v), icon: <MessageSquare size={15} /> },
+        ...(isDoc ? [] : [cmd('Сетка', 'sheet.command.toggle-gridlines', <Grid3x3 size={15} />)]),
+        'sep',
+        { ...cmd('Полный экран', 'base-ui.operation.toggle-fullscreen', <Maximize size={15} />), disabled: !can('base-ui.operation.toggle-fullscreen') },
+      ] },
+      { id: 'insert', label: 'Вставка', items: isDoc ? [
+        cmd('Таблица', 'doc.operation.create-table', <Table size={15} />),
+        cmd('Горизонтальная линия', 'doc.command.horizontal-line', <Minus size={15} />),
+        cmd('Разрыв колонки', 'docs.operation.insert-column-break', <Columns2 size={15} />),
+        cmd('Колонтитулы', 'doc.command.open-header-footer-panel', <PanelTop size={15} />),
+        'sep',
+        cmd('Ссылка', 'doc.operation.show-hyper-link-edit-popup', <Link2 size={15} />, `${mod}K`),
+        'sep',
+        comment,
+      ] : [
+        cmd('Функция', 'formula-ui.operation.more-functions', <Sigma size={15} />),
+        cmd('Ссылка', 'sheet.operation.insert-hyper-link-toolbar', <Link2 size={15} />, `${mod}K`),
+        'sep',
+        comment,
+      ] },
+      { id: 'format', label: 'Формат', items: isDoc ? [
+        cmd('Жирный', 'doc.command.set-inline-format-bold', <Bold size={15} />, `${mod}B`),
+        cmd('Курсив', 'doc.command.set-inline-format-italic', <Italic size={15} />, `${mod}I`),
+        cmd('Подчёркнутый', 'doc.command.set-inline-format-underline', <Underline size={15} />, `${mod}U`),
+        cmd('Зачёркнутый', 'doc.command.set-inline-format-strikethrough', <Strikethrough size={15} />),
+        cmd('Надстрочный', 'doc.command.set-inline-format-superscript', <Superscript size={15} />),
+        cmd('Подстрочный', 'doc.command.set-inline-format-subscript', <Subscript size={15} />),
+        'sep',
+        cmd('Нумерованный список', 'doc.command.order-list', <ListOrdered size={15} />),
+        cmd('Маркированный список', 'doc.command.bullet-list', <List size={15} />),
+        cmd('Список задач', 'doc.command.check-list', <ListChecks size={15} />),
+        'sep',
+        cmd('Параметры страницы', 'docs.operation.open-page-setting', <Settings2 size={15} />),
+        'sep',
+        cmd('Очистить форматирование', 'ui.command.clear-formatting', <Eraser size={15} />, `${mod}\\`),
+      ] : [
+        cmd('Числа…', 'sheet.operation.open.numfmt.panel', <Hash size={15} />),
+        cmd('Процент', 'sheet.command.numfmt.set.percent', <Percent size={15} />),
+        cmd('Валюта', 'sheet.command.numfmt.set.currency', <RussianRuble size={15} />),
+        cmd('Увеличить число знаков', 'sheet.command.numfmt.add.decimal.command'),
+        cmd('Уменьшить число знаков', 'sheet.command.numfmt.subtract.decimal.command'),
+        'sep',
+        cmd('Жирный', 'sheet.command.set-range-bold', <Bold size={15} />, `${mod}B`),
+        cmd('Курсив', 'sheet.command.set-range-italic', <Italic size={15} />, `${mod}I`),
+        cmd('Подчёркнутый', 'sheet.command.set-range-underline', <Underline size={15} />, `${mod}U`),
+        cmd('Зачёркнутый', 'sheet.command.set-range-stroke', <Strikethrough size={15} />),
+        'sep',
+        cmd('Увеличить размер шрифта', 'sheet.command.set-range-font-increase', <AArrowUp size={15} />),
+        cmd('Уменьшить размер шрифта', 'sheet.command.set-range-font-decrease', <AArrowDown size={15} />),
+        'sep',
+        cmd('Объединить ячейки', 'sheet.command.add-worksheet-merge-all', <TableCellsMerge size={15} />),
+        cmd('Отменить объединение', 'sheet.command.remove-worksheet-merge', <TableCellsSplit size={15} />),
+        'sep',
+        cmd('Очистить форматирование', 'ui.command.clear-formatting', <Eraser size={15} />, `${mod}\\`),
+      ] },
+    ];
+    if (!isDoc) {
+      menus.push({ id: 'data', label: 'Данные', items: [
+        cmd('Сортировать A → Я', 'sheet.command.sort-range-asc', <ArrowDownAZ size={15} />),
+        cmd('Сортировать Я → A', 'sheet.command.sort-range-desc', <ArrowUpZA size={15} />),
+        cmd('Расширенная сортировка…', 'sheet.command.sort-range-custom', <ArrowUpDown size={15} />),
+        'sep',
+        cmd('Создать или удалить фильтр', 'sheet.command.smart-toggle-filter', <Filter size={15} />),
+        cmd('Сбросить условия фильтра', 'sheet.command.clear-filter-criteria', <FilterX size={15} />),
+        cmd('Пересчитать фильтр', 'sheet.command.re-calc-filter', <RefreshCw size={15} />),
+        'sep',
+        cmd('Защитить диапазон', 'sheet.command.add-range-protection-from-toolbar', <Lock size={15} />),
+      ] });
+    }
+    menus.push({ id: 'tools', label: 'Инструменты', items: [
+      { ...cmd('Поиск по функциям', 'ui.operation.open-feature-search', <Search size={15} />), disabled: !can('ui.operation.open-feature-search') },
+      { ...cmd('Быстрые клавиши', 'base-ui.operation.toggle-shortcut-panel', <Keyboard size={15} />), disabled: !can('base-ui.operation.toggle-shortcut-panel') },
+    ] });
+    menus.push({ id: 'help', label: 'Справка', items: [
+      { label: 'Инструкция по Шару', onSelect: () => navigate(paths.guide), icon: <BookOpen size={15} /> },
+    ] });
+    return menus;
+  };
+
   async function copyLink() {
     try { await navigator.clipboard.writeText(absolute(links.office(item!.kind, item!.id))); showToast('Ссылка скопирована', 'success'); } catch { showToast('Не удалось скопировать', 'error'); }
   }
@@ -279,22 +450,40 @@ ${added}`;
 
   return (
     <div className="nws-item" data-kind={item.kind}>
-      <header className="nws-head">
+      <header className="nws-head" data-layout={commentable ? 'gdocs' : undefined}>
         {onBack && <button type="button" className="nx-icon-btn nws-back" onClick={onBack} aria-label="К списку"><ArrowLeft size={18} /></button>}
-        <span className="nws-kind-icon" style={{ '--a': info.tint[0], '--b': info.tint[1] } as React.CSSProperties} aria-hidden="true"><info.icon size={16} /></span>
-        <input
-          className="nws-title"
-          value={item.title}
-          readOnly={readOnly}
-          placeholder={info.untitled}
-          maxLength={200}
-          onChange={(e) => session.setTitle(e.target.value)}
-          onBlur={() => onChanged?.()}
-          aria-label="Название"
-        />
+        <span className="nws-kind-icon" style={{ '--a': info.tint[0], '--b': info.tint[1] } as React.CSSProperties} aria-hidden="true"><info.icon size={commentable ? 20 : 16} /></span>
+        {/* Документ и таблица — как в Google: название, звёздочка и статус в первой строке, под ними строка меню. */}
+        {commentable ? (
+          <div className="nws-head-main">
+            <div className="nws-head-titlerow">
+              <input ref={titleRef} className="nws-title" value={item.title} readOnly={readOnly} placeholder={info.untitled} maxLength={200}
+                onChange={(e) => session.setTitle(e.target.value)} onBlur={() => onChanged?.()} aria-label="Название" />
+              {item.isOwner && (
+                <button type="button" className="nws-star" aria-pressed={item.pinned} title={item.pinned ? 'Открепить' : 'Закрепить сверху'} aria-label={item.pinned ? 'Открепить' : 'Закрепить сверху'}
+                  onClick={() => void patch({ pinned: !item.pinned })}><Star size={16} /></button>
+              )}
+              {status_}
+            </div>
+            <MenuBar menus={barMenus} onDownloadAnchor={(el) => { fileMenuAnchor.current = el; }} />
+          </div>
+        ) : (
+          <input
+            className="nws-title"
+            value={item.title}
+            readOnly={readOnly}
+            placeholder={info.untitled}
+            maxLength={200}
+            onChange={(e) => session.setTitle(e.target.value)}
+            onBlur={() => onChanged?.()}
+            aria-label="Название"
+          />
+        )}
+        {/* В окне материала название не растягивается (свободное место — «ручка» окна), поэтому кнопки прижимаем к правому краю распоркой. */}
+        {windowControls && <span className="nws-sticky-fill" aria-hidden="true" />}
         <PresenceStack viewers={viewers} ownTips />
-        {status_}
-        {!shared && item.isOwner && (
+        {!commentable && status_}
+        {!shared && item.isOwner && !commentable && (
           <button type="button" className="nws-access" onClick={() => setShare(true)} title={accessLevel === 'all' ? 'Видят все в Шаре' : reach?.count ? `Доступ: ${reach.names.join(', ')}` : 'Видите только вы и те, кому выдан доступ'}>
             {accessLevel === 'private' && reach?.count ? <Users size={13} aria-hidden="true" /> : <AccessIcon size={13} aria-hidden="true" />} <span className="nws-label">{accessLevel === 'all' ? 'Все в Шаре' : reach?.count ? `Доступ: ${reach.count}` : 'Только я'}</span>
           </button>
@@ -305,12 +494,18 @@ ${added}`;
             <History size={17} />
           </button>
         )}
-        {canPrint && (
+        {commentable && (
+          <button type="button" className="nx-icon-btn nws-comment-btn" aria-label="Комментарии" title="Комментарии" aria-pressed={commentsOpen} onClick={() => setCommentsOpen((v) => !v)}>
+            <MessageSquare size={17} />
+            {comments.open.length > 0 && <span className="nws-comment-count" aria-hidden="true">{comments.open.length}</span>}
+          </button>
+        )}
+        {canPrint && !commentable && (
           <button type="button" className="nx-icon-btn" aria-label="Печать" title="Печать (Ctrl+P)" onClick={() => void print()}>
             <Printer size={17} />
           </button>
         )}
-        {item.kind !== 'presentation' && (
+        {item.kind !== 'presentation' && !commentable && (
           <button type="button" className="nx-icon-btn" aria-label="Скачать" title="Скачать" aria-haspopup="menu" aria-expanded={Boolean(downloadMenu)} onClick={(e) => setDownloadMenu({ element: e.currentTarget, align: 'end' })}>
             <Download size={17} />
           </button>
@@ -325,7 +520,7 @@ ${added}`;
         {!shared && (
           <button type="button" className="nx-primary nws-share-btn" onClick={() => setShare(true)} title="Поделиться"><Share2 size={14} aria-hidden="true" /> <span>Поделиться</span></button>
         )}
-        {!shared && (
+        {!shared && !commentable && (
           <button type="button" className="nx-icon-btn" aria-label="Ещё" aria-haspopup="menu" aria-expanded={Boolean(menu)} onClick={(e) => setMenu({ element: e.currentTarget, align: 'end' })}>
             <MoreHorizontal size={18} />
           </button>
@@ -341,10 +536,15 @@ ${added}`;
         </div>
       )}
 
-      <div className="nws-editor">
-        <Suspense fallback={<div className="nws-loading"><Spinner size={24} label="Загружаю редактор" /></div>}>
-          <Editor content={item.content} onContent={session.setContent} readOnly={readOnly} loadKey={loadKey} title={item.title} visible cursors={cursors} onCursor={sendCursor} live={session.live} />
-        </Suspense>
+      <div className="nws-main">
+        <div className="nws-editor">
+          <Suspense fallback={<div className="nws-loading"><Spinner size={24} label="Загружаю редактор" /></div>}>
+            <Editor content={item.content} onContent={session.setContent} readOnly={readOnly} loadKey={loadKey} title={item.title} visible cursors={cursors} onCursor={sendCursor} live={session.live} commentsBridge={commentsBridge} commentCells={commentCells} onAddComment={commentable ? addComment : undefined} />
+          </Suspense>
+        </div>
+        {commentable && commentsOpen && (
+          <CommentsPanel comments={comments} kind={item.kind as 'document' | 'table'} canModerate={item.isOwner} getAnchor={getCommentAnchor} onJump={jumpToComment} focusTick={commentFocus} onClose={() => setCommentsOpen(false)} />
+        )}
       </div>
 
       {!shared && (
@@ -386,6 +586,7 @@ ${added}`;
             </MenuItem>
           )}
           <MenuItem icon={<Send size={15} />} onSelect={() => { setMenu(null); setSendToChat(true); }}>Отправить в чат</MenuItem>
+          {mailConnected && <MenuItem icon={<Mail size={15} />} onSelect={() => { setMenu(null); sendByMail(); }}>Отправить по почте</MenuItem>}
           {canSticky(item.kind) && <MenuItem icon={<MonitorUp size={15} />} onSelect={() => { setMenu(null); void openSticky(item.id, null, { kind: item.kind }); }}>{stickyLabel(item.kind)}</MenuItem>}
           <MenuItem icon={<Link2 size={15} />} onSelect={() => { setMenu(null); void copyLink(); }}>Скопировать ссылку на материал</MenuItem>
           <MenuItem icon={<Copy size={15} />} onSelect={() => { setMenu(null); void duplicate(); }}>Сделать копию</MenuItem>

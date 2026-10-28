@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
 import { ChevronsDownUp, ChevronsUpDown, Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, UserPlus, LayoutGrid, Lock, MonitorUp, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
 import { useShellOptions } from '@/shared/shell/ShellContext';
@@ -77,14 +77,17 @@ function plainSnippet(text: string) {
     .trim();
 }
 
-function ItemRow({ item, active, terms, snippet, onOpen, onMenu }: {
+/** Строка не перерисовывается, пока не изменились её материал, выбранность и подсветка: обработчики снаружи стабильны. */
+const ItemRow = memo(function ItemRow({ item, active, terms, snippet, onOpen, onMenu, renaming, onRename }: {
   item: Item; active: boolean;
   /** Поиск: слова для подсветки и кусок текста у совпадения (вместо начала материала). */
   terms?: string[]; snippet?: string;
-  onOpen: () => void; onMenu: (anchor: MenuAnchor) => void;
+  onOpen: (item: Item) => void; onMenu: (item: Item, anchor: MenuAnchor) => void;
+  /** Переименование прямо в строке (из меню строки): Enter — сохранить, Esc — отменить. */
+  renaming?: boolean; onRename?: (item: Item, title: string | null) => void;
 }) {
   const info = KINDS[item.kind];
-  const press = useLongPress((x, y) => onMenu({ x, y }));
+  const press = useLongPress((x, y) => onMenu(item, { x, y }));
   const AccessIcon = item.accessLevel === 'all' ? Globe2 : Lock;
   const mine = item.ownerId === myId();
   return (
@@ -94,18 +97,38 @@ function ItemRow({ item, active, terms, snippet, onOpen, onMenu }: {
       data-flip={`i${item.id}`}
       aria-current={active ? 'true' : undefined}
       data-color={item.kind === 'note' ? item.meta.color || undefined : undefined}
-      onClick={onOpen}
+      onClick={() => onOpen(item)}
+      onPointerEnter={() => preloadEditor(item.kind)}
       // Заметку можно вытащить за пределы окна — она станет окном на рабочем столе (только в приложении для компьютера).
       // Строку можно перетащить в папку; заметку — ещё и за пределы окна: она станет окном на рабочем столе.
       draggable
       onDragStart={(e) => { e.dataTransfer.setData(ITEM_DRAG, item.id); e.dataTransfer.setData('text/plain', item.title || info.untitled); e.dataTransfer.effectAllowed = 'copyMove'; }}
       onDragEnd={(e) => { if (canSticky(item.kind)) dragNoteOut(e, item.id, item.kind); }}
-      onContextMenu={(e) => { e.preventDefault(); onMenu({ x: e.clientX, y: e.clientY }); }}
+      onContextMenu={(e) => { e.preventDefault(); onMenu(item, { x: e.clientX, y: e.clientY }); }}
       {...press}
     >
       <span className="nws-kind-icon" style={{ '--a': info.tint[0], '--b': info.tint[1] } as React.CSSProperties} aria-hidden="true"><info.icon size={16} /></span>
       <span className="nws-row-text">
-        <span className="nws-row-title">{item.isNew && <span className="nws-new">Новое</span>}<Highlight text={item.title || info.untitled} terms={terms ?? []} /></span>
+        {renaming ? (
+          <input
+            className="nws-row-rename"
+            defaultValue={item.title}
+            placeholder={info.untitled}
+            maxLength={200}
+            autoFocus
+            aria-label="Новое название"
+            onFocus={(e) => e.currentTarget.select()}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === 'Enter') e.currentTarget.blur();
+              if (e.key === 'Escape') { e.currentTarget.value = item.title; e.currentTarget.blur(); }
+            }}
+            onBlur={(e) => { const v = e.currentTarget.value.trim(); onRename?.(item, v && v !== item.title ? v : null); }}
+          />
+        ) : (
+          <span className="nws-row-title">{item.isNew && <span className="nws-new">Новое</span>}<Highlight text={item.title || info.untitled} terms={terms ?? []} /></span>
+        )}
         <span className="nws-row-snippet" data-hit={snippet ? 'true' : undefined}>
           <Highlight text={item.kind === 'note' ? plainSnippet(snippet || item.snippet) : (snippet || item.snippet)} terms={terms ?? []} />
         </span>
@@ -120,6 +143,29 @@ function ItemRow({ item, active, terms, snippet, onOpen, onMenu }: {
       </span>
     </button>
   );
+});
+
+/** Редакторы грузятся отдельными кусками (Univer — несколько мегабайт): подтягиваем кусок, как только человек навёл на
+ *  материал, — к клику он уже в кэше. Заметка и презентация лёгкие, им не нужно. */
+const preloaded = new Set<string>();
+function preloadEditor(kind: Kind) {
+  if (preloaded.has(kind)) return;
+  if (kind === 'document') { preloaded.add(kind); void import('./editors/DocEditor'); }
+  else if (kind === 'table') { preloaded.add(kind); void import('./editors/SheetEditor'); }
+}
+
+/** Новый список с сервера поверх старого: у строк без изменений остаётся прежний объект — React их не трогает. */
+function reuseItems(prev: Item[] | null, next: Item[]): Item[] {
+  if (!prev) return next;
+  const byId = new Map(prev.map((i) => [i.id, i]));
+  let same = prev.length === next.length;
+  const merged = next.map((item, index) => {
+    const old = byId.get(item.id);
+    const keep = old && JSON.stringify(old) === JSON.stringify(item) ? old : item;
+    if (keep !== prev[index]) same = false;
+    return keep;
+  });
+  return same ? prev : merged;
 }
 
 export default function OfficeScreen() {
@@ -210,14 +256,18 @@ export default function OfficeScreen() {
   // На телефоне открытый материал занимает весь экран: капсулу меню убираем.
   useShellOptions({ navHidden: narrow && Boolean(openId), onReselect: () => setParams(filter === 'all' ? {} : { kind: filter }) });
 
+  const lastLoad = useRef(0);
+  const wasNew = useRef(new Set<string>());
   const load = useCallback(async () => {
     const mine = ++reqId.current;
     try {
       // Папки грузим вместе со списком; старый сервер без папок — просто без них.
       const [list, folderList] = await Promise.all([workspaceApi.list(null, '', false, 1000), workspaceApi.folders().catch(() => null)]);
       if (mine !== reqId.current) return;
-      setItems(list);
-      if (folderList) setFolders(folderList);
+      lastLoad.current = Date.now();
+      for (const i of list) if (i.isNew) wasNew.current.add(i.id);
+      setItems((cur) => reuseItems(cur, list));
+      if (folderList) setFolders((cur) => (JSON.stringify(cur) === JSON.stringify(folderList) ? cur : folderList));
       setError('');
     } catch (cause) {
       if (mine === reqId.current) setError(cause instanceof Error ? cause.message : 'Не удалось загрузить');
@@ -248,7 +298,9 @@ export default function OfficeScreen() {
 
   // Вернулись в окно — список мог измениться (коллега поделился, правил с другого устройства).
   useEffect(() => {
-    const onFocus = () => { if (document.visibilityState === 'visible') void load(); };
+    // Окно получает и focus, и visibilitychange разом — одного чтения хватает; чаще раза в 5 с не перечитываем
+    // (события коллег и так обновляют список сами).
+    const onFocus = () => { if (document.visibilityState === 'visible' && Date.now() - lastLoad.current > 5000) void load(); };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onFocus);
     return () => { window.removeEventListener('focus', onFocus); document.removeEventListener('visibilitychange', onFocus); };
@@ -324,6 +376,14 @@ export default function OfficeScreen() {
     }
   }
 
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const renameRow = useCallback(async (item: Item, title: string | null) => {
+    setRenamingId(null);
+    if (!title) return;
+    setItems((cur) => cur?.map((i) => (i.id === item.id ? { ...i, title } : i)) ?? cur);
+    try { await workspaceApi.patch(item.id, { title }); } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось переименовать', 'error'); void load(); }
+  }, [load]);
+
   async function togglePin(item: Item) {
     try { await workspaceApi.patch(item.id, { pinned: !item.pinned }); void load(); } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не получилось', 'error'); }
   }
@@ -341,7 +401,15 @@ export default function OfficeScreen() {
 
   // Открыл новое — бейдж снимается сразу (сервер отметил это при открытии), строка встанет на место при обновлении.
   useEffect(() => {
-    if (openId) setItems((cur) => (cur?.some((i) => i.id === openId && i.isNew) ? cur.map((i) => (i.id === openId ? { ...i, isNew: false } : i)) : cur));
+    if (openId) {
+      // Бейдж снимается сразу, а место строки — нет (см. wasNew): иначе открытый материал прыгал бы из «Новых» вниз списка.
+      // Запоминаем только то, что и правда было «новым»: обычный материал остаётся в своей папке.
+      setItems((cur) => {
+        if (!cur?.some((i) => i.id === openId && i.isNew)) return cur;
+        wasNew.current.add(openId);
+        return cur.map((i) => (i.id === openId ? { ...i, isNew: false } : i));
+      });
+    }
   }, [openId, items]);
   // Материал из папки показывается в своей папке (новое — ещё и сверху), и в поиске тоже: дерево не рассыпается.
   const foldered = useMemo(() => {
@@ -377,19 +445,21 @@ export default function OfficeScreen() {
   }, [searching, folders, childFolders, terms, items, hits]);
   const listed = useMemo(() => (search ? (items || []).filter((i) => search.shown.has(i.id)) : items || []), [items, search]);
   const byRank = (a: Item, b: Item) => (hits?.order.get(a.id) ?? 1e6) - (hits?.order.get(b.id) ?? 1e6);
-  const fresh = useMemo(() => (search ? [] : listed.filter((i) => i.isNew)), [listed, search]);
-  const pinned = useMemo(() => (search ? [] : listed.filter((i) => i.pinned && !i.isNew && !foldered(i))), [listed, foldered, search]);
+  // «Новое» держит место в верхней группе, пока человек в «Офисе»: открыл материал — бейдж пропал, а строки не разъезжаются.
+  const isFresh = (i: Item) => i.isNew || wasNew.current.has(i.id);
+  const fresh = useMemo(() => (search ? [] : listed.filter(isFresh)), [listed, search]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pinned = useMemo(() => (search ? [] : listed.filter((i) => i.pinned && !isFresh(i) && !foldered(i))), [listed, foldered, search]); // eslint-disable-line react-hooks/exhaustive-deps
   // Вне папок — ручной порядок: ещё не расставленные (новые) сверху, как пришли с сервера (свежие выше), за ними — расставленные.
   // В поиске — по совпадению: лучшее выше.
   const rest = useMemo(() => {
     if (search) return listed.filter((i) => !foldered(i)).sort(byRank);
-    const loose = listed.filter((i) => !i.pinned && !i.isNew && !foldered(i));
+    const loose = listed.filter((i) => !i.pinned && !isFresh(i) && !foldered(i));
     const placed = loose.filter((i) => i.rootPosition != null).sort((a, b) => (a.rootPosition ?? 0) - (b.rootPosition ?? 0));
     return [...loose.filter((i) => i.rootPosition == null), ...placed];
   }, [listed, foldered, search]); // eslint-disable-line react-hooks/exhaustive-deps
   const byFolder = useMemo(() => {
     const map = new Map<string, Item[]>();
-    for (const i of listed) if (foldered(i) && (search || !i.isNew)) map.set(i.folderId!, [...(map.get(i.folderId!) || []), i]);
+    for (const i of listed) if (foldered(i) && (search || !isFresh(i))) map.set(i.folderId!, [...(map.get(i.folderId!) || []), i]);
     // Ручной порядок; ещё не расставленные — в конце, свежие выше. В поиске — найденное по совпадению.
     const rank = (i: Item) => (i.folderPosition ?? Number.POSITIVE_INFINITY);
     for (const list of map.values()) list.sort(search ? byRank : (a, b) => (rank(a) - rank(b)) || b.updatedAt.localeCompare(a.updatedAt));
@@ -534,6 +604,12 @@ export default function OfficeScreen() {
   const importing = busy.startsWith('import');
   const importRule = IMPORT_RULES[filter];
 
+  // Обработчики строк стабильны (свежие select и filter — через ref), иначе memo у ItemRow ничего бы не давал.
+  const rowActions = useRef({ open: (_item: Item) => {} });
+  rowActions.current.open = (item) => select(item.id, filter === 'all' ? 'all' : item.kind);
+  const openRow = useCallback((item: Item) => rowActions.current.open(item), []);
+  const menuRow = useCallback((item: Item, anchor: MenuAnchor) => setRowMenu({ item, anchor }), []);
+
   const renderRow = (item: Item) => (
     <ItemRow
       key={item.id}
@@ -541,8 +617,10 @@ export default function OfficeScreen() {
       active={item.id === openId}
       terms={search ? terms : undefined}
       snippet={search ? hits?.snippet.get(item.id) : undefined}
-      onOpen={() => select(item.id, filter === 'all' ? 'all' : item.kind)}
-      onMenu={(anchor) => setRowMenu({ item, anchor })}
+      onOpen={openRow}
+      onMenu={menuRow}
+      renaming={renamingId === item.id}
+      onRename={renameRow}
     />
   );
 
@@ -765,6 +843,7 @@ export default function OfficeScreen() {
         <Menu anchor={rowMenu.anchor} label="Действия" onClose={() => setRowMenu(null)}>
           <MenuItem onSelect={() => { const i = rowMenu.item; setRowMenu(null); select(i.id, filter === 'all' ? 'all' : i.kind); }}>Открыть</MenuItem>
           <MenuItem icon={<Send size={15} />} onSelect={() => { const i = rowMenu.item; setRowMenu(null); setSendItem(i); }}>Отправить в чат</MenuItem>
+          {(rowMenu.item.isOwner || rowMenu.item.canEdit) && <MenuItem icon={<Pencil size={15} />} onSelect={() => { const i = rowMenu.item; setRowMenu(null); setRenamingId(i.id); }}>Переименовать</MenuItem>}
           <MenuItem icon={<FolderInput size={15} />} onSelect={() => { const { item, anchor } = rowMenu; setRowMenu(null); setMoveMenu({ item, anchor }); }}>Переместить в папку…</MenuItem>
           {canSticky(rowMenu.item.kind) && (
             <MenuItem icon={<MonitorUp size={15} />} onSelect={() => { const i = rowMenu.item; setRowMenu(null); void openSticky(i.id, null, { kind: i.kind }); }}>{stickyLabel(rowMenu.item.kind)}</MenuItem>

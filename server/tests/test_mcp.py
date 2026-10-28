@@ -85,7 +85,7 @@ def test_protocol_and_tools_follow_access_level(client, anna):
     note = client.post("/api/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers={"Authorization": f"Bearer {token}"})
     assert note.status_code == 202
     names = {t["name"] for t in _rpc(client, token, "tools/list").json()["result"]["tools"]}
-    assert names == {"list_items", "list_folders", "read_item"}
+    assert names == {"list_items", "list_folders", "read_item", "list_comments"}
     denied = _call(client, token, "create_note", title="x", markdown="y")
     assert denied["isError"] and "не открыт" in denied["content"][0]["text"]
     assert _rpc(client, token, "nope").json()["error"]["code"] == -32601
@@ -197,3 +197,18 @@ def test_key_in_the_address_for_clients_without_headers(client, anna):
     assert client.post("/api/mcp/whatever", json=body).status_code in (401, 404)     # не ключ — дальше не пускаем
     assert client.get(f"/api/mcp/{token}").status_code == 405
     assert client.get("/api/mcp/keys").status_code == 401                            # без сессии список ключей закрыт
+
+
+def test_agent_comments_on_a_document(client, anna):
+    token, _ = _key(anna)
+    doc = _ok(client, token, "create_document", title="Для комментариев", markdown="Первый абзац")
+    thread = _ok(client, token, "add_comment", id=doc["id"], text="Проверить цифры", quote="Первый абзац")
+    reply = _ok(client, token, "add_comment", id=doc["id"], text="Проверил", thread_id=thread["id"])
+    assert reply["threadId"] == thread["id"]
+    listed = _ok(client, token, "list_comments", id=doc["id"])["threads"]
+    assert listed[0]["anchor"] == {"kind": "text", "quote": "Первый абзац"} and listed[0]["replies"][0]["text"] == "Проверил"
+    _ok(client, token, "resolve_comment", id=doc["id"], thread_id=thread["id"])
+    assert _ok(client, token, "list_comments", id=doc["id"])["threads"] == []
+    assert len(_ok(client, token, "list_comments", id=doc["id"], include_resolved=True)["threads"]) == 1
+    # человек видит то же самое в Шаре
+    assert anna.get(f"/api/workspace/items/{doc['id']}/comments").json()["comments"][0]["authorName"]

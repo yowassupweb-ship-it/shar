@@ -582,7 +582,7 @@ export function excelToUniver(book: ExcelWorkbook): Partial<IWorkbookData> {
       ...(xSplit || ySplit ? { freeze: { xSplit, ySplit, startRow: ySplit, startColumn: xSplit } } : {}),
       ...(tab ? { tabColor: tab } : {}),
       ...(sheet.state === 'hidden' || sheet.state === 'veryHidden' ? { hidden: 1 } : {}),
-      ...(view?.showGridLines === false ? { showGridlines: 0 } : {}),
+      // Сетка всегда видна: у файла из Excel она часто выключена, и тогда пустые ячейки вообще без границ — в Шаре так не нужно.
     } as IWorkbookData['sheets'][string];
   }
   ex.sheetIds = ids;

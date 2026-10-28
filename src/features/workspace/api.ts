@@ -1,4 +1,4 @@
-import type { Folder, Item, Kind, LinkEntry, SharedItem, SharesState, VersionRow, VersionsState, Viewer } from './types';
+import type { Comment, CommentAnchor, Folder, Item, Kind, LinkEntry, SharedItem, SharesState, VersionRow, VersionsState, Viewer } from './types';
 
 export class WorkspaceError extends Error {
   constructor(public status: number, message: string) {
@@ -97,6 +97,14 @@ export const workspaceApi = {
     call<{ item: Item }>(`/api/workspace/items/${enc(id)}/versions/${enc(versionId)}/restore`, { method: 'POST' }).then((r) => r.item),
   presence: (id: string, state: 'join' | 'beat' | 'leave', editing: boolean) =>
     call<{ viewers: Viewer[] }>(`/api/workspace/items/${enc(id)}/presence`, { method: 'POST', json: { state, editing } }),
+
+  /** Комментарии как в Google Docs. ready = false — на сервере ещё нет таблицы (старый сервер). */
+  comments: (id: string) => call<{ comments: Comment[]; ready: boolean }>(`/api/workspace/items/${enc(id)}/comments`),
+  addComment: (id: string, body: string, anchor?: CommentAnchor | null, parentId?: string | null) =>
+    call<{ comment: Comment }>(`/api/workspace/items/${enc(id)}/comments`, { method: 'POST', json: { body, anchor: anchor ?? null, parentId: parentId ?? null } }).then((r) => r.comment),
+  changeComment: (id: string, commentId: string, patch: { body?: string; resolved?: boolean }) =>
+    call<{ comment: Comment }>(`/api/workspace/items/${enc(id)}/comments/${enc(commentId)}`, { method: 'PATCH', json: patch }).then((r) => r.comment),
+  deleteComment: (id: string, commentId: string) => call<{ ok: boolean }>(`/api/workspace/items/${enc(id)}/comments/${enc(commentId)}`, { method: 'DELETE' }),
 
   // По ссылке, без входа.
   shared: (token: string) => call<SharedResult>(`/api/share/workspace/${enc(token)}`),

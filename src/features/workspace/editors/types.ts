@@ -1,5 +1,15 @@
 import type { CursorPos, RemoteCursor } from '../useCursors';
 import type { LiveChannel } from '../live/channel';
+import type { CommentAnchor } from '../types';
+
+/** Связь панели комментариев с редактором: что сейчас выделено (для нового комментария) и переход к месту ветки. */
+export interface CommentsBridge {
+  anchor: () => CommentAnchor | null;
+  jump: (anchor: CommentAnchor) => void;
+  /** Команда редактора по имени (отменить, жирный…). false — такой команды в этой сборке нет. */
+  exec: (commandId: string) => boolean;
+  has: (commandId: string) => boolean;
+}
 /**
  * Контракт редактора вида. Редактор сам разбирает и собирает формат содержимого;
  * сессия (useItemSession) видит только строку и отвечает за сохранение.
@@ -25,4 +35,10 @@ export interface EditorProps {
    * чужие на месте. Сохраняет в базу сам канал; onContent тогда нужен только для экспорта и копирования.
    */
   live?: LiveChannel | null;
+  /** Документ и таблица кладут сюда свои функции для панели комментариев. */
+  commentsBridge?: React.MutableRefObject<CommentsBridge | null>;
+  /** Таблица: ячейки с открытыми комментариями — на них рисуется отметка-уголок. */
+  commentCells?: Array<{ sheet: string; cell: string }>;
+  /** «Комментарий» в контекстном меню редактора: открыть панель с новым комментарием к выделенному. */
+  onAddComment?: () => void;
 }
