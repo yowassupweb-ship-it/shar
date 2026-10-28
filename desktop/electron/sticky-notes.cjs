@@ -10,7 +10,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { app, BrowserWindow, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeImage, screen } = require('electron');
 
 const NOTE_SIZE = { width: 320, height: 380 };
 // Документ и таблица — рабочие окна, не «записка»: им нужно место.
@@ -19,7 +19,19 @@ const KINDS = new Set(['note', 'document', 'table']);
 const TITLES = { note: 'Заметка', document: 'Документ', table: 'Таблица' };
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
+// Значок окна по виду материала (основной значок Шара с плашкой: документ, таблица, заметка): в панели задач окно
+// документа не путается с главным окном.
+function kindIcons() {
+  const out = {};
+  for (const kind of Object.keys(TITLES)) {
+    const file = path.join(__dirname, `sticky-${kind}.png`);
+    if (fs.existsSync(file)) out[kind] = nativeImage.createFromPath(file);
+  }
+  return out;
+}
+
 function createStickyNotes({ baseUrl, preload, icon }) {
+  const icons = kindIcons();
   const windows = new Map(); // noteId → BrowserWindow
   const file = () => path.join(app.getPath('userData'), 'sticky-notes.json');
   let quitting = false;
@@ -70,7 +82,7 @@ function createStickyNotes({ baseUrl, preload, icon }) {
   /** Размер нового окна: заданный (например, «как у этой заметки») или обычный для вида материала. */
   function sizeFor(kind, opts) {
     const base = kind === 'note' ? NOTE_SIZE : WIDE_SIZE;
-    const min = kind === 'note' ? { width: 220, height: 160 } : { width: 420, height: 300 };
+    const min = kind === 'note' ? { width: 220, height: 160 } : { width: 560, height: 300 };
     const pick = (value, fallback, floor) => (Number.isFinite(value) ? Math.max(floor, Math.round(value)) : fallback);
     return { width: pick(opts && opts.width, base.width, min.width), height: pick(opts && opts.height, base.height, min.height) };
   }
@@ -106,7 +118,8 @@ function createStickyNotes({ baseUrl, preload, icon }) {
     const bounds = saved && !point ? onScreen({ ...size, ...saved }) : nextBounds(point, size);
     const win = new BrowserWindow({
       ...bounds,
-      minWidth: kind === 'note' ? 220 : 420,
+      // Документу и таблице — столько, чтобы в шапке уместились кнопки «Офиса» и кнопки окна.
+      minWidth: kind === 'note' ? 220 : 560,
       minHeight: kind === 'note' ? 160 : 300,
       frame: false,
       // Размеры — содержимого: у окна без рамки в Windows есть невидимая кромка, и внешние размеры при каждом
@@ -114,7 +127,7 @@ function createStickyNotes({ baseUrl, preload, icon }) {
       useContentSize: true,
       show: false,
       backgroundColor: '#2b2b2e',
-      icon,
+      icon: icons[kind] || icon,
       title: TITLES[kind],
       alwaysOnTop: Boolean(state.onTop[key]),
       autoHideMenuBar: true,
