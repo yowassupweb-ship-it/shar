@@ -18,7 +18,7 @@ import '@univerjs/preset-sheets-core/lib/index.css';
 import '@univerjs/preset-sheets-find-replace/lib/index.css';
 import { IRenderManagerService } from '@univerjs/engine-render';
 import { SheetSkeletonManagerService } from '@univerjs/sheets-ui';
-import { hideMissingFonts, isDarkTheme, keepEditorFill, keepFillColors, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
+import { hideMissingFonts, isDarkTheme, addLinkButton, keepEditorFill, keepFillColors, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
 import { applySnapshot, bookFromBase64, bookToBase64, excelToUniver } from '../lib/workbook';
 import type { EditorProps } from './types';
 import type { CursorPos, RemoteCursor } from '../useCursors';
@@ -156,6 +156,7 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
       presets: [UniverSheetsCorePreset({ container: mount, header: !readOnly, toolbar: !readOnly, formulaBar: !readOnly, contextMenu: !readOnly, menu: {}, ribbonType: 'classic' }), UniverSheetsFindReplacePreset(), UniverSheetsHyperLinkPreset(), UniverSheetsFilterPreset(), UniverSheetsSortPreset()],
     });
     keepFillColors();
+    if (!readOnly) addLinkButton(univerAPI, 'sheet');
     univerAPI.toggleDarkMode(isDarkTheme(theme));
     univerAPI.setTheme(univerTheme(theme));
     const workbook = univerAPI.createWorkbook(excelToUniver(book));

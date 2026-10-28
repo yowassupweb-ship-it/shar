@@ -42,6 +42,7 @@ MAX_TABLE_COLS = 50
 MAX_CHARS = 60_000
 HIDDEN = "Материал не найден или этому ключу он не открыт"
 _CELL = re.compile(r"^[A-Z]{1,3}[1-9][0-9]{0,6}$")
+_HYPERLINK_FORMULA = re.compile(r'^=\s*HYPERLINK\(\s*"([^"]+)"\s*(?:[,;]\s*"([^"]*)"\s*)?\)\s*$', re.IGNORECASE)
 
 
 class ToolError(Exception):
@@ -135,9 +136,15 @@ class Access:
         return item
 
 
+def item_url(kind: str, item_id: Any) -> str:
+    """Внутренний адрес материала в Шаре (без домена — домен у Шара меняется, а приложение открывает такую ссылку само).
+    Публичные ссылки /d/<токен>, /t/<токен> — другое: их выдаёт человек в окне «Поделиться», по id они не открываются."""
+    return f"/office?kind={kind}&id={item_id}"
+
+
 def _brief(item: dict[str, Any], access: Access) -> dict[str, Any]:
     return {
-        "id": item["id"], "kind": item["kind"], "title": item["title"] or "Без названия",
+        "id": item["id"], "kind": item["kind"], "url": item_url(item["kind"], item["id"]), "title": item["title"] or "Без названия",
         "folderId": item.get("folderId"), "folder": access.paths.get(item.get("folderId") or "", ""),
         "updatedAt": item["updatedAt"], "owner": item.get("ownerName") or "", "mine": str(item.get("ownerId")) == access.me.user_id,
         "canEdit": bool(item.get("canEdit")) and access.level >= LEVELS["edit"], "snippet": item.get("snippet") or "",
@@ -218,22 +225,64 @@ def _page(text: str, args: dict[str, Any]) -> dict[str, Any]:
 def _table_rows(content: str) -> list[dict[str, Any]]:
     from openpyxl import load_workbook
 
-    book = load_workbook(io.BytesIO(base64.b64decode(content)), read_only=True, data_only=True)
+    # Не read_only: гиперссылки ячеек в этом режиме недоступны, а агенту надо видеть, куда ведёт ячейка.
+    book = load_workbook(io.BytesIO(base64.b64decode(content)), data_only=True)
     sheets = []
     for sheet in book.worksheets:
         rows: list[list[Any]] = []
-        for row in sheet.iter_rows(max_row=MAX_TABLE_ROWS, max_col=MAX_TABLE_COLS, values_only=True):
-            rows.append(["" if v is None else (v if isinstance(v, (int, float, bool)) else str(v)) for v in row])
+        links: dict[str, str] = {}
+        for row in sheet.iter_rows(max_row=MAX_TABLE_ROWS, max_col=MAX_TABLE_COLS):
+            values = []
+            for cell in row:
+                v = cell.value
+                values.append("" if v is None else (v if isinstance(v, (int, float, bool)) else str(v)))
+                link = cell.hyperlink
+                if link is not None and (link.target or link.location):
+                    links[cell.coordinate] = str(link.target or f"#{link.location}")
+            rows.append(values)
         while rows and not any(str(v).strip() for v in rows[-1]):
             rows.pop()
-        # Пустые столбцы справа не нужны агенту (read_only отдаёт строки до max_col).
+        # Пустые столбцы справа не нужны агенту (строки отдаются до max_col).
         width = max((max((i + 1 for i, v in enumerate(r) if str(v).strip()), default=0) for r in rows), default=0)
-        sheets.append({"name": sheet.title, "rows": [r[:width] for r in rows], "truncated": (sheet.max_row or 0) > MAX_TABLE_ROWS})
+        entry: dict[str, Any] = {"name": sheet.title, "rows": [r[:width] for r in rows], "truncated": (sheet.max_row or 0) > MAX_TABLE_ROWS}
+        if links:
+            entry["links"] = links  # {"F11": "https://…"} — куда ведёт ячейка; значение ячейки — её текст в rows
+        sheets.append(entry)
     return sheets
 
 
 def _cell_value(value: Any) -> Any:
     return value if value is None or isinstance(value, (int, float, bool)) else str(value)
+
+
+def _value_and_link(cell: dict[str, Any]) -> tuple[Any, str]:
+    """Значение и ссылка ячейки из вызова. Ссылку можно дать полем link, объектом value: {text, hyperlink} или
+    формулой =HYPERLINK("адрес"; "текст") — все три способа пишут настоящую ссылку ячейки."""
+    value = cell.get("value")
+    link = str(cell.get("link") or "").strip()
+    if isinstance(value, dict):
+        link = link or str(value.get("hyperlink") or value.get("link") or value.get("url") or "").strip()
+        value = value.get("text", value.get("value"))
+    if isinstance(value, str):
+        match = _HYPERLINK_FORMULA.match(value.strip())
+        if match:
+            link = link or match.group(1)
+            value = match.group(2) if match.group(2) is not None else match.group(1)
+    return _cell_value(value), link
+
+
+def _write_cell(sheet: Any, ref: str, cell: dict[str, Any]) -> None:
+    """Записать значение (и ссылку) в ячейку листа openpyxl."""
+    value, link = _value_and_link(cell)
+    target = sheet[ref]
+    # Старая ссылка не должна пережить смену значения: в xlsx она хранится отдельно от текста ячейки, и без явного
+    # сброса ячейка показывала новый текст, а вела по прежнему адресу.
+    target.hyperlink = None
+    target.value = value
+    if link:
+        target.hyperlink = link
+        if target.value in (None, ""):
+            target.value = link
 
 
 def _new_table(sheets: list[dict[str, Any]]) -> str:
@@ -279,7 +328,8 @@ def list_folders(access: Access, args: dict[str, Any]) -> dict[str, Any]:
 def read_item(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     item = access.load(args.get("id"))
     content = item.get("content") or ""
-    out: dict[str, Any] = {"id": item["id"], "kind": item["kind"], "title": item["title"], "updatedAt": item["updatedAt"],
+    out: dict[str, Any] = {"id": item["id"], "kind": item["kind"], "url": item_url(item["kind"], item["id"]),
+                           "title": item["title"], "updatedAt": item["updatedAt"],
                            "folder": access.paths.get(item.get("folderId") or "", ""),
                            "canEdit": bool(item.get("canEdit")) and access.level >= LEVELS["edit"]}
     if item["kind"] == "note":
@@ -409,7 +459,7 @@ def update_table(access: Access, args: dict[str, Any]) -> dict[str, Any]:
         ref = str((cell or {}).get("ref") or "").upper()
         if not _CELL.match(ref):
             raise ToolError(f"Неверный адрес ячейки «{ref}»: нужен вид B2")
-        sheet[ref] = _cell_value(cell.get("value"))
+        _write_cell(sheet, ref, cell)
     for row in rows:
         sheet.append([_cell_value(v) for v in list(row)[:MAX_TABLE_COLS * 4]])
     # Удаляем с конца, чтобы номера оставшихся строк не съезжали; номера — как в read_item (шапка = 1).
@@ -429,6 +479,18 @@ def rename_item(access: Access, args: dict[str, Any]) -> dict[str, Any]:
         raise ToolError("Нужно название")
     _write(access, item, title=title)
     return {"id": item["id"], "title": title[:200]}
+
+
+def delete_item(access: Access, args: dict[str, Any]) -> dict[str, Any]:
+    """Удалить материал насовсем. Только владельцу, только с confirm=true: восстановить нельзя."""
+    access.need("create", "удалять материалы")
+    if args.get("confirm") is not True:
+        raise ToolError("Удаление необратимо: передайте confirm: true, когда уверены, что материал нужно удалить")
+    item = access.load(args.get("id"), content=False)
+    if str(item.get("ownerId")) != access.me.user_id:
+        raise ToolError("Удалить можно только свой материал")
+    _call(ws.delete_item, item["id"], access.me)
+    return {"id": item["id"], "kind": item["kind"], "title": item["title"], "deleted": True}
 
 
 def move_item(access: Access, args: dict[str, Any]) -> dict[str, Any]:
@@ -465,7 +527,8 @@ TOOLS: list[dict[str, Any]] = [
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "read_item", "handler": read_item, "level": "read",
      "description": "Содержимое материала. Заметка — Markdown; документ — Markdown (format=text — чистый текст, по нему ищет edit_document); "
-                    "таблица — листы со строками ячеек (до 500 строк); презентация — текст слайдов. Длинное — частями (offset, nextOffset).",
+                    "таблица — листы со строками ячеек (до 500 строк); презентация — текст слайдов. Длинное — частями (offset, nextOffset). "
+                    "У таблицы у листа есть links: {ячейка: адрес} для ячеек со ссылкой. В ответе url — готовый внутренний адрес материала для ссылок из других материалов.",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "format": {"type": "string", "enum": ["markdown", "text"]}, **_PAGE}, "required": ["id"]}},
     {"name": "edit_note", "handler": edit_note, "level": "edit",
      "description": "Точечная правка заметки: заменить кусок old_text (точный текст из read_item) на new_text. Остальное не трогается.",
@@ -487,10 +550,12 @@ TOOLS: list[dict[str, Any]] = [
                      "required": ["id", "markdown"]}},
     {"name": "update_table", "handler": update_table, "level": "edit",
      "description": "Изменить таблицу: значения ячеек по адресам (cells: [{ref: \"B2\", value}], формула — строкой с «=») и/или строки в конец листа (append_rows), удалить строки (delete_rows: номера с 1), создать лист (create_sheet: true вместе с sheet). "
-                    "Лист — sheet (по умолчанию первый).",
+                    "Лист — sheet (по умолчанию первый). Запись value заменяет и старую ссылку ячейки (value: null очищает ячейку и ссылку). "
+                    "Ссылка ячейки: {ref, value: \"текст\", link: \"https://…\"} (или value: {text, hyperlink}, или формула =HYPERLINK(\"адрес\"; \"текст\")). "
+                    "Ссылка на материал Шара — url из list_items/read_item (вид /office?kind=document&id=94); ссылки /d/…, /t/… — публичные, по id не работают.",
      "inputSchema": {"type": "object", "properties": {
          "id": _ID, "sheet": {"type": "string"},
-         "cells": {"type": "array", "items": {"type": "object", "properties": {"ref": {"type": "string"}, "value": {}}, "required": ["ref"]}},
+         "cells": {"type": "array", "items": {"type": "object", "properties": {"ref": {"type": "string"}, "value": {}, "link": {"type": "string", "description": "адрес ссылки ячейки"}}, "required": ["ref"]}},
          "append_rows": {"type": "array", "items": {"type": "array", "items": {}}},
          "delete_rows": {"type": "array", "items": {"type": "integer"}},
          "create_sheet": {"type": "boolean"}}, "required": ["id"]}},
@@ -511,6 +576,9 @@ TOOLS: list[dict[str, Any]] = [
          "rows": {"type": "array", "items": {"type": "array", "items": {}}},
          "sheets": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "rows": {"type": "array", "items": {"type": "array", "items": {}}}}}}},
          "required": ["title"]}},
+    {"name": "delete_item", "handler": delete_item, "level": "create",
+     "description": "Удалить СВОЙ материал насовсем (необратимо, версии тоже пропадают). Нужен confirm: true. Чужие материалы удалять нельзя.",
+     "inputSchema": {"type": "object", "properties": {"id": _ID, "confirm": {"type": "boolean", "description": "true — подтверждаю удаление"}}, "required": ["id", "confirm"]}},
     {"name": "move_item", "handler": move_item, "level": "create",
      "description": "Положить материал в папку или вынуть из папок (folder_id не указан — если ключу открыт весь «Офис»).",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "folder_id": _FOLDER}, "required": ["id"]}},

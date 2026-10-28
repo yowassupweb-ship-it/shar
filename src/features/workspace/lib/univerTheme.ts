@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { DocParagraphMenuService } from '@univerjs/docs-ui';
 import { ComponentManager, IFontService } from '@univerjs/ui';
+import type { FUniver } from '@univerjs/presets';
 import { Background, Font, IRenderManagerService, Rect, UniverRenderingContext2D } from '@univerjs/engine-render';
 import { DOCS_NORMAL_EDITOR_UNIT_ID_KEY } from '@univerjs/core';
 import { IEditorBridgeService } from '@univerjs/sheets-ui';
@@ -353,4 +354,19 @@ export function overrideComponent(univer: unknown, name: string, component: unkn
   } catch {
     return () => undefined;
   }
+}
+
+/**
+ * Кнопка «Ссылка» на главной вкладке ленты. В Univer инструмент ссылок лежит только на «Вставке» — для таблицы и
+ * документа, где ссылки правят постоянно, он нужен под рукой (то же действие, что у Ctrl+K).
+ */
+export function addLinkButton(univerAPI: FUniver, kind: 'sheet' | 'doc') {
+  const command = kind === 'sheet' ? 'sheet.operation.insert-hyper-link-toolbar' : 'doc.operation.show-hyper-link-edit-popup';
+  univerAPI.createMenu({
+    id: `nx.link.${kind}`,
+    icon: 'LinkIcon',
+    title: 'Ссылка',
+    tooltip: 'Ссылка (Ctrl+K)',
+    action: () => { void univerAPI.executeCommand(command); },
+  }).appendTo('ribbon.start.format');
 }

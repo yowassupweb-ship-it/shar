@@ -19,7 +19,7 @@ import '@univerjs/find-replace/lib/index.css';
 import { UploadingImageIoService, uploadPastedImages } from '../lib/imageIo';
 import { SharEmojiPicker } from '@/shared/emoji/SharEmojiPicker';
 import { emptySnapshot, ensureDrawingResource, fingerprint, localizeImages, parseSnapshot, type DocSnapshot } from '../lib/docSnapshot';
-import { disableBlockHandle, hideMissingFonts, isDarkTheme, overrideComponent, styleDocSurface, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
+import { addLinkButton, disableBlockHandle, hideMissingFonts, isDarkTheme, overrideComponent, styleDocSurface, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
 import type { EditorProps } from './types';
 import { CursorLayer, type CursorShape } from '../CursorLayer';
 import { bindDoc } from '../live/docOps';
@@ -142,6 +142,7 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
     );
     const stopPasteUpload = uploadPastedImages(univer);
     univerAPI.toggleDarkMode(isDarkTheme(theme));
+    if (!readOnly) addLinkButton(univerAPI, 'doc');
     univerAPI.setTheme(univerTheme(theme));
     const doc = univerAPI.createDocument(ensureDrawingResource(structuredClone(initial.current)) as unknown as IDocumentData);
     styleDocSurface(univer, doc.getId(), initial.current.documentStyle?.documentFlavor === 2);
