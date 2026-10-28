@@ -99,6 +99,21 @@ def _transcode_voice_to_aac(content: bytes, filename: str) -> Optional[tuple]:
 _HTML_EXECUTABLE_EXTENSIONS = {'.html', '.htm', '.xhtml', '.shtml', '.svg', '.svgz', '.xml', '.mhtml'}
 
 
+# SVG показываем как картинку (в <img> он скриптов не исполняет), но только через наш адрес и с жёсткой песочницей:
+# откроют адрес напрямую — страница без скриптов, форм и доступа к нашему origin. Хранится он по-прежнему как
+# application/octet-stream, поэтому прямая ссылка на S3 в <img> не рисуется — наружу отдаём адрес /api/uploads/….
+_SVG_EXTENSIONS = {'.svg', '.svgz'}
+_SVG_HEADERS = {
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:",
+    'Cache-Control': 'public, max-age=3600',
+}
+
+
+def _is_svg(name: str) -> bool:
+    return Path(name or '').suffix.lower() in _SVG_EXTENSIONS
+
+
 def _neutralize_html_content_type(filename: str, content_type: Optional[str]) -> Optional[str]:
     ext = Path(filename or '').suffix.lower()
     ct = (content_type or '').lower()
@@ -175,7 +190,7 @@ def presign_upload(req: PresignRequest, me: Identity = Depends(current_identity)
     try:
         content_type = _neutralize_html_content_type(req.filename, req.content_type) or "application/octet-stream"
         return {"presigned_url": s3_storage.generate_presigned_put_url(key, content_type), "key": key,
-                "public_url": s3_storage.public_url(key)}
+                "public_url": f"/api/uploads/{unique_filename}" if _is_svg(unique_filename) else s3_storage.public_url(key)}
     except Exception:
         logger.exception("[Upload/Presign] failed")
         raise HTTPException(status_code=502, detail="Не удалось подготовить загрузку")
@@ -241,7 +256,7 @@ def complete_upload(req: UploadCompleteRequest, me: Identity = Depends(current_i
             actual_size = int(head.get("ContentLength", req.size))
         except Exception:
             actual_size = req.size
-        return {"success": True, "url": s3_storage.public_url(req.key), "filename": req.filename,
+        return {"success": True, "url": f"/api/uploads/{Path(req.key).name}" if _is_svg(req.key) else s3_storage.public_url(req.key), "filename": req.filename,
                 "key": req.key, "size": actual_size, "storage": "s3"}
     except Exception:
         logger.exception("[Upload/Complete] failed for %s", req.key)
@@ -297,11 +312,30 @@ def get_thumbnail(width: int, filename: str):
     return Response(content=body, media_type='image/webp', headers={**cache_headers, 'X-Image-Size': f"{tw}x{th}"})
 
 
+def _serve_svg(safe: str) -> Response:
+    media_type = 'image/svg+xml'
+    headers = dict(_SVG_HEADERS)
+    if safe.lower().endswith('.svgz'):
+        headers['Content-Encoding'] = 'gzip'
+    if not s3_storage.enabled:
+        local_path = UPLOAD_DIR / "uploads" / safe
+        if not local_path.exists():
+            raise HTTPException(status_code=404, detail="File not found locally")
+        return FileResponse(str(local_path), media_type=media_type, headers=headers)
+    obj = s3_storage.get_object(f"uploads/{safe}")
+    if not obj:
+        raise HTTPException(status_code=404, detail="File not found")
+    return Response(content=obj['Body'].read(), media_type=media_type, headers=headers)
+
+
 @router.get("/api/uploads/{filename}")
 def get_uploaded_file(filename: str):
     """Serve an uploaded file: stream from S3, or serve from local disk."""
 
     safe = safe_name(filename)
+
+    if _is_svg(safe):
+        return _serve_svg(safe)
 
     if not s3_storage.enabled:
         local_path = UPLOAD_DIR / "uploads" / safe

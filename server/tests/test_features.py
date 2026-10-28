@@ -60,6 +60,17 @@ def test_upload_flow_and_hardening(anna, client):
     assert "attachment" in resp.headers.get("content-disposition", "") and resp.headers["content-type"].startswith("application/octet-stream")
 
 
+def test_svg_is_an_image_but_sandboxed(anna, client):
+    """SVG рисуется в <img> (нужен image/svg+xml), но прямое открытие адреса не исполняет его скрипты."""
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><script>alert(1)</script></svg>'
+    url = anna.post("/api/upload", files={"file": ("logo.svg", svg, "image/svg+xml")}).json()["url"]
+    resp = client.get(url)
+    assert resp.status_code == 200 and resp.headers["content-type"].startswith("image/svg+xml")
+    assert resp.headers["content-security-policy"].startswith("sandbox")
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert "attachment" not in resp.headers.get("content-disposition", "")
+
+
 def test_local_presigned_put_cannot_overwrite(anna):
     pre = anna.post("/api/upload/presign", json={"filename": "f.bin", "content_type": "application/octet-stream"}).json()
     name = pre["presigned_url"].rsplit("/", 1)[1]
