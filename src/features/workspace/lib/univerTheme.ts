@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { DocParagraphMenuService } from '@univerjs/docs-ui';
 import { ComponentManager, IFontService } from '@univerjs/ui';
-import { Font, IRenderManagerService, Rect } from '@univerjs/engine-render';
+import { Background, Font, IRenderManagerService, Rect } from '@univerjs/engine-render';
 import { defaultTheme, type Theme } from '@univerjs/themes';
 
 /**
@@ -30,10 +30,11 @@ export function univerTheme(theme: string): Theme {
   };
 }
 
-// ── Текст на закрашенной ячейке в тёмной теме ────────────────────────────────
-// Univer в тёмной теме инвертирует каждый цвет холста: заливка жёлтой ячейки темнеет до оливковой, а чёрный
-// текст автора становится белым — на цветном фоне он плохо читается и выглядит чужим. Если исходный цвет текста
-// читается на том, что Univer нарисует под ним, оставляем его как есть; на тёмной заливке — прежний белый.
+// ── Закрашенные ячейки в тёмной теме ─────────────────────────────────────────
+// Univer в тёмной теме инвертирует каждый цвет холста: жёлтая заливка темнеет до оливковой, а текст автора
+// на ней становится белым. Покрашенную ячейку автор раскрашивал под светлый лист — поэтому и заливку, и текст
+// в ней рисуем как есть, одинаково в светлой и тёмной теме. Темнеют только непокрашенные ячейки.
+// Чистый белый считаем «не покрашено»: в импортированных таблицах им часто залито всё подряд.
 type Rgb = [number, number, number];
 
 function parseColor(color: unknown): Rgb | null {
@@ -48,45 +49,48 @@ function parseColor(color: unknown): Rgb | null {
   return rgb ? [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])] : null;
 }
 
-const luminance = ([r, g, b]: Rgb) => {
-  const channel = (v: number) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
-  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
-};
-const contrast = (a: Rgb, b: Rgb) => {
-  const [x, y] = [luminance(a), luminance(b)];
-  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
-};
+/** Ячейка закрашена настоящим цветом (не пусто и не белая заливка по умолчанию). */
+function isPainted(fill: unknown): boolean {
+  if (typeof fill !== 'string' || !fill || /^(transparent|white|auto)$/i.test(fill.trim())) return false;
+  const rgb = parseColor(fill);
+  return !rgb || !(rgb[0] === 255 && rgb[1] === 255 && rgb[2] === 255);
+}
 
 type ColorService = { getRenderColor: (color: string) => string };
-type CellFont = { style?: { bg?: { rgb?: string }; cl?: { rgb?: string } } } | undefined;
-type FontProto = { _renderFontEachCell: (...args: unknown[]) => boolean; __keepTextOnFill?: boolean };
+type CanvasCtx = { _canvasColorService?: ColorService };
+type CellFont = { style?: { bg?: { rgb?: string } } } | undefined;
+type Patched = { __keepFills?: boolean };
 
-/** Один раз на страницу: подменяем отрисовку текста ячейки у Univer (см. выше). Светлой темы не касается. */
-export function keepTextOnFill() {
-  const proto = Font.prototype as unknown as FontProto;
-  if (proto.__keepTextOnFill) return;
-  proto.__keepTextOnFill = true;
-  const original = proto._renderFontEachCell;
-  proto._renderFontEachCell = function patched(this: unknown, ...args: unknown[]) {
+/** Выполнить отрисовку с отключённой тёмной инверсией цветов (белая заливка по-прежнему темнеет). */
+function withoutInversion<T>(ctx: CanvasCtx, draw: () => T, keepWhite = false): T {
+  const service = ctx._canvasColorService;
+  if (!service) return draw();
+  ctx._canvasColorService = keepWhite
+    ? { getRenderColor: (color: string) => (isPainted(color) ? color : service.getRenderColor(color)) }
+    : undefined;
+  try { return draw(); } finally { ctx._canvasColorService = service; }
+}
+
+/** Один раз на страницу: подменяем отрисовку заливки и текста ячеек у Univer (см. выше). Светлой темы не касается. */
+export function keepFillColors() {
+  const font = Font.prototype as unknown as Patched & { _renderFontEachCell: (...args: unknown[]) => boolean };
+  if (font.__keepFills) return;
+  font.__keepFills = true;
+  const renderCell = font._renderFontEachCell;
+  font._renderFontEachCell = function patched(this: unknown, ...args: unknown[]) {
     const [renderCtx, row, col, matrix, cached] = args as [
-      { ctx?: { _canvasColorService?: ColorService } } | undefined, number, number,
-      { getValue?: (r: number, c: number) => CellFont } | undefined, CellFont,
+      { ctx?: CanvasCtx } | undefined, number, number, { getValue?: (r: number, c: number) => CellFont } | undefined, CellFont,
     ];
     const ctx = renderCtx?.ctx;
-    const service = ctx?._canvasColorService;
-    const style = (cached ?? matrix?.getValue?.(row, col))?.style;
-    const fill = style?.bg?.rgb;
-    if (ctx && service && fill) {
-      const authored = parseColor(fill);
-      const shown = parseColor(service.getRenderColor(fill));
-      const text = parseColor(style?.cl?.rgb) ?? ([0, 0, 0] as Rgb);
-      // Светлая тема (цвет не менялся) и тёмная заливка, где авторский текст не виден, идут прежним путём.
-      if (authored && shown && (authored[0] !== shown[0] || authored[1] !== shown[1] || authored[2] !== shown[2]) && contrast(text, shown) >= 3) {
-        ctx._canvasColorService = undefined;
-        try { return original.apply(this, args); } finally { ctx._canvasColorService = service; }
-      }
-    }
-    return original.apply(this, args);
+    const fill = (cached ?? matrix?.getValue?.(row, col))?.style?.bg?.rgb;
+    if (ctx && isPainted(fill)) return withoutInversion(ctx, () => renderCell.apply(this, args));
+    return renderCell.apply(this, args);
+  };
+
+  const background = Background.prototype as unknown as { draw: (ctx: CanvasCtx, ...rest: unknown[]) => void };
+  const drawFills = background.draw;
+  background.draw = function patched(this: unknown, ctx: CanvasCtx, ...rest: unknown[]) {
+    return withoutInversion(ctx, () => drawFills.call(this, ctx, ...rest), true);
   };
 }
 
