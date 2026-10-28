@@ -14,7 +14,7 @@ import { downloadBase64, downloadBlob, downloadText, markdownHtml, printHtml, sa
 import { markdownToSnapshot, parseSnapshot, snapshotToMarkdown } from './lib/docSnapshot';
 import { tabsAsSections } from './lib/noteTabs';
 import { IMPORT_RULES, importFile } from './lib/importFile';
-import { canSticky, forgetSticky, openSticky } from './lib/sticky';
+import { canSticky, forgetSticky, openSticky, stickyLabel } from './lib/sticky';
 import { PresenceStack } from './PresenceStack';
 import { SendToChatSheet } from './SendToChatSheet';
 import { usePresence } from './usePresence';
@@ -367,7 +367,7 @@ ${added}`;
             </MenuItem>
           )}
           <MenuItem icon={<Send size={15} />} onSelect={() => { setMenu(null); setSendToChat(true); }}>Отправить в чат</MenuItem>
-          {canSticky(item.kind) && <MenuItem icon={<MonitorUp size={15} />} onSelect={() => { setMenu(null); void openSticky(item.id); }}>На рабочий стол</MenuItem>}
+          {canSticky(item.kind) && <MenuItem icon={<MonitorUp size={15} />} onSelect={() => { setMenu(null); void openSticky(item.id, null, { kind: item.kind }); }}>{stickyLabel(item.kind)}</MenuItem>}
           <MenuItem icon={<Link2 size={15} />} onSelect={() => { setMenu(null); void copyLink(); }}>Скопировать ссылку на материал</MenuItem>
           <MenuItem icon={<Copy size={15} />} onSelect={() => { setMenu(null); void duplicate(); }}>Сделать копию</MenuItem>
           {!readOnly && (

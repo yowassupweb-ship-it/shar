@@ -17,7 +17,7 @@ import { IMPORT_RULES, importFile } from './lib/importFile';
 import { Highlight, matchesAll, searchTerms } from './lib/highlight';
 import { isWorkspaceEvent } from './live';
 import { readPlace, writePlace } from './lib/officeMemory';
-import { canSticky, dragNoteOut, forgetSticky, openSticky } from './lib/sticky';
+import { canSticky, dragNoteOut, forgetSticky, openSticky, stickyLabel } from './lib/sticky';
 import type { Folder, Item, Kind, Viewer } from './types';
 import { FOLDER_DRAG, FolderRow, isFolderDrag, isItemDrag, ITEM_DRAG, zoneOf, type DropZone } from './Folders';
 import { PresenceStack } from './PresenceStack';
@@ -99,7 +99,7 @@ function ItemRow({ item, active, terms, snippet, onOpen, onMenu }: {
       // Строку можно перетащить в папку; заметку — ещё и за пределы окна: она станет окном на рабочем столе.
       draggable
       onDragStart={(e) => { e.dataTransfer.setData(ITEM_DRAG, item.id); e.dataTransfer.setData('text/plain', item.title || info.untitled); e.dataTransfer.effectAllowed = 'copyMove'; }}
-      onDragEnd={(e) => { if (canSticky(item.kind)) dragNoteOut(e, item.id); }}
+      onDragEnd={(e) => { if (canSticky(item.kind)) dragNoteOut(e, item.id, item.kind); }}
       onContextMenu={(e) => { e.preventDefault(); onMenu({ x: e.clientX, y: e.clientY }); }}
       {...press}
     >
@@ -761,7 +761,7 @@ export default function OfficeScreen() {
           <MenuItem icon={<Send size={15} />} onSelect={() => { const i = rowMenu.item; setRowMenu(null); setSendItem(i); }}>Отправить в чат</MenuItem>
           <MenuItem icon={<FolderInput size={15} />} onSelect={() => { const { item, anchor } = rowMenu; setRowMenu(null); setMoveMenu({ item, anchor }); }}>Переместить в папку…</MenuItem>
           {canSticky(rowMenu.item.kind) && (
-            <MenuItem icon={<MonitorUp size={15} />} onSelect={() => { const i = rowMenu.item; setRowMenu(null); void openSticky(i.id); }}>На рабочий стол</MenuItem>
+            <MenuItem icon={<MonitorUp size={15} />} onSelect={() => { const i = rowMenu.item; setRowMenu(null); void openSticky(i.id, null, { kind: i.kind }); }}>{stickyLabel(rowMenu.item.kind)}</MenuItem>
           )}
           {rowMenu.item.isOwner && (
             <MenuItem icon={<Pin size={15} />} onSelect={() => { const i = rowMenu.item; setRowMenu(null); void togglePin(i); }}>{rowMenu.item.pinned ? 'Открепить' : 'Закрепить сверху'}</MenuItem>

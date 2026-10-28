@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import { DocParagraphMenuService } from '@univerjs/docs-ui';
 import { ComponentManager, IFontService } from '@univerjs/ui';
-import type { FUniver } from '@univerjs/presets';
+import { BehaviorSubject } from 'rxjs';
+import { DocSelectionManagerService } from '@univerjs/docs';
+import { IUniverInstanceService, UniverInstanceType } from '@univerjs/core';
+import { IMenuManagerService, MenuItemType, RibbonStartGroup } from '@univerjs/ui';
 import { Background, Font, IRenderManagerService, Rect, UniverRenderingContext2D } from '@univerjs/engine-render';
 import { DOCS_NORMAL_EDITOR_UNIT_ID_KEY } from '@univerjs/core';
 import { IEditorBridgeService } from '@univerjs/sheets-ui';
@@ -356,17 +359,60 @@ export function overrideComponent(univer: unknown, name: string, component: unkn
   }
 }
 
+/** Стоит ли выделение документа на ссылке (для кнопки «Ссылка») и как следить за выделением. */
+export function docLinkProbe(univer: unknown) {
+  const injector = (univer as { __getInjector: () => { get: <T>(token: unknown) => T } }).__getInjector();
+  const selection = injector.get<DocSelectionManagerService>(DocSelectionManagerService);
+  const instances = injector.get<IUniverInstanceService>(IUniverInstanceService);
+  return {
+    isActive: () => {
+      const range = selection.getTextRanges()?.[0];
+      const doc = instances.getCurrentUnitOfType(UniverInstanceType.UNIVER_DOC) as unknown as { getBody?: () => { customRanges?: Array<{ rangeType?: number; startIndex: number; endIndex: number }> } | undefined } | null;
+      if (!range || !doc?.getBody) return false;
+      const from = range.startOffset ?? 0;
+      const to = range.endOffset ?? from;
+      return (doc.getBody()?.customRanges || []).some((c) => c.rangeType === 0 && c.startIndex <= to && c.endIndex >= from);
+    },
+    watch: (update: () => void) => {
+      const sub = selection.textSelection$.subscribe(update);
+      return () => sub.unsubscribe();
+    },
+  };
+}
+
 /**
  * Кнопка «Ссылка» на главной вкладке ленты. В Univer инструмент ссылок лежит только на «Вставке» — для таблицы и
- * документа, где ссылки правят постоянно, он нужен под рукой (то же действие, что у Ctrl+K).
+ * документа, где ссылки правят постоянно, он нужен под рукой (то же действие, что у Ctrl+K). Кнопка подсвечивается,
+ * когда выделение стоит на ссылке: isActive пересчитывается на каждое событие watch (смена выделения, правка).
  */
-export function addLinkButton(univerAPI: FUniver, kind: 'sheet' | 'doc') {
-  const command = kind === 'sheet' ? 'sheet.operation.insert-hyper-link-toolbar' : 'doc.operation.show-hyper-link-edit-popup';
-  univerAPI.createMenu({
-    id: `nx.link.${kind}`,
-    icon: 'LinkIcon',
-    title: 'Ссылка',
-    tooltip: 'Ссылка (Ctrl+K)',
-    action: () => { void univerAPI.executeCommand(command); },
-  }).appendTo('ribbon.start.format');
+export function addLinkButton(
+  univer: unknown,
+  kind: 'sheet' | 'doc',
+  isActive: () => boolean,
+  watch: (update: () => void) => () => void,
+): () => void {
+  const injector = (univer as { __getInjector: () => { get: <T>(token: unknown) => T } }).__getInjector();
+  const menus = injector.get<IMenuManagerService>(IMenuManagerService);
+  const active$ = new BehaviorSubject(false);
+  const update = () => { try { const next = isActive(); if (next !== active$.value) active$.next(next); } catch { /* выделения ещё нет */ } };
+  const id = `nx.link.${kind}`;
+  menus.mergeMenu({
+    [RibbonStartGroup.FORMAT]: {
+      [id]: {
+        order: 99,
+        menuItemFactory: () => ({
+          id,
+          type: MenuItemType.BUTTON,
+          icon: 'LinkIcon',
+          title: 'Ссылка',
+          tooltip: 'Ссылка (Ctrl+K)',
+          commandId: kind === 'sheet' ? 'sheet.operation.insert-hyper-link-toolbar' : 'doc.operation.show-hyper-link-edit-popup',
+          activated$: active$.asObservable(),
+        }),
+      },
+    },
+  } as never);
+  const stop = watch(update);
+  update();
+  return () => { stop(); active$.complete(); };
 }

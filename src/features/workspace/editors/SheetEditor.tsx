@@ -156,12 +156,19 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
       presets: [UniverSheetsCorePreset({ container: mount, header: !readOnly, toolbar: !readOnly, formulaBar: !readOnly, contextMenu: !readOnly, menu: {}, ribbonType: 'classic' }), UniverSheetsFindReplacePreset(), UniverSheetsHyperLinkPreset(), UniverSheetsFilterPreset(), UniverSheetsSortPreset()],
     });
     keepFillColors();
-    if (!readOnly) addLinkButton(univerAPI, 'sheet');
     univerAPI.toggleDarkMode(isDarkTheme(theme));
     univerAPI.setTheme(univerTheme(theme));
     const workbook = univerAPI.createWorkbook(excelToUniver(book));
     hideMissingFonts(univer);
     const untagFind = tagFindDialog();
+    const watchSheet = (update: () => void) => {
+      const listeners = [univerAPI.addEvent(univerAPI.Event.SelectionChanged, update), univerAPI.addEvent(univerAPI.Event.CommandExecuted, update)];
+      return () => listeners.forEach((listener) => listener.dispose());
+    };
+    const stopLinkButton = readOnly ? () => undefined : addLinkButton(univer, 'sheet', () => {
+      const cell = workbook.getActiveSheet().getSelection()?.getActiveRange()?.getCellData();
+      return Boolean(cell && (cell.p?.body?.customRanges || []).some((range: { rangeType?: number }) => range.rangeType === 0));
+    }, watchSheet);
     const stopEditorFill = keepEditorFill(univer, (row, column) => workbook.getActiveSheet().getRange(row, column).getBackground() || undefined);
     workbook.setEditable(!readOnly);
 
@@ -250,11 +257,22 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
       // Univer снимает свои React-деревья синхронно; внутри фазы рендера нашего компонента React на это жалуется.
       untagFind();
       stopEditorFill();
+      stopLinkButton();
       window.setTimeout(() => { univer.dispose(); mount.remove(); }, 0);
     };
   }, [book, readOnly, theme, live]);
 
   useEffect(() => { if (visible) window.dispatchEvent(new Event('resize')); }, [visible]);
+  // Размер контейнера изменился без события окна (окно развернули, свернули боковую панель, отдельное окно растянули):
+  // Univer пересчитывает холст по событию resize — даём его сами, иначе холст оставался прежнего размера.
+  useEffect(() => {
+    const el = host.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    let raf = 0;
+    const observer = new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => window.dispatchEvent(new Event('resize'))); });
+    observer.observe(el);
+    return () => { cancelAnimationFrame(raf); observer.disconnect(); };
+  }, []);
 
   // Рамки коллег следят за прокруткой, масштабом и шириной столбцов: пересчёт каждый кадр, пока они есть
   // (как в документе), состояние — только если что-то сдвинулось.

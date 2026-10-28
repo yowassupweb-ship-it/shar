@@ -643,9 +643,12 @@ html.is-sticky, html.is-sticky body, html.is-sticky #root { height: 100%; overfl
 .nws-sticky-note[data-color="blue"] { --tone: #3f8cf3; }
 .nws-sticky-note[data-color="purple"] { --tone: #9d6cf0; }
 .nws-sticky-note[data-color="gray"] { --tone: #8e8e93; }
+/* Документ и таблица в своём окне: шапка по виду материала, а не цвет заметки. */
+.nws-sticky-note[data-kind="document"] { --tone: #3f8cf3; }
+.nws-sticky-note[data-kind="table"] { --tone: #34a853; }
 .nws-sticky-head { display: flex; align-items: center; gap: 2px; flex: none; min-height: 38px; padding: 4px 6px 4px 12px; background: color-mix(in srgb, var(--tone, #e8b60c) 30%, var(--container-bg)); border-bottom: 2px solid var(--tone, #e8b60c); -webkit-app-region: drag; }
 .nws-sticky-fill { flex: 1; align-self: stretch; min-width: 12px; }
-.nws-sticky-title { flex: 0 1 auto; min-width: 0; max-width: calc(100% - 150px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 28px; color: var(--text-main); font-size: var(--text-sm); font-weight: var(--weight-semibold); cursor: default; -webkit-app-region: no-drag; }
+.nws-sticky-title { flex: 0 1 auto; min-width: 0; max-width: calc(100% - 210px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 28px; color: var(--text-main); font-size: var(--text-sm); font-weight: var(--weight-semibold); cursor: default; -webkit-app-region: no-drag; }
 .nws-sticky-title.is-editing { flex: 1 1 auto; height: 28px; padding: 0 6px; border: 1px solid var(--accent-color); border-radius: var(--radius-sm); background: var(--element-bg); font: inherit; font-size: var(--text-sm); font-weight: var(--weight-semibold); outline: none; }
 .nws-sticky-btn { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-2); cursor: pointer; -webkit-app-region: no-drag; }
 @media (hover: hover) { .nws-sticky-btn:hover { background: color-mix(in srgb, var(--text-main) 12%, transparent); color: var(--text-main); } }
@@ -654,6 +657,25 @@ html.is-sticky, html.is-sticky body, html.is-sticky #root { height: 100%; overfl
 .nws-sticky-body > * { flex: 1; min-height: 0; }
 .nws-sticky-state, .nws-sticky-empty { margin: auto; padding: var(--space-4); color: var(--text-2); text-align: center; font-size: var(--text-sm); }
 .nws-sticky-empty { display: grid; gap: var(--space-2); justify-items: center; }
+/* Список заметок в окне заметки */
+.nws-sticky-list { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 6px 8px 8px; gap: 6px; }
+.nws-sticky-search { flex: none; height: 30px; padding: 0 10px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--element-bg); color: var(--text-main); font: inherit; font-size: var(--text-sm); }
+.nws-sticky-search:focus-visible { outline: 2px solid var(--accent-color); outline-offset: -1px; }
+.nws-sticky-list ul { flex: 1; min-height: 0; margin: 0; padding: 0; list-style: none; overflow-y: auto; }
+.nws-sticky-row { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-main); text-align: left; cursor: pointer; --tone: #e8b60c; }
+.nws-sticky-row[data-color="red"] { --tone: #e5577d; } .nws-sticky-row[data-color="orange"] { --tone: #f08a3c; } .nws-sticky-row[data-color="green"] { --tone: #4cae5b; }
+.nws-sticky-row[data-color="cyan"] { --tone: #2db3c6; } .nws-sticky-row[data-color="blue"] { --tone: #3f8cf3; } .nws-sticky-row[data-color="purple"] { --tone: #9d6cf0; } .nws-sticky-row[data-color="gray"] { --tone: #8e8e93; }
+@media (hover: hover) { .nws-sticky-row:hover { background: color-mix(in srgb, var(--text-main) 8%, transparent); } }
+.nws-sticky-row[aria-current="true"] { background: color-mix(in srgb, var(--tone) 22%, transparent); }
+.nws-sticky-dot { flex: none; width: 10px; height: 10px; margin-top: 5px; border-radius: 50%; background: var(--tone); }
+.nws-sticky-row-text { display: grid; min-width: 0; }
+.nws-sticky-row-text b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.nws-sticky-row-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--text-xs); }
+/* Значок вида в шапке окна документа и таблицы; статус сохранения — там же, а не отдельной строкой внизу. */
+.nws-sticky-logo { width: 22px; height: 22px; margin-right: 6px; border-radius: 6px; }
+.nws-sticky-logo svg { width: 14px; height: 14px; }
+.nws-sticky-status { flex: none; margin-right: 6px; color: var(--text-muted); font-size: var(--text-xs); white-space: nowrap; }
+.nws-sticky-status[data-state="error"] { color: var(--state-danger); }
 .nws-sticky-foot { flex: none; padding: 4px 12px; color: var(--text-muted); font-size: var(--text-xs); text-align: right; }
 .nws-sticky-foot .is-error { color: var(--state-danger); }
 

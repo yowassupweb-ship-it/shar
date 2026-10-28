@@ -19,7 +19,7 @@ import '@univerjs/find-replace/lib/index.css';
 import { UploadingImageIoService, uploadPastedImages } from '../lib/imageIo';
 import { SharEmojiPicker } from '@/shared/emoji/SharEmojiPicker';
 import { emptySnapshot, ensureDrawingResource, fingerprint, localizeImages, parseSnapshot, type DocSnapshot } from '../lib/docSnapshot';
-import { addLinkButton, disableBlockHandle, hideMissingFonts, isDarkTheme, overrideComponent, styleDocSurface, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
+import { addLinkButton, disableBlockHandle, docLinkProbe, hideMissingFonts, isDarkTheme, overrideComponent, styleDocSurface, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
 import type { EditorProps } from './types';
 import { CursorLayer, type CursorShape } from '../CursorLayer';
 import { bindDoc } from '../live/docOps';
@@ -142,13 +142,14 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
     );
     const stopPasteUpload = uploadPastedImages(univer);
     univerAPI.toggleDarkMode(isDarkTheme(theme));
-    if (!readOnly) addLinkButton(univerAPI, 'doc');
     univerAPI.setTheme(univerTheme(theme));
     const doc = univerAPI.createDocument(ensureDrawingResource(structuredClone(initial.current)) as unknown as IDocumentData);
     styleDocSurface(univer, doc.getId(), initial.current.documentStyle?.documentFlavor === 2);
     disableBlockHandle(univer, doc.getId());
     hideMissingFonts(univer);
     const untagFind = tagFindDialog();
+    const probe = docLinkProbe(univer);
+    const stopLinkButton = readOnly ? () => undefined : addLinkButton(univer, 'doc', probe.isActive, probe.watch);
     if (readOnly) void doc.getPermission().setReadOnly();
 
     // Своя позиция — коллегам (useCursors). Берём активный диапазон выделения.
@@ -201,11 +202,22 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
       engine.current = null;
       // Univer снимает свои React-деревья синхронно; внутри фазы рендера нашего компонента React на это жалуется.
       untagFind();
+      stopLinkButton();
       window.setTimeout(() => { univer.dispose(); mount.remove(); }, 0);
     };
   }, [loadKey, readOnly, theme, live]);
 
   useEffect(() => { if (visible) window.dispatchEvent(new Event('resize')); }, [visible]);
+  // Размер контейнера изменился без события окна (окно развернули, свернули боковую панель, отдельное окно растянули):
+  // Univer пересчитывает холст по событию resize — даём его сами, иначе холст оставался прежнего размера.
+  useEffect(() => {
+    const el = host.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    let raf = 0;
+    const observer = new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => window.dispatchEvent(new Event('resize'))); });
+    observer.observe(el);
+    return () => { cancelAnimationFrame(raf); observer.disconnect(); };
+  }, []);
 
   // Чужие курсоры следят за прокруткой, масштабом и раскладкой: пересчитываем каждый кадр, пока они есть,
   // а состояние меняем, только если что-то сдвинулось.

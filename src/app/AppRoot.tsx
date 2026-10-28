@@ -11,6 +11,7 @@ import { OverlayHost } from '@/shared/ui/overlay';
 import { setNavigator } from '@/shared/navigation/navigate';
 import { fromLegacyUrl, links, paths } from '@/shared/navigation/routes';
 import { installInternalLinks } from '@/shared/navigation/internalLinks';
+import LinkChooserHost from '@/shared/navigation/LinkChooser';
 import AppShell from './shell/AppShell';
 import { ShellContext, type ShellOptions } from '@/shared/shell/ShellContext';
 import { sectionFor } from './shell/sections';
@@ -212,6 +213,7 @@ function Workspace({ me }: { me: User }) {
       {/* Плавающий чат (Настройки → Внешний вид): в самом разделе «Чаты» он не нужен. */}
       {chatFrame && section.id !== 'chats' && <ChatFrame unread={unreadChats} />}
       <OverlayHost />
+      <LinkChooserHost />
       <SpotlightHost />
       <EventEditorHost />
     </ShellContext.Provider>
