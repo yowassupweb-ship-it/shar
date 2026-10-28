@@ -13,6 +13,7 @@ import {
   type Lead, type LeadSettings, type LeadStatus,
 } from './api';
 import './leads.css';
+import { MailLink } from '@/features/mail/MailLink';
 
 const FILTERS: { id: LeadStatus | ''; label: string }[] = [
   { id: 'new', label: 'Новые' }, { id: 'work', label: 'В работе' }, { id: 'done', label: 'Закрытые' }, { id: '', label: 'Все' },
@@ -110,7 +111,7 @@ export default function LeadsScreen() {
                     {(l.fields.phone || l.fields.email) && (
                       <div className="cxl-lead-contacts">
                         {l.fields.phone && <a href={tel}><Phone size={13} aria-hidden="true" />{l.fields.phone}</a>}
-                        {l.fields.email && <a href={`mailto:${l.fields.email}`}><Mail size={13} aria-hidden="true" />{l.fields.email}</a>}
+                        {l.fields.email && <MailLink email={l.fields.email}><Mail size={13} aria-hidden="true" />{l.fields.email}</MailLink>}
                       </div>
                     )}
                     <dl className="cxl-lead-rows">

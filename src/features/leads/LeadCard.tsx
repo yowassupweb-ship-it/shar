@@ -3,6 +3,7 @@ import { ArrowUpRight, Check, Globe, Hand, Mail, Phone, RotateCcw } from 'lucide
 import { showToast } from '@/shared/ui/Toast';
 import { changeLead, STATUS_LABEL, type LeadCardData, type LeadStatus } from './api';
 import './leads.css';
+import { MailLink } from '@/features/mail/MailLink';
 
 /**
  * Заявка с сайта в чате. Вид — как у карточек уведомлений (значок вида, тип и время, заголовок), плюс
@@ -31,7 +32,7 @@ export function LeadCard({ card, time, createdAt }: { card: LeadCardData; time: 
         {(card.phone || card.email) && (
           <div className="cxl-lead-contacts">
             {card.phone && <a href={tel}><Phone size={13} aria-hidden="true" />{card.phone}</a>}
-            {card.email && <a href={`mailto:${card.email}`}><Mail size={13} aria-hidden="true" />{card.email}</a>}
+            {card.email && <MailLink email={card.email}><Mail size={13} aria-hidden="true" />{card.email}</MailLink>}
           </div>
         )}
         {card.rows.length > 0 && (

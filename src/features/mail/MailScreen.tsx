@@ -237,6 +237,13 @@ export default function MailScreen() {
   const account = accounts.find((a) => String(a.id) === accountId) || null;
 
   useEffect(() => { void loadAccounts(); }, []);
+  // Нажали на адрес в профиле, контактах или заявке — открываем письмо ему.
+  const pendingCompose = useMail((s) => s.pendingCompose);
+  useEffect(() => {
+    if (!pendingCompose || !account) return;
+    setCompose({ kind: 'new', to: pendingCompose });
+    useMail.setState({ pendingCompose: null });
+  }, [pendingCompose, account]);
   useEffect(() => {
     if (!accountId) return;
     void loadBoxes();

@@ -11,6 +11,7 @@ import { SectionIcon } from '@/shared/ui/SectionIcon';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { contactName, readMe, type Contact, type Department } from './data';
 import { Spinner } from '@/shared/ui/Spinner';
+import { MailLink } from '@/features/mail/MailLink';
 
 /**
  * Карточка сотрудника — правая область мастер-детали.
@@ -184,14 +185,14 @@ export default function ContactDetail({ contact, departments, onBack }: {
               </a>
             )}
             {contact.email && (
-              <a className="nx-icon-btn ctd-round" href={`mailto:${contact.email}`} aria-label={`Написать письмо: ${contact.email}`}>
+              <MailLink email={contact.email} className="nx-icon-btn ctd-round" aria-label={`Написать письмо: ${contact.email}`}>
                 <SectionIcon name="mail" size={22} />
-              </a>
+              </MailLink>
             )}
           </div>
 
           <dl className="ctd-info">
-            {contact.email && <Row icon={<Mail size={16} />} label="Почта"><a href={`mailto:${contact.email}`}>{contact.email}</a></Row>}
+            {contact.email && <Row icon={<Mail size={16} />} label="Почта"><MailLink email={contact.email} /></Row>}
             {contact.phone && <Row icon={<Phone size={16} />} label="Телефон"><a href={`tel:${contact.phone.replace(/[^\d+]/g, '')}`}>{contact.phone}</a></Row>}
             {contact.telegramUsername && (
               <Row icon={<Send size={16} />} label="Telegram">

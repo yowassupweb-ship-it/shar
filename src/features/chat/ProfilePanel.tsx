@@ -22,6 +22,7 @@ import {
 } from './store';
 import { Spinner } from '@/shared/ui/Spinner';
 import { useProgressive } from '@/shared/ui/useProgressive';
+import { MailLink } from '@/features/mail/MailLink';
 
 const ImageViewer = lazyComponent(() => import('@/shared/ui/ImageViewer'));
 
@@ -292,7 +293,7 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
 
         {other && (other.email || other.phone) && (
           <dl className="cxf-info">
-            {other.email && (<><dt>Почта</dt><dd><a href={`mailto:${other.email}`}>{other.email}</a></dd></>)}
+            {other.email && (<><dt>Почта</dt><dd><MailLink email={other.email} /></dd></>)}
             {other.phone && (<><dt>Телефон</dt><dd><a href={`tel:${other.phone}`}>{other.phone}</a></dd></>)}
           </dl>
         )}

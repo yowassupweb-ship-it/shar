@@ -9,6 +9,7 @@ import { SectionIcon } from '@/shared/ui/SectionIcon';
 import { createChat } from './actions';
 import { displayName, openChat, setPanel, useChatStore } from './store';
 import { Spinner } from '@/shared/ui/Spinner';
+import { MailLink } from '@/features/mail/MailLink';
 
 /**
  * Профиль человека внутри боковой панели — открывается нажатием на его
@@ -80,7 +81,7 @@ export default function PersonProfile({ userId, onBack }: { userId: string; onBa
 
         {u && (u.email || u.phone || u.telegramUsername || u.workSchedule || u.username) && (
           <dl className="cxf-info">
-            {u.email && (<><dt><Mail size={12} aria-hidden="true" /> Почта</dt><dd><a href={`mailto:${u.email}`}>{u.email}</a></dd></>)}
+            {u.email && (<><dt><Mail size={12} aria-hidden="true" /> Почта</dt><dd><MailLink email={u.email} /></dd></>)}
             {u.phone && (<><dt><Phone size={12} aria-hidden="true" /> Телефон</dt><dd><a href={`tel:${u.phone.replace(/[^\d+]/g, '')}`}>{u.phone}</a></dd></>)}
             {u.telegramUsername && (
               <><dt><Send size={12} aria-hidden="true" /> Telegram</dt>

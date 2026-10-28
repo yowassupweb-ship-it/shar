@@ -60,11 +60,13 @@ interface State {
   full: Record<string, MailFull>;
   search: string;
   found: MailRow[] | null;
+  /** Адрес, на который человек нажал в другом разделе: «Почта» откроет новое письмо с ним в «Кому». */
+  pendingCompose: string[] | null;
 }
 
 export const useMail = create<State>(() => ({
   accounts: [], accountsPhase: 'idle', accountId: null, boxes: [], boxesError: false, folder: 'INBOX',
-  lists: {}, listPhase: {}, syncing: {}, full: {}, search: '', found: null,
+  lists: {}, listPhase: {}, syncing: {}, full: {}, search: '', found: null, pendingCompose: null,
 }));
 const set = useMail.setState;
 const get = useMail.getState;
