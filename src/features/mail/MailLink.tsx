@@ -9,9 +9,17 @@ import { useMail } from './api';
  * Нажатие с Ctrl/⌘/Shift и средней кнопкой — как у ссылки: браузер сам решает.
  */
 export function writeTo(email: string) {
-  useMail.setState({ pendingCompose: [email] });
+  writeMail({ to: [email] });
+}
+
+/** Новое письмо с готовыми темой и текстом (например, ссылкой на материал) — адресата выберет человек. */
+export function writeMail(draft: { to?: string[]; subject?: string; body?: string }) {
+  useMail.setState({ pendingCompose: { ...draft, to: draft.to ?? [] } });
   navigate(paths.mail);
 }
+
+/** Подключён ли у человека ящик: только тогда «Отправить по почте» имеет смысл показывать. */
+export const useMailConnected = () => useMail((s) => s.accounts.length > 0);
 
 export function MailLink({ email, children, ...rest }: { email: string } & Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href'>) {
   const connected = useMail((s) => s.accounts.length > 0);

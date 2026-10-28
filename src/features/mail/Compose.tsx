@@ -18,7 +18,7 @@ import { Spinner } from '@/shared/ui/Spinner';
  */
 
 export type ComposeMode =
-  | { kind: 'new'; to?: string[] }
+  | { kind: 'new'; to?: string[]; subject?: string; body?: string }
   | { kind: 'reply'; msg: MailFull; all?: boolean }
   | { kind: 'forward'; msg: MailFull };
 
@@ -42,7 +42,7 @@ function htmlToText(html: string): string {
 function initial(mode: ComposeMode, me: string) {
   // Подпись — не в поле текста (её HTML был бы кашей из тегов), см. ncm-sig.
   const sig = '';
-  if (mode.kind === 'new') return { to: mode.to ?? ([] as string[]), cc: [] as string[], subject: '', body: sig, quote: '' };
+  if (mode.kind === 'new') return { to: mode.to ?? ([] as string[]), cc: [] as string[], subject: mode.subject ?? '', body: mode.body ?? sig, quote: '' };
   const m = mode.msg;
   const header = `${fmtFullDate(m.date)}, ${m.fromName || m.fromAddr} <${m.fromAddr}>`;
   const original = (m.bodyText || '').trim();

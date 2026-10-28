@@ -60,8 +60,8 @@ interface State {
   full: Record<string, MailFull>;
   search: string;
   found: MailRow[] | null;
-  /** Адрес, на который человек нажал в другом разделе: «Почта» откроет новое письмо с ним в «Кому». */
-  pendingCompose: string[] | null;
+  /** Письмо, начатое в другом разделе (адрес в «Кому» или «Отправить по почте»): «Почта» откроет его новым. */
+  pendingCompose: { to: string[]; subject?: string; body?: string } | null;
 }
 
 export const useMail = create<State>(() => ({

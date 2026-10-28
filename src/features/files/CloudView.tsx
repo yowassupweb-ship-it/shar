@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { realtime } from '@/shared/realtime/realtime';
 import { lazyComponent } from '@/shared/ui/lazy';
 import {
-  AlertCircle, ChevronRight, Copy, Download, ExternalLink, Folder, FolderInput, FolderPlus, LayoutGrid, Link2, List,
-  MoreHorizontal, Pencil, Pin, PinOff, RotateCw, Send, Trash2, Upload, Users,
+  AlertCircle, ArrowUpDown, Check, ChevronRight, Copy, Download, ExternalLink, Folder, FolderInput, FolderPlus, LayoutGrid, Link2, List,
+  Mail, MoreHorizontal, Pencil, Pin, PinOff, RotateCw, Send, Trash2, Upload, Users,
 } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
 import { SearchField } from '@/shared/ui/SearchField';
 import { useChatStore, displayName } from '@/features/chat';
+import { useMailConnected, writeMail } from '@/features/mail';
 import type { ViewerItem } from '@/shared/ui/ImageViewer';
 import { thumbUrl } from '@/shared/ui/media';
 import { Avatar } from '@/shared/ui/Avatar';
@@ -48,6 +49,24 @@ function readMode(): Mode {
 
 const canEdit = (it: { ownerId: string; editAccess?: string[] }) =>
   String(it.ownerId) === myId() || (it.editAccess || []).map(String).includes(myId());
+
+type SortId = 'new' | 'old' | 'name' | 'nameDesc' | 'big' | 'small';
+const SORT_KEY = 'nf:sort';
+const byName = (a: CloudFile, b: CloudFile) => a.name.localeCompare(b.name, 'ru', { numeric: true, sensitivity: 'base' });
+const byNewest = (a: CloudFile, b: CloudFile) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id);
+/** Сортировка файлов в папке; выбранную помним на этом устройстве. */
+const SORTS: Record<SortId, { label: string; short: string; compare: (a: CloudFile, b: CloudFile) => number }> = {
+  new: { label: 'Сначала новые', short: 'Новые', compare: byNewest },
+  old: { label: 'Сначала старые', short: 'Старые', compare: (a, b) => -byNewest(a, b) },
+  name: { label: 'По имени, А → Я', short: 'Имя А–Я', compare: (a, b) => byName(a, b) || byNewest(a, b) },
+  nameDesc: { label: 'По имени, Я → А', short: 'Имя Я–А', compare: (a, b) => -byName(a, b) || byNewest(a, b) },
+  big: { label: 'Сначала большие', short: 'Большие', compare: (a, b) => (b.size || 0) - (a.size || 0) || byNewest(a, b) },
+  small: { label: 'Сначала маленькие', short: 'Маленькие', compare: (a, b) => (a.size || 0) - (b.size || 0) || byNewest(a, b) },
+};
+function readSort(): SortId {
+  try { const v = localStorage.getItem(SORT_KEY); if (v && v in SORTS) return v as SortId; } catch { /* нет хранилища */ }
+  return 'new';
+}
 
 export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highlightId }: {
   lead?: ReactNode;
@@ -121,6 +140,9 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
 
   const q = query.trim().toLowerCase();
   const folders = useMemo(() => (data?.folders || []).filter((f) => !q || f.name.toLowerCase().includes(q)), [data, q]);
+  const [sort, setSortState] = useState<SortId>(readSort);
+  const [sortMenu, setSortMenu] = useState<MenuAnchor | null>(null);
+  const setSort = (next: SortId) => { setSortState(next); try { localStorage.setItem(SORT_KEY, next); } catch { /* приватный режим — не запомним */ } };
   const files = useMemo(() => (data?.files || []).filter((f) => {
     if (q && !f.name.toLowerCase().includes(q)) return false;
     const k = kindOf(f.name, f.fileType, f.mimeType);
@@ -128,7 +150,7 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
     if (filter === 'video') return k === 'video';
     if (filter === 'doc') return k !== 'image' && k !== 'video';
     return true;
-  }), [data, q, filter]);
+  }).sort(SORTS[sort].compare), [data, q, filter, sort]);
   const images = useMemo(() => files.filter((f) => kindOf(f.name, f.fileType, f.mimeType) === 'image'), [files]);
 
   // ── Загрузка ──────────────────────────────────────────────────────────────
@@ -224,6 +246,13 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
   const copyLink = async (t: Target) => {
     const url = absolute(t.kind === 'folder' ? links.folder(t.item.id) : links.file(t.item.id));
     try { await navigator.clipboard.writeText(url); showToast('Ссылка скопирована', 'success'); } catch { showToast('Не удалось скопировать ссылку', 'error'); }
+  };
+
+  const mailConnected = useMailConnected();
+  const sendByMail = (t: Target) => {
+    const url = absolute(t.kind === 'folder' ? links.folder(t.item.id) : links.file(t.item.id));
+    writeMail({ subject: t.item.name, body: `${t.item.name}
+${url}` });
   };
 
   // Меню: ⋯, правый клик, долгое нажатие.
@@ -417,6 +446,8 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
               <button key={id} type="button" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}</button>
             ))}
           </div>
+          <button type="button" className="nx-ghost nf-act" aria-haspopup="menu" aria-expanded={Boolean(sortMenu)} title={`Сортировка: ${SORTS[sort].label}`} aria-label={`Сортировка: ${SORTS[sort].label}`}
+            onClick={(e) => setSortMenu({ element: e.currentTarget, align: 'end' })}><ArrowUpDown size={15} aria-hidden="true" /><span className="nf-btn-label">{SORTS[sort].short}</span></button>
           <div className="nx-segment" role="group" aria-label="Вид">
             <button type="button" aria-pressed={mode === 'grid'} onClick={() => setMode('grid')} aria-label="Сеткой"><LayoutGrid size={14} /></button>
             <button type="button" aria-pressed={mode === 'list'} onClick={() => setMode('list')} aria-label="Списком"><List size={14} /></button>
@@ -428,6 +459,14 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
       </header>
 
       <div className="nf-scroll nx-scroll-y">{body}</div>
+
+      {sortMenu && (
+        <Menu anchor={sortMenu} label="Сортировка файлов" onClose={() => setSortMenu(null)}>
+          {(Object.keys(SORTS) as SortId[]).map((id) => (
+            <MenuItem key={id} icon={sort === id ? <Check size={15} /> : <span style={{ width: 15 }} />} onSelect={() => { setSortMenu(null); setSort(id); }}>{SORTS[id].label}</MenuItem>
+          ))}
+        </Menu>
+      )}
 
       {dragging && (
         <div className="nf-drop" aria-hidden="true">
@@ -447,6 +486,7 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
             </>
           )}
           <MenuItem icon={<Send size={16} />} onSelect={() => { setMenu(null); setSheet({ type: 'send', target: t }); }}>Отправить в чат</MenuItem>
+          {mailConnected && <MenuItem icon={<Mail size={16} />} onSelect={() => { setMenu(null); sendByMail(t); }}>Отправить по почте</MenuItem>}
           <MenuItem icon={<Link2 size={16} />} onSelect={() => { setMenu(null); void copyLink(t); }}>Копировать ссылку</MenuItem>
           {canEdit(t.item) && (
             <>

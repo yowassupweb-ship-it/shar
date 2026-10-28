@@ -241,7 +241,7 @@ export default function MailScreen() {
   const pendingCompose = useMail((s) => s.pendingCompose);
   useEffect(() => {
     if (!pendingCompose || !account) return;
-    setCompose({ kind: 'new', to: pendingCompose });
+    setCompose({ kind: 'new', ...pendingCompose });
     useMail.setState({ pendingCompose: null });
   }, [pendingCompose, account]);
   useEffect(() => {
