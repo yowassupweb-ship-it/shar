@@ -128,8 +128,14 @@ export default function OfficeScreen() {
   const place = useRef(readPlace());
   const restored = useRef(false);
   const kindParam = params.get('kind');
-  const filter: Kind | 'all' = kindParam && kindParam in KINDS ? (kindParam as Kind) : 'all';
   const openId = params.get('id');
+  // Раздел («Все», «Доки»…) выбирает человек. В адресе без материала kind — это раздел; рядом с id (ссылка на материал,
+  // переход из документа в документ) kind — вид самого материала, и раздел от него не меняется: из «Все» открыли документ —
+  // остаёмся во «Все», фильтр «Доки» не включается.
+  const urlFilter: Kind | 'all' = kindParam && kindParam in KINDS ? (kindParam as Kind) : 'all';
+  const [pickedFilter, setPickedFilter] = useState<Kind | 'all'>(openId ? 'all' : urlFilter);
+  useEffect(() => { if (!openId) setPickedFilter(urlFilter); }, [openId, urlFilter]);
+  const filter: Kind | 'all' = openId ? pickedFilter : urlFilter;
   const narrow = useSyncExternalStore(subscribeMedia, () => window.matchMedia(NARROW).matches, () => false);
 
   // Список материалов можно убрать (крупный масштаб, широкая таблица): остаётся узкая полоска с «развернуть» и
