@@ -18,7 +18,7 @@ import '@univerjs/preset-sheets-core/lib/index.css';
 import '@univerjs/preset-sheets-find-replace/lib/index.css';
 import { IRenderManagerService } from '@univerjs/engine-render';
 import { SheetSkeletonManagerService } from '@univerjs/sheets-ui';
-import { hideMissingFonts, isDarkTheme, keepFillColors, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
+import { hideMissingFonts, isDarkTheme, keepEditorFill, keepFillColors, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
 import { applySnapshot, bookFromBase64, bookToBase64, excelToUniver } from '../lib/workbook';
 import type { EditorProps } from './types';
 import type { CursorPos, RemoteCursor } from '../useCursors';
@@ -161,6 +161,7 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
     const workbook = univerAPI.createWorkbook(excelToUniver(book));
     hideMissingFonts(univer);
     const untagFind = tagFindDialog();
+    const stopEditorFill = keepEditorFill(univer);
     workbook.setEditable(!readOnly);
 
     // Ctrl+клик по ячейке со ссылкой (или просто с адресом) — открыть в браузере, как в Excel и Google Таблицах.
@@ -247,6 +248,7 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
       el.removeEventListener('pointerdown', onPointer, true);
       // Univer снимает свои React-деревья синхронно; внутри фазы рендера нашего компонента React на это жалуется.
       untagFind();
+      stopEditorFill();
       window.setTimeout(() => { univer.dispose(); mount.remove(); }, 0);
     };
   }, [book, readOnly, theme, live]);

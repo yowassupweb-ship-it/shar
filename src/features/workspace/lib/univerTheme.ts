@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { DocParagraphMenuService } from '@univerjs/docs-ui';
 import { ComponentManager, IFontService } from '@univerjs/ui';
-import { Background, Font, IRenderManagerService, Rect } from '@univerjs/engine-render';
+import { Background, Font, IRenderManagerService, Rect, UniverRenderingContext2D } from '@univerjs/engine-render';
+import { DOCS_NORMAL_EDITOR_UNIT_ID_KEY } from '@univerjs/core';
+import { IEditorBridgeService } from '@univerjs/sheets-ui';
 import { defaultTheme, type Theme } from '@univerjs/themes';
 
 /**
@@ -92,6 +94,47 @@ export function keepFillColors() {
   background.draw = function patched(this: unknown, ctx: CanvasCtx, ...rest: unknown[]) {
     return withoutInversion(ctx, () => drawFills.call(this, ctx, ...rest), true);
   };
+}
+
+// Редактор ячейки — отдельный холст Univer: пока правишь покрашенную ячейку, на нём заливка и текст тоже рисуются
+// как есть (иначе ячейка в режиме правки вдруг «тускнела»). Холст редактора лежит в [data-u-comp="editor"];
+// цвета инвертируются в сеттерах fillStyle/strokeStyle контекста — на время правки такой ячейки они пропускают
+// цвет без изменений.
+let plainEditor = false;
+let contextPatched = false;
+type ColorSetterOwner = { canvas?: HTMLCanvasElement; _context?: { fillStyle: unknown; strokeStyle: unknown } };
+
+function patchEditorContext() {
+  if (contextPatched) return;
+  contextPatched = true;
+  const proto = UniverRenderingContext2D.prototype as object;
+  for (const key of ['fillStyle', 'strokeStyle'] as const) {
+    const original = Object.getOwnPropertyDescriptor(proto, key);
+    if (!original?.set) continue;
+    Object.defineProperty(proto, key, {
+      ...original,
+      set(this: ColorSetterOwner, value: unknown) {
+        if (plainEditor && this._context && this.canvas?.closest?.('[data-u-comp="editor"]')) { this._context[key] = value; return; }
+        original.set!.call(this, value);
+      },
+    });
+  }
+}
+
+/** Подписка на правку ячейки: покрашенная — рисуем редактор без инверсии. Возвращает отписку. */
+export function keepEditorFill(univer: unknown): () => void {
+  patchEditorContext();
+  const injector = (univer as { __getInjector: () => { get: <T>(token: unknown) => T } }).__getInjector();
+  const bridge = injector.get<IEditorBridgeService>(IEditorBridgeService);
+  const renders = injector.get<IRenderManagerService>(IRenderManagerService);
+  const sub = bridge.currentEditCellState$.subscribe((state) => {
+    const painted = isPainted(state?.documentLayoutObject?.fill);
+    if (painted === plainEditor) return;
+    plainEditor = painted;
+    // Уже нарисованное в прежних цветах — перерисовать.
+    try { (renders.getRenderUnitById(DOCS_NORMAL_EDITOR_UNIT_ID_KEY) as unknown as { scene?: { makeDirty: (dirty?: boolean) => void } } | null)?.scene?.makeDirty(true); } catch { /* редактор ещё не создан */ }
+  });
+  return () => { sub.unsubscribe(); plainEditor = false; };
 }
 
 const currentTheme = () => document.documentElement.dataset.theme || 'light';
