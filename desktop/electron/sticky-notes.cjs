@@ -62,8 +62,9 @@ function createStickyNotes({ baseUrl, preload, icon }) {
     };
   }
 
-  function urlFor(id) {
-    return new URL(`/sticky/${encodeURIComponent(id)}`, baseUrl()).toString();
+  function urlFor(id, kind) {
+    // Вид в адресе: окно сразу рисует нужный интерфейс (заметка — своя шапка, документ и таблица — шапка «Офиса»).
+    return new URL(`/sticky/${encodeURIComponent(id)}?kind=${encodeURIComponent(kind || 'note')}`, baseUrl()).toString();
   }
 
   /** Размер нового окна: заданный (например, «как у этой заметки») или обычный для вида материала. */
@@ -137,7 +138,7 @@ function createStickyNotes({ baseUrl, preload, icon }) {
       // Окно закрыли сами — заметка больше не на столе. При выходе из приложения список открытых не трогаем.
       if (!quitting) { state.open = state.open.filter((item) => item !== key); save(); }
     });
-    void win.loadURL(urlFor(key));
+    void win.loadURL(urlFor(key, kind));
     if (!state.open.includes(key)) { state.open.push(key); save(); }
     return { ok: true };
   }
@@ -161,7 +162,8 @@ function createStickyNotes({ baseUrl, preload, icon }) {
     const key = keyOf(sender);
     const next = String(newId);
     const win = windows.get(key);
-    if (!win || key === next) return { ok: Boolean(win) };
+    if (win && key === next) { if (KINDS.has(kind) && state.kinds[key] !== kind) { state.kinds[key] = kind; save(); } return { ok: true }; }
+    if (!win) return { ok: false };
     const other = windows.get(next);
     if (other && !other.isDestroyed()) {
       if (other.isMinimized()) other.restore();

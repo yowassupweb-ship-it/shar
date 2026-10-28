@@ -570,6 +570,24 @@
 .nws-presence { display: inline-flex; align-items: center; padding-left: 6px; }
 .nws-presence-one { position: relative; display: inline-grid; margin-left: -6px; border-radius: 50%; box-shadow: 0 0 0 2px var(--ring, var(--accent-color)), 0 0 0 4px var(--bg-color); }
 .nws-presence-one[data-editing] { animation: nws-typing 1.6s var(--ease-out) infinite; }
+/* Имя у каждого аватара в шапке — сразу при наведении (нативная подсказка появляется с задержкой, а в окне без рамки не появляется вовсе). */
+.nws-head .nws-presence-one[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--glass, var(--container-bg));
+  box-shadow: 0 0 0 1px var(--glass-brd, var(--border-color)), var(--glass-shadow, 0 4px 14px rgba(0, 0, 0, .25));
+  color: var(--text-main);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  pointer-events: none;
+}
 .nws-presence-more { display: inline-grid; place-items: center; min-width: 26px; height: 26px; margin-left: 4px; padding: 0 6px; border-radius: var(--radius-pill); background: var(--element-bg); color: var(--text-2); font-size: var(--text-xs); }
 @keyframes nws-typing { 0%, 100% { box-shadow: 0 0 0 2px var(--ring), 0 0 0 4px var(--bg-color); } 50% { box-shadow: 0 0 0 3px var(--ring), 0 0 10px 3px color-mix(in srgb, var(--ring) 55%, transparent), 0 0 0 5px var(--bg-color); } }
 @media (prefers-reduced-motion: reduce) { .nws-presence-one[data-editing] { animation: none; } }
@@ -673,11 +691,14 @@ html.is-sticky, html.is-sticky body, html.is-sticky #root { height: 100%; overfl
 .nws-sticky-row-text { display: grid; min-width: 0; }
 .nws-sticky-row-text b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); font-weight: var(--weight-medium); }
 .nws-sticky-row-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--text-xs); }
-/* Значок вида в шапке окна документа и таблицы; статус сохранения — там же, а не отдельной строкой внизу. */
-.nws-sticky-logo { width: 22px; height: 22px; margin-right: 6px; border-radius: 6px; }
-.nws-sticky-logo svg { width: 14px; height: 14px; }
-.nws-sticky-status { flex: none; margin-right: 6px; color: var(--text-muted); font-size: var(--text-xs); white-space: nowrap; }
-.nws-sticky-status[data-state="error"] { color: var(--state-danger); }
+/* Документ и таблица в своём окне: шапка «Офиса» — она же «ручка» для перетаскивания окна (кнопки и поля — не ручка). */
+.nws-sticky-item { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.nws-sticky-item > .nws-item { flex: 1; min-height: 0; }
+.nws-sticky-item .nws-head { -webkit-app-region: drag; user-select: none; }
+.nws-sticky-item .nws-head button, .nws-sticky-item .nws-head input, .nws-sticky-item .nws-head a, .nws-sticky-item .nws-head .nws-sticky-window, .nws-sticky-item .nws-head .nws-presence, .nws-sticky-item .nws-head .nws-save, .nws-sticky-item .nws-head .nws-owner { -webkit-app-region: no-drag; }
+/* Название — не на всю ширину: свободное место шапки остаётся «ручкой» окна. */
+.nws-sticky-item .nws-title { flex: 0 1 320px; min-width: 120px; }
+.nws-sticky-window { display: inline-flex; align-items: center; gap: 2px; margin-left: var(--space-2); padding-left: var(--space-2); border-left: 1px solid var(--border-color); }
 .nws-sticky-foot { flex: none; padding: 4px 12px; color: var(--text-muted); font-size: var(--text-xs); text-align: right; }
 .nws-sticky-foot .is-error { color: var(--state-danger); }
 

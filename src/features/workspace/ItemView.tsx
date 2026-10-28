@@ -49,8 +49,10 @@ const ACCESS_ICON = { private: Lock, all: Globe2 } as const;
  * Один материал целиком: шапка (название, состояние сохранения, доступ, «Поделиться», меню) и редактор своего вида.
  * Работает и после входа (по id), и по ссылке (по токену) — тогда без меню владельца.
  */
-export function ItemView({ source, onBack, onChanged, onDeleted, onOpen }: {
+export function ItemView({ source, onBack, onChanged, onDeleted, onOpen, windowControls }: {
   source: Source;
+  /** Кнопки окна (поверх всех окон, свернуть, закрыть) — для отдельного окна материала: ставятся в конец шапки. */
+  windowControls?: React.ReactNode;
   onBack?: () => void;
   /** Название, закрепление или доступ изменились — список обновит строку. */
   onChanged?: () => void;
@@ -274,7 +276,7 @@ ${added}`;
           onBlur={() => onChanged?.()}
           aria-label="Название"
         />
-        <PresenceStack viewers={viewers} />
+        <PresenceStack viewers={viewers} ownTips />
         {status_}
         {!shared && item.isOwner && (
           <button type="button" className="nws-access" onClick={() => setShare(true)} title={accessLevel === 'all' ? 'Видят все в Шаре' : 'Видите только вы и те, кому выдан доступ'}>
@@ -312,6 +314,7 @@ ${added}`;
             <MoreHorizontal size={18} />
           </button>
         )}
+        {windowControls}
       </header>
 
       {conflict && (

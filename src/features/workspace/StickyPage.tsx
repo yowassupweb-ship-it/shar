@@ -1,14 +1,16 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { ExternalLink, List, Minus, Pin, PinOff, Plus, StickyNote, X } from 'lucide-react';
 import { links } from '@/shared/navigation/routes';
 import LinkChooserHost from '@/shared/navigation/LinkChooser';
 import { installInternalLinks, officeItemOf, setLinkRouter } from '@/shared/navigation/internalLinks';
 import { useSession, verifySession } from '@/shared/session/session';
 import { realtime } from '@/shared/realtime/realtime';
+import { boot as bootChats, shutdown as shutdownChats } from '@/features/chat';
+import type { User } from '@/shared/types/chat';
 import ToastContainer, { showToast } from '@/shared/ui/Toast';
 import { workspaceApi } from './api';
-import { KINDS } from './kinds';
+import { ItemView } from './ItemView';
 import { NoteEditor } from './editors/NoteEditor';
 import type { Item } from './types';
 import { stickyBridge } from './lib/sticky';
@@ -16,14 +18,11 @@ import { useItemSession } from './useItemSession';
 import { Spinner } from '@/shared/ui/Spinner';
 import './workspace.css';
 
-// Документ и таблица в отдельном окне — те же редакторы, что в «Офисе»; грузятся, только когда окно открыто.
-const DocEditor = lazy(() => import('./editors/DocEditor'));
-const SheetEditor = lazy(() => import('./editors/SheetEditor'));
 
 /**
  * Окно материала на рабочем столе (/sticky/<id>): окно без рамки поверх рабочего стола — цветная шапка, правка на месте,
  * сохранение на сервер. Заметка — маленькое окно (со списком заметок, куда можно вернуться, и «+» для новой такого же
- * размера), документ и таблица — рабочее окно с тем же редактором, что в «Офисе». Это тот же материал: правки видны и в
+ * размера), документ и таблица — рабочее окно: та же шапка (импорт, доступ, скачать, история…) и редактор, что в «Офисе». Это тот же материал: правки видны и в
  * списке, и у коллег, а чужие правки подтягиваются сюда сами (useItemSession). Окно создаёт главный процесс приложения.
  */
 
@@ -54,7 +53,7 @@ export default function StickyPage() {
       }
       if (!kind || !['note', 'document', 'table'].includes(kind)) { void bridge.focusMain(path); return; }
       const result = await bridge.switchTo(item.id, kind);
-      if (!result.focusedExisting) navigate(`/sticky/${encodeURIComponent(item.id)}`, { replace: true });
+      if (!result.focusedExisting) navigate(`/sticky/${encodeURIComponent(item.id)}?kind=${kind}`, { replace: true });
     };
     setLinkRouter({ here: (path) => void showHere(path), plain: (path) => void bridge?.focusMain(path) });
     const stop = installInternalLinks();
@@ -72,7 +71,7 @@ export default function StickyPage() {
 
   return (
     <div className="nx nws-sticky">
-      {status === 'checking' ? null : me ? <ItemWindow id={id} /> : <SignedOut />}
+      {status === 'checking' ? null : me ? <Window id={id} /> : <SignedOut />}
       <ToastContainer />
       <LinkChooserHost />
     </div>
@@ -165,7 +164,53 @@ function NoteList({ currentId, onPick }: { currentId: string; onPick: (id: strin
   );
 }
 
-function ItemWindow({ id }: { id: string }) {
+/** Кнопки окна без рамки: поверх всех окон, открыть в Шаре, свернуть, закрыть. Общие для окна заметки и окна «Офиса». */
+function WindowButtons({ kind, id, onTop, setOnTop }: { kind: string; id: string; onTop: boolean; setOnTop: (v: boolean) => void }) {
+  const bridge = stickyBridge();
+  return (
+    <>
+      <button type="button" className="nws-sticky-btn" aria-pressed={onTop} title={onTop ? 'Не держать поверх окон' : 'Держать поверх всех окон'} aria-label="Поверх всех окон"
+        onClick={() => void bridge?.setOnTop().then(setOnTop)}>{onTop ? <PinOff size={15} /> : <Pin size={15} />}</button>
+      <button type="button" className="nws-sticky-btn" title="Открыть в Шаре" aria-label="Открыть в Шаре" onClick={() => void bridge?.focusMain(links.office(kind as 'note' | 'document' | 'table', id))}><ExternalLink size={15} /></button>
+      <button type="button" className="nws-sticky-btn" title="Свернуть" aria-label="Свернуть" onClick={() => void bridge?.minimize()}><Minus size={16} /></button>
+      <button type="button" className="nws-sticky-btn" title="Закрыть окно (материал останется в Офисе)" aria-label="Закрыть" onClick={() => void bridge?.close()}><X size={16} /></button>
+    </>
+  );
+}
+
+/** Какое окно рисовать: вид материала приходит в адресе (?kind=…). Заметка — своё маленькое окно, остальное — «Офис». */
+function Window({ id }: { id: string }) {
+  const [params] = useSearchParams();
+  const kind = params.get('kind') || 'note';
+  return kind === 'document' || kind === 'table' ? <OfficeWindow key={id} id={id} kind={kind} /> : <NoteWindow key={id} id={id} />;
+}
+
+/** Документ и таблица в своём окне: вся шапка и редактор «Офиса» (ItemView), плюс кнопки окна справа. */
+function OfficeWindow({ id, kind }: { id: string; kind: string }) {
+  const bridge = stickyBridge();
+  const { me } = useSession();
+  // «Отправить в чат» и «Поделиться» берут чаты и людей из хранилища чатов, а оно поднимается только в главном окне —
+  // без него в окне нечего было выбирать («Ничего не нашлось»). Поднимаем и здесь, пока окно документа открыто.
+  useEffect(() => {
+    if (!me) return undefined;
+    bootChats(me as unknown as User);
+    return () => shutdownChats();
+  }, [me]);
+  const [onTop, setOnTop] = useState(false);
+  useEffect(() => { void bridge?.state().then((state) => setOnTop(state.onTop)); }, [bridge]);
+  return (
+    <section className="nws-sticky-item" data-kind={kind}>
+      <ItemView
+        source={{ id }}
+        onDeleted={() => void bridge?.forget(id)}
+        onOpen={(copyId, copyKind) => { void bridge?.open(copyId, null, { kind: copyKind }); }}
+        windowControls={<span className="nws-sticky-window"><WindowButtons kind={kind} id={id} onTop={onTop} setOnTop={setOnTop} /></span>}
+      />
+    </section>
+  );
+}
+
+function NoteWindow({ id }: { id: string }) {
   const session = useItemSession({ id });
   const { item, status, error } = session;
   const bridge = stickyBridge();
@@ -173,19 +218,22 @@ function ItemWindow({ id }: { id: string }) {
   const [onTop, setOnTop] = useState(false);
   const [listing, setListing] = useState(false);
   useEffect(() => { void bridge?.state().then((state) => setOnTop(state.onTop)); }, [bridge]);
-  useEffect(() => { setListing(false); }, [id]);
-  const kind = item?.kind ?? 'note';
-  useEffect(() => { if (item) document.title = item.title || WINDOW_TITLE[kind] || 'Шар'; }, [item?.title, kind]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { document.title = item?.title || 'Заметка'; }, [item?.title]);
+  // Адрес без вида, а материал — документ или таблица (старая ссылка, перезапуск): переоткрываем как рабочее окно.
+  useEffect(() => {
+    if (item && (item.kind === 'document' || item.kind === 'table')) {
+      void bridge?.switchTo(id, item.kind);
+      navigate(`/sticky/${encodeURIComponent(id)}?kind=${item.kind}`, { replace: true });
+    }
+  }, [item?.kind]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const isNote = kind === 'note';
   const gone = status === 'missing';
-
   // Выбрали заметку из списка: окно (его место и размер) переходит на неё. Уже открыта в другом окне — показываем то.
   const pick = async (noteId: string) => {
     if (noteId === id) { setListing(false); return; }
     const result = await bridge?.switchTo(noteId, 'note');
     if (result?.focusedExisting) return;
-    navigate(`/sticky/${encodeURIComponent(noteId)}`, { replace: true });
+    navigate(`/sticky/${encodeURIComponent(noteId)}?kind=note`, { replace: true });
   };
   // «+» — новая заметка в новом окне того же размера, что это.
   const addNote = async () => {
@@ -197,44 +245,23 @@ function ItemWindow({ id }: { id: string }) {
     }
   };
 
-  const info = isNote ? null : KINDS[kind as 'document' | 'table'];
-  const saveText = session.state === 'error' ? 'Не сохранилось' : session.state === 'saved' ? 'Сохранено' : 'Сохраняю…';
-  const openInShar = () => void bridge?.focusMain(links.office(kind as 'note' | 'document' | 'table', id));
   return (
-    <section className="nws-sticky-note" data-kind={kind} data-color={item?.meta.color || 'default'}>
+    <section className="nws-sticky-note" data-kind="note" data-color={item?.meta.color || 'default'}>
       <header className="nws-sticky-head">
-        {isNote && (
-          <button type="button" className="nws-sticky-btn" aria-pressed={listing} title={listing ? 'Вернуться к заметке' : 'Список заметок'} aria-label="Список заметок" onClick={() => setListing((v) => !v)}><List size={15} /></button>
-        )}
-        {info && <span className="nws-kind-icon nws-sticky-logo" style={{ '--a': info.tint[0], '--b': info.tint[1] } as React.CSSProperties} aria-hidden="true"><info.icon size={14} /></span>}
+        <button type="button" className="nws-sticky-btn" aria-pressed={listing} title={listing ? 'Вернуться к заметке' : 'Список заметок'} aria-label="Список заметок" onClick={() => setListing((v) => !v)}><List size={15} /></button>
         {listing ? <span className="nws-sticky-title">Заметки</span> : <Title value={item?.title ?? ''} editable={Boolean(item?.canEdit)} onSave={session.setTitle} />}
         <span className="nws-sticky-fill" />
-        {!isNote && item && <span className="nws-sticky-status" data-state={session.state} role="status" title={saveText}>{saveText}</span>}
-        {isNote && <button type="button" className="nws-sticky-btn" title="Новая заметка (такого же размера)" aria-label="Новая заметка" onClick={() => void addNote()}><Plus size={16} /></button>}
-        <button type="button" className="nws-sticky-btn" aria-pressed={onTop} title={onTop ? 'Не держать поверх окон' : 'Держать поверх всех окон'} aria-label="Поверх всех окон"
-          onClick={() => void bridge?.setOnTop().then(setOnTop)}>{onTop ? <PinOff size={15} /> : <Pin size={15} />}</button>
-        <button type="button" className="nws-sticky-btn" title="Открыть в Шаре" aria-label="Открыть в Шаре" onClick={openInShar}><ExternalLink size={15} /></button>
-        <button type="button" className="nws-sticky-btn" title="Свернуть" aria-label="Свернуть" onClick={() => void bridge?.minimize()}><Minus size={16} /></button>
-        <button type="button" className="nws-sticky-btn" title={`Закрыть окно (${isNote ? 'заметка' : 'материал'} останется в Офисе)`} aria-label="Закрыть" onClick={() => void bridge?.close()}><X size={16} /></button>
+        <button type="button" className="nws-sticky-btn" title="Новая заметка (такого же размера)" aria-label="Новая заметка" onClick={() => void addNote()}><Plus size={16} /></button>
+        <WindowButtons kind="note" id={id} onTop={onTop} setOnTop={setOnTop} />
       </header>
       <div className="nws-sticky-body">
         {listing && <NoteList currentId={id} onPick={(noteId) => void pick(noteId)} />}
         {!listing && status === 'loading' && <div className="nws-sticky-state"><Spinner size={22} label="Открываю" /></div>}
-        {!listing && gone && <p className="nws-sticky-state" role="alert">Материал удалён или у вас нет доступа.</p>}
+        {!listing && gone && <p className="nws-sticky-state" role="alert">Заметка удалена или у вас нет доступа.</p>}
         {!listing && status === 'error' && <p className="nws-sticky-state" role="alert">{error || 'Не удалось открыть.'} <button type="button" className="nx-ghost" onClick={() => void session.reload()}>Повторить</button></p>}
-        {!listing && item && isNote && <NoteEditor content={item.content} onContent={session.setContent} readOnly={!item.canEdit} loadKey={session.loadKey} title={item.title} visible />}
-        {!listing && item && (kind === 'document' || kind === 'table') && (
-          <Suspense fallback={<div className="nws-sticky-state"><Spinner size={22} label="Загружаю редактор" /></div>}>
-            {kind === 'document'
-              ? <DocEditor content={item.content} onContent={session.setContent} readOnly={!item.canEdit} loadKey={session.loadKey} title={item.title} visible live={session.live} />
-              : <SheetEditor content={item.content} onContent={session.setContent} readOnly={!item.canEdit} loadKey={session.loadKey} title={item.title} visible live={session.live} />}
-          </Suspense>
-        )}
-        {!listing && item && kind === 'presentation' && (
-          <div className="nws-sticky-empty"><b>Презентации открываются в Шаре</b><button type="button" className="nx-ghost" onClick={openInShar}>Открыть в Шаре</button></div>
-        )}
+        {!listing && item && item.kind === 'note' && <NoteEditor content={item.content} onContent={session.setContent} readOnly={!item.canEdit} loadKey={session.loadKey} title={item.title} visible />}
       </div>
-      {item && !listing && isNote && <footer className="nws-sticky-foot">{session.state === 'error' ? <span className="is-error">Не сохранилось</span> : session.state === 'saved' ? 'Сохранено' : 'Сохраняю…'}</footer>}
+      {item && !listing && <footer className="nws-sticky-foot">{session.state === 'error' ? <span className="is-error">Не сохранилось</span> : session.state === 'saved' ? 'Сохранено' : 'Сохраняю…'}</footer>}
     </section>
   );
 }
