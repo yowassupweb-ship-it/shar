@@ -34,6 +34,10 @@
       "electron/**/*",
       "package.json"
     ],
+    "asarUnpack": [
+      "electron/sticky-*.ico",
+      "electron/icon.ico"
+    ],
     "extraResources": [
       {
         "from": "web",

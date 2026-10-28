@@ -868,10 +868,12 @@ function registerWindowControls(mainWindow) {
     mainWindow.webContents.downloadURL(absolute);
   });
 
-  ipcMain.handle('window:set-fullscreen', (_event, on) => {
-    if (mainWindow.isDestroyed()) return false;
-    mainWindow.setFullScreen(Boolean(on));
-    return mainWindow.isFullScreen();
+  ipcMain.handle('window:set-fullscreen', (event, on) => {
+    // Окно, из которого просят: отдельное окно документа разворачивает себя, а не главное окно.
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    if (win.isDestroyed()) return false;
+    win.setFullScreen(Boolean(on));
+    return win.isFullScreen();
   });
 
   ipcMain.handle('window:close', () => {
@@ -1890,7 +1892,7 @@ async function createWindow(existingSplash) {
   // когда загрузился главный интерфейс (до этого им негде взять вход и адрес).
   uiBaseUrl = remoteUrl;
   if (!stickyNotes) {
-    stickyNotes = createStickyNotes({ baseUrl: () => uiBaseUrl, preload: path.join(__dirname, 'preload.cjs'), icon: appIconPath });
+    stickyNotes = createStickyNotes({ baseUrl: () => uiBaseUrl, preload: path.join(__dirname, 'preload.cjs'), icon: appIconPath, appId: IS_BETA ? 'ru.shar.os.beta' : 'ru.shar.os' });
     stickyNotes.install({
       focusMain: (url) => {
         const win = mainWindowRef;
@@ -1934,6 +1936,21 @@ async function createWindow(existingSplash) {
   mainWindow.on('show', reapplyBadgeSoon);
   mainWindow.on('restore', reapplyBadgeSoon);
   mainWindow.webContents.on('did-finish-load', reapplyBadgeSoon);
+  // Шар запустили быстрым действием из меню значка, когда он не был открыт: адрес — после загрузки интерфейса.
+  // Окно после первой загрузки ещё раз перезагружается (ниже, «Автоматическая перезагрузка») — ждём последнюю загрузку.
+  let launchRoute = jumpRouteOf(process.argv);
+  let launchTimer = null;
+  if (launchRoute) {
+    mainWindow.webContents.on('did-finish-load', () => {
+      if (!launchRoute) return;
+      clearTimeout(launchTimer);
+      launchTimer = setTimeout(() => {
+        if (!launchRoute || mainWindow.isDestroyed()) return;
+        mainWindow.webContents.send('open-route', launchRoute);
+        launchRoute = '';
+      }, 1500);
+    });
+  }
   mainWindow.webContents.on('did-finish-load', sendAttention);
 
   // Перекрытие окна меняется без событий окна (его закрыли другим окном), поэтому
@@ -2861,6 +2878,54 @@ async function createWindow(existingSplash) {
   });
 }
 
+// ── Быстрые действия в меню значка (правый клик в панели задач Windows) ──────────────────────────────
+// Задача запускает приложение с --shar-action=<действие>. Уже запущенный экземпляр получает её через second-instance
+// (single-instance lock) и открывает адрес в интерфейсе; если Шар не был запущен — адрес открывается после загрузки окна.
+const JUMP_ACTIONS = [
+  { id: 'new-document', title: 'Новый документ', route: '/office?new=document', icon: 'document' },
+  { id: 'new-table', title: 'Новая таблица', route: '/office?new=table', icon: 'table' },
+  { id: 'new-note', title: 'Новая заметка', route: '/office?new=note', icon: 'note' },
+  { id: 'new-presentation', title: 'Новая презентация', route: '/office?new=presentation', icon: 'presentation' },
+  { id: 'office', title: 'Офис', route: '/office' },
+  { id: 'chats', title: 'Чаты', route: '/chats' },
+  { id: 'mail', title: 'Почта', route: '/mail' },
+];
+const JUMP_FLAG = '--shar-action=';
+
+function jumpRouteOf(argv) {
+  const arg = (argv || []).find((a) => typeof a === 'string' && a.startsWith(JUMP_FLAG));
+  const action = arg ? JUMP_ACTIONS.find((a) => a.id === arg.slice(JUMP_FLAG.length)) : null;
+  return action ? action.route : '';
+}
+
+function setupJumpList() {
+  if (process.platform !== 'win32') return;
+  // В разработке приложение — electron.exe с путём к main.cjs и своим профилем: задача должна запустить ровно его,
+  // иначе single-instance lock (по профилю) не сработает и откроется второй экземпляр.
+  const base = app.isPackaged ? [] : process.argv.slice(1)
+    .filter((a) => !a.startsWith(JUMP_FLAG) && !a.startsWith('--remote-debugging-port'))
+    .map((a) => (a.startsWith('-') ? a : path.resolve(a)));
+  const quote = (a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a);
+  // Значок задачи — файл .ico вне app.asar (asarUnpack): плитка вида материала, у остальных — значок Шара. Значок
+  // самой программы не берём: в разработке это electron.exe, и в меню стоял логотип Electron.
+  const unpacked = (file) => path.join(__dirname, file).replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+  const iconOf = (kind) => {
+    const file = unpacked(kind ? `sticky-${kind}.ico` : 'icon.ico');
+    return fs.existsSync(file) ? { iconPath: file, iconIndex: 0 } : { iconPath: process.execPath, iconIndex: 0 };
+  };
+  try {
+    app.setUserTasks(JUMP_ACTIONS.map((a) => ({
+      program: process.execPath,
+      arguments: [...base, `${JUMP_FLAG}${a.id}`].map(quote).join(' '),
+      title: a.title,
+      description: a.title,
+      ...iconOf(a.icon),
+    })));
+  } catch (error) {
+    console.warn('[jump-list] не удалось задать быстрые действия:', error);
+  }
+}
+
 // Устанавливаем название приложения для уведомлений и других системных diалогов
 app.setName(IS_BETA ? 'Shar OS Beta' : 'Shar OS');
 
@@ -2932,11 +2997,14 @@ const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
     if (mainWindowRef && !mainWindowRef.isDestroyed()) {
       if (mainWindowRef.isMinimized()) mainWindowRef.restore();
       mainWindowRef.show();
       mainWindowRef.focus();
+      // Быстрое действие из меню значка в панели задач (setupJumpList): адрес — в интерфейс.
+      const route = jumpRouteOf(argv);
+      if (route) mainWindowRef.webContents.send('open-route', route);
     }
   });
 }
@@ -3000,14 +3068,21 @@ function setupMediaPermissions() {
     'notifications', 'clipboard-sanitized-write',
   ]);
 
-  ses.setPermissionRequestHandler((_wc, permission, callback) => {
-    const granted = ALLOWED.has(permission);
-    if (!granted) callDebugLog(`[calls] разрешение "${permission}" отклонено`);
-    callback(granted);
+  // Чтение буфера обмена — «Вставить» из меню таблицы и документа (Ctrl+V обходится без него): без разрешения
+  // «Копировать» из меню работало, а «Вставить» молча ничего не делало. Только страницам самого Шара.
+  const OWN_HOSTS = new Set(['127.0.0.1', 'localhost', 'vokrug-sveta.shar-os.ru']);
+  const ownPage = (url) => { try { return OWN_HOSTS.has(new URL(url).hostname); } catch { return false; } };
+  const granted = (wc, permission, url) => ALLOWED.has(permission)
+    || (permission === 'clipboard-read' && ownPage(url || (wc && wc.getURL()) || ''));
+
+  ses.setPermissionRequestHandler((wc, permission, callback, details) => {
+    const ok = granted(wc, permission, details && details.requestingUrl);
+    if (!ok) callDebugLog(`[calls] разрешение "${permission}" отклонено`);
+    callback(ok);
   });
   // Синхронная проверка — по ней Chromium решает, показывать ли устройства и
   // пускать ли getUserMedia без отдельного запроса.
-  ses.setPermissionCheckHandler((_wc, permission) => ALLOWED.has(permission));
+  ses.setPermissionCheckHandler((wc, permission, requestingOrigin) => granted(wc, permission, requestingOrigin));
 
   ses.setDisplayMediaRequestHandler((_request, callback) => {
     desktopCapturer.getSources({ types: ['screen', 'window'] }).then((sources) => {
@@ -3024,6 +3099,7 @@ function setupMediaPermissions() {
 app.whenReady().then(async () => {
   ensureAutoLaunchEnabled();
   setupMediaPermissions();
+  setupJumpList();
   try {
     await startWsProxy();
   } catch (err) {

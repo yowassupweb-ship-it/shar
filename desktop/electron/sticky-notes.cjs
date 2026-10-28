@@ -30,7 +30,15 @@ function kindIcons() {
   return out;
 }
 
-function createStickyNotes({ baseUrl, preload, icon }) {
+// Windows рисует кнопку окна в панели задач по идентификатору приложения: с общим ru.shar.os окна материалов брали
+// значок ярлыка Шара. Свой идентификатор на вид материала — своя группа и свой значок (.ico лежит вне app.asar,
+// см. asarUnpack в package.json: оболочке Windows файл внутри архива недоступен).
+function taskbarIcon(kind) {
+  const file = path.join(__dirname, `sticky-${kind}.ico`).replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+  return fs.existsSync(file) ? file : '';
+}
+
+function createStickyNotes({ baseUrl, preload, icon, appId }) {
   const icons = kindIcons();
   const windows = new Map(); // noteId → BrowserWindow
   const file = () => path.join(app.getPath('userData'), 'sticky-notes.json');
@@ -135,6 +143,11 @@ function createStickyNotes({ baseUrl, preload, icon }) {
     });
     win.setMenuBarVisibility(false);
     win.setContentBounds(bounds);
+    const appIconPath = process.platform === 'win32' && appId ? taskbarIcon(kind) : '';
+    if (appIconPath) win.setAppDetails({ appId: `${appId}.${kind}`, appIconPath, appIconIndex: 0, relaunchDisplayName: TITLES[kind] });
+    // Пока материал не загрузился, страница называет окно «Шар» (title из index.html) — оставляем вид материала;
+    // название самого документа страница ставит сама (ItemView, StickyPage).
+    win.on('page-title-updated', (event, title) => { if (title === 'Шар') event.preventDefault(); });
     windows.set(key, win);
     win.once('ready-to-show', () => win.show());
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
