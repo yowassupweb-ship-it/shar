@@ -8,7 +8,8 @@ import { navigate } from './navigate';
  * в таблице, заметке или чате не должна из-за этого уводить из окна. Поэтому ссылка считается «нашей» по пути
  * (раздел приложения или материал по токену), а домен — любой из семейства Шара или текущий.
  *
- * Ссылка на материал «Офиса» с Ctrl/⌘ спрашивает, куда открыть: здесь (вместо того, что на экране) или в новом окне.
+ * Ссылка на материал «Офиса» спрашивает, куда открыть (здесь, вместо того, что на экране, или в новом окне): у обычной ссылки
+ * — при Ctrl/⌘+клике, у ссылок, которые открывает редактор документа или таблицы, — всегда.
  */
 const SHAR_HOSTS = /(^|\.)shar-os\.ru$/i;
 const LOCAL_HOSTS = /^(localhost|127\.0\.0\.1|\[::1\])$/i;
@@ -117,8 +118,9 @@ export function installInternalLinks(): () => void {
   const open = window.open;
   window.open = function patched(this: Window, url?: string | URL, ...rest: [string?, string?]) {
     if (typeof url === 'string' || url instanceof URL) {
-      // Ctrl при нажатии, из-за которого открывается ссылка (ячейка таблицы, ссылка в документе), — это вопрос «куда».
-      if (openSharLink(String(url), { choose: lastPointer.ctrl })) return null;
+      // Ссылку на материал открывает редактор (кнопка «Открыть» у ссылки в документе, Ctrl+клик по ячейке таблицы) —
+      // спрашиваем «куда»: здесь, вместо текущего, или в новом окне. Остальные ссылки на Шар идут сразу.
+      if (openSharLink(String(url), { choose: true })) return null;
     }
     return open.call(this, url, ...rest);
   } as typeof window.open;
