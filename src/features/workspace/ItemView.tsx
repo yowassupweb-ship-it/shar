@@ -67,11 +67,27 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen, windowC
   const [uploadMenu, setUploadMenu] = useState<MenuAnchor | null>(null);
   const [importing, setImporting] = useState(false);
   const [share, setShare] = useState(false);
+  // Кому открыт материал: свои доступы, отделы и пришедшие от папки выше — чтобы подпись не говорила «Только я» при чужом доступе.
+  const [reach, setReach] = useState<{ count: number; names: string[] } | null>(null);
   const [sendToChat, setSendToChat] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
   const importInput = useRef<HTMLInputElement>(null);
   const importMode = useRef<'replace' | 'append'>('replace');
   const shared = 'token' in source;
+  const reachId = !shared && item?.isOwner && (item.accessLevel ?? 'private') === 'private' ? item.id : null;
+  useEffect(() => {
+    if (!reachId) { setReach(null); return; }
+    let live = true;
+    void workspaceApi.shares(reachId).then((state) => {
+      if (!live) return;
+      const names = new Set<string>();
+      for (const entry of state.shares) names.add(entry.name);
+      for (const entry of state.departments) names.add(entry.name);
+      for (const entry of state.inherited ?? []) names.add(entry.name);
+      setReach({ count: names.size, names: [...names] });
+    }).catch(() => { if (live) setReach(null); });
+    return () => { live = false; };
+  }, [reachId, share]);
   // Присутствие: кто ещё в материале и кто печатает (по ссылке без входа — не показываем).
   const viewers = usePresence('token' in source ? null : String(source.id), state === 'pending' || state === 'saving');
   // Курсоры коллег, как в Google Docs.
@@ -279,8 +295,8 @@ ${added}`;
         <PresenceStack viewers={viewers} ownTips />
         {status_}
         {!shared && item.isOwner && (
-          <button type="button" className="nws-access" onClick={() => setShare(true)} title={accessLevel === 'all' ? 'Видят все в Шаре' : 'Видите только вы и те, кому выдан доступ'}>
-            <AccessIcon size={13} aria-hidden="true" /> <span className="nws-label">{accessLevel === 'all' ? 'Все в Шаре' : 'Только я'}</span>
+          <button type="button" className="nws-access" onClick={() => setShare(true)} title={accessLevel === 'all' ? 'Видят все в Шаре' : reach?.count ? `Доступ: ${reach.names.join(', ')}` : 'Видите только вы и те, кому выдан доступ'}>
+            {accessLevel === 'private' && reach?.count ? <Users size={13} aria-hidden="true" /> : <AccessIcon size={13} aria-hidden="true" />} <span className="nws-label">{accessLevel === 'all' ? 'Все в Шаре' : reach?.count ? `Доступ: ${reach.count}` : 'Только я'}</span>
           </button>
         )}
         {!shared && !item.isOwner && item.ownerName && <span className="nws-owner" title="Владелец"><Users size={13} aria-hidden="true" /> {item.ownerName}</span>}
