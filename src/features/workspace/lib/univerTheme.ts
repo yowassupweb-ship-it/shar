@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { DocParagraphMenuService } from '@univerjs/docs-ui';
 import { ComponentManager, IFontService } from '@univerjs/ui';
-import { IRenderManagerService, Rect } from '@univerjs/engine-render';
+import { Font, IRenderManagerService, Rect } from '@univerjs/engine-render';
 import { defaultTheme, type Theme } from '@univerjs/themes';
 
 /**
@@ -27,6 +27,66 @@ export function univerTheme(theme: string): Theme {
       0: '#f5f5f7', 50: '#eceef1', 100: '#dce0e5', 200: '#c5cad2', 300: '#9ba3ae', 400: '#7b838e',
       500: '#5e6670', 600: '#454b53', 700: '#34383e', 800: '#2a2b2f', 900: '#242529',
     },
+  };
+}
+
+// ── Текст на закрашенной ячейке в тёмной теме ────────────────────────────────
+// Univer в тёмной теме инвертирует каждый цвет холста: заливка жёлтой ячейки темнеет до оливковой, а чёрный
+// текст автора становится белым — на цветном фоне он плохо читается и выглядит чужим. Если исходный цвет текста
+// читается на том, что Univer нарисует под ним, оставляем его как есть; на тёмной заливке — прежний белый.
+type Rgb = [number, number, number];
+
+function parseColor(color: unknown): Rgb | null {
+  if (typeof color !== 'string') return null;
+  const hex = color.trim().match(/^#?([0-9a-f]{6}|[0-9a-f]{3})$/i);
+  if (hex) {
+    const full = hex[1].length === 3 ? [...hex[1]].map((c) => c + c).join('') : hex[1];
+    const value = parseInt(full, 16);
+    return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+  }
+  const rgb = color.match(/^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i);
+  return rgb ? [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])] : null;
+}
+
+const luminance = ([r, g, b]: Rgb) => {
+  const channel = (v: number) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+};
+const contrast = (a: Rgb, b: Rgb) => {
+  const [x, y] = [luminance(a), luminance(b)];
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+};
+
+type ColorService = { getRenderColor: (color: string) => string };
+type CellFont = { style?: { bg?: { rgb?: string }; cl?: { rgb?: string } } } | undefined;
+type FontProto = { _renderFontEachCell: (...args: unknown[]) => boolean; __keepTextOnFill?: boolean };
+
+/** Один раз на страницу: подменяем отрисовку текста ячейки у Univer (см. выше). Светлой темы не касается. */
+export function keepTextOnFill() {
+  const proto = Font.prototype as unknown as FontProto;
+  if (proto.__keepTextOnFill) return;
+  proto.__keepTextOnFill = true;
+  const original = proto._renderFontEachCell;
+  proto._renderFontEachCell = function patched(this: unknown, ...args: unknown[]) {
+    const [renderCtx, row, col, matrix, cached] = args as [
+      { ctx?: { _canvasColorService?: ColorService } } | undefined, number, number,
+      { getValue?: (r: number, c: number) => CellFont } | undefined, CellFont,
+    ];
+    const ctx = renderCtx?.ctx;
+    const service = ctx?._canvasColorService;
+    const style = (cached ?? matrix?.getValue?.(row, col))?.style;
+    const fill = style?.bg?.rgb;
+    if (ctx && service && fill) {
+      const authored = parseColor(fill);
+      const shown = parseColor(service.getRenderColor(fill));
+      const text = parseColor(style?.cl?.rgb) ?? ([0, 0, 0] as Rgb);
+      // Светлая тема (цвет не менялся) и тёмная заливка, где авторский текст не виден, идут прежним путём.
+      if (authored && shown && (authored[0] !== shown[0] || authored[1] !== shown[1] || authored[2] !== shown[2]) && contrast(text, shown) >= 3) {
+        ctx._canvasColorService = undefined;
+        try { return original.apply(this, args); } finally { ctx._canvasColorService = service; }
+      }
+    }
+    return original.apply(this, args);
   };
 }
 
