@@ -124,7 +124,8 @@ EDIT_VIA: ContextVar[str] = ContextVar("workspace_edit_via", default="")
 # В списке содержимого нет: снимок документа весит сотни килобайт, а списку нужны название, дата и фрагмент.
 LIST_COLUMNS = """id::text AS id, kind, title, pinned, is_template, meta, owner_id, access_level, access_mode,
     created_at::text AS created_at, updated_at::text AS updated_at,
-    GREATEST(octet_length(content), content_size) AS size_bytes, left(regexp_replace(text_content, '\\s+', ' ', 'g'), 160) AS snippet"""
+    GREATEST(octet_length(content), content_size) AS size_bytes,
+    left(regexp_replace(left(text_content, 800), '\\s+', ' ', 'g'), 160) AS snippet"""
 FULL_COLUMNS = LIST_COLUMNS + ", content, content_key, updated_by"
 
 _CONTROL = re.compile(r"[\u0000-\u0008\u000b\u000c\u000e-\u001f]")
@@ -464,18 +465,36 @@ def mark_seen(item_id: str, user_id: str) -> None:
     )
 
 
+def share_roles(item_ids: list[Any], user_id: str, depts: list[str]) -> dict[str, list[str]]:
+    """Роли, выданные человеку и его отделам, по материалам — двумя запросами на весь список вместо двух на строку."""
+    ids = [int(i) for i in item_ids]
+    out: dict[str, list[str]] = {str(i): [] for i in ids}
+    if not ids:
+        return out
+    for r in db.conn.fetch_all("SELECT item_id::text AS id, role FROM workspace_item_shares WHERE user_id = %s AND item_id = ANY(%s)", (user_id, ids)) or []:
+        out[r["id"]].append(r["role"])
+    if depts:
+        for r in db.conn.fetch_all("SELECT item_id::text AS id, role FROM workspace_item_dept_shares WHERE department_id = ANY(%s) AND item_id = ANY(%s)", (depts, ids)) or []:
+            out[r["id"]].append(r["role"])
+    return out
+
+
 def permissions(row: dict[str, Any], user_id: str, depts: list[str] | None = None,
-                folder_roles: dict[int, str] | None = None) -> dict[str, Any]:
+                folder_roles: dict[int, str] | None = None, roles: list[str] | None = None) -> dict[str, Any]:
     """Что может человек с этим материалом. Правка: владелец; выданное поимённо, его отделу или через открытую
     папку владельца (если есть право на правку хоть где — правит); остальные, кто видит материал по уровню
-    доступа, — по режиму материала. folder_roles — заранее посчитанные открытые папки (для списка)."""
+    доступа, — по режиму материала. folder_roles — заранее посчитанные открытые папки, roles — заранее собранные
+    выдачи доступа (share_roles): список не ходит в базу за каждой строкой."""
     if str(row["owner_id"]) == user_id:
         return {"isOwner": True, "canEdit": True, "role": "owner"}
-    roles = [s["role"] for s in db.conn.fetch_all("SELECT role FROM workspace_item_shares WHERE item_id = %s AND user_id = %s", (row["id"], user_id)) or []]
-    if depts is None:
-        depts = user_dept_ids(user_id)
-    if depts:
-        roles += [s["role"] for s in db.conn.fetch_all("SELECT role FROM workspace_item_dept_shares WHERE item_id = %s AND department_id = ANY(%s)", (row["id"], depts)) or []]
+    if roles is None:
+        roles = [s["role"] for s in db.conn.fetch_all("SELECT role FROM workspace_item_shares WHERE item_id = %s AND user_id = %s", (row["id"], user_id)) or []]
+        if depts is None:
+            depts = user_dept_ids(user_id)
+        if depts:
+            roles += [s["role"] for s in db.conn.fetch_all("SELECT role FROM workspace_item_dept_shares WHERE item_id = %s AND department_id = ANY(%s)", (row["id"], depts)) or []]
+    else:
+        roles = list(roles)
     # Через открытую папку: куда владелец сам положил материал (список передаёт owner_folder_id готовым).
     if "owner_folder_id" in row:
         owner_folder = row.get("owner_folder_id")
@@ -497,7 +516,7 @@ def permissions(row: dict[str, Any], user_id: str, depts: list[str] | None = Non
 
 def present(row: dict[str, Any], user_id: str | None = None, *, with_content: bool = False,
             depts: list[str] | None = None, owners: dict[str, dict[str, Any]] | None = None,
-            folder_roles: dict[int, str] | None = None) -> dict[str, Any]:
+            folder_roles: dict[int, str] | None = None, roles: list[str] | None = None) -> dict[str, Any]:
     """depts и owners — заранее посчитанные отделы смотрящего и владельцы: список не ходит за ними на каждую строку."""
     owner = owners.get(str(row["owner_id"])) if owners is not None else None
     if owner is None:
@@ -514,7 +533,7 @@ def present(row: dict[str, Any], user_id: str | None = None, *, with_content: bo
         "rootPosition": row.get("root_position"),
     }
     if user_id is not None:
-        out.update(permissions(row, user_id, depts, folder_roles))
+        out.update(permissions(row, user_id, depts, folder_roles, roles))
     if with_content:
         out["content"] = row["content"]
     return out
