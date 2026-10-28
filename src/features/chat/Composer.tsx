@@ -69,6 +69,12 @@ export default function Composer({ chatId, readOnly }: { chatId: string; readOnl
     return () => window.clearTimeout(t);
   }, [chatId, text, editing]);
 
+  // Ушли из чата раньше, чем сработал таймер (начали стирать и сразу переключились), — черновик пишем сразу,
+  // иначе стёртое возвращалось бы из прежнего черновика.
+  const live = useRef({ text, editing: Boolean(editing) });
+  live.current = { text, editing: Boolean(editing) };
+  useEffect(() => () => { if (!live.current.editing) writeDraft(chatId, live.current.text); }, [chatId]);
+
   const editingId = editing?.id;
   useEffect(() => {
     if (editingId) {

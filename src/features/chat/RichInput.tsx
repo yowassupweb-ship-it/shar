@@ -155,7 +155,10 @@ const RichInput = forwardRef<RichInputHandle, Props>(function RichInput(
   const ref = useRef<HTMLDivElement>(null);
   const emitted = useRef<string | null>(null);
 
-  const setEmpty = (el: HTMLElement, text: string) => el.setAttribute('data-empty', text.length ? 'false' : 'true');
+  // Пусто — это и когда браузер после стирания оставил в поле одну <br> (она читается как перенос строки): без этого
+  // placeholder не возвращался. Настоящий перенос (Shift+Enter) — не пусто.
+  const isBlank = (el: HTMLElement, text: string) => text === '' || (text === '\n' && /^(<div>)?<br\s*\/?>(<\/div>)?$/i.test(el.innerHTML.trim()));
+  const setEmpty = (el: HTMLElement, text: string) => el.setAttribute('data-empty', isBlank(el, text) ? 'true' : 'false');
 
   const emit = useCallback(() => {
     const el = ref.current;
@@ -238,7 +241,7 @@ const RichInput = forwardRef<RichInputHandle, Props>(function RichInput(
       onFocus={onFocus}
       onInput={() => {
         const el = ref.current;
-        if (el && serialize(el) === '' && el.innerHTML !== '') el.innerHTML = '';
+        if (el && isBlank(el, serialize(el)) && el.innerHTML !== '') el.innerHTML = '';
         decorate();
         emit();
       }}
