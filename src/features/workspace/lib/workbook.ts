@@ -663,6 +663,15 @@ export function applySnapshot(book: ExcelWorkbook, snapshot: IWorkbookData) {
   ex.sorts = nextSorts;
 }
 
+/** Текст ячейки rich text (поле `p`): абзацы — переводами строки, служебные знаки Univer убраны. */
+export function richCellText(cell: ICellData): string | null {
+  const stream = cell.p?.body?.dataStream;
+  if (typeof stream !== 'string') return null;
+  // eslint-disable-next-line no-control-regex
+  const text = stream.replace(/\r\n$/, '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '');
+  return text.trim() ? text : null;
+}
+
 function writeSheet(target: Worksheet, source: IWorkbookData['sheets'][string], snapshot: IWorkbookData, ex: BookExtras, previousName: string) {
   const name = target.name;
   const resolve = (s: unknown): IStyleData | null => {
@@ -710,7 +719,9 @@ function writeSheet(target: Worksheet, source: IWorkbookData['sheets'][string], 
       if (cell.f) targetCell.value = { formula: cell.f.replace(/^=/, ''), result: cell.v as string | number | boolean | undefined } as CellValue;
       else {
         const link = cellLink(cell);
-        targetCell.value = (link ?? cell.v ?? null) as CellValue;
+        // Текст с оформлением внутри (вставка, набор в оформленной ячейке) Univer держит в `p` без `v`: без этого
+        // ячейка уходила в файл пустой и текст пропадал после переоткрытия. Пишем текст; оформление ячейки — её стиль.
+        targetCell.value = (link ?? cell.v ?? richCellText(cell) ?? null) as CellValue;
       }
     }
   }

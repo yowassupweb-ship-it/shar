@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
 from app.core.db import db
 from app.core.security import Identity, current_identity
 from app.modules.workspace import comments as cm
-from app.modules.workspace import live, store
+from app.modules.workspace import live, store, table_repair
 from app.modules.workspace.store import WorkspaceError, ACCESS_LEVELS, ACCESS_MODES, KINDS
 
 router = APIRouter()
@@ -244,6 +244,9 @@ def patch_item(item_id: str, body: ItemPatch, me: Identity = Depends(current_ide
         new_key = ""
         if "content" in fields and fields["content"] is not None:
             store.validate_content(row["kind"], fields["content"])
+            if mark is not None and row["kind"] == "table":
+                # Текст «с оформлением» клиент (и старые Шар OS) в xlsx не писал — вписываем его из журнала правок.
+                fields["content"] = table_repair.repair_saved_table(item_id, fields["content"], mark.epoch, mark.rev)
             content_parts, content_values, new_key = store.content_sets(int(item_id), fields["content"])
             sets += content_parts + ["text_content = %s"]
             params += content_values + [store.text_of(row["kind"], fields["content"])]

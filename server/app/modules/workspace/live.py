@@ -169,6 +169,26 @@ def join(row: dict[str, Any]) -> Optional[dict[str, Any]]:
     return {"epoch": head["epoch"], "rev": since, "ops": ops}
 
 
+def journal_until(item_id: str, epoch: str, rev: int) -> list[dict[str, Any]]:
+    """Все правки журнала этого поколения с номерами до rev включительно (что ещё не вытеснено), по порядку.
+    Для починки сохранённой таблицы (table_repair.py)."""
+    head = _head(str(item_id))
+    if not head or head["epoch"] != epoch or rev <= 0:
+        return []
+    raw: list[str] = []
+    r = _redis()
+    if r is not None:
+        try:
+            raw = r.lrange(_keys(str(item_id))[1], 0, -1)
+        except Exception as exc:
+            log.debug("workspace live: redis unavailable (%s)", exc)
+    else:
+        with _mem.lock:
+            raw = list(_mem.logs.get(str(item_id), []))
+    entries = [json.loads(x) for x in raw]
+    return sorted((e for e in entries if 0 < int(e.get("rev", 0)) <= rev), key=lambda e: int(e["rev"]))
+
+
 def catch_up(item_id: str, epoch: str, since: int) -> dict[str, Any]:
     """Правки после since — для отставшего клиента (переподключился, окно было свёрнуто, потерялся кадр)."""
     head = _head(item_id)
