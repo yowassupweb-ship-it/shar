@@ -68,6 +68,8 @@ class Settings:
     # running. Two schedulers must not act on the same database at once.
     startup_maintenance: bool = True
     scheduled_jobs: bool = True
+    # Переподписка соцсетей на новые события при старте — сетевые запросы к ВКонтакте и MAX (в тестах выключена).
+    social_refresh: bool = True
 
     # --- лимиты ---
     max_upload_bytes: int = 200 * 1024 * 1024
@@ -101,6 +103,7 @@ class Settings:
             auto_migrate=_flag("SHAR_AUTO_MIGRATE", True),
             startup_maintenance=_flag("SHAR_STARTUP_MAINTENANCE", True),
             scheduled_jobs=_flag("SHAR_SCHEDULED_JOBS", True),
+            social_refresh=_flag("SHAR_SOCIAL_REFRESH", True),
             max_upload_bytes=int(os.getenv("SHAR_MAX_UPLOAD_BYTES", str(200 * 1024 * 1024))),
         )
 

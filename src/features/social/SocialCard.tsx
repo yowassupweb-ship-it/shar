@@ -30,7 +30,8 @@ export function SocialCard({ card, time, createdAt }: { card: SocialCardData; ti
         </div>
         <div className="cxm-notice-title">{who}</div>
         {card.context && <div className="cxs-social-context">↳ {card.context}</div>}
-        {card.text && <div className="cxs-social-text"><Linkified text={card.text} /></div>}
+        {card.text && <div className="cxs-social-text" data-deleted={card.deleted ? 'true' : undefined}><Linkified text={card.text} /></div>}
+        {(card.deleted || card.edited) && <div className="cxs-social-flag">{card.deleted ? 'Сообщение удалено' : 'Сообщение изменено'}</div>}
         {card.media.length > 0 && <div className="cxs-social-media">{card.media.join(' · ')}{card.link ? ' — открыть в мессенджере' : ''}</div>}
         {card.answers.length > 0 && (
           <ul className="cxs-social-answers">

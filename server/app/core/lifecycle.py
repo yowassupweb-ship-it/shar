@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from contextlib import asynccontextmanager
 
 import anyio.to_thread
@@ -51,6 +52,15 @@ async def _safe_sync(label: str, fn) -> None:
         log.warning("[%s] failed (non-fatal): %s", label, e)
 
 
+def _social_events() -> None:
+    from app.modules.social.router import refresh_subscriptions  # noqa: PLC0415
+
+    try:
+        refresh_subscriptions()
+    except Exception as e:  # noqa: BLE001 — фон, старт от этого не зависит
+        log.warning("[Social events] failed (non-fatal): %s", e)
+
+
 @asynccontextmanager
 async def run(settings: Settings):
     from app.core.legacy_import import import_legacy_data
@@ -82,6 +92,9 @@ async def run(settings: Settings):
         await _safe_sync("Calendar migration", migrate_legacy_calendar_rows)
         # Отключённого за время жизни процесса пользователя нужно вывести из конференций.
         await _safe_sync("calls eviction", evict_disabled_users_from_calls)
+        if settings.social_refresh:
+            # Подписка соцсетей на новые события — сетевые запросы к площадкам, старт их не ждёт.
+            threading.Thread(target=_social_events, daemon=True, name="social-events").start()
     else:
         log.info("startup maintenance disabled")
 

@@ -16,6 +16,10 @@
     ответ сотрудника; входящее ещё и карточкой в чате (integrations/cards.py) — уведомление со ссылкой
     на диалог.
 
+Свой ответ можно исправить или удалить (ВКонтакте — сообщения в диалогах; MAX — сообщения и комментарии):
+правка уходит на площадку, в Шаре остаётся отметка. Правки и удаления клиента приходят событиями площадки и
+отмечаются так же — удалённое видно сотрудникам как удалённое.
+
 Клиенту уходит только явный ответ — из диалога или кнопкой «Ответить клиенту» на карточке. Обычные сообщения в
 чате под карточкой — внутреннее обсуждение, наружу не уходят.
 
@@ -354,6 +358,10 @@ async def webhook(account_id: str, secret: str, request: Request):
     update = update if isinstance(update, dict) else {}
     if account["platform"] == "vk":
         return await _vk_hook(account, update)
+    change = P.max_change(update) if account["platform"] == "max" else None
+    if change:
+        await anyio.to_thread.run_sync(apply_change, account, change)
+        return {"ok": True}
     inc = (P.tg_parse if account["platform"] == "telegram" else P.max_parse)(update)
     if inc:
         await anyio.to_thread.run_sync(receive, account, inc)
@@ -370,6 +378,10 @@ async def _vk_hook(account: dict, event: dict) -> PlainTextResponse:
         raise HTTPException(status_code=404, detail="Not found")
 
     def handle() -> None:
+        change = vk.change(event)
+        if change:
+            apply_change(account, change)
+            return
         if event.get("type") == "message_reply":
             record_sent(account, event)
             return
@@ -379,6 +391,45 @@ async def _vk_hook(account: dict, event: dict) -> PlainTextResponse:
 
     await anyio.to_thread.run_sync(handle)
     return PlainTextResponse("ok")  # иначе ВКонтакте повторит событие
+
+
+def apply_change(account: dict, change: P.Change) -> None:
+    """Сообщение изменили или удалили на самой площадке: отметить в переписке и в карточке входящего в чате."""
+    row = D.find_changed(account["id"], change)
+    if not row or not D.mark(row, change.action, change.text, "platform"):
+        return
+    if row.get("direction") == "in" and row.get("message_id"):
+        patch: Dict[str, Any] = {"deleted": change.action == "delete"}
+        if change.action != "delete" and change.text:
+            patch.update(text=change.text, edited=change.action == "edit")
+        update_card(str(row["message_id"]), patch)
+    if row.get("dialog_id"):
+        D.notify(str(row["dialog_id"]))
+
+
+def refresh_subscriptions() -> None:
+    """Подписать уже подключённые сообщества и ботов на новые события (правки, удаления). Делается один раз на
+    версию набора событий: отметка — в extra.events. Сбой площадки не страшен — попробуем при следующем старте."""
+    version = len(vk.VK_EVENTS) * 100 + len(P.MAX_UPDATES)
+    for row in db.conn.fetch_all("SELECT * FROM social_accounts WHERE platform IN ('vk', 'max')") or []:
+        account = dict(row)
+        extra = account.get("extra") or {}
+        if extra.get("events") == version:
+            continue
+        token = _decrypt(account["token_enc"])
+        try:
+            if account["platform"] == "vk":
+                if not extra.get("serverId"):
+                    continue
+                vk.call(token, "groups.setCallbackSettings", group_id=int(extra["groupId"]), server_id=int(extra["serverId"]),
+                        api_version=vk.VK_VERSION, **{e: 1 for e in vk.VK_EVENTS})
+            elif not P.max_resubscribe(token, account["id"]):
+                continue
+        except P.PlatformError as e:
+            log.warning("social %s: events not refreshed: %s", account["id"], e)
+            continue
+        db.conn.execute_query("UPDATE social_accounts SET extra = extra || %s::jsonb WHERE id = %s", (json.dumps({"events": version}), account["id"]))
+        log.info("social %s: subscribed to edits and deletions", account["id"])
 
 
 def _default_chat(account: dict) -> Optional[str]:
@@ -563,7 +614,7 @@ async def _answer(row: dict, text: str, me: Identity, files: Optional[list] = No
     out = None
     if row.get("dialog_id"):
         out = D.record_out(str(row["dialog_id"]), row["account_id"], row["ext_chat_id"], sent_id, text, me.user_id, me.display_name,
-                           [n for n, _, _ in files or []])
+                           [n for n, _, _ in files or []], row["ext_message_id"])
     shown = text or ", ".join(n for n, _, _ in files or [])
     answer = {"by": me.user_id, "byName": me.display_name, "text": shown, "at": datetime.now(timezone.utc).isoformat()}
     answers = [*(row.get("answers") or []), answer]
@@ -639,25 +690,119 @@ def get_dialog(dialog_id: str, me: Identity = Depends(require_tool)):
         (dialog_id,),
     ) or []
     users = {str(u["id"]): u for u in (db.get_users(include_disabled=True) or []) if u.get("id")}
-    messages = []
-    for it in items:
-        data = it.get("data") or {}
-        out = it.get("direction") == "out"
-        author = users.get(str(it.get("author_user_id") or "")) if out else None
-        messages.append({
-            "id": it["id"], "direction": it.get("direction") or "in",
-            "text": data.get("text") or "", "media": data.get("media") or [], "images": data.get("images") or [], "link": data.get("link"),
-            "context": data.get("context") or "", "canReply": data.get("can_reply", True),
-            "authorName": ((author or {}).get("name") or data.get("author_name") or "") if out else (data.get("author_name") or ""),
-            "authorUserId": it.get("author_user_id"),
-            "at": it["created_at"].isoformat() if hasattr(it.get("created_at"), "isoformat") else None,
-        })
-    last_in = next((m for m in reversed(messages) if m["direction"] == "in"), None)
     account = accounts.get(row["account_id"], {})
+    messages = [_message_view(dict(it), users, row, account, me) for it in items]
+    last_in = next((m for m in reversed(messages) if m["direction"] == "in" and not m["deleted"]), None)
     return {"dialog": D.view(row, PLATFORMS, account), "messages": messages,
             "canReply": bool(last_in and last_in["canReply"] and row["account_id"] in accounts),
             # Автору комментария во ВКонтакте сообщество может написать в личные (если он не закрыл сообщения).
             "canPrivate": bool(row["kind"] == "comments" and account.get("platform") == "vk" and last_in)}
+
+
+def _change_target(account: dict, dialog: dict, item: dict) -> Optional[dict]:
+    """Куда на площадке уходит правка или удаление ответа; None — площадка этого не даёт."""
+    sent = str((item.get("data") or {}).get("sent_id") or "")
+    if item.get("direction") != "out" or not sent or sent == "0":
+        return None
+    if account.get("platform") == "vk":
+        # Комментарии сообщества правит и удаляет только человек (ключ пользователя), не ключ сообщества.
+        peer = str(item.get("ext_chat_id") or "")
+        return {"kind": "message", "peer_id": int(peer)} if dialog.get("kind") != "comments" and peer.lstrip("-").isdigit() else None
+    if account.get("platform") == "max":
+        if dialog.get("kind") == "comments":
+            parts = str(dialog.get("dialog_key") or "").split(":")  # чат:пост:автор (dialogs.dialog_key)
+            return {"kind": "comment", "post_id": parts[1]} if len(parts) == 3 and parts[1] else None
+        return {"kind": "message", "reply_mid": (item.get("data") or {}).get("reply_to") or ""}
+    return None
+
+
+def _may_change(me: Identity, item: dict) -> bool:
+    """Свой ответ — автору; админу — любой ответ от имени сообщества (и отправленный не из Шара)."""
+    return item.get("direction") == "out" and (me.is_admin or str(item.get("author_user_id") or "") == me.user_id)
+
+
+def _message_view(it: dict, users: Dict[str, dict], dialog: dict, account: dict, me: Identity) -> dict:
+    data = it.get("data") or {}
+    out = it.get("direction") == "out"
+    author = users.get(str(it.get("author_user_id") or "")) if out else None
+    deleted = bool(data.get("deleted_at"))
+    changeable = not deleted and _may_change(me, it) and _change_target(account, dialog, it) is not None
+    return {
+        "id": it["id"], "direction": it.get("direction") or "in",
+        "text": data.get("text") or "", "media": data.get("media") or [], "images": data.get("images") or [], "link": data.get("link"),
+        "context": data.get("context") or "", "canReply": data.get("can_reply", True),
+        "authorName": ((author or {}).get("name") or data.get("author_name") or "") if out else (data.get("author_name") or ""),
+        "authorUserId": it.get("author_user_id"),
+        "at": it["created_at"].isoformat() if hasattr(it.get("created_at"), "isoformat") else None,
+        "edited": bool(data.get("edited_at")), "deleted": deleted,
+        # Сообщение с файлами не правим: ВКонтакте при правке без вложений снимает их.
+        "canEdit": changeable and not data.get("media"), "canDelete": changeable,
+    }
+
+
+def _own_item(item_id: str, me: Identity) -> tuple:
+    """Ответ, который человек может исправить или удалить, с подключением, диалогом и адресом на площадке."""
+    row = db.conn.fetch_one("SELECT * FROM social_items WHERE id = %s", (item_id,))
+    if not row or not row.get("dialog_id"):
+        raise HTTPException(status_code=404, detail="Сообщение не найдено")
+    item = dict(row)
+    if not _may_change(me, item):
+        raise HTTPException(status_code=403, detail="Исправить или удалить можно только свой ответ")
+    if (item.get("data") or {}).get("deleted_at"):
+        raise HTTPException(status_code=409, detail="Сообщение уже удалено")
+    account_row = db.conn.fetch_one("SELECT * FROM social_accounts WHERE id = %s", (item["account_id"],))
+    if not account_row:
+        raise HTTPException(status_code=410, detail="Подключение удалено — изменить сообщение отсюда нельзя")
+    account, dialog = dict(account_row), _dialog(str(item["dialog_id"]))
+    target = _change_target(account, dialog, item)
+    if target is None:
+        raise HTTPException(status_code=409, detail="Это сообщение площадка не даёт изменить из Шара — только в её приложении")
+    return item, account, dialog, target
+
+
+def _changed_view(item_id: str, dialog: dict, account: dict, me: Identity) -> dict:
+    row = dict(db.conn.fetch_one("SELECT * FROM social_items WHERE id = %s", (item_id,)) or {})
+    users = {str(u["id"]): u for u in (db.get_users(include_disabled=True) or []) if u.get("id")}
+    return _message_view(row, users, dialog, account, me)
+
+
+@router.patch("/api/social/messages/{item_id}")
+async def edit_message(item_id: str, body: Dict[str, Any] = Body(...), me: Identity = Depends(require_tool)):
+    """Исправить свой ответ клиенту: новый текст уходит на площадку, в переписке — отметка «изменено»."""
+    text = _check_text(body)
+    item, account, dialog, target = _own_item(item_id, me)
+    if (item.get("data") or {}).get("media"):
+        raise HTTPException(status_code=409, detail="Сообщение с файлами не исправить — удалите его и отправьте заново")
+    sent = str(item["data"]["sent_id"])
+    token = _decrypt(account["token_enc"])
+    try:
+        if account["platform"] == "vk":
+            await anyio.to_thread.run_sync(vk.edit_message, token, target["peer_id"], sent, text)
+        else:
+            await anyio.to_thread.run_sync(P.max_edit, token, sent, text, target)
+    except P.PlatformError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from None
+    D.mark(item, "edit", text)
+    D.notify(str(item["dialog_id"]))
+    return {"message": _changed_view(item_id, dialog, account, me)}
+
+
+@router.delete("/api/social/messages/{item_id}")
+async def delete_message(item_id: str, me: Identity = Depends(require_tool)):
+    """Удалить свой ответ у клиента. В Шаре он остаётся отметкой «удалено» — история не теряется."""
+    item, account, dialog, target = _own_item(item_id, me)
+    sent = str(item["data"]["sent_id"])
+    token = _decrypt(account["token_enc"])
+    try:
+        if account["platform"] == "vk":
+            await anyio.to_thread.run_sync(vk.delete_message, token, sent)
+        else:
+            await anyio.to_thread.run_sync(P.max_delete, token, sent, target)
+    except P.PlatformError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from None
+    D.mark(item, "delete", by=me.user_id)
+    D.notify(str(item["dialog_id"]))
+    return {"message": _changed_view(item_id, dialog, account, me)}
 
 
 @router.post("/api/social/dialogs/{dialog_id}/messages")
@@ -668,7 +813,8 @@ async def send_to_dialog(dialog_id: str, body: Dict[str, Any] = Body(...), me: I
     text = _check_text(body, allow_empty=bool(files))
     _dialog(dialog_id)
     row = db.conn.fetch_one(
-        "SELECT * FROM social_items WHERE dialog_id = %s AND direction = 'in' ORDER BY created_at DESC LIMIT 1", (dialog_id,))
+        "SELECT * FROM social_items WHERE dialog_id = %s AND direction = 'in' AND data->>'deleted_at' IS NULL "
+        "ORDER BY created_at DESC LIMIT 1", (dialog_id,))
     if not row:
         raise HTTPException(status_code=409, detail="В диалоге нет сообщений клиента")
     if not (row.get("data") or {}).get("can_reply", True):

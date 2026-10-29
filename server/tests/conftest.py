@@ -21,6 +21,7 @@ os.environ["DB_NAME"] = "shar_test"
 os.environ.setdefault("REDIS_URL", "redis://127.0.0.1:6379/15")
 os.environ["SHAR_DATA_DIR"] = _TMP
 os.environ["SHAR_MAIL_WATCH"] = "0"
+os.environ["SHAR_SOCIAL_REFRESH"] = "0"
 os.environ["SHAR_SECRET_KEY"] = "test-secret"
 os.environ["SHAR_INTEGRATION_API_KEY"] = "int-key"
 os.environ["SHAR_INTERNAL_PUSH_KEY"] = "push-key"

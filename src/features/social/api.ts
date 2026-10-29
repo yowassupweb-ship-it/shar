@@ -31,6 +31,9 @@ export interface SocialCardData {
   canReply?: boolean;
   status: 'new' | 'answered';
   answers: SocialAnswer[];
+  /** Сообщение исправили или удалили на самой площадке (клиент или модератор). */
+  edited?: boolean;
+  deleted?: boolean;
 }
 
 export interface SocialItem extends SocialCardData { id: string; createdAt: string | null; chatId: string | null; messageId: string | null }
@@ -124,6 +127,13 @@ export interface DialogMessage {
   authorName: string;
   authorUserId: string | null;
   at: string | null;
+  /** Исправлено — из Шара или на самой площадке (клиентом или в её приложении). */
+  edited: boolean;
+  /** Удалено — остаётся в переписке отметкой: что клиент написал и убрал, бывает важно. */
+  deleted: boolean;
+  /** Свой ответ можно исправить (без файлов) и удалить, если площадка это даёт: ВКонтакте — сообщения, MAX — и комментарии. */
+  canEdit: boolean;
+  canDelete: boolean;
 }
 
 /** mode: «Диалоги» — личные и беседы, «Комментарии» — комментарии к постам (две вкладки раздела). */
@@ -143,6 +153,11 @@ export interface OutFile { url: string; name: string; type: string }
 
 export const sendToDialog = (id: string, text: string, attachments: OutFile[] = []) =>
   call<{ ok: boolean }>(`/api/social/dialogs/${encodeURIComponent(id)}/messages`, 'POST', { text, attachments });
+
+export const editMessage = (id: string, text: string) =>
+  call<{ message: DialogMessage }>(`/api/social/messages/${encodeURIComponent(id)}`, 'PATCH', { text });
+export const deleteMessage = (id: string) =>
+  call<{ message: DialogMessage }>(`/api/social/messages/${encodeURIComponent(id)}`, 'DELETE');
 
 /** Уведомления модуля: кому (отдельно для вкладок) и куда. «Выбранные» — только из тех, у кого есть доступ. */
 export interface NotifyRule { to: 'all' | 'selected'; users: string[] }

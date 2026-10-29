@@ -1,15 +1,16 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { AlertCircle, ArrowLeft, ArrowUp, ArrowUpRight, CheckCircle2, Circle, CornerDownRight, Mail, MessageSquare, MessagesSquare, Paperclip, Plus, Smile, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowUp, ArrowUpRight, Check, CheckCircle2, Circle, CornerDownRight, Mail, MessageSquare, MessagesSquare, MoreHorizontal, Paperclip, Pencil, Plus, Smile, Trash2, X } from 'lucide-react';
 import RichInput, { type RichInputHandle } from '@/features/chat/RichInput';
 import { uploadFileWithProgress } from '@/shared/api/uploadFile';
 import { links, paths } from '@/shared/navigation/routes';
 import { realtime } from '@/shared/realtime/realtime';
 import { SearchField } from '@/shared/ui/SearchField';
-import { Sheet } from '@/shared/ui/overlay';
+import { askConfirm, Menu, MenuItem, Sheet, type MenuAnchor } from '@/shared/ui/overlay';
 import { Spinner } from '@/shared/ui/Spinner';
 import { showToast } from '@/shared/ui/Toast';
-import { listDialogs, loadDialog, markHandled, sendToDialog, writePrivate, type DialogMessage, type OutFile, type Platform, type SocialDialog } from './api';
+import { useLongPress } from '@/shared/ui/useLongPress';
+import { deleteMessage, editMessage, listDialogs, loadDialog, markHandled, sendToDialog, writePrivate, type DialogMessage, type OutFile, type Platform, type SocialDialog } from './api';
 import { Linkified } from './Linkified';
 import { SocialAvatar } from './SocialAvatar';
 
@@ -194,6 +195,10 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
   // Вложения: сначала грузятся в Шар (с прогрессом), в ответ уходят уже загруженные.
   const [files, setFiles] = useState<{ key: string; name: string; type: string; progress: number; file?: OutFile; error?: boolean }[]>([]);
   const uploading = files.some((f) => !f.file && !f.error);
+  // Правка своего ответа — в том же поле, как в чате Шара; начатый ответ на это время откладывается.
+  const [editing, setEditing] = useState<DialogMessage | null>(null);
+  const draftBeforeEdit = useRef('');
+  const [menu, setMenu] = useState<{ m: DialogMessage; anchor: MenuAnchor } | null>(null);
 
   useEffect(() => {
     loadDialog(id).then((d) => { setData(d); setError(''); }).catch((e: Error) => setError(e.message));
@@ -266,7 +271,60 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
       .catch((e: Error) => showToast(e.message, 'error'));
   };
 
+  const replaceMessage = (m: DialogMessage) =>
+    setData((cur) => (cur ? { ...cur, messages: cur.messages.map((x) => (x.id === m.id ? m : x)) } : cur));
+
+  const startEdit = (m: DialogMessage) => {
+    if (!editing) draftBeforeEdit.current = text;
+    setEditing(m);
+    setText(m.text);
+    setEmoji(false);
+    requestAnimationFrame(() => { input.current?.focus(); input.current?.caretToEnd(); });
+  };
+  const cancelEdit = () => {
+    setEditing(null);
+    setText(draftBeforeEdit.current);
+    draftBeforeEdit.current = '';
+  };
+  // Стрелка вверх в пустом поле — исправить свой последний ответ (как в чате).
+  const editLast = () => {
+    const last = [...(data?.messages || [])].reverse().find((m) => m.direction === 'out' && !m.deleted);
+    if (!last?.canEdit) return false;
+    startEdit(last);
+    return true;
+  };
+
+  const remove = async (m: DialogMessage) => {
+    const where = data?.dialog.platformLabel || 'площадки';
+    const ok = await askConfirm({
+      title: 'Удалить сообщение у клиента?',
+      text: `Оно исчезнет в ${where}. В Шаре останется отметка «удалено».`,
+      confirm: 'Удалить',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    try {
+      replaceMessage((await deleteMessage(m.id)).message);
+      if (editing?.id === m.id) cancelEdit();
+      onSent();
+    } catch (e) {
+      showToast((e as Error).message, 'error');
+    }
+  };
+
+  const saveEdit = () => {
+    const body = text.trim();
+    if (!editing || busy) return;
+    if (!body || body === editing.text.trim()) { cancelEdit(); return; }
+    setBusy(true);
+    editMessage(editing.id, body)
+      .then(({ message }) => { replaceMessage(message); cancelEdit(); onSent(); })
+      .catch((e: Error) => showToast(e.message, 'error'))
+      .finally(() => setBusy(false));
+  };
+
   const send = () => {
+    if (editing) { saveEdit(); return; }
     const body = text.trim();
     const ready = files.filter((f) => f.file).map((f) => f.file!);
     if ((!body && !ready.length) || busy || uploading) return;
@@ -321,26 +379,26 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
           const prev = data.messages[i - 1];
           const showName = m.direction === 'out' ? prev?.direction !== 'out' || prev?.authorUserId !== m.authorUserId : group && (prev?.direction !== 'in' || prev?.authorName !== m.authorName);
           return (
-            <div key={m.id} className="nsd-msg" data-dir={m.direction} data-msg-id={m.id}>
-              {showName && <span className="nsd-msg-name">{m.direction === 'out' ? m.authorName || 'Сотрудник' : m.authorName}</span>}
-              <div className="nsd-bubble">
-                {m.images?.length > 0 && (
-                  <span className="nsd-msg-images">
-                    {m.images.map((src) => (
-                      <a key={src} href={src} target="_blank" rel="noopener noreferrer"><img src={src} alt="Вложение" loading="lazy" referrerPolicy="no-referrer" onLoad={keepBottom} /></a>
-                    ))}
-                  </span>
-                )}
-                {m.text && <span className="nsd-msg-text"><Linkified text={m.text} /></span>}
-                {m.media.length > 0 && <span className="nsd-msg-media">{(m.images?.length ? m.media.filter((x) => !PICTURE_LABELS.has(x)) : m.media).join(' · ')}{m.link ? <> — <a href={m.link} target="_blank" rel="noopener noreferrer">открыть</a></> : null}</span>}
-                <time>{timeOf(m.at)}</time>
-              </div>
-            </div>
+            <MessageRow key={m.id} m={m} showName={showName} editing={editing?.id === m.id} onLoad={keepBottom}
+              onMenu={m.canEdit || m.canDelete ? (anchor) => setMenu({ m, anchor }) : undefined} />
           );
         })}
       </div>
-      {data.canReply ? (
+      {menu && (
+        <Menu anchor={menu.anchor} label="Сообщение" onClose={() => setMenu(null)} compact>
+          {menu.m.canEdit && <MenuItem icon={<Pencil size={16} />} onSelect={() => { const m = menu.m; setMenu(null); startEdit(m); }}>Изменить</MenuItem>}
+          {menu.m.canDelete && <MenuItem icon={<Trash2 size={16} />} tone="danger" onSelect={() => { const m = menu.m; setMenu(null); void remove(m); }}>Удалить у клиента</MenuItem>}
+        </Menu>
+      )}
+      {data.canReply || editing ? (
         <div className="nsd-composer-wrap">
+        {editing && (
+          <div className="nsd-edit-bar">
+            <Pencil size={14} aria-hidden="true" />
+            <span><b>Изменение: </b>{editing.text}</span>
+            <button type="button" className="nx-icon-btn" onClick={cancelEdit} aria-label="Отменить изменение"><X size={14} /></button>
+          </div>
+        )}
         {files.length > 0 && (
           <div className="nsd-files">
             {files.map((f) => (
@@ -360,7 +418,7 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
           </div>
         )}
         <div className="nsd-composer cxc-row" data-dragging={dragging ? 'true' : undefined}>
-          {canAttach && (
+          {canAttach && !editing && (
             <>
               <input ref={picker} type="file" multiple hidden onChange={(e) => pick(e.target.files)} />
               <button type="button" className="cxc-plus" onClick={() => picker.current?.click()} disabled={files.length >= 10}
@@ -374,12 +432,14 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
               ref={input}
               className="cxn-input"
               value={text}
-              placeholder={files.length ? 'Подпись' : `Ответ в ${d.platformLabel}`}
-              enterKeyHint={coarse ? undefined : 'send'}
+              placeholder={editing ? 'Изменить сообщение' : files.length ? 'Подпись' : `Ответ в ${d.platformLabel}`}
+              enterKeyHint={coarse ? undefined : editing ? 'done' : 'send'}
               onChange={(value) => setText(value.slice(0, 4000))}
-              onPasteFiles={canAttach ? pick : undefined}
+              onPasteFiles={canAttach && !editing ? pick : undefined}
               onKeyDown={(e) => {
                 if (e.key === 'Escape' && emoji) { e.preventDefault(); setEmoji(false); return; }
+                if (e.key === 'Escape' && editing) { e.preventDefault(); cancelEdit(); return; }
+                if (e.key === 'ArrowUp' && !text && !editing && !files.length && editLast()) { e.preventDefault(); return; }
                 if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.nativeEvent.isComposing || coarse) return;
                 e.preventDefault();
                 send();
@@ -390,9 +450,10 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
               <Smile size={20} aria-hidden="true" />
             </button>
           </div>
-          <button type="button" className="cxn-send" onClick={send} disabled={!canSend} aria-label="Отправить клиенту"
+          <button type="button" className="cxn-send" onClick={send} disabled={!canSend} aria-label={editing ? 'Сохранить изменение' : 'Отправить клиенту'}
             onPointerDown={(e) => e.preventDefault()}>
-            {busy ? <Spinner size={16} label="Отправляю" /> : <ArrowUp size={18} strokeWidth={2.6} aria-hidden="true" />}
+            {busy ? <Spinner size={16} label={editing ? 'Сохраняю' : 'Отправляю'} />
+              : editing ? <Check size={18} strokeWidth={2.6} aria-hidden="true" /> : <ArrowUp size={18} strokeWidth={2.6} aria-hidden="true" />}
           </button>
         </div>
         </div>
@@ -400,6 +461,42 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
         <p className="nsd-noreply">Сюда {d.platformLabel} не даёт ответить из Шара — ответьте на сайте по ссылке «Открыть в {d.platformLabel}».</p>
       )}
     </section>
+  );
+}
+
+/** Сообщение переписки. Своё можно исправить или удалить: меню — кнопкой «…» при наведении, правым кликом
+ *  или долгим нажатием на телефоне. Удалённое остаётся бледным зачёркнутым текстом с отметкой. */
+function MessageRow({ m, showName, editing, onLoad, onMenu }: {
+  m: DialogMessage; showName: boolean; editing: boolean; onLoad: () => void; onMenu?: (anchor: MenuAnchor) => void;
+}) {
+  const hold = useLongPress((x, y) => onMenu?.({ x, y }));
+  return (
+    <div className="nsd-msg" data-dir={m.direction} data-msg-id={m.id} data-editing={editing ? 'true' : undefined}>
+      {showName && <span className="nsd-msg-name">{m.direction === 'out' ? m.authorName || 'Сотрудник' : m.authorName}</span>}
+      <div className="nsd-msg-line">
+        {onMenu && (
+          <button type="button" className="nsd-msg-more nx-icon-btn" aria-label="Действия с сообщением"
+            onClick={(e) => onMenu({ element: e.currentTarget, align: 'end' })}><MoreHorizontal size={16} /></button>
+        )}
+        <div className="nsd-bubble" data-deleted={m.deleted ? 'true' : undefined}
+          onContextMenu={onMenu ? (e) => { e.preventDefault(); onMenu({ x: e.clientX, y: e.clientY }); } : undefined}
+          {...(onMenu ? hold : {})}>
+          {m.images?.length > 0 && !m.deleted && (
+            <span className="nsd-msg-images">
+              {m.images.map((src) => (
+                <a key={src} href={src} target="_blank" rel="noopener noreferrer"><img src={src} alt="Вложение" loading="lazy" referrerPolicy="no-referrer" onLoad={onLoad} /></a>
+              ))}
+            </span>
+          )}
+          {m.text && <span className="nsd-msg-text"><Linkified text={m.text} /></span>}
+          {m.media.length > 0 && <span className="nsd-msg-media">{(m.images?.length ? m.media.filter((x) => !PICTURE_LABELS.has(x)) : m.media).join(' · ')}{m.link ? <> — <a href={m.link} target="_blank" rel="noopener noreferrer">открыть</a></> : null}</span>}
+          <span className="nsd-msg-meta">
+            {m.deleted ? <span className="nsd-msg-flag"><Trash2 size={11} aria-hidden="true" /> удалено</span> : m.edited ? <span className="nsd-msg-flag">изменено</span> : null}
+            <time>{timeOf(m.at)}</time>
+          </span>
+        </div>
+      </div>
+    </div>
   );
 }
 

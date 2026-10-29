@@ -7,6 +7,8 @@
     последний комментарий там.
 Сообщения диалога — social_items: входящие (direction='in') и ответы сотрудников ('out').
 «Ждёт ответа» — последнее сообщение диалога от клиента.
+Правка и удаление — отметки в data (edited_at, deleted_at): удалённое остаётся в истории, видно сотрудникам
+как удалённое — что клиент написал и убрал, бывает важно.
 
 Здесь только хранение и рассылка события social_changed; запросы к площадкам — в router.py."""
 
@@ -14,13 +16,14 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.core.db import db
 from app.core.realtime import sse_manager
 from app.modules.chats.access import participant_ids
 from app.modules.chats.cache import _get_chat_cached
-from app.modules.social.platforms import Incoming
+from app.modules.social.platforms import Change, Incoming
 
 # Регистрирует router.py — после social_accounts, на которую ссылается.
 DDL = """
@@ -62,7 +65,9 @@ def dialog_key(inc: Incoming) -> str:
     return inc.ext_chat_id
 
 
-def _preview(text: str, media: List[str]) -> str:
+def _preview(text: str, media: List[str], deleted: bool = False) -> str:
+    if deleted:
+        return "Сообщение удалено"
     return (text or ", ".join(media) or "Вложение").replace("\n", " ")[:200]
 
 
@@ -87,11 +92,12 @@ def upsert_for_incoming(account: dict, inc: Incoming, chat_id: Optional[str]) ->
 
 
 def record_out(dialog_id: str, account_id: str, ext_chat_id: str, ext_message_id: str, text: str, user_id: str, user_name: str,
-               files: Optional[List[str]] = None) -> dict:
+               files: Optional[List[str]] = None, reply_to: str = "") -> dict:
     """Ответ сотрудника — сообщение диалога; диалог больше не ждёт ответа. ext_message_id — id отправленного
-    сообщения на площадке (по нему же отзеркаленный ответ не задвоится); files — имена вложений."""
+    сообщения на площадке (по нему же отзеркаленный ответ не задвоится и его можно будет исправить или удалить);
+    files — имена вложений; reply_to — id сообщения клиента, на которое ответ (MAX просит его и при правке)."""
     media = [f"📎 {n}" for n in files or []]
-    data = {"text": text, "author_name": user_name, "media": media, "sent_id": ext_message_id}
+    data = {"text": text, "author_name": user_name, "media": media, "sent_id": ext_message_id, "reply_to": reply_to}
     row = db.conn.fetch_one(
         "INSERT INTO social_items (id, account_id, ext_chat_id, ext_message_id, data, status, dialog_id, direction, author_user_id) "
         "VALUES (%s,%s,%s,%s,%s::jsonb,'answered',%s,'out',%s) "
@@ -146,6 +152,53 @@ def refresh_last(dialog_id: str, recent_hours: int = 48) -> None:
         (_preview(data.get("text") or "", data.get("media") or []), last["direction"], last["created_at"],
          last["direction"], last["created_at"], recent_hours, dialog_id),
     )
+
+
+def find_changed(account_id: str, ch: Change) -> Optional[dict]:
+    """Сообщение, которого касается правка или удаление на площадке: входящее — по его id, исходящее — по sent_id."""
+    row = db.conn.fetch_one(
+        "SELECT * FROM social_items WHERE account_id = %s AND ext_chat_id = %s AND ("
+        "(direction = 'in' AND ext_message_id = %s) OR (direction = 'out' AND data->>'sent_id' = %s)) LIMIT 1",
+        (account_id, ch.ext_chat_id, ch.in_id, ch.out_id),
+    )
+    return dict(row) if row else None
+
+
+def mark(row: dict, action: str, text: str = "", by: str = "") -> bool:
+    """Отметить правку (новый текст), удаление или восстановление. Повтор того же (эхо своей же правки из Шара,
+    повтор события) ничего не меняет и никого не будит. Возвращает True, если что-то поменялось."""
+    data = dict(row.get("data") or {})
+    if action == "edit":
+        if not text or text == (data.get("text") or ""):
+            return False
+        patch: Dict[str, Any] = {"text": text, "edited_at": _now()}
+    elif action == "delete":
+        if data.get("deleted_at"):
+            return False
+        patch = {"deleted_at": _now(), "deleted_by": by}
+    elif action == "restore":
+        if not data.get("deleted_at"):
+            return False
+        patch = {"deleted_at": None, "deleted_by": None, **({"text": text} if text else {})}
+    else:
+        return False
+    db.conn.execute_query("UPDATE social_items SET data = data || %s::jsonb WHERE id = %s", (json.dumps(patch, ensure_ascii=False), row["id"]))
+    if row.get("dialog_id"):
+        _touch_preview(str(row["dialog_id"]))
+    return True
+
+
+def _touch_preview(dialog_id: str) -> None:
+    """Превью в списке — по последнему сообщению. Только текст: «ждёт ответа» и отметку «ответ дан» не трогаем."""
+    last = db.conn.fetch_one("SELECT data FROM social_items WHERE dialog_id = %s ORDER BY created_at DESC LIMIT 1", (dialog_id,))
+    if last:
+        data = last.get("data") or {}
+        db.conn.execute_query("UPDATE social_dialogs SET last_text = %s WHERE id = %s",
+                              (_preview(data.get("text") or "", data.get("media") or [], bool(data.get("deleted_at"))), dialog_id))
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def notify(dialog_id: str) -> None:

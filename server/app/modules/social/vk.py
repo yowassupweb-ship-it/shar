@@ -18,12 +18,20 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from app.modules.social.platforms import TIMEOUT, Incoming, PlatformError
+from app.modules.social.platforms import TIMEOUT, Change, Incoming, PlatformError
 from app.modules.social.tls import ca_bundle
 
 VK_API = "https://api.vk.com/method/"
 VK_VERSION = "5.199"
-VK_EVENTS = ["message_new", "message_reply", "wall_reply_new", "photo_comment_new", "video_comment_new", "market_comment_new", "board_post_new"]
+VK_EVENTS = ["message_new", "message_reply", "wall_reply_new", "photo_comment_new", "video_comment_new", "market_comment_new", "board_post_new",
+             # Правки и удаления: правку сообщения ВКонтакте присылает только для сообщений самого сообщества,
+             # правку и удаление комментария — для любых.
+             "message_edit",
+             "wall_reply_edit", "wall_reply_delete", "wall_reply_restore",
+             "photo_comment_edit", "photo_comment_delete", "photo_comment_restore",
+             "video_comment_edit", "video_comment_delete", "video_comment_restore",
+             "market_comment_edit", "market_comment_delete", "market_comment_restore",
+             "board_post_edit", "board_post_delete", "board_post_restore"]
 
 # Частые отказы ВКонтакте — по-русски и с тем, что делать.
 _ERRORS = {
@@ -37,7 +45,10 @@ _ERRORS = {
     900: "Клиент добавил сообщество в чёрный список",
     901: "Клиент не разрешил сообществу писать ему — ответить можно, когда он напишет снова",
     902: "Клиент закрыл сообщения в настройках приватности",
+    909: "Сообщение уже нельзя изменить — ВКонтакте даёт править только свежие сообщения",
     917: "У сообщества нет доступа к этой беседе",
+    920: "Такое сообщение ВКонтакте изменить не даёт",
+    924: "Сообщение уже нельзя удалить у клиента — ВКонтакте даёт сделать это только в первые сутки",
     2000: "У сообщества уже 10 Callback-серверов — удалите лишний (Работа с API → Callback API)",
 }
 
@@ -208,6 +219,41 @@ def parse(event: dict, token: str, group_name: str = "") -> Optional[Incoming]:
         reply={"kind": "wall", "owner_id": owner, "post_id": item, "comment_id": cid} if area == "wall" else {},
         can_reply=area == "wall", thread=str(item),
     )
+
+
+# Правка и удаление комментария приходят своими событиями: у правки — сам комментарий, у удаления — только id.
+_COMMENT_CHANGES = {f"{base[:-4]}_{suffix}": (base, action) for base in _COMMENTS
+                    for suffix, action in (("edit", "edit"), ("delete", "delete"), ("restore", "restore"))}
+
+
+def change(event: dict) -> Optional[Change]:
+    """Правка, удаление или восстановление комментария; правка сообщения сообщества (сделанная во ВКонтакте)."""
+    kind = event.get("type")
+    obj = event.get("object") or {}
+    if kind == "message_edit":
+        msg = obj.get("message") or obj
+        mid, peer = str(msg.get("id") or ""), str(msg.get("peer_id") or "")
+        return Change("edit", peer, mid, mid, msg.get("text") or "") if mid and mid != "0" and peer else None
+    if kind not in _COMMENT_CHANGES:
+        return None
+    base, action = _COMMENT_CHANGES[kind]
+    owner_key, item_key, area, _ = _COMMENTS[base]
+    group_id = int(event.get("group_id") or 0)
+    owner = int(obj.get(owner_key) or obj.get("owner_id") or -group_id)
+    item, cid = int(obj.get(item_key) or 0), int(obj.get("id") or 0)
+    if not item or not cid:
+        return None
+    return Change(action, f"{area}{owner}", f"{item}_{cid}", str(cid), obj.get("text") or "")
+
+
+def edit_message(token: str, peer_id: int, message_id: str, text: str) -> None:
+    """Исправить сообщение сообщества в диалоге. Комментарии ключ сообщества править не может — только человек."""
+    call(token, "messages.edit", peer_id=peer_id, message_id=message_id, message=text, keep_forward_messages=1, keep_snippets=1)
+
+
+def delete_message(token: str, message_id: str) -> None:
+    """Удалить сообщение сообщества у всех (ВКонтакте разрешает это в первые сутки)."""
+    call(token, "messages.delete", message_ids=message_id, delete_for_all=1)
 
 
 def reply(token: str, target: Dict[str, Any], text: str) -> str:

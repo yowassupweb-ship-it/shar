@@ -72,6 +72,17 @@ class Incoming:
     images: List[str] = field(default_factory=list)  # адреса картинок вложений — показываются прямо в переписке
 
 
+@dataclass
+class Change:
+    """Сообщение на площадке изменили, удалили или восстановили (клиент — своё, сотрудник — из приложения площадки).
+    in_id — как такое сообщение записано входящим (ext_message_id), out_id — как исходящим (data.sent_id)."""
+    action: str  # edit | delete | restore
+    ext_chat_id: str
+    in_id: str
+    out_id: str
+    text: str = ""
+
+
 # ─── Telegram ────────────────────────────────────────────────────────────────
 
 def _tg_proxies() -> Optional[dict]:
@@ -224,13 +235,27 @@ def max_call(token: str, method: str, path: str, *, params: Optional[dict] = Non
     return data
 
 
-MAX_UPDATES = ["message_created", "comment_created"]
+# Правки и удаления — чтобы в переписке Шара было то же, что у клиента. Новые типы доходят до уже
+# подключённых ботов после переподписки (refresh_subscriptions в router.py делает её сама при старте).
+MAX_UPDATES = ["message_created", "comment_created", "message_edited", "message_removed", "comment_edited", "comment_removed"]
 
 
 def max_connect(token: str, hook_url: str) -> Dict[str, Any]:
     me = max_call(token, "GET", "/me")
     max_call(token, "POST", "/subscriptions", body={"url": hook_url, "update_types": MAX_UPDATES})
     return {"botUsername": me.get("username") or "", "botName": me.get("name") or me.get("first_name") or ""}
+
+
+def max_resubscribe(token: str, account_id: str) -> int:
+    """Обновить типы событий у уже оформленной подписки этого подключения (адрес берём у MAX — он тот же)."""
+    subs = (max_call(token, "GET", "/subscriptions") or {}).get("subscriptions") or []
+    done = 0
+    for sub in subs:
+        url = str(sub.get("url") or "")
+        if f"/api/social/hook/{account_id}/" in url:
+            max_call(token, "POST", "/subscriptions", body={"url": url, "update_types": MAX_UPDATES})
+            done += 1
+    return done
 
 
 def max_disconnect(token: str, hook_url: str) -> None:
@@ -295,6 +320,21 @@ def max_parse(update: dict) -> Optional[Incoming]:
     )
 
 
+def max_change(update: dict) -> Optional[Change]:
+    """Правка или удаление сообщения или комментария. Правка приходит целым сообщением, удаление — только id."""
+    kind = update.get("update_type")
+    if kind in ("message_edited", "comment_edited"):
+        msg = update.get("message") or {}
+        body = msg.get("body") or {}
+        mid = str(body.get("mid") or "")
+        chat = str((msg.get("recipient") or {}).get("chat_id") or "")
+        return Change("edit", chat, mid, mid, body.get("text") or "") if mid and chat else None
+    if kind in ("message_removed", "comment_removed"):
+        mid, chat = str(update.get("message_id") or ""), str(update.get("chat_id") or "")
+        return Change("delete", chat, mid, mid) if mid and chat else None
+    return None
+
+
 def max_chat_title(token: str, chat_id: str) -> str:
     try:
         return str(max_call(token, "GET", f"/chats/{chat_id}").get("title") or "")
@@ -319,6 +359,45 @@ def max_reply(token: str, ext_chat_id: str, ext_message_id: str, text: str, targ
     sent = max_call(token, "POST", "/messages", params={"chat_id": ext_chat_id},
                     body={"text": text, "link": {"type": "reply", "mid": ext_message_id}})
     return str(((sent or {}).get("message") or {}).get("body", {}).get("mid") or "")
+
+
+# Отказы при правке и удалении — по-русски. MAX отвечает на них и HTTP-ошибкой, и 200 с success=false.
+_MAX_CHANGE_ERRORS = {
+    "comments.timeout_exceeded": "Комментарий можно изменить только в первые 26 часов после отправки",
+}
+
+
+def _max_change_call(token: str, method: str, path: str, params: dict, body: Optional[dict] = None) -> None:
+    try:
+        got = max_call(token, method, path, params=params, body=body)
+    except PlatformError as e:
+        raise PlatformError(_MAX_CHANGE_ERRORS.get(e.code) or str(e), e.code) from None
+    if isinstance(got, dict) and got.get("success") is False:
+        text = str(got.get("message") or "")
+        known = next((v for k, v in _MAX_CHANGE_ERRORS.items() if k in text), "")
+        if not known and "admin" in text.lower():
+            known = "Боту нужны права администратора с удалением сообщений"
+        raise PlatformError(known or f"MAX: {text or 'не получилось'}")
+
+
+def max_edit(token: str, sent_id: str, text: str, target: Dict[str, Any]) -> None:
+    """Исправить своё сообщение (в диалоге с ботом — пока ему меньше 7 дней) или комментарий (первые 26 часов).
+    Вложения не трогаем: без поля attachments MAX оставляет их как были."""
+    if target.get("kind") == "comment":
+        _max_change_call(token, "PUT", f"/messages/{target['post_id']}/comments", {"comment_id": sent_id}, {"text": text})
+        return
+    body: Dict[str, Any] = {"text": text}
+    if target.get("reply_mid"):
+        body["link"] = {"type": "reply", "mid": target["reply_mid"]}  # иначе правка может снять цитату
+    _max_change_call(token, "PUT", "/messages", {"message_id": sent_id}, body)
+
+
+def max_delete(token: str, sent_id: str, target: Dict[str, Any]) -> None:
+    """Удалить своё сообщение у всех. В чатах и каналах боту нужны права администратора на удаление."""
+    if target.get("kind") == "comment":
+        _max_change_call(token, "DELETE", f"/messages/{target['post_id']}/comments", {"comment_id": sent_id})
+        return
+    _max_change_call(token, "DELETE", "/messages", {"message_id": sent_id})
 
 
 def max_send_files(token: str, ext_chat_id: str, ext_message_id: str, text: str, files: List[tuple],

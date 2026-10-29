@@ -1,6 +1,8 @@
 .cxs-social-context{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;margin-top:2px;font-size:var(--text-xs);color:var(--text-muted)}
 .cxs-social-text{margin-top:4px;font-size:var(--text-sm);line-height:1.45;color:var(--text-main);white-space:pre-wrap;overflow-wrap:anywhere}
 .cxs-social-media{margin-top:4px;font-size:var(--text-xs);color:var(--text-muted)}
+.cxs-social-text[data-deleted=true]{text-decoration:line-through;opacity:.6}
+.cxs-social-flag{margin-top:2px;font-size:var(--text-xs);color:var(--text-muted)}
 .cxs-social-answers{display:grid;gap:6px;margin:8px 0 0;padding:8px 0 0;list-style:none;border-top:1px solid var(--border-color)}
 .cxs-social-answers li{display:grid;grid-template-columns:auto 1fr;gap:0 8px;font-size:var(--text-sm)}
 .cxs-social-answers b{font-weight:var(--weight-semibold)}
@@ -126,3 +128,22 @@
 .nsd-avatar { position: relative; display: inline-flex; flex: none; }
 .nsd-avatar-mark { position: absolute; right: -4px; bottom: -4px; display: inline-flex; border-radius: 50%; box-shadow: 0 0 0 2px var(--bg-raised, var(--bg-color, #1f2024)); line-height: 0; }
 .nsd-avatar-mark .nsd-mark { display: block; border-radius: 50%; }
+
+/* Правка и удаление своего ответа: «…» у пузыря при наведении (на телефоне — долгое нажатие), отметки
+   «изменено» / «удалено» рядом со временем, полоска правки над полем ввода — как в чате Шара. */
+.nsd-msg-line { display: flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; }
+.nsd-msg-line > .nsd-bubble { min-width: 0; }
+.nsd-msg-more { flex: none; width: 28px; height: 28px; opacity: 0; transition: opacity var(--duration-fast) var(--ease-out); }
+.nsd-msg:hover .nsd-msg-more, .nsd-msg-more:focus-visible { opacity: 1; }
+@media (hover: none) { .nsd-msg-more { display: none; } }
+.nsd-msg-meta { justify-self: end; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; opacity: .65; font-variant-numeric: tabular-nums; }
+.nsd-msg-meta time { opacity: 1; }
+.nsd-msg-flag { display: inline-flex; align-items: center; gap: 3px; }
+.nsd-bubble[data-deleted="true"] { opacity: .6; }
+.nsd-bubble[data-deleted="true"] .nsd-msg-text { text-decoration: line-through; }
+.nsd-msg[data-editing="true"] .nsd-bubble { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+.nsd-edit-bar { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-3) var(--space-4) 0; padding: 3px 3px 3px 10px; border-radius: var(--radius-pill); background: var(--surface-hover); font-size: var(--text-xs); color: var(--text-2); }
+.nsd-edit-bar > svg { flex: none; color: var(--accent-color); }
+.nsd-edit-bar > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nsd-edit-bar b { font-weight: var(--weight-semibold); color: var(--accent-color); }
+.nsd-edit-bar .nx-icon-btn { width: 26px; height: 26px; }
