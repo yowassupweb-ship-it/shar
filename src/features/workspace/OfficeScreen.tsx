@@ -883,6 +883,7 @@ export default function OfficeScreen() {
           <ItemView
             key={openId}
             source={{ id: openId }}
+            kindHint={items?.find((i) => i.id === openId)?.kind}
             onBack={narrow ? () => select(null) : undefined}
             onChanged={() => void load()}
             onDeleted={() => { select(null); void load(); }}

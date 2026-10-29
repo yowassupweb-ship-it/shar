@@ -19,6 +19,7 @@ import { tabsAsSections } from './lib/noteTabs';
 import { IMPORT_RULES, importFile } from './lib/importFile';
 import { canSticky, forgetSticky, openSticky, stickyLabel } from './lib/sticky';
 import { PresenceStack } from './PresenceStack';
+import { EditorSkeleton } from './EditorSkeleton';
 import { CommentsPanel } from './CommentsPanel';
 import { MenuBar, type BarMenu } from './MenuBar';
 import { SendToChatSheet } from './SendToChatSheet';
@@ -55,8 +56,10 @@ const ACCESS_ICON = { private: Lock, all: Globe2 } as const;
  * Один материал целиком: шапка (название, состояние сохранения, доступ, «Поделиться», меню) и редактор своего вида.
  * Работает и после входа (по id), и по ссылке (по токену) — тогда без меню владельца.
  */
-export function ItemView({ source, onBack, onChanged, onDeleted, onOpen, windowControls }: {
+export function ItemView({ source, kindHint, onBack, onChanged, onDeleted, onOpen, windowControls }: {
   source: Source;
+  /** Вид материала, если известен заранее (строка списка): скелетон при открытии рисуется сразу нужной формы. */
+  kindHint?: Kind;
   /** Кнопки окна (поверх всех окон, свернуть, закрыть) — для отдельного окна материала: ставятся в конец шапки. */
   windowControls?: React.ReactNode;
   onBack?: () => void;
@@ -185,7 +188,8 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen, windowC
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
 
-  if (status === 'loading') return <div className="nws-loading"><Spinner size={24} label="Открываю" /></div>;
+  // Пока материал грузится — скелетон, а не спиннер: следом Univer рисует такой же, и подмена не заметна.
+  if (status === 'loading') return <EditorSkeleton kind={kindHint} withHeader />;
   if (status === 'missing') return <div className="nws-missing" role="alert">{shared ? 'Ссылка не открывается: её отозвали или материал удалён.' : 'Материал не найден или нет доступа.'}</div>;
   if (status === 'error' || !item) return <div className="nws-missing" role="alert">{error || 'Не удалось открыть.'} <button type="button" className="nx-ghost" onClick={() => void session.reload()}>Повторить</button></div>;
 
@@ -568,7 +572,7 @@ ${absolute(links.office(item!.kind, item!.id))}` });
 
       <div className="nws-main">
         <div className="nws-editor">
-          <Suspense fallback={<div className="nws-loading"><Spinner size={24} label="Загружаю редактор" /></div>}>
+          <Suspense fallback={<EditorSkeleton kind={item.kind} />}>
             <Editor content={item.content} onContent={session.setContent} readOnly={readOnly} loadKey={loadKey} title={item.title} visible cursors={cursors} onCursor={sendCursor} live={session.live} commentsBridge={commentsBridge} commentCells={commentCells} onAddComment={commentable ? addComment : undefined} onCommentCell={commentable ? showCellComment : undefined} commentQuotes={commentQuotes} onCommentQuote={commentable ? showQuoteComment : undefined} />
           </Suspense>
         </div>

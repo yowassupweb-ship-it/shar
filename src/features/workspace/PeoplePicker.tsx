@@ -1,4 +1,5 @@
-import { useId, useMemo, useRef, useState } from 'react';
+import { useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import { Building2, X } from 'lucide-react';
 import { useChatStore } from '@/features/chat';
 import { useContacts } from '@/features/contacts/data';
@@ -77,6 +78,8 @@ export function PeoplePicker({ excludeUsers, excludeDepartments, roles, defaultR
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const input = useRef<HTMLInputElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const [place, setPlace] = useState<CSSProperties | null>(null);
   const listId = useId();
 
   const options = useMemo(() => {
@@ -131,6 +134,25 @@ export function PeoplePicker({ excludeUsers, excludeDepartments, roles, defaultR
 
   const optionId = (index: number) => `${listId}-${index}`;
   const showList = open && options.all.length > 0;
+
+  // Подсказки — в портале поверх окна: внутри карточки группы (overflow: hidden) и прокрутки листа их обрезало,
+  // и выбрать человека было нельзя. Место считаем от поля: снизу, а если снизу тесно — сверху.
+  useLayoutEffect(() => {
+    if (!showList) { setPlace(null); return undefined; }
+    const measure = () => {
+      const r = box.current?.getBoundingClientRect();
+      if (!r) return;
+      const below = window.innerHeight - r.bottom - 12;
+      const above = r.top - 12;
+      const up = below < 220 && above > below;
+      const maxHeight = Math.max(160, Math.min(320, up ? above : below));
+      setPlace({ position: 'fixed', left: r.left, width: r.width, maxHeight, ...(up ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }) });
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    window.addEventListener('scroll', measure, true);
+    return () => { window.removeEventListener('resize', measure); window.removeEventListener('scroll', measure, true); };
+  }, [showList, picked.length]);
   const renderOption = (option: Option, index: number) => (
     <li
       key={`${option.kind}:${option.id}`}
@@ -155,7 +177,7 @@ export function PeoplePicker({ excludeUsers, excludeDepartments, roles, defaultR
 
   return (
     <div className="nws-picker">
-      <div className="nws-picker-box">
+      <div className="nws-picker-box" ref={box}>
       <div className="nws-picker-field" onMouseDown={(e) => { if (e.target === e.currentTarget) { e.preventDefault(); input.current?.focus(); } }}>
         {picked.map((p) => (
           <span key={`${p.kind}:${p.id}`} className="nws-chip">
@@ -183,8 +205,8 @@ export function PeoplePicker({ excludeUsers, excludeDepartments, roles, defaultR
           onKeyDown={onKeyDown}
         />
       </div>
-      {showList && (
-        <ul id={listId} role="listbox" className="nws-picker-list" aria-label="Подсказки">
+      {showList && place && createPortal(
+        <ul id={listId} role="listbox" className="nws-picker-list" aria-label="Подсказки" style={place} onMouseDown={(e) => e.preventDefault()}>
           {[options.deptsFirst ? 'depts' : 'people', options.deptsFirst ? 'people' : 'depts'].map((group, g) => {
             const list = group === 'people' ? options.people : options.depts;
             const offset = g === 0 ? 0 : (options.deptsFirst ? options.depts.length : options.people.length);
@@ -193,7 +215,8 @@ export function PeoplePicker({ excludeUsers, excludeDepartments, roles, defaultR
               ...list.map((o, i) => renderOption(o, offset + i)),
             ];
           })}
-        </ul>
+        </ul>,
+        document.querySelector('.nx') || document.body,
       )}
       </div>
       {open && query && !options.all.length && <p className="nws-picker-empty">Никого не нашли по «{query}» — попробуйте фамилию, должность или отдел.</p>}

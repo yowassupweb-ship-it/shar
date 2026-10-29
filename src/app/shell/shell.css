@@ -85,9 +85,9 @@
    тень отделяет их от подложки. В тёмной не нужна: там их держит контраст. */
 .nx-nav-icon img { filter: var(--icon-shadow); }
 
-/* Счётчик — на углу значка, как на телефоне, а не в строке: появившись после загрузки, он расширял пункт, и
-   отцентрированное меню целиком съезжало вбок (сдвиг раскладки). */
-.nx-nav-badge { position: absolute; top: -3px; left: 14px; min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; box-shadow: 0 0 0 2px var(--glass, var(--surface-chrome)); }
+/* Счётчик — справа от названия раздела (на телефоне — на углу значка, см. ниже). Решение владельца 29.10:
+   привычнее, чем на значке, даже ценой небольшого сдвига меню, когда счётчик приходит после загрузки. */
+.nx-nav-badge { min-width: 18px; height: 18px; padding: 0 5px; }
 .nx-count.nx-nav-alert { background: var(--state-danger); color: #fff; font-weight: var(--weight-bold); }
 /* Инструмент в меню — плашка-иконка на его градиенте, как плитка в «Ещё». */
 .nx-nav-tool { display: inline-grid; place-items: center; border-radius: 7px; background: linear-gradient(145deg, var(--a), var(--b)); color: #fff; }
