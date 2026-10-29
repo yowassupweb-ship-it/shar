@@ -691,7 +691,9 @@ export default function OfficeScreen() {
       setItems((cur) => cur?.map((i) => (i.folderId === folder.id ? { ...i, folderId: folder.parentId } : i)) ?? cur);
     } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось удалить папку', 'error'); }
   }
-  useFlip(rowsRef, [items, folders, openFolders], `${filter}:${query}`);
+  // Раскрытие и закрытие папки — не «переезд»: строки ниже просто встают на место, без анимации (иначе при закрытии
+  // они плыли вверх через пол-экрана). Анимация остаётся для перемещений — своих, коллеги, с другого устройства.
+  useFlip(rowsRef, [items, folders, openFolders], `${filter}:${query}:${[...openFolders].sort().join(',')}:${[...searchClosed].sort().join(',')}`);
   useDragAutoScroll(rowsRef);
   const importing = busy.startsWith('import');
   const importRule = IMPORT_RULES[filter];
