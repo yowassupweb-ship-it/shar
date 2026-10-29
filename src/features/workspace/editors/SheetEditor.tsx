@@ -239,6 +239,20 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
     workbook.setEditable(!readOnly);
     // Вход в правку ячейки: пустой белый кадр редактора закрываем снимком таблицы (holdSheetFrame).
     const editStart = univerAPI.addEvent(univerAPI.Event.BeforeSheetEditStart, () => holdSheetFrame());
+    // Набранное в ячейке без Enter живёт только в поле правки: уход из таблицы (клик по списку Офиса, меню, другому
+    // материалу, чату) молча его терял — человек видел текст, возвращался, а его нет. Как Excel и Google Таблицы,
+    // клик мимо таблицы сначала принимает набранное. Всплывающие меню самого Univer (лента, цвета) — не мимо: там
+    // оформляют текст ячейки, правку не закрываем.
+    const commitEdit = () => {
+      if (!readOnly && workbook.isCellEditing()) void workbook.endEditingAsync(true);
+    };
+    const onOutside = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (!target || el.contains(target) || target.closest?.('[class*="univer-"], [data-u-comp]')) return;
+      commitEdit();
+    };
+    document.addEventListener('pointerdown', onOutside, true);
+    window.addEventListener('pagehide', commitEdit);
 
     // Ctrl+клик по ячейке со ссылкой (или просто с адресом) — открыть в браузере, как в Excel и Google Таблицах.
     // У события клика по ячейке нет признака Ctrl — запоминаем его по нажатию.
@@ -335,6 +349,13 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
     });
     return () => {
       window.clearTimeout(readyTimer);
+      document.removeEventListener('pointerdown', onOutside, true);
+      window.removeEventListener('pagehide', commitEdit);
+      // Редактор закрывают не кликом (клавиши, переход по ссылке): принять набранное, пока канал ещё подключён.
+      if (ready && !readOnly && workbook.isCellEditing()) {
+        // То же, что endEditingAsync(true), но синхронно: DeviceInputEventType.Keyboard = 4, KeyCode.ENTER = 13.
+        try { commandsOf().syncExecuteCommand('sheet.operation.set-cell-edit-visible', { eventType: 4, keycode: 13, visible: false, unitId: workbook.getId() }); } catch { /* уже разобран */ }
+      }
       unbind?.();
       // Редактор пересоздаётся (тема, просмотр ↔ правка): книга должна унести всё, включая правки коллег за последние мгновения.
       if (ready && !readOnly) { try { applySnapshot(book, workbook.save() as IWorkbookData); } catch { /* уже разобран */ } }
