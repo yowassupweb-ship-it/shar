@@ -92,11 +92,12 @@ async def run(settings: Settings):
         await _safe_sync("Calendar migration", migrate_legacy_calendar_rows)
         # Отключённого за время жизни процесса пользователя нужно вывести из конференций.
         await _safe_sync("calls eviction", evict_disabled_users_from_calls)
-        if settings.social_refresh:
-            # Подписка соцсетей на новые события — сетевые запросы к площадкам, старт их не ждёт.
-            threading.Thread(target=_social_events, daemon=True, name="social-events").start()
     else:
         log.info("startup maintenance disabled")
+    if settings.social_refresh:
+        # Подписка соцсетей на новые события — сетевые запросы к площадкам, старт их не ждёт. Не под
+        # startup_maintenance: на проде она выключена, а переподписка безопасна и повторяется без вреда.
+        threading.Thread(target=_social_events, daemon=True, name="social-events").start()
 
     tasks = [
         asyncio.create_task(health_probe_loop(), name="health-probe"),
