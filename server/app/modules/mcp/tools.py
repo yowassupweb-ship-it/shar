@@ -533,7 +533,7 @@ def delete_item(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     """Удалить материал насовсем. Только владельцу, только с confirm=true: восстановить нельзя."""
     access.need("create", "удалять материалы")
     if args.get("confirm") is not True:
-        raise ToolError("Удаление необратимо: передайте confirm: true, когда уверены, что материал нужно удалить")
+        raise ToolError("Материал уйдёт в корзину «Офиса» (вернуть его сможет человек), через 30 дней сотрётся: передайте confirm: true, когда уверены")
     item = access.load(args.get("id"), content=False)
     if str(item.get("ownerId")) != access.me.user_id:
         raise ToolError("Удалить можно только свой материал")
@@ -637,7 +637,7 @@ TOOLS: list[dict[str, Any]] = [
          "sheets": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "rows": {"type": "array", "items": {"type": "array", "items": {}}}}}}},
          "required": ["title"]}},
     {"name": "delete_item", "handler": delete_item, "level": "create",
-     "description": "Удалить СВОЙ материал насовсем (необратимо, версии тоже пропадают). Нужен confirm: true. Чужие материалы удалять нельзя.",
+     "description": "Удалить СВОЙ материал: он уходит в корзину «Офиса» на 30 дней (вернуть может человек), потом стирается вместе с версиями. Нужен confirm: true. Чужие материалы удалять нельзя.",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "confirm": {"type": "boolean", "description": "true — подтверждаю удаление"}}, "required": ["id", "confirm"]}},
     {"name": "move_item", "handler": move_item, "level": "create",
      "description": "Положить материал в папку или вынуть из папок (folder_id не указан — если ключу открыт весь «Офис»).",

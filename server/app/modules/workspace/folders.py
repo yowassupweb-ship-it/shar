@@ -20,7 +20,9 @@
   move  — перемещение и правка: ещё перекладывать материалы и папки внутри открытой ветки, переименовывать
           и заводить в ней папки (их владелец — владелец ветки), класть туда свои материалы — их видят все, кому
           открыта папка (строка раскладки владельца с placed_by = автор). Свой материал автор может забрать обратно.
-Удалять папки и раздавать доступ может только владелец; вынести чужой материал из открытой ветки нельзя.
+Участник с «перемещением» удаляет вложенные папки (содержимое поднимается выше) и материалы — в корзину
+(store.TRASH_DAYS дней, router.py). Удалить саму открытую ему папку, раздавать доступ и выносить чужой материал из
+ветки может только владелец.
 
 Любое изменение раскладки — событие workspace_folders на все устройства владельца: список перестраивается сам.
 """
@@ -173,7 +175,8 @@ def _folders(user_id: str) -> list[dict]:
     if roles:
         for c in db.conn.fetch_all(
             "SELECT x.folder_id::text AS folder_id, i.kind, count(*) AS n FROM workspace_item_folder x "
-            f"JOIN workspace_items i ON i.id = x.item_id AND {store.published_sql('x', 'i')} "
+            f"JOIN workspace_items i ON i.id = x.item_id AND {store.published_sql('x', 'i')}"
+            f"{' AND i.deleted_at IS NULL' if store.trash_ready() else ''} "
             "WHERE x.folder_id = ANY(%s) GROUP BY 1, 2", (list(roles),),
         ) or []:
             counts.setdefault(c["folder_id"], {})[c["kind"]] = int(c["n"])
@@ -339,15 +342,20 @@ def change_folder(folder_id: str, body: FolderPatch, me: Identity = Depends(curr
 
 @router.delete("/api/workspace/folders/{folder_id}")
 def delete_folder(folder_id: str, me: Identity = Depends(current_identity)):
-    folder = _own(folder_id, me.user_id)
+    """Своя папка — всегда; в открытой ветке с правом «перемещение» — вложенная (саму открытую вам папку — нет)."""
+    roles = _scope(me.user_id)
+    folder = _arrange(folder_id, me.user_id, roles)
+    owner = str(folder["owner_id"])
     parent = folder.get("parent_id")
+    if owner != me.user_id and (parent is None or roles.get(int(parent)) != "move"):
+        raise HTTPException(status_code=403, detail="Открытую вам папку удалить может только владелец — вложенные в неё можно")
     # Содержимое — на уровень выше: вложенные папки к родителю удаляемой, материалы в родителя (с верхнего уровня —
     # раскладка удаляется каскадом, и материалы возвращаются в общий список).
     db.conn.execute_query("UPDATE workspace_folders SET parent_id = %s WHERE parent_id = %s", (parent, int(folder_id)))
     if parent is not None:
         db.conn.execute_query("UPDATE workspace_item_folder SET folder_id = %s WHERE folder_id = %s", (parent, int(folder_id)))
     db.conn.execute_query("DELETE FROM workspace_folders WHERE id = %s", (int(folder_id),))
-    _changed(me.user_id)
+    _changed(me.user_id, owner)
     return {"folders": _folders(me.user_id)}
 
 

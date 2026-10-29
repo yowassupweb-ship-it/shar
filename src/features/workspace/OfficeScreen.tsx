@@ -22,6 +22,7 @@ import type { Folder, Item, Kind, Viewer } from './types';
 import { canArrange, FOLDER_DRAG, FOLDER_ROLE_NOTE, FolderRow, isFolderDrag, isItemDrag, ITEM_DRAG, zoneOf, type DropZone } from './Folders';
 import { PresenceStack } from './PresenceStack';
 import { FolderShareDialog } from './FolderShareDialog';
+import { TrashSheet } from './TrashSheet';
 import { useDragAutoScroll, useFlip } from './lib/listMotion';
 
 const OPEN_FOLDERS_KEY = 'shar.office.open-folders';
@@ -67,6 +68,9 @@ function since(iso: string): string {
   if (days < 30) return `${days} дн`;
   return new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
 }
+
+/** Удалённое лежит в корзине 30 дней (сервер: store.TRASH_DAYS). */
+export const TRASH_HINT = 'Материал полежит в корзине 30 дней — оттуда его можно вернуть.';
 
 /** Строка списка — без Markdown-разметки: сервер отдаёт начало текста заметки как есть, с #, **, | и ссылками. */
 function plainSnippet(text: string) {
@@ -402,6 +406,7 @@ export default function OfficeScreen() {
   }, [newParam]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [dropping, setDropping] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
 
   async function importPicked(file: File | undefined) {
     if (!file) return;
@@ -431,7 +436,7 @@ export default function OfficeScreen() {
   }
 
   async function removeItem(item: Item) {
-    const ok = await askConfirm({ title: `Удалить «${item.title || KINDS[item.kind].untitled}»?`, text: 'Это нельзя отменить.', confirm: 'Удалить', tone: 'danger' });
+    const ok = await askConfirm({ title: `Удалить «${item.title || KINDS[item.kind].untitled}»?`, text: TRASH_HINT, confirm: 'Удалить', tone: 'danger' });
     if (!ok) return;
     try {
       await workspaceApi.remove(item.id);
@@ -822,6 +827,12 @@ export default function OfficeScreen() {
               )}
             </div>
           )}
+          {/* Корзина — тихой ссылкой в самом низу списка: нужна редко. */}
+          {!search && items !== null && (
+            <button type="button" className="nws-trash-open" data-flip="g-trash" onClick={() => setTrashOpen(true)}>
+              <Trash2 size={14} aria-hidden="true" /> Корзина
+            </button>
+          )}
         </div>
       </aside>
 
@@ -890,12 +901,14 @@ export default function OfficeScreen() {
               {sort.label}
             </MenuItem>
           ))}
-          {(!folderMenu.folder.role || folderMenu.folder.role === 'owner') && (<>
+          {/* Чужую открытую папку участник с «перемещением» удалить не может, вложенные в неё — может. */}
+          {(!folderMenu.folder.role || folderMenu.folder.role === 'owner' || (folderMenu.folder.role === 'move' && folderMenu.folder.parentId)) && (<>
           <div className="nx-menu-sep" />
           <MenuItem icon={<Trash2 size={15} />} tone="danger" onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void removeFolder(f); }}>Удалить папку</MenuItem>
           </>)}
         </Menu>
       )}
+      {trashOpen && <TrashSheet onClose={() => setTrashOpen(false)} onRestored={() => void load()} />}
       {shareFolder && <FolderShareDialog folder={shareFolder} onClose={() => setShareFolder(null)} onChanged={() => void load()} />}
       {moveMenu && (
         <Menu anchor={moveMenu.anchor} label="В папку" onClose={() => setMoveMenu(null)}>
@@ -918,7 +931,7 @@ export default function OfficeScreen() {
           {rowMenu.item.isOwner && (
             <MenuItem icon={<Pin size={15} />} onSelect={() => { const i = rowMenu.item; setRowMenu(null); void togglePin(i); }}>{rowMenu.item.pinned ? 'Открепить' : 'Закрепить сверху'}</MenuItem>
           )}
-          {rowMenu.item.isOwner && (
+          {(rowMenu.item.isOwner || rowMenu.item.canDelete) && (
             <MenuItem icon={<Trash2 size={15} />} tone="danger" onSelect={() => { const i = rowMenu.item; setRowMenu(null); void removeItem(i); }}>Удалить</MenuItem>
           )}
         </Menu>

@@ -1058,3 +1058,12 @@ div.univer-w-\[400px\]:has(.univerjs-icon-ascending-icon) > .univer-mt-4 > span 
 .nws-text-marks { position: absolute; z-index: 8; overflow: hidden; pointer-events: none; }
 .nws-text-marks > span { position: absolute; border-radius: 2px; background: color-mix(in srgb, #f5c518 32%, transparent); mix-blend-mode: multiply; }
 html:is([data-theme="graphite"], [data-theme="black"]) .nws-text-marks > span { background: color-mix(in srgb, #f5c518 30%, transparent); mix-blend-mode: screen; }
+
+/* Корзина: ссылка под списком и строки окна. */
+.nws-trash-open { display: flex; align-items: center; gap: 6px; width: fit-content; margin: var(--space-4) var(--space-2) var(--space-2); padding: 4px 8px;
+  border: 0; border-radius: 8px; background: none; color: var(--text-2); font: inherit; font-size: var(--text-xs); cursor: pointer; }
+.nws-trash-open:hover { background: var(--surface-hover); color: var(--text-main); }
+.nws-trash { display: flex; flex-direction: column; gap: var(--space-2); }
+.nws-trash-row { gap: var(--space-3); }
+.nws-trash-icon { flex: none; color: var(--text-2); }
+.nws-trash-empty { color: var(--text-2); padding: var(--space-4) 0; text-align: center; }

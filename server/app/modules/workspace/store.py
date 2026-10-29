@@ -125,6 +125,17 @@ ALTER TABLE workspace_item_versions ADD COLUMN IF NOT EXISTS saved_via TEXT NOT 
 """)
 EDIT_VIA: ContextVar[str] = ContextVar("workspace_edit_via", default="")
 
+# Корзина: удалённый материал TRASH_DAYS дней лежит с отметкой deleted_at (из списков, поиска и ссылок он пропадает),
+# потом стирается окончательно (purge_trash). deleted_folder_owner — владелец папки, где материал лежал: он видит
+# удалённое в корзине и может вернуть. deleted_at — последним: по нему код понимает, что шаг применён (trash_ready).
+schema.register("workspace_trash", """
+ALTER TABLE workspace_items ADD COLUMN IF NOT EXISTS deleted_by TEXT;
+ALTER TABLE workspace_items ADD COLUMN IF NOT EXISTS deleted_folder_owner TEXT;
+ALTER TABLE workspace_items ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_workspace_items_deleted ON workspace_items(deleted_at) WHERE deleted_at IS NOT NULL;
+""")
+TRASH_DAYS = 30
+
 # В списке содержимого нет: снимок документа весит сотни килобайт, а списку нужны название, дата и фрагмент.
 LIST_COLUMNS = """id::text AS id, kind, title, pinned, is_template, meta, owner_id, access_level, access_mode,
     created_at::text AS created_at, updated_at::text AS updated_at,
@@ -335,12 +346,13 @@ def published_sql(x: str = "x", alias: str = "i") -> str:
 def visible_sql(alias: str = "i") -> str:
     """Условие «пользователь видит материал»; параметры — visible_params(user_id). Через открытую папку виден
     только материал, который туда положил сам его автор: папкой нельзя раздать чужое. Владельцу папки виден и
-    материал, который участник с правом «перемещение» положил в его папку."""
-    return (f"({alias}.owner_id = %s OR {alias}.access_level = 'all' "
+    материал, который участник с правом «перемещение» положил в его папку. Материал в корзине не виден никому."""
+    alive = f"{alias}.deleted_at IS NULL AND " if trash_ready() else ""
+    return (f"({alive}({alias}.owner_id = %s OR {alias}.access_level = 'all' "
             f"OR EXISTS (SELECT 1 FROM workspace_item_shares s WHERE s.item_id = {alias}.id AND s.user_id = %s) "
             f"OR EXISTS (SELECT 1 FROM workspace_item_dept_shares d WHERE d.item_id = {alias}.id AND d.department_id = ANY(%s)) "
             f"OR EXISTS (SELECT 1 FROM workspace_item_folder fx WHERE fx.item_id = {alias}.id AND {published_sql('fx', alias)} "
-            f"AND (fx.folder_id = ANY(%s) OR fx.user_id = %s)))")
+            f"AND (fx.folder_id = ANY(%s) OR fx.user_id = %s))))")
 
 
 def visible_params(user_id: str) -> list[Any]:
@@ -526,7 +538,10 @@ def permissions(row: dict[str, Any], user_id: str, depts: list[str] | None = Non
     доступа, — по режиму материала. folder_roles — заранее посчитанные открытые папки, roles — заранее собранные
     выдачи доступа (share_roles): список не ходит в базу за каждой строкой."""
     if str(row["owner_id"]) == user_id:
-        return {"isOwner": True, "canEdit": True, "role": "owner"}
+        return {"isOwner": True, "canEdit": True, "canDelete": True, "role": "owner"}
+    # Удалить (в корзину, оттуда можно вернуть) может ещё владелец папки, где материал лежит, и тот, у кого на эту
+    # папку право «перемещение». Без корзины удаление окончательное — только автору.
+    can_delete = False
     if roles is None:
         roles = [s["role"] for s in db.conn.fetch_all("SELECT role FROM workspace_item_shares WHERE item_id = %s AND user_id = %s", (row["id"], user_id)) or []]
         if depts is None:
@@ -544,18 +559,21 @@ def permissions(row: dict[str, Any], user_id: str, depts: list[str] | None = Non
     if owner_folder is not None:
         if str(folder_owner or "") == user_id:
             roles.append("edit")  # участник положил свой материал в мою папку — я его правлю, как и всё в ней
+            can_delete = True
         else:
             via_folder = (folder_roles if folder_roles is not None else shared_folder_roles(user_id, depts)).get(int(owner_folder))
             if via_folder:
                 # «Перемещение» к самому материалу — это правка: раскладку проверяет folders.py.
                 roles.append("view" if via_folder == "view" else "edit")
+                can_delete = via_folder == "move"
+    can_delete = can_delete and trash_ready()
     if roles:
         role = "edit" if "edit" in roles else "view"
-        return {"isOwner": False, "canEdit": role == "edit", "role": role}
+        return {"isOwner": False, "canEdit": role == "edit", "canDelete": can_delete, "role": role}
     if row["access_level"] == "all":
         mode = row["access_mode"]
-        return {"isOwner": False, "canEdit": mode != "view", "role": "view" if mode == "view" else "edit"}
-    return {"isOwner": False, "canEdit": False, "role": None}
+        return {"isOwner": False, "canEdit": mode != "view", "canDelete": False, "role": "view" if mode == "view" else "edit"}
+    return {"isOwner": False, "canEdit": False, "canDelete": False, "role": None}
 
 
 def present(row: dict[str, Any], user_id: str | None = None, *, with_content: bool = False,
@@ -613,11 +631,39 @@ def via_ready() -> bool:
     return column_ready("workspace_items", "updated_via") and column_ready("workspace_item_versions", "saved_via")
 
 
+def trash_ready() -> bool:
+    return column_ready("workspace_items", "deleted_at")
+
+
+_purged_at = 0.0
+
+
+def purge_trash(*, force: bool = False) -> int:
+    """Стереть окончательно то, что пролежало в корзине дольше TRASH_DAYS дней (строки и объекты в S3). Отдельной
+    фоновой задачи нет: зовут обращения к «Офису», не чаще раза в 10 минут на процесс. Не ломает запрос."""
+    global _purged_at
+    if not trash_ready() or (not force and time.monotonic() - _purged_at < 600):
+        return 0
+    _purged_at = time.monotonic()
+    try:
+        rows = db.conn.fetch_all(
+            "DELETE FROM workspace_items WHERE deleted_at < now() - make_interval(days => %s) RETURNING id", (TRASH_DAYS,)) or []
+    except Exception as exc:
+        log.warning("workspace: trash purge failed: %s", exc)
+        return 0
+    for r in rows:
+        drop_objects(int(r["id"]))
+    return len(rows)
+
+
 def get_row(item_id: str, *, full: bool = True, content: bool = True) -> Optional[dict[str, Any]]:
-    """content=False: все поля, кроме содержимого из S3 (для проверки прав и служебных запросов)."""
+    """content=False: все поля, кроме содержимого из S3 (для проверки прав и служебных запросов). Материал из корзины
+    тоже отдаётся — с deleted_at: решают вызывающие (get_visible его прячет)."""
     if not str(item_id).isdigit():
         return None
     columns = (FULL_COLUMNS + (", updated_via" if via_ready() else "")) if full else LIST_COLUMNS
+    if trash_ready():
+        columns += ", deleted_at::text AS deleted_at, deleted_by, deleted_folder_owner"
     row = db.conn.fetch_one(f"SELECT {columns} FROM workspace_items i WHERE id = %s", (int(item_id),))
     if row and full and content and row.get("content_key"):
         row["content"] = read_object(row["content_key"])
@@ -674,8 +720,8 @@ def get_visible(item_id: str, user_id: str, *, content: bool = True) -> dict[str
     """content=False — без содержимого из S3: присутствию, истории и управлению доступом оно не нужно, а качать
     документ целиком ради проверки прав (присутствие — раз в 15 с на каждого зрителя) дорого."""
     row = get_row(item_id, content=content)
-    # Чужой закрытый материал не выдаёт даже своего существования.
-    if not row or not (permissions(row, user_id)["role"]):
+    # Чужой закрытый материал не выдаёт даже своего существования; материал в корзине — как удалённый.
+    if not row or row.get("deleted_at") or not (permissions(row, user_id)["role"]):
         raise WorkspaceError(404, "Материал не найден")
     return row
 

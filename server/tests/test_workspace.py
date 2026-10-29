@@ -169,8 +169,10 @@ def test_content_lives_in_s3(anna, monkeypatch):
     anna.patch(f"/api/workspace/items/{item['id']}", json={"content": "вторая"})
     # поиск по тексту работает и с S3
     assert anna.get("/api/workspace/items?kind=note&q=вторая").json()["items"][0]["id"] == item["id"]
-    # удаление чистит хранилище
+    # удаление — в корзину (объекты остаются, чтобы можно было вернуть); стереть навсегда — чистит хранилище
     assert anna.delete(f"/api/workspace/items/{item['id']}").status_code == 200
+    assert fake.objects
+    assert anna.delete(f"/api/workspace/trash/{item['id']}").status_code == 200
     assert fake.objects == {}
 
 
@@ -592,7 +594,7 @@ def test_folder_move_right_lets_people_rearrange_and_add(anna, boris, clara, use
     assert boris.patch(f"/api/workspace/folders/{sub['id']}", json={"title": "Черновики 2", "parentId": inbox["id"]}).status_code == 200
     assert {f["id"]: f["parentId"] for f in anna.get("/api/workspace/folders").json()["folders"]}[sub["id"]] == inbox["id"]
     assert boris.patch(f"/api/workspace/folders/{sub['id']}", json={"parentId": None}).status_code == 403
-    assert boris.delete(f"/api/workspace/folders/{sub['id']}").status_code == 404
+    assert boris.delete(f"/api/workspace/folders/{root['id']}").status_code == 403
     own = boris.post("/api/workspace/folders", json={"title": "Личная Бориса"}).json()["folder"]
     assert boris.patch(f"/api/workspace/folders/{sub['id']}", json={"parentId": own["id"]}).status_code == 400
 
@@ -615,3 +617,61 @@ def test_folder_move_right_lets_people_rearrange_and_add(anna, boris, clara, use
     # Сняли «перемещение» — снова только правка документов.
     anna.put(f"/api/workspace/folders/{root['id']}/shares", json={"userId": users.ids["boris"], "role": "edit"})
     assert boris.put(f"/api/workspace/items/{plan['id']}/folder", json={"folderId": inbox["id"]}).status_code == 403
+
+
+def test_trash_keeps_deleted_for_30_days_and_lets_folder_members_delete(anna, boris, clara, users, client):
+    """Удаление — в корзину: у всех пропадает, вернуть можно на прежнее место. Удалять могут автор, владелец папки и
+    участник с правом «Перемещение и редактирование»; стереть навсегда — автор или владелец папки."""
+    from app.core.db import db
+    from app.modules.workspace import store
+
+    root = anna.post("/api/workspace/folders", json={"title": "Общая"}).json()["folder"]
+    sub = anna.post("/api/workspace/folders", json={"title": "Вложенная", "parentId": root["id"]}).json()["folder"]
+    doc = _create(anna, "document", title="Программа", content=DOC)
+    anna.put(f"/api/workspace/items/{doc['id']}/folder", json={"folderId": sub["id"]})
+    link = anna.post(f"/api/workspace/items/{doc['id']}/links", json={"mode": "view"}).json()["link"]
+    anna.put(f"/api/workspace/folders/{root['id']}/shares", json={"userId": users.ids["boris"], "role": "edit"})
+    anna.put(f"/api/workspace/folders/{root['id']}/shares", json={"userId": users.ids["clara"], "role": "view"})
+
+    # «Редактирование» удалять не даёт, «Перемещение и редактирование» — даёт.
+    assert next(i for i in boris.get("/api/workspace/items").json()["items"] if i["id"] == doc["id"])["canDelete"] is False
+    assert boris.delete(f"/api/workspace/items/{doc['id']}").status_code == 403
+    anna.put(f"/api/workspace/folders/{root['id']}/shares", json={"userId": users.ids["boris"], "role": "move"})
+    assert next(i for i in boris.get("/api/workspace/items").json()["items"] if i["id"] == doc["id"])["canDelete"] is True
+    assert boris.delete(f"/api/workspace/items/{doc['id']}").json()["trash"] is True
+
+    # Пропал отовсюду: списки, карточка, поиск, ссылка.
+    for who in (anna, boris, clara):
+        assert doc["id"] not in {i["id"] for i in who.get("/api/workspace/items").json()["items"]}
+        assert who.get(f"/api/workspace/items/{doc['id']}").status_code == 404
+    assert client.get(f"/api/share/workspace/{link['token']}").status_code == 404
+
+    # В корзине — у автора и у того, кто удалил; у Клары — нет. Стереть навсегда Борис не может.
+    trash = {i["id"]: i for i in anna.get("/api/workspace/trash").json()["items"]}
+    assert trash[doc["id"]]["deletedByName"] and trash[doc["id"]]["canPurge"] is True and trash[doc["id"]]["purgeAt"]
+    assert next(i for i in boris.get("/api/workspace/trash").json()["items"] if i["id"] == doc["id"])["canPurge"] is False
+    assert doc["id"] not in {i["id"] for i in clara.get("/api/workspace/trash").json()["items"]}
+    assert boris.delete(f"/api/workspace/trash/{doc['id']}").status_code == 403
+    assert clara.post(f"/api/workspace/trash/{doc['id']}/restore").status_code == 404
+
+    # Борис возвращает — материал снова в той же папке у всех, ссылка работает.
+    assert boris.post(f"/api/workspace/trash/{doc['id']}/restore").status_code == 200
+    assert next(i for i in clara.get("/api/workspace/items").json()["items"] if i["id"] == doc["id"])["folderId"] == sub["id"]
+    assert client.get(f"/api/share/workspace/{link['token']}").status_code == 200
+
+    # Вложенную папку Борис удалить может (содержимое поднимается выше), саму открытую ему — нет.
+    assert boris.delete(f"/api/workspace/folders/{root['id']}").status_code == 403
+    assert boris.delete(f"/api/workspace/folders/{sub['id']}").status_code == 200
+    assert next(i for i in anna.get("/api/workspace/items").json()["items"] if i["id"] == doc["id"])["folderId"] == root["id"]
+
+    # Срок вышел — стирается само.
+    assert boris.delete(f"/api/workspace/items/{doc['id']}").status_code == 200
+    db.conn.execute_query("UPDATE workspace_items SET deleted_at = now() - interval '31 days' WHERE id = %s", (int(doc["id"]),))
+    assert store.purge_trash(force=True) >= 1
+    assert doc["id"] not in {i["id"] for i in anna.get("/api/workspace/trash").json()["items"]}
+
+    # Автор стирает навсегда сразу.
+    note = _create(anna, "note", title="Черновик", content="x")
+    assert anna.delete(f"/api/workspace/items/{note['id']}").status_code == 200
+    assert anna.delete(f"/api/workspace/trash/{note['id']}").status_code == 200
+    assert anna.post(f"/api/workspace/trash/{note['id']}/restore").status_code == 404

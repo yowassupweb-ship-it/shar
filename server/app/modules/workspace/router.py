@@ -5,7 +5,10 @@
   GET    /api/workspace/items/{id}                     целиком
   PATCH  /api/workspace/items/{id}                     {title?, content?, meta?, pinned?, isTemplate?, accessLevel?, accessMode?, baseUpdatedAt?, live?}
   GET    /api/workspace/items/{id}/live?epoch=&since=  правки совместной правки после версии since (live.py)
-  DELETE /api/workspace/items/{id}                     только владелец
+  DELETE /api/workspace/items/{id}                     в корзину: автор, владелец папки, право «перемещение» на папку
+  GET    /api/workspace/trash                          корзина: удалённое мной, моё и из моих папок (TRASH_DAYS дней)
+  POST   /api/workspace/trash/{id}/restore             вернуть на прежнее место
+  DELETE /api/workspace/trash/{id}                     стереть навсегда: автор или владелец папки
   GET    /api/workspace/items/{id}/shares              кому выдано: поимённо и отделам
   PUT    /api/workspace/items/{id}/shares              {userId | departmentId, role: "view"|"edit"|null}
                                                        (право «перемещение» — только у папок: folders.py)
@@ -92,6 +95,7 @@ class LinkBody(BaseModel):
 def list_items(kind: Optional[str] = None, q: str = "", templates: bool = False, limit: int = 300, me: Identity = Depends(current_identity)):
     if kind is not None and kind not in KINDS:
         raise HTTPException(status_code=400, detail="Неизвестный вид материала")
+    store.purge_trash()  # не чаще раза в 10 минут: стирает пролежавшее в корзине дольше срока
     where = [store.visible_sql("i")]
     params: list[Any] = store.visible_params(me.user_id)
     if kind:
@@ -323,16 +327,81 @@ def patch_item(item_id: str, body: ItemPatch, me: Identity = Depends(current_ide
 
 @router.delete("/api/workspace/items/{item_id}")
 def delete_item(item_id: str, me: Identity = Depends(current_identity)):
+    """В корзину: у всех пропадает, TRASH_DAYS дней можно вернуть. Без шага схемы корзины — стирается сразу (только автор)."""
     try:
         row = store.get_visible(item_id, me.user_id, content=False)
-        if not store.permissions(row, me.user_id)["isOwner"]:
-            raise WorkspaceError(403, "Удалить может только владелец")
+        if not store.permissions(row, me.user_id).get("canDelete"):
+            raise WorkspaceError(403, "Удалить может автор, владелец папки или тот, у кого на папку право «Перемещение и редактирование»"
+                                 if store.trash_ready() else "Удалить может только владелец")
     except WorkspaceError as exc:
         raise _raise(exc) from exc
     who = store.audience(row)
+    if store.trash_ready():
+        place = store.owner_place(item_id) or {}
+        db.conn.execute_query("UPDATE workspace_items SET deleted_at = now(), deleted_by = %s, deleted_folder_owner = %s WHERE id = %s",
+                              (me.user_id, place.get("folder_owner"), int(item_id)))
+        live.forget_access(item_id)
+        store.purge_trash()
+    else:
+        db.conn.execute_query("DELETE FROM workspace_items WHERE id = %s", (int(item_id),))
+        store.drop_objects(int(item_id))
+    store.announce(who, row, "changed", actor=me.user_id, exclude=me.user_id)
+    return {"ok": True, "trash": store.trash_ready()}
+
+
+def _trashed(item_id: str, me: Identity) -> dict[str, Any]:
+    """Материал из корзины, который человеку виден там: удалил он, материал его или лежал в его папке."""
+    if not store.trash_ready():
+        raise HTTPException(status_code=503, detail="Корзина ещё не включена на сервере")
+    row = store.get_row(item_id, content=False)
+    if not row or not row.get("deleted_at") or me.user_id not in {str(row["owner_id"]), str(row.get("deleted_by") or ""), str(row.get("deleted_folder_owner") or "")}:
+        raise HTTPException(status_code=404, detail="В корзине такого нет")
+    return row
+
+
+@router.get("/api/workspace/trash")
+def list_trash(me: Identity = Depends(current_identity)):
+    if not store.trash_ready():
+        return {"items": [], "days": store.TRASH_DAYS, "ready": False}
+    store.purge_trash()
+    rows = db.conn.fetch_all(
+        f"""SELECT {store.LIST_COLUMNS}, deleted_at::text AS deleted_at, deleted_by, deleted_folder_owner,
+               (deleted_at + make_interval(days => %s))::text AS purge_at
+           FROM workspace_items i WHERE deleted_at IS NOT NULL AND (owner_id = %s OR deleted_by = %s OR deleted_folder_owner = %s)
+           ORDER BY deleted_at DESC LIMIT 500""",
+        (store.TRASH_DAYS, me.user_id, me.user_id, me.user_id),
+    ) or []
+    people = sorted({str(r["owner_id"]) for r in rows} | {str(r["deleted_by"]) for r in rows if r.get("deleted_by")})
+    names = {str(u["id"]): u.get("name") or u.get("username") or "" for u in (db.conn.fetch_all(
+        "SELECT id, name, username FROM users WHERE id = ANY(%s)", (people,)) or [])} if people else {}
+    return {"days": store.TRASH_DAYS, "ready": True, "items": [{
+        "id": r["id"], "kind": r["kind"], "title": r["title"], "snippet": r.get("snippet") or "",
+        "ownerId": str(r["owner_id"]), "ownerName": names.get(str(r["owner_id"]), ""), "isOwner": str(r["owner_id"]) == me.user_id,
+        "deletedAt": r["deleted_at"], "deletedBy": str(r.get("deleted_by") or ""), "deletedByName": names.get(str(r.get("deleted_by") or ""), ""),
+        "purgeAt": r["purge_at"],
+        "canPurge": me.user_id in {str(r["owner_id"]), str(r.get("deleted_folder_owner") or "")},
+    } for r in rows]}
+
+
+@router.post("/api/workspace/trash/{item_id}/restore")
+def restore_from_trash(item_id: str, me: Identity = Depends(current_identity)):
+    """Вернуть: материал снова виден всем, кому был открыт, — в той же папке (если её не удалили), с историей версий."""
+    row = _trashed(item_id, me)
+    db.conn.execute_query("UPDATE workspace_items SET deleted_at = NULL, deleted_by = NULL, deleted_folder_owner = NULL WHERE id = %s", (int(item_id),))
+    live.forget_access(item_id)
+    fresh = store.get_row(item_id, full=False) or row
+    store.announce(store.audience(fresh), fresh, "changed", actor=me.user_id, exclude=me.user_id)
+    return {"ok": True}
+
+
+@router.delete("/api/workspace/trash/{item_id}")
+def purge_from_trash(item_id: str, me: Identity = Depends(current_identity)):
+    """Стереть навсегда, не дожидаясь срока: автор материала или владелец папки, где он лежал."""
+    row = _trashed(item_id, me)
+    if me.user_id not in {str(row["owner_id"]), str(row.get("deleted_folder_owner") or "")}:
+        raise HTTPException(status_code=403, detail="Стереть навсегда может автор материала или владелец папки — дождитесь срока или попросите их")
     db.conn.execute_query("DELETE FROM workspace_items WHERE id = %s", (int(item_id),))
     store.drop_objects(int(item_id))
-    store.announce(who, row, "changed", actor=me.user_id, exclude=me.user_id)
     return {"ok": True}
 
 

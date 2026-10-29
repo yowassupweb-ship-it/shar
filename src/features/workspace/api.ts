@@ -1,4 +1,4 @@
-import type { Comment, CommentAnchor, Folder, FolderRole, Item, Kind, LinkEntry, SharedItem, SharesState, VersionRow, VersionsState, Viewer } from './types';
+import type { Comment, CommentAnchor, Folder, FolderRole, Item, Kind, LinkEntry, SharedItem, SharesState, TrashState, VersionRow, VersionsState, Viewer } from './types';
 
 export class WorkspaceError extends Error {
   constructor(public status: number, message: string) {
@@ -53,7 +53,11 @@ export const workspaceApi = {
   /** Сохранение от живого редактора (документ, таблица): содержимое версии rev журнала совместной правки. */
   saveLive: (id: string, content: string, live: { epoch: string; rev: number }) =>
     call<{ item: Item; live?: 'already' }>(`/api/workspace/items/${enc(id)}`, { method: 'PATCH', json: { content, live } }),
-  remove: (id: string) => call<{ ok: boolean }>(`/api/workspace/items/${enc(id)}`, { method: 'DELETE' }),
+  remove: (id: string) => call<{ ok: boolean; trash?: boolean }>(`/api/workspace/items/${enc(id)}`, { method: 'DELETE' }),
+  /** Корзина: удалённое мной, моё и из моих папок; вернуть на место или стереть навсегда. */
+  trash: () => call<TrashState>('/api/workspace/trash'),
+  restoreFromTrash: (id: string) => call<{ ok: boolean }>(`/api/workspace/trash/${enc(id)}/restore`, { method: 'POST' }),
+  purgeFromTrash: (id: string) => call<{ ok: boolean }>(`/api/workspace/trash/${enc(id)}`, { method: 'DELETE' }),
 
   folders: () => call<{ folders: Folder[] }>('/api/workspace/folders').then((r) => r.folders),
   createFolder: (title: string, parentId: string | null = null) =>

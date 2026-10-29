@@ -200,7 +200,7 @@ export function ItemView({ source, onBack, onChanged, onDeleted, onOpen, windowC
   }
 
   async function remove() {
-    const ok = await askConfirm({ title: `Удалить «${item!.title || info.untitled}»?`, text: 'Это нельзя отменить. Те, кому вы дали доступ, его потеряют.', confirm: 'Удалить', tone: 'danger' });
+    const ok = await askConfirm({ title: `Удалить «${item!.title || info.untitled}»?`, text: 'Он пропадёт у всех, у кого есть доступ, и 30 дней полежит в корзине — оттуда его можно вернуть.', confirm: 'Удалить', tone: 'danger' });
     if (!ok || 'token' in source) return;
     try { await workspaceApi.remove(source.id); forgetSticky(source.id); onDeleted?.(); } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось удалить', 'error'); }
   }
@@ -368,7 +368,7 @@ ${absolute(links.office(item!.kind, item!.id))}` });
         { label: 'История версий', onSelect: () => setVersionsOpen(true), icon: <History size={15} /> },
         ...(canSticky(item.kind) ? [{ label: stickyLabel(item.kind), onSelect: () => void openSticky(item.id, null, { kind: item.kind }), icon: <MonitorUp size={15} /> }] : []),
         ...(canPrint ? ['sep' as const, { label: 'Печать', onSelect: () => void print(), hint: `${mod}P`, icon: <Printer size={15} /> }] : []),
-        ...(item.isOwner ? ['sep' as const, { label: 'Удалить', onSelect: () => void remove(), tone: 'danger' as const, icon: <Trash2 size={15} /> }] : []),
+        ...(item.isOwner || item.canDelete ? ['sep' as const, { label: 'Удалить', onSelect: () => void remove(), tone: 'danger' as const, icon: <Trash2 size={15} /> }] : []),
       ] },
       { id: 'edit', label: 'Правка', items: [
         cmd('Отменить', 'univer.command.undo', <Undo2 size={15} />, `${mod}Z`),

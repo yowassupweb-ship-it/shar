@@ -52,7 +52,7 @@ def _shared_view(row: dict[str, Any], mode: str) -> dict[str, Any]:
 def open_shared(token: str):
     link = _link(token)
     row = store.get_row(str(link["item_id"]))
-    if not row:
+    if not row or row.get("deleted_at"):  # в корзине — по ссылке не открывается, пока не вернут
         raise HTTPException(status_code=404, detail="Материал удалён")
     db.conn.execute_query("UPDATE workspace_item_links SET last_used_at = now() WHERE token = %s", (token,))
     return _shared_view(row, link["mode"])
@@ -64,7 +64,7 @@ def save_shared(token: str, body: SharedPatch):
     if link["mode"] != "edit":
         raise HTTPException(status_code=403, detail="Эта ссылка — только для просмотра")
     row = store.get_row(str(link["item_id"]))
-    if not row:
+    if not row or row.get("deleted_at"):  # в корзине — по ссылке не открывается, пока не вернут
         raise HTTPException(status_code=404, detail="Материал удалён")
     sets: list[str] = []
     params: list[Any] = []

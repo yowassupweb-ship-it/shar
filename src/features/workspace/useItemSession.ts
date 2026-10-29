@@ -33,6 +33,8 @@ export interface SessionItem {
   updatedAt: string;
   canEdit: boolean;
   isOwner: boolean;
+  /** Удалить в корзину можно (автор, владелец папки, право «Перемещение и редактирование»). */
+  canDelete?: boolean;
   /** Есть только у материала, открытого после входа (по ссылке владельца не видно). */
   pinned?: boolean;
   accessLevel?: AccessLevel;
@@ -99,7 +101,7 @@ export function useItemSession(source: Source) {
     const full = await workspaceApi.get(src.id);
     return {
       id: full.id, kind: full.kind, title: full.title, content: full.content ?? '', meta: full.meta,
-      updatedAt: full.updatedAt, canEdit: full.canEdit, isOwner: full.isOwner,
+      updatedAt: full.updatedAt, canEdit: full.canEdit, isOwner: full.isOwner, canDelete: full.canDelete,
       pinned: full.pinned, accessLevel: full.accessLevel, accessMode: full.accessMode, ownerName: full.ownerName,
       live: full.live,
     };

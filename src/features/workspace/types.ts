@@ -28,6 +28,8 @@ export interface Item {
   /** Права текущего человека (считает сервер). */
   isOwner: boolean;
   canEdit: boolean;
+  /** Удалить в корзину: автор, владелец папки, где лежит материал, и право «Перемещение и редактирование» на неё. */
+  canDelete?: boolean;
   role: Role | null;
   /** Только у карточки (GET /items/{id}); в списке содержимого нет. */
   content?: string;
@@ -116,3 +118,22 @@ export interface Comment {
   createdAt: string;
   updatedAt: string;
 }
+
+/** Материал в корзине «Офиса»: лежит TrashState.days дней с удаления, потом стирается сам. */
+export interface TrashItem {
+  id: string;
+  kind: Kind;
+  title: string;
+  snippet: string;
+  ownerId: string;
+  ownerName: string;
+  isOwner: boolean;
+  deletedAt: string;
+  deletedBy: string;
+  deletedByName: string;
+  /** Когда сотрётся окончательно. */
+  purgeAt: string;
+  /** Стереть навсегда сейчас может автор или владелец папки, где материал лежал. */
+  canPurge: boolean;
+}
+export interface TrashState { items: TrashItem[]; days: number; ready: boolean }
