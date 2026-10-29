@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { DocParagraphMenuService } from '@univerjs/docs-ui';
+import { DocPageLayoutService, DocParagraphMenuService } from '@univerjs/docs-ui';
 import { ComponentManager, IFontService } from '@univerjs/ui';
 import { BehaviorSubject } from 'rxjs';
 import { DocSelectionManagerService } from '@univerjs/docs';
@@ -376,31 +376,52 @@ const TOOLBAR_GAP = 14;
 
 /**
  * Лента документа парит над листом (office-apple.css), и в начале документа верх листа уходил под неё. Своего отступа
- * сверху у Univer нет в настройках: сдвигаем лист отступом компонентов отрисовки (pageMarginTop основного слоя и фона;
- * свойство открыто в типах engine-render, но ведёт его Univer — решение владельца от 2026-10-28). Побочно растёт и
- * промежуток между листами: Univer берёт его из того же отступа.
+ * сверху у Univer нет в настройках. Раньше (2026-10-28) лист сдвигали отступом pageMarginTop, но из него же Univer
+ * берёт промежуток между листами — листы разъехались на ширину ленты. Теперь pageMarginTop штатный, а сдвигается
+ * только начало документа: после каждой расстановки листа (DocPageLayoutService.calculatePagePosition) опускаем
+ * документ и фон на недостающее до ленты и на столько же удлиняем сцену (resolveSceneHeight), чтобы низ не обрезался.
+ * Попадание курсора и выделение Univer считает от того же верха документа (getOffsetConfig().docsTop) — они сходятся.
  */
 export function reserveToolbarSpace(univer: unknown, unitId: string, onCommand: (listener: (id: string) => void) => () => void): () => void {
   const injector = (univer as { __getInjector: () => { get: <T>(token: unknown) => T } }).__getInjector();
-  type Layer = { pageMarginTop?: number; makeDirty?: (dirty?: boolean) => void; getParentScale?: () => { scaleY?: number } };
+  type Layer = { pageMarginTop?: number; left: number; top: number; translate: (x: number, y: number) => void };
+  type Layout = { calculatePagePosition: () => unknown; resolveSceneHeight: (height: number) => number };
+  type Unit = { components?: Map<string, Layer>; scene?: { scaleY?: number }; with: <T>(token: unknown) => T };
   let tries = 0;
+  let layout: Layout | null = null;
+  let restore: () => void = () => undefined;
   const apply = () => {
-    let unit: { components?: Map<string, Layer> } | null;
-    try { unit = injector.get<IRenderManagerService>(IRenderManagerService).getRenderUnitById(unitId) as unknown as typeof unit; } catch { return; }
-    const layers = [unit?.components?.get('__Document_Render_Main__'), unit?.components?.get('__Document_Render_Background__')];
-    if (layers.some((layer) => typeof layer?.pageMarginTop !== 'number')) { if (tries++ < 60) window.requestAnimationFrame(apply); return; }
-    // Отступ — в единицах документа и растёт с масштабом, а лента — нет: делим на масштаб, чтобы зазор был одинаковым.
-    let scale = 1;
-    try { scale = Number(layers[0]!.getParentScale?.().scaleY) || 1; } catch { /* масштаб по умолчанию */ }
-    const margin = Math.round((TOOLBAR_SPACE + TOOLBAR_GAP) / scale);
-    if (layers.every((layer) => layer!.pageMarginTop === margin)) return;
-    for (const layer of layers) { layer!.pageMarginTop = margin; layer!.makeDirty?.(true); }
-    // Размер сцены и прокрутку Univer пересчитывает по событию resize.
-    window.dispatchEvent(new Event('resize'));
+    let unit: Unit | null = null;
+    try {
+      unit = injector.get<IRenderManagerService>(IRenderManagerService).getRenderUnitById(unitId) as unknown as Unit | null;
+      layout = unit?.with<Layout>(DocPageLayoutService) ?? null;
+    } catch { layout = null; }
+    const main = unit?.components?.get('__Document_Render_Main__');
+    const background = unit?.components?.get('__Document_Render_Background__');
+    if (!unit || !layout || typeof main?.pageMarginTop !== 'number' || !background) { if (tries++ < 60) window.requestAnimationFrame(apply); return; }
+    // Сколько добавить сверху, в единицах документа: лента не растёт с масштабом, поэтому делим на масштаб.
+    const extra = () => Math.max(0, (TOOLBAR_SPACE + TOOLBAR_GAP) / (Number(unit!.scene?.scaleY) || 1) - (main.pageMarginTop ?? 0));
+    const target = layout;
+    const position = target.calculatePagePosition;
+    const sceneHeight = target.resolveSceneHeight;
+    target.resolveSceneHeight = (height) => sceneHeight.call(target, height) + extra();
+    target.calculatePagePosition = () => {
+      const result = position.call(target);
+      // Скрытый редактор Univer уводит за край (-10000) — его не трогаем.
+      if (main.top > -1000) {
+        const shift = extra();
+        main.translate(main.left, main.top + shift);
+        background.translate(background.left, background.top + shift);
+      }
+      return result;
+    };
+    restore = () => { target.calculatePagePosition = position; target.resolveSceneHeight = sceneHeight; };
+    target.calculatePagePosition();
   };
   apply();
-  // Масштаб сменили — пересчитать отступ под новый.
-  return onCommand((id) => { if (/zoom/i.test(id)) window.requestAnimationFrame(apply); });
+  // Масштаб сменили — Univer сам заново расставит лист, сдвиг пересчитается по новому масштабу.
+  const stop = onCommand((id) => { if (/zoom/i.test(id)) window.requestAnimationFrame(() => layout?.calculatePagePosition()); });
+  return () => { stop(); restore(); };
 }
 
 /**
