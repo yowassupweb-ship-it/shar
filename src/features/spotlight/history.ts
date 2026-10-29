@@ -34,8 +34,15 @@ export function getVisits(): Visit[] {
 const listeners = new Set<() => void>();
 export const onVisitsChanged = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; };
 
+/** Последнее открытое именно в этом окне — «где человек сейчас» для агента «Ядра» (core/whereAmI.ts). */
+let inWindow: (Omit<Visit, 'key' | 'ts' | 'n'> & { id: string }) | null = null;
+export const windowVisit = () => inWindow;
+
 export function recordVisit(entry: Omit<Visit, 'key' | 'ts' | 'n'> & { id: string }) {
   if (!entry.title) return;
+  const changed = inWindow?.path !== entry.path || inWindow?.title !== entry.title;
+  inWindow = entry;
+  if (changed) window.dispatchEvent(new Event('shar:window-visit'));
   const key = `${entry.kind}:${entry.id}`;
   const list = getVisits();
   const prev = list.find((v) => v.key === key);

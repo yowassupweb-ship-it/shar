@@ -21,8 +21,9 @@ from app.modules.calendar import router as cal
 from app.modules.core_agents import memory
 from app.modules.todos import router as todos
 
-APPS = ("calendar", "tasks", "files", "people", "agent")
-APP_NAMES = {"calendar": "календарь", "tasks": "задачи", "files": "файлы", "people": "люди", "agent": "память и навыки агента"}
+APPS = ("calendar", "tasks", "files", "people", "agent", "integrations")
+APP_NAMES = {"calendar": "календарь", "tasks": "задачи", "files": "файлы", "people": "люди", "agent": "память и навыки агента",
+             "integrations": "подключённые API компании"}
 
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DATETIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$")
@@ -383,6 +384,22 @@ def skill_write(access, args: dict[str, Any]) -> dict[str, Any]:
                                            str(args.get("body") or ""), access.ctx.key_name, shared=shared))
 
 
+def request_permission(access, args: dict[str, Any]) -> dict[str, Any]:
+    """Попросить разрешения на действие, которое режим человека без согласия не пускает (permissions.py)."""
+    from app.modules.core_agents import permissions
+
+    message_id = access.ctx.scope.get("job")
+    if not message_id:
+        raise _err("Разрешение спрашивают только из чата «Ядра»")
+    tool = str(args.get("tool") or "").strip()
+    summary = " ".join(str(args.get("summary") or "").split())[:500]
+    if not tool or not summary:
+        raise _err("Нужны tool (какой инструмент) и summary (что именно сделаете — одной фразой)")
+    approval_id = permissions.request(access.me.user_id, message_id, tool, summary)
+    return {"asked": True, "approval": approval_id,
+            "note": "Карточка «Разрешить / Запретить» показана. Коротко скажите, что ждёте решения, и закончите ответ."}
+
+
 def ask_user(access, args: dict[str, Any]) -> dict[str, Any]:
     """Вопрос с кнопками прямо в ответе агента (запуск «Ядра»): человек нажимает — ответ приходит следующим сообщением."""
     message_id = access.ctx.scope.get("job")
@@ -399,6 +416,96 @@ def ask_user(access, args: dict[str, Any]) -> dict[str, Any]:
     update_agent_message(message_id, props={"ask": {"kind": kind, "question": str(args.get("question") or "")[:500]},
                                             "actions": [{"label": o, "value": o} for o in options]})
     return {"shown": True, "note": "Вопрос показан. Закончите ответ коротко (что ждёте) — выбор человека придёт следующим сообщением."}
+
+
+# ── подключённые API, свои агенты, окна Шара ────────────────────────────────
+
+def integration_list(access, args: dict[str, Any]) -> dict[str, Any]:
+    from app.modules.core_agents import integrations
+
+    items = integrations.listing(access.me.user_id, access.me.is_admin)
+    return {"integrations": [{k: v for k, v in i.items() if k != "fields" or access.me.is_admin} for i in items],
+            "canManage": access.me.is_admin}
+
+
+def integration_call(access, args: dict[str, Any]) -> dict[str, Any]:
+    from app.modules.core_agents import integrations
+
+    service = str(args.get("service") or "")
+    if not integrations.open_to(service, access.me.user_id, access.me.is_admin):
+        raise _err("Этот API вам не открыт — доступ выдаёт администратор (Админка → Ядро → Интеграции)")
+    return integrations.call(service, method=str(args.get("method") or ""), path=str(args.get("path") or ""),
+                             query=args.get("query") if isinstance(args.get("query"), dict) else None, body=args.get("body"),
+                             max_chars=int(args.get("max_chars") or 30_000))
+
+
+def _admin(access) -> None:
+    if not access.me.is_admin:
+        raise _err("Подключает и удаляет API компании администратор — попросите его")
+
+
+def integration_save(access, args: dict[str, Any]) -> dict[str, Any]:
+    from app.modules.core_agents import integrations
+
+    _admin(access)
+    service = str(args.get("service") or "").strip().lower()
+    try:
+        integrations.save(service, {k: v for k, v in args.items() if k != "service"}, access.ctx.key_name)
+    except (integrations.IntegrationError, RuntimeError) as exc:
+        raise _err(str(exc)) from exc
+    return {"saved": service, "test": integrations.test(service)}
+
+
+def integration_delete(access, args: dict[str, Any]) -> dict[str, Any]:
+    from app.modules.core_agents import integrations
+
+    _admin(access)
+    if args.get("confirm") is not True:
+        raise _err("Удаление API нужно подтвердить: confirm: true (сначала спросите человека)")
+    integrations.delete(str(args.get("service") or ""))
+    return {"deleted": args.get("service")}
+
+
+def connect_gemini(access, args: dict[str, Any]) -> dict[str, Any]:
+    """Человек прислал ключ Google в чат — подключаем его Gemini сами. Ключ проверяется у Google и хранится зашифрованным."""
+    from app.modules.core_agents import accounts
+
+    result = _call(accounts.put_gemini, accounts.GeminiBody(key=str(args.get("key") or "").strip()), access.me)
+    card = next(a for a in result["accounts"] if a["provider"] == "gemini")
+    return {"connected": True, "model": card["model"], "models": [m["id"] for m in card["models"]][:10],
+            "note": "Ключ сохранён зашифрованным. Посоветуйте человеку удалить сообщение с ключом из чата."}
+
+
+def agent_disconnect(access, args: dict[str, Any]) -> dict[str, Any]:
+    from app.modules.core_agents import accounts
+
+    if args.get("confirm") is not True:
+        raise _err("Отключение нужно подтвердить: confirm: true")
+    provider = str(args.get("provider") or "")
+    _call(accounts.disconnect, provider, access.me)
+    return {"disconnected": provider}
+
+
+# Переписки (чаты, почта, соцсети) агенту закрыты совсем: ни инструментов, ни открытия окна. Нужное человек пересылает сам.
+_CLOSED_PATHS = ("/chats", "/chat", "/messages", "/m/", "/mail", "/social")
+
+
+def open_in_shar(access, args: dict[str, Any]) -> dict[str, Any]:
+    """Открыть у человека раздел или материал Шара: его интерфейс получает живое событие и переходит по адресу."""
+    from urllib.parse import urlparse
+
+    raw = str(args.get("url") or "").strip()
+    parsed = urlparse(raw)
+    path = parsed.path or "/"
+    if parsed.scheme or parsed.netloc or not path.startswith("/") or path.startswith("/api/"):
+        raise _err("Нужен внутренний адрес Шара: /office?kind=document&id=94, /tasks?task=…, /calendar, /files?folder=…")
+    if path.startswith(_CLOSED_PATHS):
+        raise _err("Переписки (чаты, почта, соцсети) агенту закрыты: открыть их нельзя")
+    target = path + (f"?{parsed.query}" if parsed.query else "")
+    from app.core.realtime import sse_manager
+
+    sse_manager.push(access.me.user_id, {"type": "core_open", "url": target, "window": bool(args.get("new_window"))})
+    return {"opened": target}
 
 
 _TIME = {"type": "string", "description": "местное время: 2026-11-03T15:00 (или дата 2026-11-03)"}
@@ -479,11 +586,47 @@ TOOLS: list[dict[str, Any]] = [
      "description": "Найти в памяти по словам или метке — в личной и общей памяти компании. Ищите перед ответом, если вопрос может опираться на прошлое.",
      "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "tag": {"type": "string"}, "limit": {"type": "integer"},
                                                      "scope": {"type": "string", "enum": ["all", "mine", "company"]}}}},
+    {"name": "request_permission", "app": "agent", "handler": request_permission, "level": "read",
+     "description": "Попросить у человека разрешение на действие, которое его режим без согласия не пускает (сервер ответил «Нужно разрешение»). "
+                    "summary — что именно и с чем сделаете, одной фразой. После вызова закончите ответ: решение придёт следующим сообщением с approval_id.",
+     "inputSchema": {"type": "object", "properties": {"tool": {"type": "string"}, "summary": {"type": "string"}}, "required": ["tool", "summary"]}},
     {"name": "ask_user", "app": "agent", "handler": ask_user, "level": "read",
      "description": "Спросить человека с кнопками под вашим ответом: confirm — да/нет, choice — один вариант, multi — несколько. "
                     "Для подтверждения удаления, выбора из вариантов, уточнения. После вызова закончите ответ — выбор придёт следующим сообщением.",
      "inputSchema": {"type": "object", "properties": {"question": {"type": "string"}, "kind": {"type": "string", "enum": ["confirm", "choice", "multi"]},
                                                      "options": {"type": "array", "items": {"type": "string"}}}, "required": ["options"]}},
+    {"name": "integration_list", "app": "integrations", "handler": integration_list, "level": "read",
+     "description": "Подключённые API компании, открытые этому человеку (Topvisor, Яндекс Метрика, Вебмастер, Wordstat и свои): что умеют, базовый адрес, подсказка по путям.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "integration_call", "app": "integrations", "handler": integration_call, "level": "read",
+     "description": "Вызвать API из integration_list: ключ подставит Шар (вам он не нужен). path — относительный путь метода; query — параметры адреса; "
+                    "body — JSON для POST/PUT. Ответ больше max_chars (30 000, до 60 000) обрезается — уточняйте запрос.",
+     "inputSchema": {"type": "object", "properties": {"service": {"type": "string"}, "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+                                                     "path": {"type": "string"}, "query": {"type": "object"}, "body": {}, "max_chars": {"type": "integer"}},
+                     "required": ["service", "path"]}},
+    {"name": "integration_save", "app": "integrations", "handler": integration_save, "level": "create",
+     "description": "Только администратор: подключить или поменять API компании, когда человек прислал ключи. Готовый сервис (topvisor, yandex_metrica, "
+                    "yandex_webmaster, yandex_wordstat) — fields {ключ: значение}; своё API — service (латиница), label, base_url (https), auth_type "
+                    "(bearer|oauth|header|basic|query), auth_name, secret, notes (что умеет, пути). access — кому открыть: id людей из people_search или ['*'] — всем. "
+                    "После сохранения подключение проверяется. Ключ в ответе не возвращается.",
+     "inputSchema": {"type": "object", "properties": {"service": {"type": "string"}, "fields": {"type": "object"}, "label": {"type": "string"},
+                                                     "base_url": {"type": "string"}, "auth_type": {"type": "string"}, "auth_name": {"type": "string"},
+                                                     "secret": {"type": "string"}, "notes": {"type": "string"}, "access": {"type": "array", "items": {"type": "string"}}},
+                     "required": ["service"]}},
+    {"name": "integration_delete", "app": "integrations", "handler": integration_delete, "level": "create",
+     "description": "Только администратор: удалить API компании (своё) или стереть ключи готового сервиса. Нужен confirm: true.",
+     "inputSchema": {"type": "object", "properties": {"service": {"type": "string"}, "confirm": {"type": "boolean"}}, "required": ["service", "confirm"]}},
+    {"name": "connect_gemini", "app": "agent", "handler": connect_gemini, "level": "read",
+     "description": "Человек прислал ключ Google (AI Studio / Google Cloud) — подключить его Gemini в «Ядре»: ключ проверяется у Google и хранится зашифрованным.",
+     "inputSchema": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}},
+    {"name": "agent_disconnect", "app": "agent", "handler": agent_disconnect, "level": "read",
+     "description": "Отключить агента человека (gemini — стереть ключ; claude, codex — выйти из подписки на ноде). Нужен confirm: true.",
+     "inputSchema": {"type": "object", "properties": {"provider": {"type": "string", "enum": ["gemini", "claude", "codex"]}, "confirm": {"type": "boolean"}},
+                     "required": ["provider", "confirm"]}},
+    {"name": "open_in_shar", "app": "agent", "handler": open_in_shar, "level": "read",
+     "description": "Открыть человеку раздел или материал Шара на его экране: документ, таблицу, задачу, календарь, папку файлов (url из ответов "
+                    "инструментов). new_window — отдельным окном. Чаты открыть нельзя.",
+     "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}, "new_window": {"type": "boolean"}}, "required": ["url"]}},
     {"name": "skill_list", "app": "agent", "handler": skill_list, "level": "read",
      "description": "Навыки: ваши для этого человека и общие для компании — имя, когда применять, сколько раз применяли.",
      "inputSchema": {"type": "object", "properties": {}}},

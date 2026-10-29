@@ -76,7 +76,7 @@ class ScopeBody(BaseModel):
     kinds: list[Literal["note", "document", "table", "presentation"]] = Field(default_factory=lambda: list(KINDS))
     folders: list[str] | None = Field(default=None, max_length=200)
     shared: bool = True
-    apps: list[Literal["calendar", "tasks", "files", "people", "agent"]] = Field(default_factory=list)
+    apps: list[Literal["calendar", "tasks", "files", "people", "agent", "integrations"]] = Field(default_factory=list)
 
 
 class KeyBody(BaseModel):
@@ -118,8 +118,9 @@ def clean_scope(raw: Any, user_id: str) -> dict[str, Any]:
     apps = [a for a in (s.get("apps") or []) if a in APPS]
     out = {"access": s.get("access") if s.get("access") in ACCESS else "read", "kinds": kinds,
            "folders": folders, "shared": bool(s.get("shared", True)), "apps": apps}
-    if s.get("job"):  # ключ запуска «Ядра»: в какое сообщение агент отвечает (ask_user, присутствие в материалах)
+    if s.get("job"):  # ключ запуска «Ядра»: в какое сообщение агент отвечает (ask_user) и режим разрешений человека
         out["job"] = str(s["job"])
+        out["mode"] = str(s.get("mode") or "careful")
     return out
 
 

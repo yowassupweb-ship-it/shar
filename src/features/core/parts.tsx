@@ -1,4 +1,4 @@
-import { memo, useState, type ReactNode } from 'react';
+import { memo, useEffect, useState, type ReactNode } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
@@ -7,6 +7,18 @@ import { plural } from '@/shared/ui/format';
 import type { CoreStep, CoreWork } from './api';
 
 export const EFFORT_LABEL: Record<string, string> = { low: 'быстро', medium: 'обычно', high: 'тщательно' };
+
+/** «claude-sonnet-5-5» → «Sonnet 5.5», «gemini-3.5-flash-lite» → «3.5 Flash-Lite»: человеку не нужен идентификатор API. */
+export function modelLabel(model?: string): string {
+  if (!model) return '';
+  const words = model.replace(/^(claude|gemini|gpt)-/i, '').split('-');
+  const out: string[] = [];
+  for (const w of words) {
+    if (/^\d+$/.test(w) && /^\d+$/.test(out[out.length - 1] || '')) out[out.length - 1] += `.${w}`;
+    else out.push(/^\d/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1));
+  }
+  return out.join(' ').replace(' Lite', '-Lite').replace(/\s+\d{8}$/, '');
+}
 
 export function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1).replace('.', ',')} млн`;
@@ -50,19 +62,26 @@ function CodeBlock({ children }: { children: ReactNode }) {
   );
 }
 
-/** Ответ агента: Markdown с таблицами и кодом. Ссылки — в новом окне; таблица широкая — прокручивается сама. */
+/** Голый внутренний адрес Шара в тексте агента (/tasks?task=…) — ссылкой «открыть»: агенты иногда пишут его без Markdown. */
+const BARE_PATH = /(^|[\s«"])(\/(?:office|tasks|calendar|files|contacts|settings)(?:\?[^\s)»"]*[^\s).,;:»"])?)(?=$|[\s).,;:»"])/gm;
+const linkify = (text: string) => text.replace(BARE_PATH, (_m, lead: string, path: string) => `${lead}[открыть](${path})`);
+
+/** Ответ агента: Markdown с таблицами и кодом. Внешние ссылки — в новом окне, внутренние (/office…, /tasks…) — в Шаре;
+ *  таблица широкая — прокручивается сама. */
 export const MarkdownText = memo(function MarkdownText({ text }: { text: string }) {
   return (
     <div className="ncore-md">
       <Markdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
         components={{
-          a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer noopener">{children}</a>,
+          a: ({ href, children }) => (href?.startsWith('/')
+            ? <a href={href} className="ncore-inlink">{children}</a>
+            : <a href={href} target="_blank" rel="noreferrer noopener">{children}</a>),
           pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
           table: ({ children }) => <div className="ncore-table"><table>{children}</table></div>,
         }}
       >
-        {text}
+        {linkify(text)}
       </Markdown>
     </div>
   );
@@ -82,10 +101,13 @@ const STEP_ICON: Array<[RegExp, typeof Search]> = [
 ];
 const iconFor = (name = '') => STEP_ICON.find(([re]) => re.test(name))?.[1] ?? Wrench;
 
-/** Что агент делал: шаги с аргументами и результатом. Длинную цепочку сворачиваем до последних шагов. */
-export function Chain({ steps, live, status }: { steps: CoreStep[]; live?: boolean; status?: ReactNode }) {
+/** Что агент делал: шаги с аргументами и результатом. Пока работает — развёрнуто (видно, что происходит); готово —
+ *  одна строка «Сделано: N шагов · время», раскрывается по щелчку. Длинную цепочку сворачиваем до последних шагов. */
+export function Chain({ steps, live, status, durationMs }: { steps: CoreStep[]; live?: boolean; status?: ReactNode; durationMs?: number }) {
   const [full, setFull] = useState(false);
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(Boolean(live));
+  useEffect(() => { setOpen(Boolean(live)); }, [live]);
+  const seconds = Math.round((durationMs || 0) / 1000);
   const hidden = full ? 0 : Math.max(0, steps.length - VISIBLE_STEPS);
   const shown = hidden ? steps.slice(hidden) : steps;
   const tools = steps.filter((s) => s.kind === 'tool').length;
@@ -94,9 +116,9 @@ export function Chain({ steps, live, status }: { steps: CoreStep[]; live?: boole
     <div className="ncore-chain" data-live={live || undefined}>
       <button type="button" className="ncore-chain-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <ChevronRight size={13} className="ncore-chain-chevron" aria-hidden="true" />
-        {status ?? <strong>Ход работы</strong>}
+        {status ?? <strong>{tools ? `Сделано: ${tools} ${plural(tools, ['шаг', 'шага', 'шагов'])}` : 'Ход мысли'}</strong>}
         <span className="ncore-chain-count">
-          {tools} {plural(tools, ['шаг', 'шага', 'шагов'])}{errors ? ` · ${errors} ${plural(errors, ['ошибка', 'ошибки', 'ошибок'])}` : ''}
+          {errors ? `${errors} ${plural(errors, ['ошибка', 'ошибки', 'ошибок'])}` : ''}{errors && seconds ? ' · ' : ''}{!live && seconds ? (seconds >= 60 ? `${Math.floor(seconds / 60)} мин ${seconds % 60} с` : `${seconds} с`) : ''}
         </span>
       </button>
       {open && (

@@ -267,3 +267,88 @@
   .nst-tiles { grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); padding-inline: var(--space-3); }
   .nst[data-open] .nst-detail-inner { padding-bottom: calc(var(--space-7) + env(safe-area-inset-bottom, 0px)); }
 }
+
+/* ── Настройки → Ядро ──────────────────────────────────────────────────────
+   Строго: монохром, тонкие линии; подключённый агент — тёмный знак и ровная рамка. */
+
+.nst-core-hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: var(--space-3); padding: var(--space-4) var(--space-4) var(--space-4) var(--space-5); border-radius: var(--radius-lg); background: var(--surface-panel); box-shadow: inset 0 0 0 1px var(--border-color); }
+.nst-core-hero h2 { margin: 0 0 4px; font-size: var(--text-lg); font-weight: var(--weight-semibold); }
+.nst-core-hero p { margin: 0; max-width: 560px; color: var(--text-2); font-size: var(--text-sm); line-height: var(--leading-normal); }
+.nst-core-node { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 6px; box-shadow: inset 0 0 0 1px var(--border-color); color: var(--text-2); font-size: var(--text-xs); font-weight: var(--weight-medium); white-space: nowrap; }
+.nst-core-node::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+.nst-core-node[data-online] { color: var(--text-main); }
+.nst-core-node[data-online]::before { background: var(--state-ok); }
+
+.nst-core-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: var(--space-3); }
+.nst-core-card { display: grid; grid-template-rows: auto 1fr auto; gap: var(--space-3); min-height: 200px; padding: var(--space-4); border-radius: var(--radius-lg); background: var(--surface-panel); box-shadow: inset 0 0 0 1px var(--border-color); }
+.nst-core-card[data-state="ready"] { box-shadow: inset 0 0 0 1px var(--border-strong); }
+.nst-core-card-head { display: flex; align-items: center; gap: 12px; }
+.nst-core-mark { display: grid; place-items: center; flex: none; border-radius: 10px; box-shadow: inset 0 0 0 1px var(--border-strong); color: var(--text-main); font-weight: 700; font-size: 16px; }
+.nst-core-card[data-state="ready"] .nst-core-mark { background: var(--text-main); color: var(--surface-panel); box-shadow: none; }
+.nst-core-card-title { display: grid; flex: 1; min-width: 0; line-height: 1.25; }
+.nst-core-card-title b { font-size: var(--text-md); font-weight: var(--weight-semibold); }
+.nst-core-card-title span { color: var(--text-muted); font-size: var(--text-xs); }
+.nst-core-pill { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: var(--text-xs); white-space: nowrap; }
+.nst-core-pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.nst-core-pill[data-tone="ok"] { color: var(--state-ok); }
+.nst-core-pill[data-tone="warn"] { color: var(--state-warn); }
+.nst-core-pill[data-tone="busy"] { color: var(--text-main); }
+.nst-core-pill[data-tone="busy"]::before { display: none; }
+.nst-core-card-body { display: grid; align-content: start; gap: var(--space-2); }
+.nst-core-pitch { margin: 0; color: var(--text-2); font-size: var(--text-sm); line-height: var(--leading-normal); }
+.nst-core-who { display: inline-flex; align-items: center; gap: 6px; margin: 0; overflow: hidden; color: var(--text-main); font-size: var(--text-sm); text-overflow: ellipsis; white-space: nowrap; }
+.nst-core-who svg { flex: none; color: var(--text-muted); }
+.nst-core-error { margin: 0; color: var(--state-danger); font-size: var(--text-xs); }
+.nx-select.nst-core-model { justify-self: start; min-height: 30px; height: 30px; border-radius: 8px; font-size: var(--text-xs); }
+.nst-core-card-foot { display: grid; gap: var(--space-2); }
+.nst-core-card-foot > .nx-primary { justify-self: stretch; justify-content: center; }
+.nst-core-key { display: flex; gap: 6px; }
+.nst-core-input { flex: 1; min-width: 0; min-height: 36px; }
+.nst-core-help { display: inline-flex; align-items: center; gap: 4px; justify-self: start; color: var(--text-muted); font-size: 11px; text-decoration: none; }
+@media (hover: hover) { .nst-core-help:hover { color: var(--text-main); } }
+.nst-core-off { justify-self: start; color: var(--text-muted); }
+.nst-core-tip { display: flex; align-items: center; gap: 6px; }
+.nst-core-skel { min-height: 200px; background: var(--surface-hover); }
+
+/* Вход в подписку — по шагам. */
+.nst-core-flow { display: grid; gap: var(--space-2); }
+.nst-core-flow ol { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; counter-reset: step; }
+.nst-core-flow li { position: relative; display: grid; gap: 6px; padding-left: 26px; counter-increment: step; font-size: var(--text-sm); }
+.nst-core-flow li::before { content: counter(step); position: absolute; left: 0; top: 1px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--border-strong); color: var(--text-2); font-size: 10px; font-weight: 700; }
+.nst-core-flow li[data-done]::before { content: "\2713"; color: var(--state-ok); }
+.nst-core-flow-row { display: flex; align-items: center; gap: 6px; }
+.nst-core-wait { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--text-xs); }
+.nst-core-code { display: inline-flex; align-items: center; gap: 8px; justify-self: start; padding: 2px 2px 2px 12px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--border-strong); font-family: var(--font-mono, ui-monospace, monospace); font-size: 17px; font-weight: 700; letter-spacing: .12em; }
+
+/* Режимы разрешений. */
+.nst-core-modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--space-2); }
+.nst-core-mode { display: grid; gap: 4px; justify-items: start; padding: 12px 14px; border: 0; border-radius: var(--radius-lg); background: var(--surface-panel); box-shadow: inset 0 0 0 1px var(--border-color); color: var(--text-main); font: inherit; text-align: left; cursor: pointer; transition: box-shadow var(--duration-fast) var(--ease-out); }
+.nst-core-mode svg { margin-bottom: 2px; color: var(--text-muted); }
+.nst-core-mode b { font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+.nst-core-mode span { color: var(--text-muted); font-size: var(--text-xs); line-height: 1.35; }
+.nst-core-mode[aria-checked="true"] { box-shadow: inset 0 0 0 1.5px var(--text-main); }
+.nst-core-mode[aria-checked="true"] svg { color: var(--text-main); }
+@media (hover: hover) { .nst-core-mode:not([aria-checked="true"]):hover { box-shadow: inset 0 0 0 1px var(--border-strong); } }
+
+/* Расход. */
+.nst-core-usage { display: grid; padding: 4px var(--space-2); border-radius: var(--radius-lg); background: var(--surface-panel); box-shadow: inset 0 0 0 1px var(--border-color); }
+.nst-core-usage-row { display: flex; align-items: center; gap: 12px; padding: 10px 6px; }
+.nst-core-usage-row + .nst-core-usage-row { border-top: 1px solid var(--border-color); }
+.nst-core-usage-row .nst-core-mark { border-radius: 7px; font-size: 12px; }
+.nst-core-usage-main { display: grid; flex: 1; gap: 5px; min-width: 0; }
+.nst-core-usage-top { display: flex; justify-content: space-between; gap: 8px; font-size: var(--text-sm); }
+.nst-core-usage-top span { color: var(--text-muted); font-size: var(--text-xs); }
+.nst-core-bar { display: block; height: 4px; overflow: hidden; border-radius: 2px; background: var(--surface-hover); }
+.nst-core-bar > i { display: block; height: 100%; background: var(--text-main); }
+.nst-core-usage-sub { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+/* Что знает агент. */
+.nst-core-memory { display: grid; gap: var(--space-3); }
+.nst-core-memory > .nx-segment { justify-self: start; }
+.nst-core-memory .nx-segment button { display: inline-flex; align-items: center; gap: 5px; }
+.nst-core-profile, .nst-core-notes, .nst-core-skills { display: grid; gap: var(--space-2); }
+.nst-core-textarea { width: 100%; min-height: 180px; padding: 12px 14px; border: 0; border-radius: var(--radius-lg); background: var(--surface-panel); box-shadow: inset 0 0 0 1px var(--border-color); color: var(--text-main); font: inherit; font-size: var(--text-sm); line-height: 1.5; resize: vertical; }
+.nst-core-textarea:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--text-muted); }
+.nst-core-notes .nx-block-title { display: flex; align-items: center; gap: 5px; }
+.nst-core-note .nx-row-label { white-space: normal; }
+.nst-core-skill-icon { display: grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--border-color); color: var(--text-2); }

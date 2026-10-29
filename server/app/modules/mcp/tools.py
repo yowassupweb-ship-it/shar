@@ -681,4 +681,12 @@ def summary(ctx: KeyContext) -> str:
 def run(ctx: KeyContext, tool: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
     if not _open(ctx, tool):
         raise ToolError(f"Этому ключу инструмент {tool['name']} не открыт")
+    if ctx.scope.get("job"):  # запуск «Ядра»: режим разрешений человека держит сервер (core_agents/permissions.py)
+        from app.modules.core_agents import permissions
+
+        why = permissions.reason(ctx.scope.get("mode") or permissions.DEFAULT, tool, args, ctx.me.user_id)
+        if why and not permissions.consume(args.get("approval_id"), ctx.me.user_id, tool["name"]):
+            raise ToolError(f"Нужно разрешение человека ({why}). Вызовите request_permission(tool=\"{tool['name']}\", summary=что именно и с чем "
+                            "сделаете — одной фразой), коротко скажите, что ждёте, и закончите ответ. Если человек разрешит, придёт "
+                            "approval_id — повторите вызов с ним.")
     return tool["handler"](Access(ctx), args)

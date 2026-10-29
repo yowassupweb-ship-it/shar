@@ -10,6 +10,7 @@ import { links, paths } from '@/shared/navigation/routes';
 import {
   chatTitle, isFavorites, isGroupChat, isNotifications, lastActivity, otherParticipant, setForwardDraft, useChatStore,
 } from './store';
+import { readDraft, writeDraft } from './drafts';
 
 /** Открыть чат: на странице чатов — на месте, иначе переходом. */
 function goToChat(chatId: string) {
@@ -20,9 +21,10 @@ function goToChat(chatId: string) {
 /**
  * Переслать сообщения в другой чат. Сообщения не уходят сразу: человека переносит в выбранный чат, а они
  * встают в композере вложением — можно дописать комментарий, убрать лишнее и отправить одной кнопкой.
+ * Вместо сообщений можно передать текст (ответ агента «Ядра»): он встаёт в поле ввода чата — так же, до отправки.
  */
-export default function ForwardSheet({ messages, onClose, onDone }: {
-  messages: Message[]; onClose: () => void; onDone?: () => void;
+export default function ForwardSheet({ messages = [], text, onClose, onDone }: {
+  messages?: Message[]; text?: string; onClose: () => void; onDone?: () => void;
 }) {
   const chats = useChatStore((s) => s.chats);
   const me = useChatStore((s) => s.me);
@@ -38,17 +40,24 @@ export default function ForwardSheet({ messages, onClose, onDone }: {
   }, [chats, me, users, query]);
 
   const pick = (chatId: string) => {
-    setForwardDraft(chatId, messages);
     const title = chats[chatId] ? chatTitle(chats[chatId], me, users) : 'чат';
-    showToast(`Открыл «${title}»: сообщения прикреплены, нажмите «Отправить»`, 'success');
+    if (text !== undefined) {
+      const before = readDraft(chatId).trim();
+      writeDraft(chatId, before ? `${before}\n\n${text}` : text);
+      showToast(`Открыл «${title}»: текст в поле ввода — поправьте и отправьте`, 'success');
+    } else {
+      setForwardDraft(chatId, messages);
+      showToast(`Открыл «${title}»: сообщения прикреплены, нажмите «Отправить»`, 'success');
+    }
     onDone?.();
     onClose();
     goToChat(chatId);
   };
 
   const n = messages.length;
+  const heading = text !== undefined ? 'Переслать в чат' : n > 1 ? `Переслать ${n} ${plural(n, ['сообщение', 'сообщения', 'сообщений'])}` : 'Переслать сообщение';
   return (
-    <Sheet title={n > 1 ? `Переслать ${n} ${plural(n, ['сообщение', 'сообщения', 'сообщений'])}` : 'Переслать сообщение'} onClose={onClose}>
+    <Sheet title={heading} onClose={onClose}>
       <div className="cxs-controls">
         <label className="nx-field" data-variant="filter">
           <Search size={15} aria-hidden="true" />

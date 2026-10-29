@@ -159,7 +159,26 @@ export default function ChatHeader({
             </span>
           </button>
         </div>
-        <span className="cxh-spacer" />
+        {/* Закреп — в строке шапки, по центру между названием и поиском; тесно — уходит второй строкой (timeline.css). */}
+        {pin ? (
+          <div className="cxh-pin" style={{ '--pin-n': Math.min(pinned.length, 4), '--pin-i': Math.min(pinIndex, pinned.length - 1) % 4 } as CSSProperties}>
+            <button
+              type="button"
+              className="cxh-pin-body"
+              onClick={() => { onJump(String(pin.id)); if (pinned.length > 1) setPinIndex((i) => (i + 1) % pinned.length); }}
+              aria-label={`Закреплённое сообщение: ${previewText(pin) || 'сообщение'}. Показать в переписке`}
+            >
+              <span className="cxh-pin-bar" aria-hidden="true" />
+              <span className="cxh-pin-text">
+                <b>{pinned.length > 1 ? `Закреплённое ${Math.min(pinIndex, pinned.length - 1) + 1} из ${pinned.length}` : 'Закреплённое сообщение'}</b>
+                <span>{previewText(pin) || 'Сообщение'}</span>
+              </span>
+            </button>
+            <button type="button" className="nx-icon-btn cxh-pin-x" onClick={() => void togglePin(chatId, String(pin.id))} aria-label="Открепить" title="Открепить">
+              <X size={15} aria-hidden="true" />
+            </button>
+          </div>
+        ) : <span className="cxh-spacer" />}
         {requestMine && (
           <button type="button" className="cxh-pill cxh-request" disabled={requestBusy} onClick={() => void setRequest(!requestResolved)}>
             {requestBusy ? <Spinner size={15} /> : requestResolved ? <RotateCcw size={15} aria-hidden="true" /> : <CheckCircle2 size={15} aria-hidden="true" />}
@@ -170,25 +189,6 @@ export default function ChatHeader({
           <Search size={19} aria-hidden="true" />
         </button>
       </div>
-      {pin && (
-        <div className="cxh-pin" style={{ '--pin-n': Math.min(pinned.length, 4), '--pin-i': Math.min(pinIndex, pinned.length - 1) % 4 } as CSSProperties}>
-          <button
-            type="button"
-            className="cxh-pin-body"
-            onClick={() => { onJump(String(pin.id)); if (pinned.length > 1) setPinIndex((i) => (i + 1) % pinned.length); }}
-            aria-label={`Закреплённое сообщение: ${previewText(pin) || 'сообщение'}. Показать в переписке`}
-          >
-            <span className="cxh-pin-bar" aria-hidden="true" />
-            <span className="cxh-pin-text">
-              <b>{pinned.length > 1 ? `Закреплённое ${Math.min(pinIndex, pinned.length - 1) + 1} из ${pinned.length}` : 'Закреплённое сообщение'}</b>
-              <span>{previewText(pin) || 'Сообщение'}</span>
-            </span>
-          </button>
-          <button type="button" className="nx-icon-btn cxh-pin-x" onClick={() => void togglePin(chatId, String(pin.id))} aria-label="Открепить" title="Открепить">
-            <X size={15} aria-hidden="true" />
-          </button>
-        </div>
-      )}
     </div>
   );
 }

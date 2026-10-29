@@ -96,7 +96,10 @@ def _mcp_key(user_id: str, provider: str, message_id: str) -> tuple[str, int]:
     from app.modules.mcp import apps, keys
 
     token = keys.PREFIX + _secrets.token_urlsafe(32)
-    scope = {"access": "create", "kinds": list(keys.KINDS), "folders": None, "shared": True, "apps": list(apps.APPS), "job": message_id}
+    from app.modules.core_agents import permissions
+
+    scope = {"access": "create", "kinds": list(keys.KINDS), "folders": None, "shared": True, "apps": list(apps.APPS), "job": message_id,
+             "mode": permissions.mode_of(user_id)}
     row = db.conn.fetch_one(
         "INSERT INTO mcp_keys (user_id, name, token_hash, token_start, scope, expires_at) "
         "VALUES (%s, %s, %s, %s, %s, now() + make_interval(hours => %s)) RETURNING id",
@@ -113,8 +116,12 @@ SYSTEM = """Вы — личный агент сотрудника в Шаре (�
   «Файлы», люди, память и навыки. Права — ровно права человека.
 - Человек работает рядом с вами в реальном времени: документ, который вы правите, у него может быть открыт.
   Правьте точечно (edit_document, edit_note, update_table с cells), не переписывайте целиком без просьбы.
-- Перед удалением и перед делами «на людях» (приглашения, задачи коллегам) спросите — ask_user с вариантами,
-  если человек сам прямо не просил. Ответ придёт следующим сообщением.
+- Режим разрешений человека: {mode}. Где нужно его согласие, сервер не выполнит инструмент без approval_id — тогда
+  вызовите request_permission (что именно сделаете, одной фразой), коротко скажите, что ждёте, и закончите ответ.
+- Не уверены, чего хочет человек, или есть варианты — спросите ask_user с кнопками и закончите ответ: выбор придёт
+  следующим сообщением. Лучше один точный вопрос, чем работа «мимо».
+- Переписки (чаты, почта, соцсети) вам закрыты. Если нужен их текст — попросите переслать («Переслать агенту»).
+- Показать человеку материал — open_in_shar (документ, задачу, календарь), а не только ссылкой.
 - Подстраивайтесь под человека: поправил вашу работу или сказал «всегда/никогда» — profile_note. Важный факт,
   договорённость, где что лежит — memory_add (полезное всей компании — shared: true). Повторяющаяся задача или
   человек объяснил, как её делать, — skill_write. Перед задачей посмотрите, нет ли навыка под неё.
@@ -145,13 +152,16 @@ def build_run(job: dict) -> dict:
     system = SYSTEM.format(
         company=_company(), name=user.get("name") or user.get("username") or "сотрудник",
         position=f", {user['position']}" if user.get("position") else "",
-        now=datetime.now().strftime("%A, %d.%m.%Y %H:%M"),
+        now=datetime.now().strftime("%A, %d.%m.%Y %H:%M"), mode=_mode_text(user_id),
         memory=memory.prompt_context(user_id) if _memory_ready() else "",
         where=f"## Где человек сейчас (открыто у него на экране)\n{where}" if where else "")
     reply = props.get("replyTo") or {}
-    text = (message.get("body") or "").strip()
+    # Ответ кнопкой разрешения: человек видит «Разрешить», агенту уходит служебное — с approval_id.
+    text = (props.get("agentNote") or message.get("body") or "").strip()
     if reply.get("text"):
         text = f"> {reply['text'][:600]}\n\n{text}"
+    if props.get("forwarded"):
+        text = f"{_forwarded(props['forwarded'])}\n\n{text or 'Разберись с пересланным.'}"
     out: dict[str, Any] = {
         "id": str(job["id"]), "kind": "run", "provider": provider, "userId": user_id, "messageId": job["message_id"],
         "threadId": thread.get("id"), "model": payload.get("model") or "", "effort": payload.get("effort") or "medium",
@@ -163,6 +173,22 @@ def build_run(job: dict) -> dict:
     if provider == "gemini":
         out["apiKey"] = store.unseal(store.account(user_id, "gemini").get("secret_enc") or "")
     return out
+
+
+def _mode_text(user_id: str) -> str:
+    from app.modules.core_agents import permissions
+
+    mode = permissions.mode_of(user_id)
+    return f"«{permissions.MODES[mode]['label']}» — {permissions.MODES[mode]['hint'].lower()}"
+
+
+def _forwarded(items: list[dict]) -> str:
+    """Пересланное из чатов — блоком перед сообщением. Это всё, что агент знает о переписке: доступа к чатам у него нет."""
+    lines = ["## Пересланные сообщения из чата Шара (человек переслал сам; других сообщений вы не видите)"]
+    for item in items[:50]:
+        files = f" [вложения: {', '.join(item.get('files') or [])}]" if item.get("files") else ""
+        lines.append(f"**{item.get('author') or 'Кто-то'}** ({item.get('at') or ''}):{files}\n{(item.get('text') or '').strip()[:4000]}")
+    return "\n\n".join(lines)
 
 
 def _memory_ready() -> bool:

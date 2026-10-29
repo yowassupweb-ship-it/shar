@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Activity, AlertTriangle, BarChart3, Building2, ChevronLeft, LayoutDashboard, ScrollText, Settings2, ShieldOff, Users } from 'lucide-react';
+import { Activity, AlertTriangle, Atom, BarChart3, Building2, ChevronLeft, LayoutDashboard, ScrollText, Settings2, ShieldOff, Users } from 'lucide-react';
 import { paths } from '@/shared/navigation/routes';
 import { loadMe } from './api';
 import UsersTab from './UsersTab';
@@ -11,6 +11,7 @@ import SettingsTab from './SettingsTab';
 import OverviewTab from './OverviewTab';
 import AuditTab from './AuditTab';
 import UsageTab from './UsageTab';
+import CoreTab from './CoreTab';
 import './admin.css';
 
 /**
@@ -28,6 +29,7 @@ const TABS = [
   { id: 'status', label: 'Сервер', icon: Activity },
   { id: 'errors', label: 'Ошибки', icon: AlertTriangle },
   { id: 'usage', label: 'Статистика', icon: BarChart3 },
+  { id: 'core', label: 'Ядро', icon: Atom },
   { id: 'audit', label: 'Журнал', icon: ScrollText },
   { id: 'settings', label: 'Настройки', icon: Settings2 },
 ] as const;
@@ -90,6 +92,7 @@ export default function AdminScreen() {
         {tab === 'status' && <StatusTab />}
         {tab === 'errors' && <ErrorsTab />}
         {tab === 'usage' && <UsageTab />}
+        {tab === 'core' && <CoreTab />}
         {tab === 'audit' && <AuditTab />}
         {tab === 'settings' && <SettingsTab />}
       </div>

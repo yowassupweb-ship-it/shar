@@ -146,7 +146,7 @@ class PollBody(BaseModel):
 
 
 def _seen(node: dict, body: PollBody) -> None:
-    info = {"version": body.version, "host": body.host, "clis": {k: v[:60] for k, v in body.clis.items() if k in store.PROVIDERS and v},
+    info = {"version": body.version, "host": body.host, "clis": {k: v[:60] for k, v in body.clis.items() if (k in store.PROVIDERS or k == "browser") and v},
             "running": len(body.running)}
     db.conn.execute_query("UPDATE core_nodes SET last_seen = now(), info = %s WHERE id = %s", (Json(info), node["id"]))
     node["info"] = info

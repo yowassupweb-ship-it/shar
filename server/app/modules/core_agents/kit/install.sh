@@ -50,6 +50,24 @@ say "Claude Code, Codex, Gemini CLI"
 npm install -g --no-audit --no-fund @anthropic-ai/claude-code @openai/codex @google/gemini-cli >/dev/null 2>&1 \
   || fail "Не удалось поставить CLI агентов (npm install -g …)"
 
+say "Браузер для агентов (Obscura)"
+# Готовая сборка с GitHub под архитектуру сервера; не скачалась — агенты работают без браузера, установка идёт дальше.
+case "$(uname -m)" in x86_64|amd64) OBS_ARCH=x86_64 ;; aarch64|arm64) OBS_ARCH=aarch64 ;; *) OBS_ARCH="" ;; esac
+if [ -n "$OBS_ARCH" ]; then
+  install -d -m 755 "$APP/bin"
+  OBS_TMP="$(mktemp -d)"
+  if curl -fsSL "https://github.com/h4ckf0r0day/obscura/releases/latest/download/obscura-$OBS_ARCH-linux.tar.gz" -o "$OBS_TMP/o.tgz" \
+     && tar xzf "$OBS_TMP/o.tgz" -C "$OBS_TMP"; then
+    OBS_BIN="$(find "$OBS_TMP" -type f -name obscura | head -1)"
+    OBS_WORKER="$(find "$OBS_TMP" -type f -name obscura-worker | head -1)"
+    [ -n "$OBS_BIN" ] && install -m 755 "$OBS_BIN" "$APP/bin/obscura"
+    [ -n "$OBS_WORKER" ] && install -m 755 "$OBS_WORKER" "$APP/bin/obscura-worker"
+  else
+    echo "  Obscura не скачалась — агенты будут без браузера"
+  fi
+  rm -rf "$OBS_TMP"
+fi
+
 say "Пользователь $USER_NAME"
 id "$USER_NAME" >/dev/null 2>&1 || useradd --system --create-home --home-dir "$DATA" --shell /usr/sbin/nologin "$USER_NAME"
 install -d -m 700 -o "$USER_NAME" -g "$USER_NAME" "$DATA" "$DATA/users"

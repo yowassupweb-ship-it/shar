@@ -1122,7 +1122,7 @@ button.cxm-status { cursor: pointer; }
     linear-gradient(to top, var(--edge-shade, rgba(0, 0, 0, .1)), transparent 10px);
 }
 
-.cxh { display: grid; gap: 6px; max-width: calc(var(--cxv-max) + 160px); margin: 0 auto; pointer-events: none; }
+.cxh { display: grid; gap: 6px; max-width: calc(var(--cxv-max) + 160px); margin: 0 auto; pointer-events: none; container: cxh / inline-size; }
 .cxh > * { pointer-events: auto; }
 .cxh-row { display: flex; align-items: center; gap: var(--space-2); min-width: 0; pointer-events: none; }
 .cxh-row > * { pointer-events: auto; }
@@ -1271,7 +1271,14 @@ button.cxm-status { cursor: pointer; }
   .cxh-pin-x:focus-visible { opacity: 1; }
 }
 /* Десктоп: полоса под пилюлей собеседника, шириной с ленту сообщений. */
-@media (min-width: 641px) { .cxh-pin { justify-self: start; width: min(460px, 100%); } }
+/* Закреп — в строке шапки: по центру свободного места между названием и поиском (авто-поля делят его поровну).
+   Тесно (узкая шапка, панель «Ядра» рядом) — уходит второй строкой во всю ширину. Меряем саму шапку, не окно. */
+.cxh-row > .cxh-pin { flex: 0 1 460px; margin-inline: auto; }
+@container cxh (max-width: 760px) {
+  .cxh-row { flex-wrap: wrap; row-gap: 6px; }
+  .cxh-row > .cxh-pin { order: 5; flex: 1 0 100%; margin-inline: 0; }
+  .cxh-row > .cxh-id { margin-right: auto; }
+}
 
 @media (max-width: 640px) {
   .cxv-head { padding-left: var(--space-2); padding-right: var(--space-2); }

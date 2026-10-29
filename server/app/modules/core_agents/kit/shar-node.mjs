@@ -163,7 +163,16 @@ async function detectClis() {
     const version = stripAnsi(res.out).trim().split("\n").pop();
     if (res.code === 0 && version) found[provider] = version.slice(0, 60);
   }
+  browser = findObscura();
   return found;
+}
+
+// Браузер для агентов — Obscura (MCP по stdio): страницы, формы, скриншоты. Ставит его установщик ноды; нет — агенты
+// работают без браузера (поиск и чтение страниц у CLI свои).
+let browser = "";
+function findObscura() {
+  const candidates = [process.env.OBSCURA_COMMAND, "/opt/shar-node/bin/obscura"].filter(Boolean);
+  return candidates.find((file) => { try { return fs.statSync(file).isFile(); } catch { return false; } }) || "";
 }
 
 // ── каталог человека ─────────────────────────────────────────────────────────
@@ -384,7 +393,10 @@ function claudeRateLimit(info) {
 
 function claudeFiles(job, dirs) {
   const mcp = secretFile(dirs, `mcp-${job.id}.json`, JSON.stringify({
-    mcpServers: { shar: { type: "http", url: absolute(job.mcp.url), headers: { Authorization: `Bearer ${job.mcp.token}` } } },
+    mcpServers: {
+      shar: { type: "http", url: absolute(job.mcp.url), headers: { Authorization: `Bearer ${job.mcp.token}` } },
+      ...(browser ? { browser: { type: "stdio", command: browser, args: ["mcp"] } } : {}),
+    },
   }));
   const system = secretFile(dirs, `system-${job.id}.md`, job.system || "");
   return { mcp, system };
@@ -521,7 +533,9 @@ function runCodex(job, dirs, resumeId, report, entry) {
   // Ключ MCP — в переменной окружения запуска, во флагах только адрес.
   const config = ["-c", "approval_policy=never", "-c", "sandbox_mode=read-only", "-c", "model_reasoning_summary=auto",
     "-c", `mcp_servers.shar.url=${absolute(job.mcp.url)}`, "-c", "mcp_servers.shar.bearer_token_env_var=SHAR_MCP_TOKEN",
-    "-c", "mcp_servers.shar.tool_timeout_sec=120"];
+    "-c", "mcp_servers.shar.tool_timeout_sec=120",
+    // Массив в TOML — с кавычками; через cmd.exe на Windows их не передать, поэтому браузер у Codex — только на Linux.
+    ...(browser && process.platform !== "win32" ? ["-c", `mcp_servers.browser.command=${browser}`, "-c", 'mcp_servers.browser.args=["mcp"]'] : [])];
   const args = resumeId
     ? ["exec", "resume", "--json", "--skip-git-repo-check", "--ignore-user-config", ...config]
     : ["exec", "--json", "--skip-git-repo-check", "--ignore-user-config", ...config, "-C", dirs.work];
@@ -597,7 +611,10 @@ function runCodex(job, dirs, resumeId, report, entry) {
 function geminiSettings(job, dirs) {
   // Настройки запуска — отдельным файлом (системный уровень Gemini CLI): MCP Шара и ничего из личных настроек машины.
   return secretFile(dirs, `gemini-${job.id}.json`, JSON.stringify({
-    mcpServers: { shar: { httpUrl: absolute(job.mcp.url), headers: { Authorization: `Bearer ${job.mcp.token}` }, timeout: 120_000, trust: true } },
+    mcpServers: {
+      shar: { httpUrl: absolute(job.mcp.url), headers: { Authorization: `Bearer ${job.mcp.token}` }, timeout: 120_000, trust: true },
+      ...(browser ? { browser: { command: browser, args: ["mcp"], timeout: 120_000, trust: true } } : {}),
+    },
     general: { disableAutoUpdate: true, checkpointing: { enabled: false } },
     security: { auth: { selectedType: "gemini-api-key" }, folderTrust: { enabled: false } },
     privacy: { usageStatisticsEnabled: false },
@@ -608,7 +625,7 @@ function geminiSettings(job, dirs) {
 function runGemini(job, dirs, resumeId, report, entry) {
   const settings = geminiSettings(job, dirs);
   const system = secretFile(dirs, `gemini-system-${job.id}.md`, job.system || "");
-  const args = ["--output-format", "stream-json", "--approval-mode", "yolo", "--allowed-mcp-server-names", "shar"];
+  const args = ["--output-format", "stream-json", "--approval-mode", "yolo", "--allowed-mcp-server-names", "shar", ...(browser ? ["browser"] : [])];
   if (job.model) args.push("-m", job.model);
   if (resumeId) args.push("--resume", resumeId);
   args.push("-p", "");
@@ -775,7 +792,7 @@ async function main() {
   let failures = 0;
   for (;;) {
     try {
-      const res = await shar("/api/core/node/poll", { version: VERSION, host: os.hostname(), clis, running: [...running.keys()], wait: running.size < PARALLEL }, 45_000);
+      const res = await shar("/api/core/node/poll", { version: VERSION, host: os.hostname(), clis: { ...clis, ...(browser ? { browser: "obscura" } : {}) }, running: [...running.keys()], wait: running.size < PARALLEL }, 45_000);
       failures = 0;
       for (const id of res.cancel || []) running.get(String(id))?.stop();
       for (const job of res.jobs || []) handleJob(job);

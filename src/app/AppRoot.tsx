@@ -27,6 +27,8 @@ import { SpotlightHost, useVisitTracker } from '@/features/spotlight';
 import { ChatFrame, chatFrameEnabled, subscribeChatFrame } from '@/features/chat';
 import CorePanel, { CORE_PANEL_ID } from '@/features/core/CorePanel';
 import { toggleCorePanel, useCorePanel } from '@/features/core/panel';
+import { setAgentAvailable } from '@/shared/core/agentBridge';
+import { realtime } from '@/shared/realtime/realtime';
 
 /**
  * Корень Шара v2 — живёт над всеми разделами и не пересоздаётся при переходе
@@ -94,6 +96,20 @@ function Workspace({ me }: { me: User }) {
   // «Ядро» — не страница, а выдвижная панель справа: значок в меню её открывает и закрывает.
   const coreAvailable = tools.some((t) => t.id === 'core');
   const coreOpen = useCorePanel((s) => s.open);
+  // Чаты показывают «Переслать агенту» только тем, кому «Ядро» включено; пересланное открывает панель.
+  useEffect(() => { setAgentAvailable(coreAvailable); }, [coreAvailable]);
+  useEffect(() => {
+    if (!coreAvailable) return undefined;
+    const open = () => useCorePanel.setState({ open: true });
+    window.addEventListener('shar:agent-forward', open);
+    // Агент открывает человеку материал или раздел (open_in_shar; переписки сервер ему не даёт).
+    const off = realtime.subscribe((event) => {
+      const e = event as { type?: string; url?: string; window?: boolean };
+      if (e.type !== 'core_open' || !e.url?.startsWith('/') || /^\/(chats|mail|social)/.test(e.url)) return;
+      if (e.window) window.open(e.url, '_blank'); else navigate(e.url);
+    });
+    return () => { window.removeEventListener('shar:agent-forward', open); off(); };
+  }, [coreAvailable, navigate]);
   const navTools = useMemo(() => (navSource?.navTools || [])
     .map((id) => tools.find((t) => t.id === id && !t.external && t.href.startsWith('/')))
     .filter((t): t is NonNullable<typeof t> => Boolean(t))

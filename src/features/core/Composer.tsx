@@ -1,8 +1,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, CornerDownRight, Paperclip, Slash, X } from 'lucide-react';
+import { ArrowUp, CalendarDays, CheckSquare, CornerDownRight, FileSpreadsheet, FileText, Folder, Forward, LayoutGrid, Mail, MessageCircle, MonitorUp,
+  Paperclip, Plug, Plus, Presentation, Slash, StickyNote, User, X } from 'lucide-react';
+import { clearAgentForward, useAgentBridge, type AgentForward } from '@/shared/core/agentBridge';
+import { paths } from '@/shared/navigation/routes';
 import { Select } from '@/shared/ui/Select';
-import type { CoreAttachment, CoreCatalog, CoreMessage } from './api';
+import type { CoreAttachment, CoreCatalog, CoreContextItem, CoreMessage } from './api';
 import { formatBytes } from './parts';
+import { useWhere, type WhereItem } from './whereAmI';
 
 export interface ComposerCommand { cmd: string; hint: string; admin?: boolean }
 
@@ -10,6 +14,7 @@ export const COMMANDS: ComposerCommand[] = [
   { cmd: '/new', hint: 'Новый чат' },
   { cmd: '/rename', hint: 'Переименовать чат: /rename Название' },
   { cmd: '/archive', hint: 'Убрать чат в архив' },
+  { cmd: '/compact', hint: 'Сжать контекст чата: /compact что важно сохранить' },
   { cmd: '/help', hint: 'Что умеет «Ядро»' },
   { cmd: '/demo', hint: 'Показать ответ агента (демо)', admin: true },
   { cmd: '/demo fail', hint: 'Демо: ответ не получился', admin: true },
@@ -18,7 +23,57 @@ export const COMMANDS: ComposerCommand[] = [
 
 interface Draft { id: string; file: File; name: string; size: number; type: string; loaded: number; key?: string; error?: string }
 
-export interface ComposerHandle { addFiles: (files: File[]) => void; focus: () => void }
+export interface ComposerHandle {
+  addFiles: (files: File[]) => void;
+  focus: () => void;
+  /** Отправить готовый текст (подсказка на пустом экране) — с тем же агентом и «где я», что выбраны в поле. */
+  sendText: (text: string) => void;
+}
+
+/** Знак агента — тот же, что в Настройки → Ядро: буква, без логотипов. */
+const AGENT_MARK: Record<string, string> = { gemini: 'G', claude: 'C', codex: 'O' };
+
+export interface SendOptions { effort: string; model: string; context: CoreContextItem[]; forwarded: AgentForward[] }
+
+const WHERE_ICON: Record<string, typeof FileText> = {
+  document: FileText, note: StickyNote, table: FileSpreadsheet, presentation: Presentation, task: CheckSquare, chat: MessageCircle,
+  person: User, file: Folder, mail: Mail, event: CalendarDays, section: LayoutGrid,
+};
+
+/** Пересланное из чатов: агент увидит только это — авторы, время, текст. Убрать — крестик. */
+function ForwardCard({ items }: { items: AgentForward[] }) {
+  const authors = [...new Set(items.map((i) => i.author))];
+  return (
+    <div className="ncore-forward" role="group" aria-label="Пересланные сообщения">
+      <span className="ncore-forward-icon" aria-hidden="true"><Forward size={14} /></span>
+      <span className="ncore-forward-body">
+        <b>{items.length > 1 ? `Переслано сообщений: ${items.length}` : 'Пересланное сообщение'}</b>
+        <span>{authors.slice(0, 3).join(', ')}{authors.length > 3 ? ` и ещё ${authors.length - 3}` : ''} — {items[items.length - 1].text || items[items.length - 1].files.join(', ')}</span>
+      </span>
+      <button type="button" className="nx-icon-btn" onClick={clearAgentForward} aria-label="Не пересылать" title="Не пересылать"><X size={14} /></button>
+    </div>
+  );
+}
+
+/** Плашки «где я»: что открыто у человека. Щелчок — зачеркнуть (агенту не уйдёт), ещё раз — вернуть. */
+function WhereChips({ items, struck, onToggle }: { items: WhereItem[]; struck: Set<string>; onToggle: (key: string) => void }) {
+  if (!items.length) return null;
+  return (
+    <div className="ncore-where" aria-label="Что агент увидит из открытого у вас">
+      <span className="ncore-where-label" title="Агент знает, что у вас открыто. Лишнее — зачеркните щелчком."><MonitorUp size={12} aria-hidden="true" /> Видит</span>
+      {items.map((item) => {
+        const Icon = WHERE_ICON[item.kind] || LayoutGrid;
+        const off = struck.has(item.key);
+        return (
+          <button key={item.key} type="button" className="ncore-where-chip" aria-pressed={!off} data-off={off || undefined} data-here={item.here || undefined}
+            onClick={() => onToggle(item.key)} title={off ? 'Не уйдёт агенту — щёлкните, чтобы вернуть' : `${item.here ? 'Это окно. ' : ''}Щёлкните, чтобы агент этого не видел`}>
+            <Icon size={12} aria-hidden="true" /><span>{item.title}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 const draftKey = (threadId: string | null) => `nx:core:draft:${threadId || 'new'}`;
 const readDraft = (threadId: string | null) => { try { return localStorage.getItem(draftKey(threadId)) || ''; } catch { return ''; } };
@@ -37,12 +92,24 @@ export const Composer = forwardRef<ComposerHandle, {
   replyTo: CoreMessage | null;
   onCancelReply: () => void;
   history: string[];
-  onSend: (text: string, attachments: Array<Pick<CoreAttachment, 'name' | 'key' | 'size' | 'type'>>, effort: string) => Promise<boolean>;
+  /** Агент этого чата (кто отвечал раньше): его и предлагаем, пока человек не выберет другого. */
+  peer: string;
+  onSend: (text: string, attachments: Array<Pick<CoreAttachment, 'name' | 'key' | 'size' | 'type'>>, options: SendOptions) => Promise<boolean>;
   onCommand: (cmd: string, arg: string) => boolean;
-}>(function Composer({ threadId, catalog, replyTo, onCancelReply, history, onSend, onCommand }, ref) {
+}>(function Composer({ threadId, catalog, replyTo, onCancelReply, history, peer, onSend, onCommand }, ref) {
   const [text, setText] = useState(() => readDraft(threadId));
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [effort, setEffort] = useState('');
+  const [picked, setPicked] = useState('');
+  const where = useWhere();
+  const forwarded = useAgentBridge((s) => s.pending);
+  const [struck, setStruck] = useState<Set<string>>(() => new Set());
+  const agents = catalog?.agents ?? [];
+  // Выбор человека → агент чата → первый подключённый. «claude:opus» — агент и модель.
+  const optionOf = (a: (typeof agents)[number]) => (a.models.length > 1 ? `${a.id}:${a.model || a.models[0].id}` : a.id);
+  const base = agents.find((a) => a.id === peer) ?? agents[0];
+  const agentValue = picked || (base ? optionOf(base) : '');
+  const agent = agents.find((a) => a.id === agentValue.split(':')[0]);
   const [historyPos, setHistoryPos] = useState(-1);
   const [highlight, setHighlight] = useState(0);
   /** Esc закрыл подсказки команд для этого текста — пока его не изменят, они не всплывают. */
@@ -80,7 +147,7 @@ export const Composer = forwardRef<ComposerHandle, {
     next.forEach((d) => void upload(d));
   }
 
-  useImperativeHandle(ref, () => ({ addFiles, focus: () => area.current?.focus() }));
+  useImperativeHandle(ref, () => ({ addFiles, focus: () => area.current?.focus(), sendText: (value: string) => { void submit(value); } }));
 
   const slash = text.startsWith('/') && !text.includes('\n') ? text.toLowerCase() : '';
   // Набрана ровно команда — Enter её выполняет, а не подставляет соседнюю («/demo» ≠ «/demo fail»).
@@ -93,22 +160,25 @@ export const Composer = forwardRef<ComposerHandle, {
 
   const uploading = drafts.some((d) => !d.key && !d.error);
   const ready = drafts.filter((d) => d.key);
-  const canSend = (text.trim() || ready.length) && !uploading;
+  const canSend = (text.trim() || ready.length || forwarded.length) && !uploading;
 
-  async function submit() {
-    const body = text.trim();
-    if (!canSend) return;
+  async function submit(override?: string) {
+    const body = (override ?? text).trim();
+    if (override === undefined ? !canSend : !body) return;
     // Команды чата выполняет сам интерфейс; /demo и неизвестные уходят на сервер как сообщение.
     if (body.startsWith('/')) {
       const [cmd, ...rest] = body.split(' ');
       if (onCommand(cmd.toLowerCase(), rest.join(' ').trim())) { setText(''); return; }
     }
     const files = ready.map((d) => ({ name: d.name, key: d.key!, size: d.size, type: d.type }));
-    setText('');
+    if (override === undefined) setText('');
     setDrafts((cur) => cur.filter((d) => !d.key));
     setHistoryPos(-1);
+    const context = where.filter((w) => !struck.has(w.key)).map(({ kind, title, id, url }) => ({ kind, title, id, url }));
+    const sentForward = forwarded;
+    clearAgentForward();
     // Не ушло — пузырь сам покажет «не отправлено — повторить».
-    await onSend(body, files, effort);
+    await onSend(body, files, { effort, model: agentValue, context, forwarded: sentForward });
   }
 
   function accept(cmd: string) {
@@ -145,9 +215,12 @@ export const Composer = forwardRef<ComposerHandle, {
     }
   }
 
-  const noAgents = !catalog?.agents.length;
+  const noAgents = !agents.length;
+  const toggleWhere = (key: string) => setStruck((cur) => { const next = new Set(cur); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   return (
     <div className="ncore-composer">
+      <WhereChips items={where} struck={struck} onToggle={toggleWhere} />
+      {forwarded.length > 0 && <ForwardCard items={forwarded} />}
       {suggestions.length > 0 && (
         <div className="ncore-suggest" role="listbox" aria-label="Команды">
           {suggestions.map((s, i) => (
@@ -158,57 +231,77 @@ export const Composer = forwardRef<ComposerHandle, {
           ))}
         </div>
       )}
-      {replyTo && (
-        <div className="ncore-reply-bar">
-          <CornerDownRight size={13} aria-hidden="true" />
-          <span>Ответ <b>{replyTo.role === 'agent' ? replyTo.actor || 'агенту' : 'себе'}</b>: {replyTo.body.slice(0, 180)}</span>
-          <button type="button" className="nx-icon-btn" onClick={onCancelReply} aria-label="Отменить ответ" title="Отменить ответ (Esc)"><X size={14} /></button>
-        </div>
-      )}
-      {drafts.length > 0 && (
-        <div className="ncore-drafts">
-          {drafts.map((d) => (
-            <span key={d.id} className="ncore-draft" data-error={d.error ? '' : undefined} data-done={d.key ? '' : undefined} title={d.error || d.name}>
-              <i style={{ width: `${d.key ? 100 : d.loaded}%` }} aria-hidden="true" />
-              <Paperclip size={12} aria-hidden="true" />
-              <span className="ncore-draft-name">{d.name}</span>
-              <em>{d.error ? 'не загрузилось' : d.key ? formatBytes(d.size) : `${d.loaded}%`}</em>
-              <button type="button" onClick={() => setDrafts((cur) => cur.filter((x) => x.id !== d.id))} aria-label={`Убрать ${d.name}`}><X size={12} /></button>
-            </span>
-          ))}
-        </div>
-      )}
-      <form className="ncore-field" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
-        <button type="button" className="ncore-attach" onClick={() => fileInput.current?.click()} aria-label="Приложить файл" title="Приложить файл — или вставьте из буфера, перетащите в переписку">
-          <Paperclip size={17} />
-        </button>
-        <input ref={fileInput} type="file" multiple hidden onChange={(e) => { addFiles([...(e.target.files ?? [])]); e.target.value = ''; }} />
+      {/* Одна рамка: что прикладываем, текст и панель — скрепка, кто отвечает, модель, усилие, отправка. */}
+      <form className="ncore-box" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
+        {replyTo && (
+          <div className="ncore-reply-bar">
+            <CornerDownRight size={13} aria-hidden="true" />
+            <span>Ответ <b>{replyTo.role === 'agent' ? replyTo.actor || 'агенту' : 'себе'}</b>: {replyTo.body.slice(0, 180)}</span>
+            <button type="button" className="nx-icon-btn" onClick={onCancelReply} aria-label="Отменить ответ" title="Отменить ответ (Esc)"><X size={14} /></button>
+          </div>
+        )}
+        {drafts.length > 0 && (
+          <div className="ncore-drafts">
+            {drafts.map((d) => (
+              <span key={d.id} className="ncore-draft" data-error={d.error ? '' : undefined} data-done={d.key ? '' : undefined} title={d.error || d.name}>
+                <i style={{ width: `${d.key ? 100 : d.loaded}%` }} aria-hidden="true" />
+                <Paperclip size={12} aria-hidden="true" />
+                <span className="ncore-draft-name">{d.name}</span>
+                <em>{d.error ? 'не загрузилось' : d.key ? formatBytes(d.size) : `${d.loaded}%`}</em>
+                <button type="button" onClick={() => setDrafts((cur) => cur.filter((x) => x.id !== d.id))} aria-label={`Убрать ${d.name}`}><X size={12} /></button>
+              </span>
+            ))}
+          </div>
+        )}
         <textarea
           ref={area}
           className="ncore-input"
           value={text}
           rows={1}
-          placeholder="Сообщение для Ядра…"
+          placeholder={noAgents ? 'Сообщение сохранится в чате — агент ещё не подключён' : `Спросите ${agent?.name || 'агента'}…`}
           aria-label="Сообщение"
           spellCheck
           onChange={(e) => { setText(e.target.value); if (historyPos >= 0) setHistoryPos(-1); }}
           onKeyDown={onKeyDown}
           onPaste={(e) => { const files = [...e.clipboardData.files]; if (files.length) { e.preventDefault(); addFiles(files); } }}
         />
-        <button type="submit" className="ncore-send" disabled={!canSend} aria-label="Отправить" title={uploading ? 'Дождитесь загрузки файлов' : 'Отправить (Enter)'}>
-          <ArrowUp size={16} strokeWidth={2.4} />
-        </button>
+        <div className="ncore-bar">
+          <button type="button" className="ncore-tool" onClick={() => fileInput.current?.click()} aria-label="Приложить файл" title="Приложить файл — или вставьте из буфера, перетащите в переписку">
+            <Paperclip size={16} />
+          </button>
+          <input ref={fileInput} type="file" multiple hidden onChange={(e) => { addFiles([...(e.target.files ?? [])]); e.target.value = ''; }} />
+          {noAgents ? (
+            <a className="ncore-connect" href={`${paths.settings}?section=core`} title="Gemini — по ключу Google, Claude и GPT — вашей подпиской">
+              <Plug size={13} aria-hidden="true" /> Подключить агента
+            </a>
+          ) : (
+            <>
+              {/* Кто отвечает — видно и переключается одним щелчком; модель — рядом, у выбранного. */}
+              <span className="ncore-agents" role="radiogroup" aria-label="Кто отвечает">
+                {agents.map((a) => (
+                  <button key={a.id} type="button" role="radio" aria-checked={a.id === agent?.id} className="ncore-agent" data-offline={!a.online || undefined}
+                    onClick={() => setPicked(optionOf(a))} title={a.online ? `Ответит ${a.name}` : `${a.name}: нода не на связи — ответ не придёт`}>
+                    <span className="ncore-agent-mark" aria-hidden="true">{AGENT_MARK[a.id] || a.name[0]}</span>
+                    <span className="ncore-agent-name">{a.name}</span>
+                  </button>
+                ))}
+                <a className="ncore-tool" href={`${paths.settings}?section=core`} title="Подключить ещё агента" aria-label="Подключить ещё агента"><Plus size={15} /></a>
+              </span>
+              {agent && agent.models.length > 1 && (
+                <Select className="ncore-picker" label={`Модель ${agent.name}`} value={agentValue} onChange={setPicked}
+                  groups={[{ options: agent.models.map((m) => ({ value: `${agent.id}:${m.id}`, label: m.label })) }]} />
+              )}
+            </>
+          )}
+          {!!catalog?.efforts.length && (
+            <Select className="ncore-picker" label="Как долго думать перед ответом" value={effort} onChange={setEffort} placeholder="Обычно"
+              groups={[{ options: [{ value: '', label: 'Обычно' }, ...catalog.efforts.filter((e) => e.id !== 'medium').map((e) => ({ value: e.id, label: e.label }))] }]} />
+          )}
+          <button type="submit" className="ncore-send" disabled={!canSend} aria-label="Отправить" title={uploading ? 'Дождитесь загрузки файлов' : 'Отправить (Enter) · Shift+Enter — новая строка · / — команды'}>
+            <ArrowUp size={16} strokeWidth={2.4} />
+          </button>
+        </div>
       </form>
-      <div className="ncore-under">
-        <span className="ncore-who" title={noAgents ? 'Агентов подключим позже — сейчас сообщения сохраняются в чате' : undefined}>
-          {noAgents ? 'Агенты не подключены' : `Ответит: ${catalog?.agents[0]?.name}`}
-        </span>
-        {!!catalog?.efforts.length && (
-          <Select className="ncore-picker" label="Как долго думать перед ответом" value={effort} onChange={setEffort} placeholder="Обычно"
-            groups={[{ options: [{ value: '', label: 'Как обычно' }, ...catalog.efforts.map((e) => ({ value: e.id, label: e.label }))] }]} />
-        )}
-        <span className="ncore-keys" aria-hidden="true"><kbd>/</kbd> команды · <kbd>Shift</kbd>+<kbd>Enter</kbd> новая строка</span>
-      </div>
     </div>
   );
 });

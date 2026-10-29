@@ -113,7 +113,7 @@ def _thread_view(row: dict, stats: Optional[dict] = None) -> dict:
     return {"id": row["id"], "title": row["title"] or stats.get("first_text") or "Новый чат", "customTitle": bool(row["title"]),
             "peer": row["peer"], "archived": row["archived"], "createdAt": _iso(row["created_at"]), "updatedAt": _iso(row["updated_at"]),
             "messages": int(stats.get("messages") or 0), "lastText": stats.get("last_text") or "", "lastRole": stats.get("last_role") or "",
-            "lastWork": stats.get("last_work") or None}
+            "lastWork": stats.get("last_work") or None, "working": bool(stats.get("working"))}
 
 
 def _stats(thread_ids: list[str]) -> dict[str, dict]:
@@ -124,7 +124,8 @@ def _stats(thread_ids: list[str]) -> dict[str, dict]:
                   (array_agg(left(body, 90) ORDER BY created_at) FILTER (WHERE role = 'user'))[1] AS first_text,
                   (array_agg(left(body, 160) ORDER BY created_at DESC))[1] AS last_text,
                   (array_agg(role ORDER BY created_at DESC))[1] AS last_role,
-                  (array_agg(props->'work' ORDER BY created_at DESC) FILTER (WHERE props ? 'work'))[1] AS last_work
+                  (array_agg(props->'work' ORDER BY created_at DESC) FILTER (WHERE props ? 'work'))[1] AS last_work,
+                  bool_or(role = 'agent' AND status IN ('queued', 'working')) AS working
            FROM core_messages WHERE thread_id = ANY(%s) GROUP BY thread_id""", (thread_ids,)) or []
     return {r["thread_id"]: r for r in rows}
 
@@ -264,6 +265,15 @@ class ContextItem(BaseModel):
     url: str = Field(default="", max_length=300)
 
 
+class ForwardItem(BaseModel):
+    """Сообщение из чата Шара, которое человек сам переслал агенту («Переслать агенту»). Только текст, автор и время:
+    доступа к перепискам у агента нет — он видит ровно то, что ему переслали."""
+    author: str = Field(default="", max_length=120)
+    text: str = Field(default="", max_length=8000)
+    at: str = Field(default="", max_length=40)
+    files: list[str] = Field(default_factory=list, max_length=10)
+
+
 class MessageBody(BaseModel):
     id: str = Field(min_length=8, max_length=64)
     body: str = Field(default="", max_length=MAX_BODY)
@@ -272,6 +282,7 @@ class MessageBody(BaseModel):
     context: list[ContextItem] = Field(default_factory=list, max_length=12)
     model: str = Field(default="", max_length=60)
     effort: Literal["", "low", "medium", "high"] = ""
+    forwarded: list[ForwardItem] = Field(default_factory=list, max_length=50)
 
 
 class AnswerBody(BaseModel):
@@ -309,7 +320,7 @@ def send_message(thread_id: str, body: MessageBody, tasks: BackgroundTasks, me: 
     thread = _thread(thread_id, me)
     text = body.body.strip()
     attachments = _clean_attachments(body.attachments)
-    if not text and not attachments:
+    if not text and not attachments and not body.forwarded:
         raise HTTPException(status_code=400, detail="Пустое сообщение")
     # Повтор той же отправки (сеть моргнула) узнаётся по id: второй раз не пишем.
     existing = db.conn.fetch_one("SELECT * FROM core_messages WHERE id = %s AND user_id = %s", (body.id, me.user_id))
@@ -320,6 +331,8 @@ def send_message(thread_id: str, body: MessageBody, tasks: BackgroundTasks, me: 
         props["attachments"] = attachments
     if body.context:
         props["context"] = [c.model_dump() for c in body.context]
+    if body.forwarded:
+        props["forwarded"] = [f.model_dump() for f in body.forwarded if f.text.strip() or f.files]
     if body.model:
         props["model"] = body.model
     if body.effort:
@@ -354,12 +367,22 @@ def answer_ask(message_id: str, body: AnswerBody, me: Identity = Depends(current
         raise HTTPException(status_code=404, detail="Вопрос не найден")
     if (row.get("props") or {}).get("answered"):
         raise HTTPException(status_code=409, detail="На этот вопрос уже ответили")
+    ask = (row.get("props") or {}).get("ask") or {}
+    value = body.value
+    if ask.get("kind") == "permission":  # «Разрешить» — одноразовое разрешение, агент получит его id в ответе
+        from app.modules.core_agents import permissions
+
+        allow = value.strip().lower().startswith("разреш")
+        permissions.decide(str(ask.get("approvalId") or ""), me.user_id, allow)
+        value = (f"Разрешено: {ask.get('question') or ask.get('tool')}. approval_id={ask.get('approvalId')}" if allow
+                 else f"Запрещено: {ask.get('question') or ask.get('tool')}. Не делайте этого; предложите другой путь, если он есть.")
     updated = db.conn.fetch_one("UPDATE core_messages SET props = props || %s WHERE id = %s RETURNING *", (Json({"answered": body.value}), message_id))
     _push(me.user_id, {"type": "core_message", "message": present_message(updated)})
     reply = db.conn.fetch_one(
         "INSERT INTO core_messages (id, thread_id, user_id, role, actor, body, props, status) VALUES (%s, %s, %s, 'user', %s, %s, %s, 'done') RETURNING *",
         (uuid.uuid4().hex, row["thread_id"], me.user_id, me.display_name, body.value,
-         Json({"replyTo": {"id": row["id"], "actor": row["actor"], "text": row["body"][:300]}})))
+         Json({"replyTo": {"id": row["id"], "actor": row["actor"], "text": row["body"][:300]},
+               **({"agentNote": value} if value != body.value else {})})))
     _touch(row["thread_id"])
     message = present_message(reply)
     _announce(me.user_id, message, row["thread_id"])

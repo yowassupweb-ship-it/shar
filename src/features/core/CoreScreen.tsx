@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Archive, ArchiveRestore, ArrowDown, Atom, ChevronLeft, Lock, MessageSquarePlus, Pencil, Search, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, Atom, BarChart3, ChevronLeft, Lock, MessageSquarePlus, Pencil, Search, X } from 'lucide-react';
+import { ForwardSheet } from '@/features/chat';
 import { realtime } from '@/shared/realtime/realtime';
 import { paths } from '@/shared/navigation/routes';
 import { Spinner } from '@/shared/ui/Spinner';
 import { showToast } from '@/shared/ui/Toast';
 import { dayKey, formatDay, formatListTime, plural } from '@/shared/ui/format';
 import { coreApi, type CoreMessage, type CoreThread } from './api';
-import { Composer, COMMANDS, type ComposerHandle } from './Composer';
+import { ChatStats } from './ChatStats';
+import { Composer, COMMANDS, type ComposerHandle, type SendOptions } from './Composer';
 import { MessageItem, type MessageHandlers } from './MessageItem';
 import { formatTokens } from './parts';
 import { setCorePanelThread, useCorePanel } from './panel';
@@ -17,6 +19,9 @@ import {
 import './core.css';
 
 const EMPTY: CoreMessage[] = [];
+/** Сколько последних сообщений на экране сразу и на сколько окно растёт при прокрутке вверх. */
+const WINDOW = 60;
+const WINDOW_STEP = 40;
 
 function useNarrow() {
   const query = '(max-width: 760px)';
@@ -31,8 +36,9 @@ function useNarrow() {
 }
 
 /**
- * «Ядро» — чат с агентами (по образцу чата MBOX), пока без агентов: треды, сообщения, вложения, ответы,
- * команды, цепочка шагов и ход работы. Включено админам; остальным — когда админ выдаст инструмент.
+ * «Ядро» — чат с личными агентами человека (Gemini, Claude, GPT — Настройки → Ядро), работающими на ноде компании:
+ * треды, сообщения, вложения, ответы, команды, цепочка шагов и ход работы на глазах. Агент видит, что у человека
+ * открыто (плашки «где я» над полем ввода). Включено админам; остальным — когда админ выдаст инструмент.
  *
  * Два места: страница /core и выдвижная панель справа (embedded, CorePanel). В панели всегда узкая раскладка
  * (список или переписка), а открытый чат хранится в панели, а не в адресе — иначе он менял бы адрес раздела слева.
@@ -57,9 +63,13 @@ export default function CoreScreen({ embedded = false, onClose }: { embedded?: b
     if (e.type === 'core_thread' && e.thread) upsertThread(e.thread);
   }), []);
 
+  // Узко (панель, телефон) — одно из двух: список чатов или разговор. Открыли «Ядро» — сразу разговор (последний
+  // чат или новый с подсказками), список — по «назад»: начать спрашивать не должно стоить лишнего щелчка.
+  const [listOpen, setListOpen] = useState(false);
   const select = useCallback((id: string | null) => {
     if (embedded) setCorePanelThread(id);
     else setParams(id ? { thread: id } : {}, { replace: false });
+    setListOpen(false);
   }, [embedded, setParams]);
 
   if (denied) {
@@ -75,12 +85,12 @@ export default function CoreScreen({ embedded = false, onClose }: { embedded?: b
   if (!threads) {
     return <div className="ncore ncore-loading">{error ? <p className="ncore-error" role="alert">{error}</p> : <Spinner size={24} label="Загружаю" />}</div>;
   }
-  const showList = !narrow || !threadId;
-  const showChat = !narrow || Boolean(threadId);
+  const showList = !narrow || listOpen;
+  const showChat = !narrow || !listOpen;
   return (
     <div className="ncore" data-narrow={narrow || undefined}>
       {showList && <ThreadList activeId={threadId} onSelect={select} onBack={leave} embedded={embedded} />}
-      {showChat && <Conversation key={threadId || 'new'} threadId={threadId} onSelect={select} narrow={narrow} />}
+      {showChat && <Conversation key={threadId || 'new'} threadId={threadId} onSelect={select} narrow={narrow} onList={() => setListOpen(true)} />}
     </div>
   );
 }
@@ -121,7 +131,7 @@ function ThreadList({ activeId, onSelect, onBack, embedded }: { activeId: string
           <button key={t.id} type="button" className="ncore-thread" aria-current={t.id === activeId || undefined} onClick={() => onSelect(t.id)}>
             <span className="ncore-thread-top">
               <b>{t.title}</b>
-              <time>{formatListTime(t.updatedAt)}</time>
+              {t.working ? <span className="ncore-thread-live" title="Агент отвечает" aria-label="Агент отвечает" /> : <time>{formatListTime(t.updatedAt)}</time>}
             </span>
             <span className="ncore-thread-sub">
               {t.lastText ? `${t.lastRole === 'user' ? 'Вы: ' : ''}${t.lastText}` : 'Пока без сообщений'}
@@ -138,25 +148,36 @@ function ThreadList({ activeId, onSelect, onBack, embedded }: { activeId: string
 
 // ── Переписка ────────────────────────────────────────────────────────────────
 
+/** С чего начать — на пустом экране чата. Щелчок отправляет сразу. */
+const STARTERS = [
+  'Что у меня сегодня — встречи и задачи?',
+  'Какие задачи горят на этой неделе?',
+  'Разбери документ, который у меня открыт, и предложи правки',
+  'Найди в «Файлах» последний прайс и перескажи коротко',
+];
+
 const HELP = [
-  '«Ядро» — чат с агентами Шара. Агентов подключим позже: сейчас сообщения и файлы сохраняются в чате.',
-  'Команды: /new — новый чат, /rename Название — переименовать, /archive — в архив, /help — эта подсказка.',
+  '«Ядро» — ваш агент в Шаре: документы, таблицы, задачи, календарь, файлы. Агента подключают в Настройки → Ядро.',
+  'Агент видит, что у вас открыто, — плашки над полем ввода; лишнее зачеркните щелчком. Он запоминает, как вы работаете, и пишет себе навыки.',
+  'Команды: /new — новый чат, /rename Название — переименовать, /archive — в архив, /compact — сжать длинный разговор, /help — эта подсказка.',
+  'Ответ агента — правой кнопкой: переслать в чат, скопировать, ответить.',
   'Enter — отправить, Shift+Enter — новая строка, ↑ в пустом поле — прошлое сообщение. Файл можно перетащить в переписку или вставить из буфера.',
 ].join('\n');
 
-function Conversation({ threadId, onSelect, narrow }: { threadId: string | null; onSelect: (id: string | null) => void; narrow: boolean }) {
+function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string | null; onSelect: (id: string | null) => void; narrow: boolean; onList: () => void }) {
   const catalog = useCore((s) => s.catalog);
   const thread = useCore((s) => [...(s.threads ?? []), ...(s.archived ?? [])].find((t) => t.id === threadId) ?? null);
   const log = useCore((s) => (threadId ? s.logs[threadId] : undefined));
   const messages = log?.messages ?? EMPTY;
   const [replyTo, setReplyTo] = useState<CoreMessage | null>(null);
+  const [forwarding, setForwarding] = useState<CoreMessage | null>(null);
+  const [showStats, setShowStats] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [dropping, setDropping] = useState(false);
   const [farFromBottom, setFarFromBottom] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const composer = useRef<ComposerHandle>(null);
   const atBottom = useRef(true);
-  const prevHeight = useRef<{ height: number; top: number; first?: string } | null>(null);
 
   useEffect(() => { if (threadId) void loadMessages(threadId); }, [threadId]);
   // Неизвестный чат в адресе (удалён, чужой) — назад к списку.
@@ -164,18 +185,43 @@ function Conversation({ threadId, onSelect, narrow }: { threadId: string | null;
     if (threadId && !thread && useCore.getState().threads && !useCore.getState().archived) void loadArchived();
   }, [threadId, thread]);
 
-  // Прокрутка: внизу — держимся низа; подгрузили историю сверху — видимое остаётся на месте.
-  useLayoutEffect(() => {
+  // Окно ленты: на экране — последние сообщения, выше — дорисовываются по мере прокрутки (длинный разговор не тормозит).
+  const [windowSize, setWindowSize] = useState(WINDOW);
+  useEffect(() => { setWindowSize(WINDOW); }, [threadId]);
+  const shown = messages.length > windowSize ? messages.slice(messages.length - windowSize) : messages;
+
+  // Якорь прокрутки — как в чатах Шара. Внизу — держимся низа (ответ печатается, панель меняет ширину, догрузилась
+  // картинка). Читаем выше — то сообщение, что было у верха окна, остаётся на том же месте при любой перестройке.
+  const anchor = useRef<{ id: string; offset: number } | null>(null);
+  const toBottom = useCallback(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight; }, []);
+  const restore = useCallback(() => {
     const el = scroller.current;
     if (!el) return;
-    const prev = prevHeight.current;
-    if (prev && prev.first !== messages[0]?.id) {
-      el.scrollTop = el.scrollHeight - prev.height + prev.top;
-    } else if (atBottom.current) {
-      el.scrollTop = el.scrollHeight;
+    if (atBottom.current) { toBottom(); return; }
+    const saved = anchor.current;
+    const row = saved && el.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(saved.id)}"]`);
+    if (saved && row) el.scrollTop = row.offsetTop - saved.offset;
+  }, [toBottom]);
+  const remember = () => {
+    const el = scroller.current;
+    if (!el) return;
+    const rows = el.querySelectorAll<HTMLElement>('[data-msg-id]');
+    for (const row of rows) {
+      if (row.offsetTop + row.offsetHeight > el.scrollTop) { anchor.current = { id: row.dataset.msgId!, offset: row.offsetTop - el.scrollTop }; return; }
     }
-    prevHeight.current = null;
-  }, [messages]);
+  };
+
+  useLayoutEffect(() => { restore(); }, [shown, restore]);
+  // Высота содержимого (печать ответа, картинки, ширина панели) и самого окна ленты (поле ввода растёт) — без рывков.
+  useEffect(() => {
+    const el = scroller.current;
+    const inner = el?.firstElementChild;
+    if (!el || !inner) return undefined;
+    const ro = new ResizeObserver(() => restore());
+    ro.observe(inner);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [restore, threadId]);
 
   const onScroll = () => {
     const el = scroller.current;
@@ -183,9 +229,10 @@ function Conversation({ threadId, onSelect, narrow }: { threadId: string | null;
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
     atBottom.current = gap < 80;
     setFarFromBottom(gap > 600);
-    if (el.scrollTop < 120 && threadId && log?.hasMore && !log.loadingOlder) {
-      prevHeight.current = { height: el.scrollHeight, top: el.scrollTop, first: messages[0]?.id };
-      void loadOlder(threadId);
+    remember();
+    if (el.scrollTop < 200) {
+      if (shown.length < messages.length) setWindowSize((n) => n + WINDOW_STEP);
+      else if (threadId && log?.hasMore && !log.loadingOlder) void loadOlder(threadId);
     }
   };
 
@@ -203,13 +250,18 @@ function Conversation({ threadId, onSelect, narrow }: { threadId: string | null;
     }
   }
 
-  async function send(text: string, attachments: Array<{ name: string; key: string; size: number; type: string }>, effort: string) {
+  async function send(text: string, attachments: Array<{ name: string; key: string; size: number; type: string }>, options: SendOptions) {
     const id = await ensureThread();
     if (!id) return false;
     atBottom.current = true;
     const quoted = replyTo;
     setReplyTo(null);
-    return sendMessage(id, { id: crypto.randomUUID().replace(/-/g, ''), body: text, replyTo: quoted?.id, attachments, effort: effort || undefined }, {
+    return sendMessage(id, {
+      id: crypto.randomUUID().replace(/-/g, ''), body: text, replyTo: quoted?.id, attachments,
+      effort: options.effort || undefined, model: options.model || undefined, context: options.context,
+      forwarded: options.forwarded.length ? options.forwarded : undefined,
+    }, {
+      forwarded: options.forwarded.length ? options.forwarded : undefined,
       attachments: attachments.map((a) => ({ ...a, url: '' })),
       replyTo: quoted ? { id: quoted.id, actor: quoted.role === 'agent' ? quoted.actor : '', text: quoted.body.slice(0, 300) } : undefined,
     });
@@ -239,6 +291,7 @@ function Conversation({ threadId, onSelect, narrow }: { threadId: string | null;
     answer: (m, value) => { atBottom.current = true; coreApi.answer(m.id, value).then(upsertMessage).catch((cause) => showToast(cause instanceof Error ? cause.message : 'Не получилось', 'error')); },
     cancel: (m) => { coreApi.cancel(m.id).then(upsertMessage).catch((cause) => showToast(cause instanceof Error ? cause.message : 'Не получилось', 'error')); },
     retry: (m) => retryMessage(m.id),
+    forward: (m) => setForwarding(m),
     jump: (id) => {
       const row = scroller.current?.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(id)}"]`);
       if (!row) { showToast('Это сообщение выше — прокрутите историю', 'info'); return; }
@@ -261,7 +314,7 @@ function Conversation({ threadId, onSelect, narrow }: { threadId: string | null;
       onDrop={(e) => { if (!e.dataTransfer.files.length) return; e.preventDefault(); setDropping(false); composer.current?.addFiles([...e.dataTransfer.files]); }}
     >
       <header className="ncore-chat-head">
-        {narrow && <button type="button" className="nx-icon-btn" onClick={() => onSelect(null)} aria-label="К списку чатов"><ChevronLeft size={20} /></button>}
+        {narrow && <button type="button" className="nx-icon-btn" onClick={onList} aria-label="Все чаты" title="Все чаты"><ChevronLeft size={20} /></button>}
         {renaming && thread ? (
           <input className="ncore-rename" autoFocus defaultValue={thread.title} maxLength={120} aria-label="Название чата"
             onBlur={(e) => { const v = e.currentTarget.value.trim(); setRenaming(false); if (v && v !== thread.title) void patchThread(thread.id, { title: v }); }}
@@ -274,11 +327,16 @@ function Conversation({ threadId, onSelect, narrow }: { threadId: string | null;
         )}
         <span className="ncore-chat-tools">
           {contextLoad && (
-            <span className="ncore-context" data-heavy={contextLoad.share >= 0.6 || undefined}
+            <button type="button" className="ncore-context" data-heavy={contextLoad.share >= 0.6 || undefined} onClick={() => setShowStats((v) => !v)}
               title={`Контекст чата: ${formatTokens(contextLoad.tokens)} токенов — столько агент перечитывает на каждом шаге.${contextLoad.share >= 0.6 ? ' Для новой темы лучше начать новый чат.' : ''}`}>
               <i><i style={{ width: `${Math.min(100, Math.round(contextLoad.share * 100))}%` }} /></i>
               {formatTokens(contextLoad.tokens)}
-            </span>
+            </button>
+          )}
+          {thread && (
+            <button type="button" className="nx-icon-btn" aria-pressed={showStats} onClick={() => setShowStats((v) => !v)} aria-label="Статистика чата" title="Статистика чата">
+              <BarChart3 size={16} />
+            </button>
           )}
           {thread && <button type="button" className="nx-icon-btn" onClick={() => setRenaming(true)} aria-label="Переименовать чат" title="Переименовать"><Pencil size={16} /></button>}
           {thread && (
@@ -290,6 +348,7 @@ function Conversation({ threadId, onSelect, narrow }: { threadId: string | null;
         </span>
       </header>
 
+      {showStats && <ChatStats thread={thread} messages={messages} />}
       <div className="ncore-log nx-scroll-y" ref={scroller} onScroll={onScroll} role="log" aria-label="Сообщения">
         <div className="ncore-log-inner">
           {log?.loadingOlder && <div className="ncore-older"><Spinner size={16} label="Загружаю историю" /></div>}
@@ -298,15 +357,24 @@ function Conversation({ threadId, onSelect, narrow }: { threadId: string | null;
             <div className="ncore-empty">
               <span className="ncore-empty-mark" aria-hidden="true"><Atom size={34} strokeWidth={1.6} /></span>
               <h2>{threadId ? 'Новый чат' : 'Ядро'}</h2>
-              <p>Чат с агентами Шара. Агентов подключим позже — пока сообщения и файлы сохраняются здесь.</p>
-              {catalog?.demo && <p className="ncore-empty-hint">Чтобы посмотреть, как будет выглядеть ответ агента, отправьте <code>/demo</code>.</p>}
+              {catalog?.agents.length ? (
+                <>
+                  <p>{catalog.agents.map((a) => a.name).join(', ')} {catalog.agents.length > 1 ? 'работают' : 'работает'} с вашими правами: документы, таблицы, задачи, календарь, файлы. Видит, что у вас открыто, — лишнее зачеркните над полем ввода.</p>
+                  <div className="ncore-starters">
+                    {STARTERS.map((s) => <button key={s} type="button" className="ncore-starter" onClick={() => composer.current?.sendText(s)}>{s}</button>)}
+                  </div>
+                </>
+              ) : (
+                <p>Подключите своего агента — Gemini по ключу Google или Claude и GPT вашей подпиской — в <a href={`${paths.settings}?section=core`}>Настройки → Ядро</a>. Пока сообщения сохраняются здесь.</p>
+              )}
+              {catalog?.demo && !catalog.agents.length && <p className="ncore-empty-hint">Чтобы посмотреть, как будет выглядеть ответ агента, отправьте <code>/demo</code>.</p>}
             </div>
           )}
-          {messages.map((m, i) => {
+          {shown.map((m, i) => {
             const day = dayKey(m.createdAt);
             const sep = day !== lastDay;
             lastDay = day;
-            const quote = Boolean(m.props.replyTo && messages[i - 1]?.id !== m.props.replyTo.id);
+            const quote = Boolean(m.props.replyTo && shown[i - 1]?.id !== m.props.replyTo.id);
             return (
               <div key={m.id}>
                 {sep && <div className="ncore-day"><span>{formatDay(m.createdAt)}</span></div>}
@@ -317,13 +385,14 @@ function Conversation({ threadId, onSelect, narrow }: { threadId: string | null;
         </div>
       </div>
       {farFromBottom && (
-        <button type="button" className="ncore-to-bottom" onClick={() => { const el = scroller.current; if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }); }} aria-label="К последним сообщениям">
+        <button type="button" className="ncore-to-bottom" onClick={() => { atBottom.current = true; const el = scroller.current; if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }); }} aria-label="К последним сообщениям">
           <ArrowDown size={18} />
         </button>
       )}
       {dropping && <div className="ncore-drop" aria-hidden="true">Отпустите, чтобы приложить файлы</div>}
       <Composer ref={composer} threadId={threadId} catalog={catalog} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
-        history={history} onSend={send} onCommand={onCommand} />
+        history={history} peer={thread?.peer || ''} onSend={send} onCommand={onCommand} />
+      {forwarding && <ForwardSheet text={forwarding.body} onClose={() => setForwarding(null)} />}
     </section>
   );
 }

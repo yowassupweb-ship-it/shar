@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from app.core.db import db
 from app.core.security import Identity, current_identity
-from app.modules.core_agents import store
+from app.modules.core_agents import permissions, store
 
 router = APIRouter()
 log = logging.getLogger("shar.core.agents")
@@ -62,7 +62,7 @@ def _overview(me: Identity) -> dict:
     accounts = [store.public_account(store.account(me.user_id, p)) for p in store.PROVIDERS]
     nodes = store.online_nodes()
     return {"accounts": accounts, "node": {"online": bool(nodes), "clis": sorted({p for n in nodes for p in store.PROVIDERS if store.node_has(n, p)})},
-            "usage": store.usage(me.user_id, 30)}
+            "usage": store.usage(me.user_id, 30), "mode": permissions.mode_of(me.user_id), "modes": permissions.view()}
 
 
 @router.get("/api/core/accounts")
@@ -207,6 +207,20 @@ def disconnect(provider: str, me: Identity = Depends(current_identity)):
         store.enqueue("logout", me.user_id, provider, node_id=row["node_id"])
     store.save_account(me.user_id, provider, state="none", secret_enc="", account="", login={}, error="")
     push_account(me.user_id, provider)
+    return _overview(me)
+
+
+class SettingsBody(BaseModel):
+    mode: str = Field(max_length=20)
+
+
+@router.put("/api/core/settings")
+def put_settings(body: SettingsBody, me: Identity = Depends(current_identity)):
+    """Режим разрешений агента: под ключ, осторожно, спрашивать всегда (permissions.py)."""
+    _guard(me)
+    if body.mode not in permissions.MODES:
+        raise HTTPException(status_code=400, detail="Нет такого режима")
+    permissions.set_mode(me.user_id, body.mode)
     return _overview(me)
 
 

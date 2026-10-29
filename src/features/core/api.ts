@@ -12,6 +12,8 @@ export interface CoreThread {
   lastText: string;
   lastRole: string;
   lastWork: CoreWork | null;
+  /** Агент сейчас отвечает в этом чате. */
+  working?: boolean;
 }
 
 /** Шаг работы агента: вызов инструмента (с аргументами и результатом) или реплика между шагами. */
@@ -50,17 +52,25 @@ export interface CoreProps {
   model?: string;
   effort?: string;
   work?: CoreWork;
-  rateLimit?: { provider?: string; wait_seconds?: number; used_percent?: number; detail?: string };
+  rateLimit?: { provider?: string; wait_seconds?: number; used_percent?: number; detail?: string; status?: string };
   failed?: boolean;
   /** Вопрос агента: confirm — да/нет, choice — один вариант, multi — несколько. */
-  ask?: { kind: 'confirm' | 'choice' | 'multi' };
+  ask?: { kind: 'confirm' | 'choice' | 'multi' | 'permission'; question?: string; approvalId?: string; tool?: string };
   actions?: CoreAction[];
   /** Что ответили на вопрос. */
   answered?: string;
+  /** Кто отвечает: gemini | claude | codex. */
+  provider?: string;
   replyTo?: { id: string; actor: string; text: string };
   attachments?: CoreAttachment[];
-  context?: Array<{ kind: string; title: string; id?: string }>;
+  context?: CoreContextItem[];
+  forwarded?: Array<{ author: string; text: string; at: string; files: string[] }>;
+  /** Служебная пометка для агента (ответ на разрешение) — человеку не показываем. */
+  agentNote?: string;
 }
+
+/** Что открыто у человека — агенту («где я»). */
+export interface CoreContextItem { kind: string; title: string; id?: string; url?: string }
 
 export type CoreStatus = 'queued' | 'working' | 'done' | 'failed' | 'cancelled';
 
@@ -77,8 +87,11 @@ export interface CoreMessage {
   local?: 'sending' | 'failed';
 }
 
+export interface CoreAgent { id: string; name: string; model: string; models: Array<{ id: string; label: string }>; online: boolean }
+
 export interface CoreCatalog {
-  agents: Array<{ id: string; name: string }>;
+  /** Подключённые агенты человека (Настройки → Ядро): первый — по умолчанию. */
+  agents: CoreAgent[];
   models: Array<{ id: string; label: string }>;
   efforts: Array<{ id: string; label: string; hint?: string }>;
   /** Демо-ответ (/demo) — у админа, пока агентов нет. */
@@ -91,8 +104,58 @@ export interface SendPayload {
   replyTo?: string;
   attachments?: Array<Pick<CoreAttachment, 'name' | 'key' | 'size' | 'type'>>;
   effort?: string;
+  /** Агент и модель: «claude» или «claude:opus». */
   model?: string;
+  context?: CoreContextItem[];
+  /** Пересланное из чатов (только текст): «Переслать агенту». */
+  forwarded?: Array<{ author: string; text: string; at: string; files: string[] }>;
 }
+
+// ── подключения (Настройки → Ядро) ───────────────────────────────────────────
+
+export type ProviderId = 'gemini' | 'claude' | 'codex';
+
+export interface CoreAccount {
+  provider: ProviderId;
+  label: string;
+  vendor: string;
+  /** key — по ключу (Gemini), login — вход в подписку на ноде. */
+  how: 'key' | 'login';
+  state: 'none' | 'pending' | 'ready';
+  account: string;
+  model: string;
+  models: Array<{ id: string; label: string }>;
+  keyHint: string;
+  nodeOnline: boolean;
+  error: string;
+  login: { state?: 'starting' | 'waiting' | 'verifying'; url?: string; code?: string; message?: string; needsCode?: boolean };
+}
+
+export interface CoreUsageRow { userId: string; name?: string; provider: ProviderId; runs: number; inputTokens: number; cachedTokens: number; outputTokens: number; costUsd: number; lastDay: string }
+
+export interface CoreAccounts {
+  accounts: CoreAccount[];
+  node: { online: boolean; clis: string[] };
+  usage: CoreUsageRow[];
+  /** Режим разрешений агента: auto | careful | ask. */
+  mode: string;
+  modes: Array<{ id: string; label: string; hint: string }>;
+}
+
+export interface CoreNote { id: string; text: string; tags: string[]; by: string; shared: boolean; mine: boolean; at: string }
+export interface CoreSkill { name: string; description: string; enabled: boolean; uses: number; by: string; shared: boolean; mine: boolean; updatedAt: string; size: number }
+export interface CoreMemory { profile: string; notes: CoreNote[]; skills: CoreSkill[]; canModerate: boolean }
+
+export interface CoreIntegration {
+  service: string; label: string; kind: 'builtin' | 'custom'; baseUrl: string; docs: string; hint: string; configured: boolean;
+  /** Кому открыт: id людей или «*» — всем. */
+  access: string[];
+  authType?: string; authName?: string;
+  fields: Array<{ key: string; label: string; secret: boolean; optional: boolean; filled: boolean; value: string }>;
+}
+
+export interface CoreNode { id: string; name: string; start: string; online: boolean; enabled: boolean; lastSeen: string | null; users: number; createdAt: string;
+  info: { version?: string; host?: string; clis?: Record<string, string>; running?: number } }
 
 export class CoreError extends Error {
   constructor(public status: number, message: string) {
@@ -139,4 +202,34 @@ export const coreApi = {
   answer: (messageId: string, value: string) =>
     call<{ message: CoreMessage }>(`/api/core/messages/${enc(messageId)}/answer`, { method: 'POST', json: { value } }).then((r) => r.message),
   cancel: (messageId: string) => call<{ message: CoreMessage }>(`/api/core/messages/${enc(messageId)}/cancel`, { method: 'POST' }).then((r) => r.message),
+
+  accounts: () => call<CoreAccounts>('/api/core/accounts'),
+  setGeminiKey: (key: string) => call<CoreAccounts>('/api/core/accounts/gemini', { method: 'PUT', json: { key } }),
+  setModel: (provider: ProviderId, model: string) => call<CoreAccounts>(`/api/core/accounts/${provider}`, { method: 'PATCH', json: { model } }),
+  login: (provider: ProviderId) => call<CoreAccounts>(`/api/core/accounts/${provider}/login`, { method: 'POST' }),
+  loginCode: (provider: ProviderId, code: string) => call<CoreAccounts>(`/api/core/accounts/${provider}/login/code`, { method: 'POST', json: { code } }),
+  cancelLogin: (provider: ProviderId) => call<CoreAccounts>(`/api/core/accounts/${provider}/login`, { method: 'DELETE' }),
+  disconnect: (provider: ProviderId) => call<CoreAccounts>(`/api/core/accounts/${provider}`, { method: 'DELETE' }),
+  setMode: (mode: string) => call<CoreAccounts>('/api/core/settings', { method: 'PUT', json: { mode } }),
+  usage: (days = 30, all = false) => call<{ usage: CoreUsageRow[] }>(`/api/core/usage?days=${days}${all ? '&all=1' : ''}`),
+
+  memory: () => call<CoreMemory>('/api/core/memory'),
+  saveProfile: (text: string) => call<{ profile: string }>('/api/core/memory/profile', { method: 'PUT', json: { text } }),
+  forgetNote: (id: string) => call<{ ok: boolean }>(`/api/core/memory/notes/${enc(id)}`, { method: 'DELETE' }),
+  skill: (name: string) => call<{ skill: CoreSkill & { body: string } }>(`/api/core/memory/skills/${enc(name)}`).then((r) => r.skill),
+  saveSkill: (name: string, patch: { description?: string; body?: string; enabled?: boolean; shared?: boolean }) =>
+    call<{ skills: CoreSkill[] }>(`/api/core/memory/skills/${enc(name)}`, { method: 'PUT', json: patch }).then((r) => r.skills),
+  deleteSkill: (name: string, shared = false) =>
+    call<{ skills: CoreSkill[] }>(`/api/core/memory/skills/${enc(name)}${shared ? '?shared=1' : ''}`, { method: 'DELETE' }).then((r) => r.skills),
+
+  integrations: () => call<{ integrations: CoreIntegration[]; authTypes: Record<string, string> }>('/api/core/integrations'),
+  saveIntegration: (service: string, body: Partial<{ fields: Record<string, string>; label: string; base_url: string; auth_type: string; auth_name: string; notes: string; secret: string; access: string[] }>) =>
+    call<{ integrations: CoreIntegration[] }>(`/api/core/integrations/${enc(service)}`, { method: 'PUT', json: body }).then((r) => r.integrations),
+  deleteIntegration: (service: string) => call<{ integrations: CoreIntegration[] }>(`/api/core/integrations/${enc(service)}`, { method: 'DELETE' }).then((r) => r.integrations),
+  testIntegration: (service: string) => call<{ ok: boolean; message: string }>(`/api/core/integrations/${enc(service)}/test`, { method: 'POST' }),
+
+  nodes: () => call<{ nodes: CoreNode[] }>('/api/core/nodes').then((r) => r.nodes),
+  createNode: (name: string) => call<{ node: CoreNode; token: string; command: string }>('/api/core/nodes', { method: 'POST', json: { name } }),
+  reissueNode: (id: string) => call<{ node: CoreNode; token: string; command: string }>(`/api/core/nodes/${enc(id)}/token`, { method: 'POST' }),
+  deleteNode: (id: string) => call<{ ok: boolean }>(`/api/core/nodes/${enc(id)}`, { method: 'DELETE' }),
 };

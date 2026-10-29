@@ -4,7 +4,7 @@ import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useR
 import { lazyComponent } from '@/shared/ui/lazy';
 import {
   BellPlus,
-  AlertCircle, ArrowDown, CheckCheck, Copy, CornerUpLeft, Forward, ImageDown, Pencil,
+  AlertCircle, ArrowDown, Atom, CheckCheck, Copy, CornerUpLeft, Forward, ImageDown, Pencil,
   Pin, PinOff, RotateCw, Trash2,
 } from 'lucide-react';
 import type { Message, User } from '@/shared/types/chat';
@@ -20,8 +20,9 @@ import {
   useChatStore, type ChatRow, type Msg, type Thread,
 } from '../store';
 import {
-  copyImage, copySelectionOr, deleteMessage, editPoll, markVoiceListened, togglePin, toggleReaction, votePoll,
+  copyImage, copySelectionOr, deleteMessage, editPoll, forwardToAgentFrom, markVoiceListened, togglePin, toggleReaction, votePoll,
 } from '../messageActions';
+import { useAgentBridge } from '@/shared/core/agentBridge';
 import ForwardSheet from '../ForwardSheet';
 import { readerName } from './content';
 import { MessageRow, type RowCtx } from './MessageRow';
@@ -151,6 +152,7 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
   const thread = useChatStore((s) => s.threads[chatId]) || EMPTY;
   const me = useChatStore((s) => s.me);
   const users = useChatStore((s) => s.users);
+  const agentOn = useAgentBridge((s) => s.available);
   const myId = String(me?.id ?? '');
   const isGroup = Boolean(chat?.isGroup) || (chat?.participantIds?.length ?? 0) > 2;
   const notificationsChat = Boolean(chat && isNotifications(chat));
@@ -792,6 +794,9 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
           )}
           {!menuPoll && (
             <MenuItem icon={<Forward size={16} />} onSelect={() => { setForwarding([menuMsg]); setMenu(null); }}>Переслать</MenuItem>
+          )}
+          {!menuPoll && agentOn && (
+            <MenuItem icon={<Atom size={16} />} onSelect={() => { forwardToAgentFrom([menuMsg], (m) => readerName(users[String(m.authorId)])); setMenu(null); }}>Переслать агенту</MenuItem>
           )}
           {!menuPoll && menuMsg.content && (
             <MenuItem icon={<Copy size={16} />} onSelect={() => { void copySelectionOr(menuMsg); setMenu(null); }}>Копировать</MenuItem>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { lazyComponent } from '@/shared/ui/lazy';
 import {
-  ArrowUp, BarChart3, CornerUpLeft, FileText, Forward, Keyboard, Mic, Paperclip, Pencil, Plus, Smile, Trash2, X,
+  ArrowUp, Atom, BarChart3, CornerUpLeft, FileText, Forward, Keyboard, Mic, Paperclip, Pencil, Plus, Smile, Trash2, X,
 } from 'lucide-react';
 import { plural } from '@/shared/ui/format';
 import { askConfirm, Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
@@ -12,7 +12,8 @@ import RichInput, { type RichInputHandle } from './RichInput';
 import { readDraft, writeDraft } from './drafts';
 import { scheduleMessage, whenLabel } from './scheduled';
 import { ScheduledBar, ScheduleMenu, SchedulePicker } from './ScheduledUi';
-import { deleteMessage, editMessage, forwardMessages } from './messageActions';
+import { deleteMessage, editMessage, forwardMessages, forwardToAgentFrom } from './messageActions';
+import { useAgentBridge } from '@/shared/core/agentBridge';
 import {
   displayName, isGroupChat, notifyTyping, previewText, sendFiles, sendPoll, sendText, setCompose, uploadForLater, setForwardDraft, setPanel, setSelection,
   useChatStore, type Msg,
@@ -46,6 +47,7 @@ export default function Composer({ chatId, readOnly }: { chatId: string; readOnl
   const editing = useChatStore((s) => (compose?.editingId ? s.threads[chatId]?.byId[compose.editingId] : undefined));
   const chat = useChatStore((s) => s.chats[chatId]);
   const users = useChatStore((s) => s.users);
+  const agentOn = useAgentBridge((s) => s.available);
   const panel = useChatStore((s) => s.panel);
   const selection = useChatStore((s) => (s.selection?.chatId === chatId ? s.selection.ids : null));
   const forwardDraft = useChatStore((s) => s.forwardDraft[chatId]);
@@ -241,6 +243,12 @@ export default function Composer({ chatId, readOnly }: { chatId: string; readOnl
           <button type="button" className="nx-icon-btn" disabled={!msgs.length} onClick={() => setForwarding(msgs)} aria-label="Переслать выбранные">
             <Forward size={18} aria-hidden="true" />
           </button>
+          {agentOn && (
+            <button type="button" className="nx-icon-btn" disabled={!msgs.length} title="Переслать агенту — он увидит только эти сообщения"
+              onClick={() => { forwardToAgentFrom(msgs, (m) => displayName(users[String(m.authorId)])); setSelection(null); }} aria-label="Переслать выбранные агенту">
+              <Atom size={18} aria-hidden="true" />
+            </button>
+          )}
           <button
             type="button"
             className="nx-icon-btn"

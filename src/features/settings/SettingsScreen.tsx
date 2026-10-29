@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Bell, Bot, ChevronLeft, ChevronRight, KeyRound, LayoutGrid, LogOut, MonitorSmartphone, Palette, RotateCw, User, Volume2 } from 'lucide-react';
+import { Atom, Bell, Bot, ChevronLeft, ChevronRight, KeyRound, LayoutGrid, LogOut, MonitorSmartphone, Palette, RotateCw, User, Volume2 } from 'lucide-react';
+import { useAgentBridge } from '@/shared/core/agentBridge';
 import { logout } from '@/shared/session/session';
 import { adoptServerChatPrefs } from '@/shared/settings/chatPrefs';
 import { paths } from '@/shared/navigation/routes';
@@ -15,6 +16,7 @@ import SoundsSection from './sections/SoundsSection';
 import NotificationsSection from './sections/NotificationsSection';
 import SectionsSection from './sections/SectionsSection';
 import McpSection from './sections/McpSection';
+import CoreSection from './sections/CoreSection';
 import './settings.css';
 
 /**
@@ -23,7 +25,7 @@ import './settings.css';
  * «Назад» работает как везде, а на раздел можно дать ссылку.
  */
 
-type SectionId = 'profile' | 'account' | 'devices' | 'appearance' | 'sounds' | 'notifications' | 'sections' | 'mcp';
+type SectionId = 'profile' | 'account' | 'devices' | 'appearance' | 'sounds' | 'notifications' | 'sections' | 'core' | 'mcp';
 
 interface SectionDef {
   id: SectionId;
@@ -32,6 +34,8 @@ interface SectionDef {
   /** Два цвета плашки иконки — как в «Ещё». */
   tint: [string, string];
   needsProfile?: boolean;
+  /** Только тем, кому включено «Ядро». */
+  needsCore?: boolean;
 }
 
 const SECTIONS: SectionDef[] = [
@@ -42,6 +46,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'sounds', label: 'Звуки', icon: Volume2, tint: ['#60a5fa', '#2563eb'] },
   { id: 'notifications', label: 'Уведомления', icon: Bell, tint: ['#fb923c', '#dc2626'] },
   { id: 'sections', label: 'Разделы в меню', icon: LayoutGrid, tint: ['#34d399', '#059669'], needsProfile: true },
+  { id: 'core', label: 'Ядро — агенты', icon: Atom, tint: ['#c084fc', '#4338ca'], needsCore: true },
   { id: 'mcp', label: 'MCP', icon: Bot, tint: ['#a78bfa', '#4f46e5'] },
 ];
 
@@ -94,6 +99,7 @@ export default function SettingsScreen() {
     if (await askConfirm({ title: 'Выйти из аккаунта?', text: 'На этом устройстве придётся войти заново.', confirm: 'Выйти', tone: 'danger' })) await logout();
   };
 
+  const coreOn = useAgentBridge((s) => s.available);
   const current = SECTIONS.find((s) => s.id === open);
   const version = window.sharDesktop?.appVersion;
 
@@ -107,7 +113,7 @@ export default function SettingsScreen() {
           <h1>Настройки</h1>
         </header>
         <div className="nx-group">
-          {SECTIONS.map((s) => {
+          {SECTIONS.filter((s) => !s.needsCore || coreOn).map((s) => {
             const Icon = s.icon;
             return (
               <button
@@ -155,6 +161,7 @@ export default function SettingsScreen() {
   else if (open === 'notifications') body = <NotificationsSection />;
   else if (open === 'sections' && profile) body = <SectionsSection profile={profile} onChange={setProfile} />;
   else if (open === 'mcp') body = <McpSection />;
+  else if (open === 'core') body = <CoreSection />;
 
   return (
     <div className="nst" data-open={open ? 'true' : undefined}>

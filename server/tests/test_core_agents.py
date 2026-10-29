@@ -26,8 +26,8 @@ def _events(client, token, job_id, *events):
     return client.post(f"/api/core/node/jobs/{job_id}/events", json={"events": list(events)}, headers={"Authorization": f"Bearer {token}"})
 
 
-def _rpc(client, token, tool, **args):
-    r = client.post("/api/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool, "arguments": args}},
+def _rpc(client, token, tool_name, /, **args):
+    r = client.post("/api/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool_name, "arguments": args}},
                     headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200, r.text
     return r.json()["result"]
@@ -185,3 +185,58 @@ def test_personal_mcp_keys_dont_get_calendar_by_default(client, anna):
                                             headers={"Authorization": f"Bearer {token}"}).json()["result"]["tools"]}
     assert "calendar_create" not in names and "read_item" in names
     assert _rpc(client, token, "calendar_list")["isError"]
+
+
+def test_permission_mode_is_enforced_by_server(client, admin, users):
+    """«Осторожно»: удаление без согласия человека не выполняется; «Разрешить» даёт одно разрешение на этот инструмент."""
+    from app.modules.core_agents import dispatch, permissions
+
+    uid = admin.get("/api/auth/session").json()["user"]["id"]
+    thread = admin.post("/api/core/threads", json={}).json()["thread"]
+    from app.modules.core_chat.router import post_agent_message
+
+    message = post_agent_message(uid, thread["id"], "Claude", status="working", props={"provider": "claude"})
+    token, key_id = dispatch._mcp_key(uid, "claude", message["id"])
+    try:
+        task = _rpc(client, token, "task_create", title="Удалить потом")["structuredContent"]["created"]
+        denied = _rpc(client, token, "task_delete", id=task["id"], confirm=True)
+        assert denied["isError"] and "request_permission" in denied["content"][0]["text"]
+        asked = _rpc(client, token, "request_permission", tool="task_delete", summary="Удалю задачу «Удалить потом»")["structuredContent"]
+        card = admin.get(f"/api/core/threads/{thread['id']}/messages").json()["messages"][-1]
+        assert card["props"]["ask"]["kind"] == "permission"
+        admin.post(f"/api/core/messages/{message['id']}/answer", json={"value": "Разрешить"})
+        last = admin.get(f"/api/core/threads/{thread['id']}/messages").json()["messages"]
+        mine = [m for m in last if m["role"] == "user"][-1]
+        assert mine["body"] == "Разрешить" and asked["approval"] in mine["props"]["agentNote"]
+        assert _rpc(client, token, "task_delete", id=task["id"], confirm=True, approval_id=asked["approval"])["structuredContent"]["deleted"]
+        # Разрешение одноразовое.
+        again = _rpc(client, token, "task_create", title="Ещё одна")["structuredContent"]["created"]
+        assert _rpc(client, token, "task_delete", id=again["id"], confirm=True, approval_id=asked["approval"])["isError"]
+        # «Под ключ» — удаление без вопросов.
+        permissions.set_mode(uid, "auto")
+        auto_token, auto_key = dispatch._mcp_key(uid, "claude", message["id"])
+        assert _rpc(client, auto_token, "task_delete", id=again["id"], confirm=True)["structuredContent"]["deleted"]
+        db.conn.execute_query("UPDATE mcp_keys SET revoked_at = now() WHERE id = %s", (auto_key,))
+    finally:
+        permissions.set_mode(uid, "careful")
+        db.conn.execute_query("UPDATE mcp_keys SET revoked_at = now() WHERE id = %s", (key_id,))
+        _cleanup()
+
+
+def test_forwarded_reaches_agent_and_chats_stay_closed(client, admin):
+    try:
+        _, token = _node(admin)
+        _poll(client, token)
+        uid = admin.get("/api/auth/session").json()["user"]["id"]
+        db.conn.execute_query("INSERT INTO core_accounts (user_id, provider, state) VALUES (%s, 'gemini', 'ready')", (uid,))
+        thread = admin.post("/api/core/threads", json={}).json()["thread"]
+        admin.post(f"/api/core/threads/{thread['id']}/messages", json={
+            "id": uuid.uuid4().hex, "body": "Что решили?",
+            "forwarded": [{"author": "Мария", "text": "Едем в Карелию 12-го", "at": "29 окт., 10:00", "files": []}]})
+        run = _poll(client, token).json()["jobs"][0]
+        assert "Мария" in run["prompt"] and "Едем в Карелию" in run["prompt"]
+        opened = _rpc(client, run["mcp"]["token"], "open_in_shar", url="/chats?chat=1")
+        assert opened["isError"]
+        assert _rpc(client, run["mcp"]["token"], "open_in_shar", url="/office?kind=document&id=1")["structuredContent"]["opened"]
+    finally:
+        _cleanup()

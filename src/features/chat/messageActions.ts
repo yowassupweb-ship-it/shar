@@ -2,7 +2,8 @@ import type { Message } from '@/shared/types/chat';
 import { showToast } from '@/shared/ui/Toast';
 import { isRetryableStatus } from './api';
 import { writeDraft } from './drafts';
-import { internals, loadChats, markMessageDeleted, setCompose, type Thread } from './store';
+import { forwardToAgent } from '@/shared/core/agentBridge';
+import { internals, loadChats, markMessageDeleted, plainFromMarkdown, setCompose, type Thread } from './store';
 import { sendMessage } from './transport';
 
 /**
@@ -300,4 +301,23 @@ export async function editPoll(chatId: string, messageId: string, question: stri
     if (prev) setMeta(chatId, messageId, { poll: prev });
     showToast('Опрос не сохранился — нет связи с сервером', 'error');
   }
+}
+
+/**
+ * «Переслать агенту»: выбранные сообщения уходят в «Ядро» только текстом — автор, время, текст, имена файлов.
+ * Ни id чата, ни ссылок на переписку: доступа к чатам у агента нет и быть не должно.
+ */
+export function forwardToAgentFrom(messages: Message[], nameOf: (m: Message) => string) {
+  const items = [...messages]
+    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
+    .map((m) => ({
+      author: nameOf(m) || m.authorName || 'Кто-то',
+      text: plainFromMarkdown(String(m.content || '')),
+      at: new Date(m.createdAt).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }),
+      files: (m.attachments || []).map((a: { name?: string; filename?: string }) => String(a?.name || a?.filename || 'файл')).slice(0, 10),
+    }))
+    .filter((item) => item.text.trim() || item.files.length);
+  if (!items.length) { showToast('В выбранных сообщениях нечего переслать', 'info'); return; }
+  forwardToAgent(items);
+  showToast(items.length > 1 ? `Агенту переслано сообщений: ${items.length} — допишите вопрос в «Ядре»` : 'Сообщение у агента — допишите вопрос в «Ядре»', 'success');
 }
