@@ -2,9 +2,17 @@ import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { BirthdaySheet } from './BirthdaySheet';
 import { loadBirthdays, useBirthdays } from './store';
+import { myId } from '@/shared/session/session';
 
 const HIDE_KEY = 'shar.birthday-banner.hidden-until';
 const HIDE_DAYS = 14;
+
+/** Нужна ли плашка — по прошлому разу на этом устройстве: данные приходят после первой отрисовки, и плашка,
+ *  появляясь, опускала весь список чатов (сдвиг раскладки). Теперь она есть сразу (или её нет вовсе). */
+const needKey = () => `shar.birthday-banner.need:${myId()}`;
+function neededBefore() {
+  try { return localStorage.getItem(needKey()) === '1'; } catch { return false; }
+}
 
 function hiddenNow() {
   try { return Number(localStorage.getItem(HIDE_KEY) || 0) > Date.now(); } catch { return false; }
@@ -19,8 +27,13 @@ export function BirthdayBanner() {
   const [hidden, setHidden] = useState(hiddenNow);
   const [open, setOpen] = useState(false);
   useEffect(() => { void loadBirthdays(); }, []);
+  const need = loaded ? !unsupported && !mine : neededBefore();
+  useEffect(() => {
+    if (!loaded) return;
+    try { localStorage.setItem(needKey(), !unsupported && !mine ? '1' : '0'); } catch { /* приватный режим */ }
+  }, [loaded, unsupported, mine]);
 
-  if (!loaded || unsupported || mine || hidden) return open ? <BirthdaySheet onClose={() => setOpen(false)} /> : null;
+  if (!need || hidden) return open ? <BirthdaySheet onClose={() => setOpen(false)} /> : null;
   return (
     <>
       <div className="nbd-banner">

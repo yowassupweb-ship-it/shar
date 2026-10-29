@@ -73,13 +73,24 @@ function Workspace({ me }: { me: User }) {
   const unread = unreadChats + toolBadgesTotal(toolCounts);
   const meFull = useChatStore((s) => s.users[String(me.id)]) as
     (User & { position?: string; visibleTabs?: Record<string, boolean>; navTools?: string[]; enabledTools?: string[]; role?: string }) | undefined;
+  // Пункты, вынесенные в нижнее меню, приходят с профилем (/api/users) — уже после первой отрисовки: меню
+  // дорисовывалось и съезжало. Помним их на устройстве и рисуем сразу, профиль потом только уточняет.
+  const navKey = `nx:nav-tools:${me.id}`;
+  const [navCache] = useState<{ navTools?: string[]; enabledTools?: string[]; role?: string } | null>(() => {
+    try { return JSON.parse(localStorage.getItem(navKey) || 'null'); } catch { return null; }
+  });
+  const navSource = meFull ?? navCache;
+  useEffect(() => {
+    if (!meFull) return;
+    try { localStorage.setItem(navKey, JSON.stringify({ navTools: meFull.navTools || [], enabledTools: meFull.enabledTools || [], role: meFull.role })); } catch { /* приватный режим */ }
+  }, [navKey, meFull?.navTools, meFull?.enabledTools, meFull?.role]); // eslint-disable-line react-hooks/exhaustive-deps
   const navTools = useMemo(() => {
-    const tools = availableTools({ role: meFull?.role || me.role, enabledTools: meFull?.enabledTools });
-    return (meFull?.navTools || [])
+    const tools = availableTools({ role: navSource?.role || me.role, enabledTools: navSource?.enabledTools });
+    return (navSource?.navTools || [])
       .map((id) => tools.find((t) => t.id === id && !t.external && t.href.startsWith('/')))
       .filter((t): t is NonNullable<typeof t> => Boolean(t))
       .map((t) => ({ id: t.id, label: t.name, href: t.href, icon: t.icon, tint: t.tint, count: toolCounts[t.id] || 0 }));
-  }, [meFull?.navTools, meFull?.enabledTools, meFull?.role, me.role, toolCounts]);
+  }, [navSource?.navTools, navSource?.enabledTools, navSource?.role, me.role, toolCounts]);
   const moreCount = Object.entries(toolCounts).reduce((sum, [id, n]) => sum + (navTools.some((t) => t.id === id) ? 0 : n || 0), 0);
 
   // Layout-эффект, а не обычный: эффекты родителя идут после эффектов детей, и
