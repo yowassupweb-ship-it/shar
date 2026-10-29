@@ -209,13 +209,19 @@ def test_permission_mode_is_enforced_by_server(client, admin, users):
         mine = [m for m in last if m["role"] == "user"][-1]
         assert mine["body"] == "Разрешить" and asked["approval"] in mine["props"]["agentNote"]
         assert _rpc(client, token, "task_delete", id=task["id"], confirm=True, approval_id=asked["approval"])["structuredContent"]["deleted"]
-        # Разрешение одноразовое.
+        # Разрешение — на пачку дел в ближайшие минуты: вторая задача удаляется тем же разрешением; другой инструмент — нет.
         again = _rpc(client, token, "task_create", title="Ещё одна")["structuredContent"]["created"]
-        assert _rpc(client, token, "task_delete", id=again["id"], confirm=True, approval_id=asked["approval"])["isError"]
-        # «Под ключ» — удаление без вопросов.
+        assert _rpc(client, token, "calendar_delete", id="x", confirm=True, approval_id=asked["approval"])["isError"]
+        assert _rpc(client, token, "task_delete", id=again["id"], confirm=True, approval_id=asked["approval"])["structuredContent"]["deleted"]
+        db.conn.execute_query("UPDATE core_approvals SET decided_at = now() - interval '1 hour' WHERE id = %s", (asked["approval"],))
+        third = _rpc(client, token, "task_create", title="Третья")["structuredContent"]["created"]
+        assert _rpc(client, token, "task_delete", id=third["id"], confirm=True, approval_id=asked["approval"])["isError"]
+        # «Под ключ»: задача коллеге — без вопросов, удаление — всё равно с разрешением.
         permissions.set_mode(uid, "auto")
         auto_token, auto_key = dispatch._mcp_key(uid, "claude", message["id"])
-        assert _rpc(client, auto_token, "task_delete", id=again["id"], confirm=True)["structuredContent"]["deleted"]
+        other = users.ids["anna"]
+        assert _rpc(client, auto_token, "task_create", title="Коллеге", assignee_ids=[other])["structuredContent"]["created"]
+        assert _rpc(client, auto_token, "task_delete", id=third["id"], confirm=True)["isError"]
         db.conn.execute_query("UPDATE mcp_keys SET revoked_at = now() WHERE id = %s", (auto_key,))
     finally:
         permissions.set_mode(uid, "careful")

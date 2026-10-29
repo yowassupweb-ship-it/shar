@@ -9,7 +9,8 @@
 
 Правило держит сервер, а не совесть агента: инструмент MCP, которому в этом режиме нужно разрешение, без одобренного
 approval_id не выполнится. Агент зовёт request_permission — под его ответом появляется карточка «Разрешить / Запретить»,
-он заканчивает ход и ждёт. «Разрешить» выдаёт одноразовое разрешение на этот инструмент (живёт час), и агент продолжает.
+он заканчивает ход и ждёт. «Разрешить» открывает этот инструмент на 15 минут — на то дело, о котором агент спросил
+(«удалить четыре дубля» — четыре вызова), и агент продолжает. Другой инструмент — снова спросит.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ MODES = {
 }
 DEFAULT = "careful"
 
-# Удаление и необратимое — с разрешением в любом режиме, кроме «под ключ» (там хватает confirm: true от агента).
+# Удаление и необратимое — с разрешением в любом режиме, «под ключ» тоже (так обещает его подпись в настройках).
 ALWAYS_ASK = {"delete_item", "calendar_delete", "task_delete", "file_delete", "integration_delete", "agent_disconnect"}
 # Касается других людей или внешних систем.
 SOCIAL = {"integration_save"}
@@ -77,10 +78,10 @@ def reason(mode: str, tool: dict[str, Any], args: dict[str, Any], me: str) -> Op
     writes = tool["level"] != "read" or (name == "integration_call" and str(args.get("method") or "GET").upper() != "GET")
     if not writes and name not in ALWAYS_ASK:
         return None
-    if mode == "auto":
-        return None
     if name in ALWAYS_ASK:
         return "удаление"
+    if mode == "auto":
+        return None
     if mode == "ask":
         return "любое изменение в режиме «Спрашивать всегда»"
     if name in SOCIAL:
@@ -113,13 +114,16 @@ def decide(approval_id: str, user_id: str, allow: bool) -> Optional[dict]:
         ("granted" if allow else "denied", approval_id, user_id))
 
 
+APPROVAL_MINUTES = 15
+
+
 def consume(approval_id: Any, user_id: str, tool: str) -> bool:
-    """Одноразово: разрешение на этот инструмент, выданное за последний час, гасится при использовании."""
+    """Разрешение на этот инструмент действует APPROVAL_MINUTES после «Разрешить» — на всю пачку, о которой спросили."""
     if not approval_id:
         return False
     return bool(db.conn.fetch_one(
-        "UPDATE core_approvals SET status = 'used' WHERE id = %s AND user_id = %s AND tool = %s AND status = 'granted' "
-        "AND decided_at > now() - interval '1 hour' RETURNING id", (str(approval_id), user_id, tool)))
+        "SELECT id FROM core_approvals WHERE id = %s AND user_id = %s AND tool = %s AND status = 'granted' "
+        f"AND decided_at > now() - interval '{APPROVAL_MINUTES} minutes'", (str(approval_id), user_id, tool)))
 
 
 def view() -> list[dict]:

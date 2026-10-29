@@ -173,6 +173,7 @@
 .ncore-chain-step time { margin-left: auto; padding-left: 8px; color: var(--text-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .ncore-chain-err { display: inline-flex; flex: none; align-items: center; gap: 3px; color: var(--state-danger); font-style: normal; font-size: var(--text-xs); }
 .ncore-chain-list > li[data-error] summary b { color: var(--state-danger); }
+.ncore-chain-gate { flex: none; color: var(--text-muted); font-style: normal; font-size: var(--text-xs); }
 .ncore-chain-io { position: relative; margin: 4px 0 6px; padding: 18px 10px 8px; max-height: 200px; overflow: auto; border-radius: 6px; background: var(--ncore-soft); color: var(--text-2); font-family: var(--font-mono); font-size: var(--text-xs); white-space: pre-wrap; }
 .ncore-chain-io::before { content: attr(data-label); position: absolute; top: 4px; left: 10px; color: var(--text-muted); font-family: var(--font-sans); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
 

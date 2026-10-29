@@ -111,7 +111,9 @@ export function Chain({ steps, live, status, durationMs }: { steps: CoreStep[]; 
   const hidden = full ? 0 : Math.max(0, steps.length - VISIBLE_STEPS);
   const shown = hidden ? steps.slice(hidden) : steps;
   const tools = steps.filter((s) => s.kind === 'tool').length;
-  const errors = steps.filter((s) => s.is_error).length;
+  // Сервер не пустил без разрешения человека — это не сбой, а остановка «спросить»: считаем отдельно.
+  const gated = (s: CoreStep) => Boolean(s.is_error && s.output?.startsWith('Нужно разрешение'));
+  const errors = steps.filter((s) => s.is_error && !gated(s)).length;
   return (
     <div className="ncore-chain" data-live={live || undefined}>
       <button type="button" className="ncore-chain-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
@@ -135,12 +137,13 @@ export function Chain({ steps, live, status, durationMs }: { steps: CoreStep[]; 
               }
               const Icon = iconFor(step.name);
               return (
-                <li key={hidden + index} data-error={step.is_error || undefined}>
+                <li key={hidden + index} data-error={(step.is_error && !gated(step)) || undefined}>
                   <details className="ncore-chain-step">
                     <summary title={step.name}>
                       <Icon size={13} className="ncore-chain-icon" aria-hidden="true" />
                       <b>{step.hint || step.name}</b>
-                      {step.is_error && <em className="ncore-chain-err"><AlertTriangle size={11} aria-hidden="true" /> ошибка</em>}
+                      {step.is_error && !gated(step) && <em className="ncore-chain-err"><AlertTriangle size={11} aria-hidden="true" /> ошибка</em>}
+                      {gated(step) && <em className="ncore-chain-gate">нужно разрешение</em>}
                       {step.ms ? <time>{step.ms >= 1000 ? `${Math.round(step.ms / 1000)} с` : `${step.ms} мс`}</time> : null}
                     </summary>
                     {step.input && <pre className="ncore-chain-io" data-label="Вход">{step.input}</pre>}
