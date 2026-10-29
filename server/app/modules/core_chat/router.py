@@ -1,6 +1,6 @@
-"""«Ядро» — чат с агентами (по образцу чата MBOX). Пока только сам чат: треды, сообщения, вложения, ответы,
-вопросы агента с кнопками, цепочка шагов и ход работы. Агентов подключим позже (нода, MBOX #589): они будут
-писать ответы через post_agent_message / update_agent_message — тем же путём, что демо-ответ ниже.
+"""«Ядро» — чат с агентами (по образцу чата MBOX): треды, сообщения, вложения, ответы, вопросы агента с кнопками,
+цепочка шагов и ход работы. Отвечают личные агенты человека (Gemini, Claude, GPT), работающие на ноде
+(core_agents/): они пишут ответы через post_agent_message / update_agent_message — тем же путём, что демо-ответ ниже.
 
 Доступ: админ или тот, кому выдан инструмент `core` (users.enabled_tools). По умолчанию — только админы.
 
@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS core_threads (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_core_threads_user ON core_threads(user_id, archived, updated_at DESC);
+-- Сессии CLI агентов по чату ({провайдер: id}): нода продолжает разговор, а не начинает заново (core_agents/node.py).
+ALTER TABLE core_threads ADD COLUMN IF NOT EXISTS sessions JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE TABLE IF NOT EXISTS core_messages (
     id TEXT PRIMARY KEY,
     thread_id TEXT NOT NULL REFERENCES core_threads(id) ON DELETE CASCADE,
@@ -203,9 +205,13 @@ class ThreadPatch(BaseModel):
 
 @router.get("/api/core/catalog")
 def catalog(me: Identity = Depends(current_identity)):
-    """Кто отвечает. Агентов пока нет — интерфейс так и говорит; модели и «усилие» придут с нодой."""
+    """Кто отвечает: подключённые агенты человека с их моделями. Никого — интерфейс зовёт подключить в настройках."""
     _guard(me)
-    return {"agents": [], "models": [], "efforts": EFFORTS, "demo": me.is_admin}
+    from app.modules.core_agents import store as agents
+
+    ready = agents.ready_agents(me.user_id) if agents.ready() else []
+    return {"agents": [{"id": a["provider"], "name": a["label"], "model": a["model"], "models": a["models"], "online": a["nodeOnline"]} for a in ready],
+            "models": [], "efforts": EFFORTS, "demo": me.is_admin}
 
 
 @router.get("/api/core/threads")
@@ -251,9 +257,11 @@ class Attachment(BaseModel):
 
 
 class ContextItem(BaseModel):
+    """Что открыто у человека (раздел, документ, окна) — агент знает, «где я». Зачёркнутое в поле ввода сюда не попадает."""
     kind: str = Field(max_length=30)
     title: str = Field(max_length=200)
     id: str = Field(default="", max_length=80)
+    url: str = Field(default="", max_length=300)
 
 
 class MessageBody(BaseModel):
@@ -261,7 +269,7 @@ class MessageBody(BaseModel):
     body: str = Field(default="", max_length=MAX_BODY)
     replyTo: Optional[str] = Field(default=None, max_length=64)
     attachments: list[Attachment] = Field(default_factory=list, max_length=10)
-    context: list[ContextItem] = Field(default_factory=list, max_length=10)
+    context: list[ContextItem] = Field(default_factory=list, max_length=12)
     model: str = Field(default="", max_length=60)
     effort: Literal["", "low", "medium", "high"] = ""
 
@@ -326,10 +334,15 @@ def send_message(thread_id: str, body: MessageBody, tasks: BackgroundTasks, me: 
     _touch(thread_id)
     message = present_message(row)
     _announce(me.user_id, message, thread_id)
-    # Агентов пока нет: отвечает только демо — у админа, по команде /demo.
-    if me.is_admin and text.split(maxsplit=1)[:1] == ["/demo"]:
+    if me.is_admin and text.split(maxsplit=1)[:1] == ["/demo"]:  # все состояния ответа — без агента
         tasks.add_task(_demo_reply, me.user_id, thread["id"], text[5:].strip())
-    return {"message": message}
+        return {"message": message}
+    from app.modules.core_agents.dispatch import dispatch
+
+    reply = dispatch(me.user_id, thread, message, wanted=body.model, effort=body.effort)
+    if reply and body.model and not thread.get("peer"):  # агент, которого выбрали, становится агентом чата
+        db.conn.execute_query("UPDATE core_threads SET peer = %s WHERE id = %s", (body.model.split(":")[0], thread_id))
+    return {"message": message, "reply": reply}
 
 
 @router.post("/api/core/messages/{message_id}/answer")
@@ -350,7 +363,13 @@ def answer_ask(message_id: str, body: AnswerBody, me: Identity = Depends(current
     _touch(row["thread_id"])
     message = present_message(reply)
     _announce(me.user_id, message, row["thread_id"])
-    return {"message": message}
+    # Ответ на вопрос — продолжение разговора: спросивший агент работает дальше.
+    from app.modules.core_agents.dispatch import dispatch
+
+    thread = db.conn.fetch_one("SELECT * FROM core_threads WHERE id = %s", (row["thread_id"],))
+    provider = (row.get("props") or {}).get("provider") or ""
+    reply_agent = dispatch(me.user_id, thread, message, wanted=provider) if thread else None
+    return {"message": message, "reply": reply_agent}
 
 
 @router.post("/api/core/messages/{message_id}/cancel")
@@ -362,6 +381,10 @@ def cancel_reply(message_id: str, me: Identity = Depends(current_identity)):
         (message_id, me.user_id))
     if not row:
         raise HTTPException(status_code=404, detail="Ответ уже готов или не найден")
+    from app.modules.core_agents import store as agents
+
+    if agents.ready():
+        agents.cancel_by_message(message_id)
     message = present_message(row)
     _announce(me.user_id, message, row["thread_id"])
     return {"message": message}

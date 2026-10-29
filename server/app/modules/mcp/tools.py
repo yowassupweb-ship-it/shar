@@ -647,15 +647,24 @@ TOOLS: list[dict[str, Any]] = [
      "inputSchema": {"type": "object", "properties": {"title": {"type": "string"}, "parent_id": {"type": "string"}}, "required": ["title"]}},
 ]
 
+from app.modules.mcp import apps as _apps  # noqa: E402 — им нужен ToolError выше
+from app.modules.mcp import files as _files  # noqa: E402
+
+TOOLS += _apps.TOOLS + _files.TOOLS
 BY_NAME = {t["name"]: t for t in TOOLS}
+
+
+def _open(ctx: KeyContext, tool: dict[str, Any]) -> bool:
+    """Инструмент «Офиса» — по уровню доступа; календарь, задачи, файлы и прочее — ещё и по списку apps ключа."""
+    return LEVELS[tool["level"]] <= LEVELS[ctx.scope["access"]] and (not tool.get("app") or tool["app"] in ctx.scope.get("apps", []))
 
 
 def describe(ctx: KeyContext) -> list[dict[str, Any]]:
     """Список инструментов для tools/list — только те, что этому ключу можно: агент не тратит попытки на запретное."""
-    level = LEVELS[ctx.scope["access"]]
     return [{"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"],
-             "annotations": {"readOnlyHint": t["level"] == "read", "destructiveHint": False, "idempotentHint": t["level"] == "read"}}
-            for t in TOOLS if LEVELS[t["level"]] <= level]
+             "annotations": {"readOnlyHint": t["level"] == "read", "destructiveHint": t["name"].endswith("_delete") or t["name"] == "delete_item",
+                             "idempotentHint": t["level"] == "read"}}
+            for t in TOOLS if _open(ctx, t)]
 
 
 def summary(ctx: KeyContext) -> str:
@@ -665,11 +674,11 @@ def summary(ctx: KeyContext) -> str:
     kinds = ", ".join(KIND_NAMES[k] for k in scope["kinds"]) or "ничего"
     where = "весь «Офис»" if scope["folders"] is None else "только выбранные папки и вложенные в них (list_folders)"
     whose = "свои материалы и те, которыми поделились" if scope["shared"] else "только свои материалы"
-    return f"Доступ ключа «{ctx.key_name}»: {access}; виды: {kinds}; где: {where}; {whose}."
+    apps = ", ".join(_apps.APP_NAMES[a] for a in scope.get("apps", []) if a in _apps.APP_NAMES)
+    return f"Доступ ключа «{ctx.key_name}»: {access}; виды: {kinds}; где: {where}; {whose}." + (f" Ещё: {apps}." if apps else "")
 
 
 def run(ctx: KeyContext, tool: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
-    access = Access(ctx)
-    if LEVELS[tool["level"]] > access.level:
+    if not _open(ctx, tool):
         raise ToolError(f"Этому ключу инструмент {tool['name']} не открыт")
-    return tool["handler"](access, args)
+    return tool["handler"](Access(ctx), args)

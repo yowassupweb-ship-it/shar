@@ -36,6 +36,8 @@ from app.core.security import Identity, current_identity, identity_of
 router = APIRouter()
 
 PREFIX = "shar_mcp_"
+# Ключи на один запуск агента «Ядра» (core_agents/dispatch.py): в списке человека и в лимите их не видно.
+JOB_PREFIX = "Ядро · "
 MAX_KEYS = 10
 KINDS = ("note", "document", "table", "presentation")
 ACCESS = ("read", "edit", "create")
@@ -74,6 +76,7 @@ class ScopeBody(BaseModel):
     kinds: list[Literal["note", "document", "table", "presentation"]] = Field(default_factory=lambda: list(KINDS))
     folders: list[str] | None = Field(default=None, max_length=200)
     shared: bool = True
+    apps: list[Literal["calendar", "tasks", "files", "people", "agent"]] = Field(default_factory=list)
 
 
 class KeyBody(BaseModel):
@@ -109,8 +112,15 @@ def clean_scope(raw: Any, user_id: str) -> dict[str, Any]:
 
         visible = {f["id"] for f in _folders(user_id)}
         folders = [str(f) for f in folders if str(f) in visible]
-    return {"access": s.get("access") if s.get("access") in ACCESS else "read", "kinds": kinds,
-            "folders": folders, "shared": bool(s.get("shared", True))}
+    from app.modules.mcp.apps import APPS
+
+    # Календарь, задачи и прочее сверх «Офиса» — только если открыты явно: у старых ключей их нет.
+    apps = [a for a in (s.get("apps") or []) if a in APPS]
+    out = {"access": s.get("access") if s.get("access") in ACCESS else "read", "kinds": kinds,
+           "folders": folders, "shared": bool(s.get("shared", True)), "apps": apps}
+    if s.get("job"):  # ключ запуска «Ядра»: в какое сообщение агент отвечает (ask_user, присутствие в материалах)
+        out["job"] = str(s["job"])
+    return out
 
 
 def _hash(token: str) -> str:
@@ -145,14 +155,16 @@ def _own_key(key_id: str, user_id: str) -> dict:
 @router.get("/api/mcp/keys")
 def list_keys(me: Identity = Depends(current_identity)):
     _ready()
-    rows = db.conn.fetch_all(f"SELECT {_COLUMNS} FROM mcp_keys WHERE user_id = %s AND revoked_at IS NULL ORDER BY id DESC", (me.user_id,)) or []
+    rows = db.conn.fetch_all(f"SELECT {_COLUMNS} FROM mcp_keys WHERE user_id = %s AND revoked_at IS NULL AND name NOT LIKE %s ORDER BY id DESC",
+                             (me.user_id, JOB_PREFIX + "%")) or []
     return {"keys": [_view(r) for r in rows]}
 
 
 @router.post("/api/mcp/keys", status_code=201)
 def create_key(body: KeyBody, me: Identity = Depends(current_identity)):
     _ready()
-    count = db.conn.fetch_one("SELECT count(*) AS n FROM mcp_keys WHERE user_id = %s AND revoked_at IS NULL", (me.user_id,))["n"]
+    count = db.conn.fetch_one("SELECT count(*) AS n FROM mcp_keys WHERE user_id = %s AND revoked_at IS NULL AND name NOT LIKE %s",
+                              (me.user_id, JOB_PREFIX + "%"))["n"]
     if count >= MAX_KEYS:
         raise HTTPException(status_code=400, detail=f"Не больше {MAX_KEYS} ключей: отзовите ненужный")
     scope = clean_scope(body.scope.model_dump(), me.user_id)
