@@ -18,6 +18,7 @@ export const paths = {
   utm: '/utm-generator',
   leads: '/site-leads',
   social: '/social',
+  core: '/core',
   guide: '/how-to-shar',
   login: '/login',
 } as const;

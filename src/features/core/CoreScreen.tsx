@@ -1,0 +1,318 @@
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router';
+import { Archive, ArchiveRestore, ArrowDown, Atom, ChevronLeft, Lock, MessageSquarePlus, Pencil, Search } from 'lucide-react';
+import { realtime } from '@/shared/realtime/realtime';
+import { paths } from '@/shared/navigation/routes';
+import { Spinner } from '@/shared/ui/Spinner';
+import { showToast } from '@/shared/ui/Toast';
+import { dayKey, formatDay, formatListTime, plural } from '@/shared/ui/format';
+import { coreApi, type CoreMessage, type CoreThread } from './api';
+import { Composer, COMMANDS, type ComposerHandle } from './Composer';
+import { MessageItem, type MessageHandlers } from './MessageItem';
+import { formatTokens } from './parts';
+import {
+  createThread, loadAll, loadArchived, loadMessages, loadOlder, patchThread, retryMessage, sendMessage, upsertMessage, upsertThread, useCore,
+} from './store';
+import './core.css';
+
+const EMPTY: CoreMessage[] = [];
+
+function useNarrow() {
+  const query = '(max-width: 760px)';
+  const [narrow, setNarrow] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const on = () => setNarrow(mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
+  return narrow;
+}
+
+/**
+ * «Ядро» — чат с агентами (по образцу чата MBOX), пока без агентов: треды, сообщения, вложения, ответы,
+ * команды, цепочка шагов и ход работы. Включено админам; остальным — когда админ выдаст инструмент.
+ */
+export default function CoreScreen() {
+  const [params, setParams] = useSearchParams();
+  const threadId = params.get('thread');
+  const denied = useCore((s) => s.denied);
+  const error = useCore((s) => s.error);
+  const threads = useCore((s) => s.threads);
+  const narrow = useNarrow();
+  const navigate = useNavigate();
+
+  useEffect(() => { void loadAll(); }, []);
+  // Живые события: ответы агентов, свои сообщения с других устройств, переименования и архив.
+  useEffect(() => realtime.subscribe((event) => {
+    const e = event as { type?: string; message?: CoreMessage; thread?: CoreThread };
+    if (e.type === 'core_message' && e.message) upsertMessage(e.message);
+    if (e.type === 'core_thread' && e.thread) upsertThread(e.thread);
+  }), []);
+
+  const select = useCallback((id: string | null) => setParams(id ? { thread: id } : {}, { replace: false }), [setParams]);
+
+  if (denied) {
+    return (
+      <div className="ncore ncore-locked">
+        <Lock size={36} strokeWidth={1.5} aria-hidden="true" />
+        <h2>«Ядро» вам пока не включено</h2>
+        <p>Это чат с агентами Шара. Сейчас он доступен администраторам — включить его вам может администратор.</p>
+        <button type="button" className="nx-ghost" onClick={() => navigate(paths.more)}>Вернуться в «Ещё»</button>
+      </div>
+    );
+  }
+  if (!threads) {
+    return <div className="ncore ncore-loading">{error ? <p className="ncore-error" role="alert">{error}</p> : <Spinner size={24} label="Загружаю" />}</div>;
+  }
+  const showList = !narrow || !threadId;
+  const showChat = !narrow || Boolean(threadId);
+  return (
+    <div className="ncore" data-narrow={narrow || undefined}>
+      {showList && <ThreadList activeId={threadId} onSelect={select} onBack={() => navigate(paths.more)} />}
+      {showChat && <Conversation key={threadId || 'new'} threadId={threadId} onSelect={select} narrow={narrow} />}
+    </div>
+  );
+}
+
+// ── Список чатов ─────────────────────────────────────────────────────────────
+
+function ThreadList({ activeId, onSelect, onBack }: { activeId: string | null; onSelect: (id: string | null) => void; onBack: () => void }) {
+  const threads = useCore((s) => s.threads) ?? [];
+  const archived = useCore((s) => s.archived);
+  const [showArchive, setShowArchive] = useState(false);
+  const [query, setQuery] = useState('');
+  useEffect(() => { if (showArchive && !archived) void loadArchived(); }, [showArchive, archived]);
+  const list = (showArchive ? archived ?? [] : threads).filter((t) => !query.trim() || t.title.toLowerCase().includes(query.trim().toLowerCase()));
+
+  async function newChat() {
+    try { onSelect((await createThread()).id); } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось создать чат', 'error'); }
+  }
+
+  return (
+    <aside className="ncore-list" aria-label="Чаты Ядра">
+      <header className="ncore-list-head">
+        <button type="button" className="nx-icon-btn ncore-back" onClick={onBack} aria-label="Назад в «Ещё»"><ChevronLeft size={20} /></button>
+        <span className="ncore-brand"><Atom size={20} aria-hidden="true" /> Ядро</span>
+        <button type="button" className="nx-icon-btn" onClick={() => void newChat()} aria-label="Новый чат" title="Новый чат"><MessageSquarePlus size={18} /></button>
+      </header>
+      <label className="ncore-search">
+        <Search size={14} aria-hidden="true" />
+        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Найти чат" aria-label="Найти чат по названию" />
+      </label>
+      <nav className="nx-segment ncore-tabs" aria-label="Какие чаты">
+        <button type="button" aria-pressed={!showArchive} onClick={() => setShowArchive(false)}>Чаты</button>
+        <button type="button" aria-pressed={showArchive} onClick={() => setShowArchive(true)}>Архив</button>
+      </nav>
+      <div className="ncore-threads nx-scroll-y">
+        {showArchive && !archived && <div className="ncore-loading"><Spinner size={18} label="Загружаю" /></div>}
+        {list.map((t) => (
+          <button key={t.id} type="button" className="ncore-thread" aria-current={t.id === activeId || undefined} onClick={() => onSelect(t.id)}>
+            <span className="ncore-thread-top">
+              <b>{t.title}</b>
+              <time>{formatListTime(t.updatedAt)}</time>
+            </span>
+            <span className="ncore-thread-sub">
+              {t.lastText ? `${t.lastRole === 'user' ? 'Вы: ' : ''}${t.lastText}` : 'Пока без сообщений'}
+            </span>
+          </button>
+        ))}
+        {!list.length && (showArchive ? archived : true) && (
+          <p className="ncore-list-empty">{query ? 'Ничего не нашлось' : showArchive ? 'В архиве пусто' : 'Чатов пока нет — начните новый'}</p>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+// ── Переписка ────────────────────────────────────────────────────────────────
+
+const HELP = [
+  '«Ядро» — чат с агентами Шара. Агентов подключим позже: сейчас сообщения и файлы сохраняются в чате.',
+  'Команды: /new — новый чат, /rename Название — переименовать, /archive — в архив, /help — эта подсказка.',
+  'Enter — отправить, Shift+Enter — новая строка, ↑ в пустом поле — прошлое сообщение. Файл можно перетащить в переписку или вставить из буфера.',
+].join('\n');
+
+function Conversation({ threadId, onSelect, narrow }: { threadId: string | null; onSelect: (id: string | null) => void; narrow: boolean }) {
+  const catalog = useCore((s) => s.catalog);
+  const thread = useCore((s) => [...(s.threads ?? []), ...(s.archived ?? [])].find((t) => t.id === threadId) ?? null);
+  const log = useCore((s) => (threadId ? s.logs[threadId] : undefined));
+  const messages = log?.messages ?? EMPTY;
+  const [replyTo, setReplyTo] = useState<CoreMessage | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [dropping, setDropping] = useState(false);
+  const [farFromBottom, setFarFromBottom] = useState(false);
+  const scroller = useRef<HTMLDivElement>(null);
+  const composer = useRef<ComposerHandle>(null);
+  const atBottom = useRef(true);
+  const prevHeight = useRef<{ height: number; top: number; first?: string } | null>(null);
+
+  useEffect(() => { if (threadId) void loadMessages(threadId); }, [threadId]);
+  // Неизвестный чат в адресе (удалён, чужой) — назад к списку.
+  useEffect(() => {
+    if (threadId && !thread && useCore.getState().threads && !useCore.getState().archived) void loadArchived();
+  }, [threadId, thread]);
+
+  // Прокрутка: внизу — держимся низа; подгрузили историю сверху — видимое остаётся на месте.
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const prev = prevHeight.current;
+    if (prev && prev.first !== messages[0]?.id) {
+      el.scrollTop = el.scrollHeight - prev.height + prev.top;
+    } else if (atBottom.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+    prevHeight.current = null;
+  }, [messages]);
+
+  const onScroll = () => {
+    const el = scroller.current;
+    if (!el) return;
+    const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+    atBottom.current = gap < 80;
+    setFarFromBottom(gap > 600);
+    if (el.scrollTop < 120 && threadId && log?.hasMore && !log.loadingOlder) {
+      prevHeight.current = { height: el.scrollHeight, top: el.scrollTop, first: messages[0]?.id };
+      void loadOlder(threadId);
+    }
+  };
+
+  const history = useMemo(() => messages.filter((m) => m.role === 'user' && m.body).map((m) => m.body).reverse().slice(0, 30), [messages]);
+
+  async function ensureThread(): Promise<string | null> {
+    if (threadId) return threadId;
+    try {
+      const created = await createThread();
+      onSelect(created.id);
+      return created.id;
+    } catch (cause) {
+      showToast(cause instanceof Error ? cause.message : 'Не удалось создать чат', 'error');
+      return null;
+    }
+  }
+
+  async function send(text: string, attachments: Array<{ name: string; key: string; size: number; type: string }>, effort: string) {
+    const id = await ensureThread();
+    if (!id) return false;
+    atBottom.current = true;
+    const quoted = replyTo;
+    setReplyTo(null);
+    return sendMessage(id, { id: crypto.randomUUID().replace(/-/g, ''), body: text, replyTo: quoted?.id, attachments, effort: effort || undefined }, {
+      attachments: attachments.map((a) => ({ ...a, url: '' })),
+      replyTo: quoted ? { id: quoted.id, actor: quoted.role === 'agent' ? quoted.actor : '', text: quoted.body.slice(0, 300) } : undefined,
+    });
+  }
+
+  function systemNote(text: string) {
+    if (!threadId) return;
+    upsertMessage({ id: `local-${Date.now()}`, threadId, role: 'system', actor: '', body: text, props: {}, status: 'done', createdAt: new Date().toISOString() });
+  }
+
+  function onCommand(cmd: string, arg: string): boolean {
+    const known = COMMANDS.some((c) => c.cmd === cmd);
+    if (!known) return false;
+    if (cmd === '/new') { void createThread().then((t) => onSelect(t.id)).catch(() => showToast('Не удалось создать чат', 'error')); return true; }
+    if (cmd === '/help') { if (threadId) systemNote(HELP); else showToast(HELP, 'info'); return true; }
+    if (cmd === '/rename') {
+      if (!threadId) return true;
+      if (arg) void patchThread(threadId, { title: arg }); else setRenaming(true);
+      return true;
+    }
+    if (cmd === '/archive') { if (threadId) void patchThread(threadId, { archived: true }).then(() => onSelect(null)); return true; }
+    return false; // /demo — сообщение на сервер
+  }
+
+  const handlers = useMemo<MessageHandlers>(() => ({
+    reply: (m) => { setReplyTo(m); composer.current?.focus(); },
+    answer: (m, value) => { atBottom.current = true; coreApi.answer(m.id, value).then(upsertMessage).catch((cause) => showToast(cause instanceof Error ? cause.message : 'Не получилось', 'error')); },
+    cancel: (m) => { coreApi.cancel(m.id).then(upsertMessage).catch((cause) => showToast(cause instanceof Error ? cause.message : 'Не получилось', 'error')); },
+    retry: (m) => retryMessage(m.id),
+    jump: (id) => {
+      const row = scroller.current?.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(id)}"]`);
+      if (!row) { showToast('Это сообщение выше — прокрутите историю', 'info'); return; }
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      row.dataset.flash = '';
+      window.setTimeout(() => { delete row.dataset.flash; }, 1400);
+    },
+  }), []);
+
+  const contextLoad = thread?.lastWork?.context_tokens && thread.lastWork.context_window
+    ? { tokens: thread.lastWork.context_tokens, share: thread.lastWork.context_tokens / thread.lastWork.context_window } : null;
+
+  let lastDay = 0;
+  return (
+    <section
+      className="ncore-chat"
+      data-dropping={dropping || undefined}
+      onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDropping(true); } }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropping(false); }}
+      onDrop={(e) => { if (!e.dataTransfer.files.length) return; e.preventDefault(); setDropping(false); composer.current?.addFiles([...e.dataTransfer.files]); }}
+    >
+      <header className="ncore-chat-head">
+        {narrow && <button type="button" className="nx-icon-btn" onClick={() => onSelect(null)} aria-label="К списку чатов"><ChevronLeft size={20} /></button>}
+        {renaming && thread ? (
+          <input className="ncore-rename" autoFocus defaultValue={thread.title} maxLength={120} aria-label="Название чата"
+            onBlur={(e) => { const v = e.currentTarget.value.trim(); setRenaming(false); if (v && v !== thread.title) void patchThread(thread.id, { title: v }); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { e.currentTarget.value = thread.title; e.currentTarget.blur(); } }} />
+        ) : (
+          <button type="button" className="ncore-chat-title" onDoubleClick={() => thread && setRenaming(true)} title={thread ? 'Двойной щелчок — переименовать' : undefined}>
+            <b>{thread?.title || 'Новый чат'}</b>
+            {thread && <span>{thread.messages} {plural(thread.messages, ['сообщение', 'сообщения', 'сообщений'])}{thread.archived ? ' · в архиве' : ''}</span>}
+          </button>
+        )}
+        <span className="ncore-chat-tools">
+          {contextLoad && (
+            <span className="ncore-context" data-heavy={contextLoad.share >= 0.6 || undefined}
+              title={`Контекст чата: ${formatTokens(contextLoad.tokens)} токенов — столько агент перечитывает на каждом шаге.${contextLoad.share >= 0.6 ? ' Для новой темы лучше начать новый чат.' : ''}`}>
+              <i><i style={{ width: `${Math.min(100, Math.round(contextLoad.share * 100))}%` }} /></i>
+              {formatTokens(contextLoad.tokens)}
+            </span>
+          )}
+          {thread && <button type="button" className="nx-icon-btn" onClick={() => setRenaming(true)} aria-label="Переименовать чат" title="Переименовать"><Pencil size={16} /></button>}
+          {thread && (
+            <button type="button" className="nx-icon-btn" onClick={() => void patchThread(thread.id, { archived: !thread.archived }).then(() => { if (!thread.archived) onSelect(null); })}
+              aria-label={thread.archived ? 'Вернуть из архива' : 'Убрать в архив'} title={thread.archived ? 'Вернуть из архива' : 'Убрать в архив'}>
+              {thread.archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
+            </button>
+          )}
+        </span>
+      </header>
+
+      <div className="ncore-log nx-scroll-y" ref={scroller} onScroll={onScroll} role="log" aria-label="Сообщения">
+        <div className="ncore-log-inner">
+          {log?.loadingOlder && <div className="ncore-older"><Spinner size={16} label="Загружаю историю" /></div>}
+          {threadId && !log?.loaded && <div className="ncore-loading"><Spinner size={22} label="Загружаю" /></div>}
+          {(!threadId || (log?.loaded && !messages.length)) && (
+            <div className="ncore-empty">
+              <span className="ncore-empty-mark" aria-hidden="true"><Atom size={34} strokeWidth={1.6} /></span>
+              <h2>{threadId ? 'Новый чат' : 'Ядро'}</h2>
+              <p>Чат с агентами Шара. Агентов подключим позже — пока сообщения и файлы сохраняются здесь.</p>
+              {catalog?.demo && <p className="ncore-empty-hint">Чтобы посмотреть, как будет выглядеть ответ агента, отправьте <code>/demo</code>.</p>}
+            </div>
+          )}
+          {messages.map((m, i) => {
+            const day = dayKey(m.createdAt);
+            const sep = day !== lastDay;
+            lastDay = day;
+            const quote = Boolean(m.props.replyTo && messages[i - 1]?.id !== m.props.replyTo.id);
+            return (
+              <div key={m.id}>
+                {sep && <div className="ncore-day"><span>{formatDay(m.createdAt)}</span></div>}
+                <MessageItem message={m} quote={quote} h={handlers} />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      {farFromBottom && (
+        <button type="button" className="ncore-to-bottom" onClick={() => { const el = scroller.current; if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }); }} aria-label="К последним сообщениям">
+          <ArrowDown size={18} />
+        </button>
+      )}
+      {dropping && <div className="ncore-drop" aria-hidden="true">Отпустите, чтобы приложить файлы</div>}
+      <Composer ref={composer} threadId={threadId} catalog={catalog} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
+        history={history} onSend={send} onCommand={onCommand} />
+    </section>
+  );
+}

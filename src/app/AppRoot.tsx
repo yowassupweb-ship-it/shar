@@ -1,4 +1,5 @@
 import { Suspense, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { startUsageTracker, trackSection } from '@/shared/usage/tracker';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import type { User } from '@/shared/types/chat';
 import { boot, isMuted, shutdown, unreadChatsTotal, useChatStore } from '@/features/chat';
@@ -101,6 +102,9 @@ function Workspace({ me }: { me: User }) {
     return () => shutdown();
   }, [me]);
   useEffect(() => startToolBadges(), [me]);
+  // Статистика разделов для админки: кто, чем и сколько пользуется (shared/usage/tracker.ts).
+  useEffect(() => startUsageTracker(), [me]);
+  useEffect(() => { trackSection(pathname); }, [pathname]);
   // Ссылки на Шар (любой домен семейства) открываются в этом же окне, а не во внешнем браузере.
   useEffect(() => installInternalLinks(), []);
   // Непрочитанные во «Входящих» — единичка на «Почте» в меню (на значок приложения не идут: там чаты и заявки).

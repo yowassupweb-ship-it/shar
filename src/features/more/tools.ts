@@ -1,4 +1,4 @@
-import { FileText, Globe, Hash, MessagesSquare, Search, Settings, Shield, type LucideIcon } from 'lucide-react';
+import { Atom, FileText, Globe, Hash, MessagesSquare, Search, Settings, Shield, type LucideIcon } from 'lucide-react';
 import { paths } from '@/shared/navigation/routes';
 
 /**
@@ -30,6 +30,8 @@ export const TOOLS: Tool[] = [
   { id: 'utm-generator', name: 'Генератор UTM', hint: 'Ссылки с метками для рекламы', href: paths.utm, icon: Hash, tint: ['#e879f9', '#db2777'] },
   { id: 'site-leads', name: 'Заявки', hint: 'Заявки с corp и school.vs-travel.ru: кто взял, что закрыто', href: paths.leads, icon: Globe, tint: ['#5eead4', '#0f766e'] },
   { id: 'social', name: 'Соцсети', hint: 'Сообщения и комментарии из ВКонтакте и MAX — ответ из Шара', href: paths.social, icon: MessagesSquare, tint: ['#7dd3fc', '#0284c7'] },
+  // Чат с агентами. Не стандартный и не только для админа: админ видит сразу, остальным выдаёт админ (enabledTools).
+  { id: 'core', name: 'Ядро', hint: 'Чат с агентами Шара: задачи, документы, ответы с ходом работы', href: paths.core, icon: Atom, tint: ['#a78bfa', '#4f46e5'] },
   { id: 'how-to-shar', name: 'Инструкция', hint: 'Как работать в Шаре', href: paths.guide, icon: FileText, tint: ['#a3e635', '#059669'], standard: true },
   { id: 'admin', name: 'Админка', hint: 'Пользователи, права, система', href: paths.admin, icon: Shield, tint: ['#fbbf24', '#ea580c'], adminOnly: true },
   { id: 'settings', name: 'Настройки', hint: 'Профиль, уведомления, внешний вид', href: paths.settings, icon: Settings, tint: ['#9ca3af', '#475569'], standard: true },

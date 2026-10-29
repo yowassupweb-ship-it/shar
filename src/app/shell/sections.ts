@@ -29,7 +29,7 @@ export const SECTIONS: Section[] = [
 
 /** Страницы вне меню и раздел, пункт которого они подсвечивают. */
 const NESTED: Record<string, SectionId> = {
-  [paths.settings]: 'more', [paths.admin]: 'more', [paths.utm]: 'more', [paths.leads]: 'more', [paths.social]: 'more', [paths.guide]: 'more',
+  [paths.settings]: 'more', [paths.admin]: 'more', [paths.utm]: 'more', [paths.leads]: 'more', [paths.social]: 'more', [paths.core]: 'more', [paths.guide]: 'more',
 };
 
 export function sectionFor(pathname: string | null): Section {
