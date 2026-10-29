@@ -18,16 +18,25 @@ export function useFlip(container: RefObject<HTMLElement | null>, deps: unknown[
     const next = new Map<string, number>();
     const animate = !reducedMotion() && lastKey.current === resetKey;
     lastKey.current = resetKey;
+    // Сначала все замеры, потом все анимации: запуск анимации между замерами сбрасывал стили, и каждый следующий
+    // getBoundingClientRect пересчитывал их заново — на сотнях строк раскрытие папки подвисало на сотни миллисекунд.
+    const moved: Array<[HTMLElement, number]> = [];
     root.querySelectorAll<HTMLElement>('[data-flip]').forEach((el) => {
       const key = el.dataset.flip as string;
       const top = el.getBoundingClientRect().top - base;
       next.set(key, top);
       const was = prev.current.get(key);
-      if (animate && was !== undefined && Math.abs(was - top) > 2) {
-        el.animate([{ transform: `translateY(${was - top}px)` }, { transform: 'none' }], { duration: 280, easing: 'cubic-bezier(.2, .8, .2, 1)' });
-      }
+      if (animate && was !== undefined && Math.abs(was - top) > 2) moved.push([el, was - top]);
     });
     prev.current = next;
+    // Анимировать имеет смысл только видимое: строки за краем списка переезжают молча.
+    const view = root.clientHeight;
+    for (const [el, shift] of moved) {
+      const top = next.get(el.dataset.flip as string)! - root.scrollTop;
+      if (top + shift > view + 200 && top > view + 200) continue;
+      if (top + shift < -200 && top < -200) continue;
+      el.animate([{ transform: `translateY(${shift}px)` }, { transform: 'none' }], { duration: 280, easing: 'cubic-bezier(.2, .8, .2, 1)' });
+    }
   }, deps); // eslint-disable-line react-hooks/exhaustive-deps
 }
 

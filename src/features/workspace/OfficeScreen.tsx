@@ -165,13 +165,50 @@ const ItemRow = memo(function ItemRow({ item, active, terms, snippet, onOpen, on
   );
 });
 
-/** Редакторы грузятся отдельными кусками (Univer — несколько мегабайт): подтягиваем кусок, как только человек навёл на
- *  материал, — к клику он уже в кэше. Заметка и презентация лёгкие, им не нужно. */
+/** Редакторы грузятся отдельными кусками (Univer — несколько мегабайт): подтягиваем кусок заранее — в простое после
+ *  показа списка (useEditorWarmup) или, если раньше, как только человек навёл на материал. Заметка и презентация
+ *  лёгкие, им не нужно. */
 const preloaded = new Set<string>();
 function preloadEditor(kind: Kind) {
   if (preloaded.has(kind)) return;
   if (kind === 'document') { preloaded.add(kind); void import('./editors/DocEditor'); }
   else if (kind === 'table') { preloaded.add(kind); void import('./editors/SheetEditor'); }
+}
+
+/** Разбор кода Univer — до секунды на слабом ноутбуке. Делаем его, пока человек смотрит список, а не в момент клика
+ *  (документ открывался на секунду-две дольше) и не при наведении посреди прокрутки (список подвисал). По одному
+ *  редактору за простой, только тем видам, что есть в списке. */
+function useEditorWarmup(items: Item[] | null) {
+  useEffect(() => {
+    if (!items?.length) return undefined;
+    const kinds = (['document', 'table'] as Kind[]).filter((kind) => !preloaded.has(kind) && items.some((i) => i.kind === kind));
+    if (!kinds.length) return undefined;
+    let handle = 0;
+    let cancelled = false;
+    const idle = (fn: () => void) => (typeof window.requestIdleCallback === 'function'
+      ? window.requestIdleCallback(fn, { timeout: 4000 })
+      : window.setTimeout(fn, 1500));
+    // Разбор — одна длинная задача: если человек в этот момент печатает в поиске или тянет строку, она заметна.
+    // Поэтому ждём паузы — 2 секунды без нажатий и движения колеса.
+    let lastInput = performance.now();
+    const onInput = () => { lastInput = performance.now(); };
+    const events = ['keydown', 'pointerdown', 'wheel'] as const;
+    events.forEach((type) => window.addEventListener(type, onInput, { passive: true, capture: true }));
+    const next = () => {
+      if (cancelled) return;
+      if (performance.now() - lastInput < 2000) { handle = window.setTimeout(next, 700); return; }
+      const kind = kinds.shift();
+      if (!kind) return;
+      handle = idle(() => { if (!cancelled) { preloadEditor(kind); handle = window.setTimeout(next, 1200); } });
+    };
+    handle = window.setTimeout(next, 1500);
+    return () => {
+      events.forEach((type) => window.removeEventListener(type, onInput, { capture: true }));
+      cancelled = true;
+      window.clearTimeout(handle);
+      if (typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(handle);
+    };
+  }, [items !== null]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 /** Новый список с сервера поверх старого: у строк без изменений остаётся прежний объект — React их не трогает. */
@@ -407,6 +444,7 @@ export default function OfficeScreen() {
 
   const [dropping, setDropping] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
+  useEditorWarmup(items);
 
   async function importPicked(file: File | undefined) {
     if (!file) return;

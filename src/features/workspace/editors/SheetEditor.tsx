@@ -20,7 +20,7 @@ import '@univerjs/preset-sheets-sort/lib/index.css';
 import '@univerjs/preset-sheets-core/lib/index.css';
 import '@univerjs/preset-sheets-find-replace/lib/index.css';
 import { IRenderManagerService } from '@univerjs/engine-render';
-import { SheetSkeletonManagerService, genNormalSelectionStyle } from '@univerjs/sheets-ui';
+import { IEditorBridgeService, SheetSkeletonManagerService, genNormalSelectionStyle } from '@univerjs/sheets-ui';
 import { ThemeService } from '@univerjs/core';
 import { DARK_GRIDLINES, addWebFonts, relayoutOnHostResize, stepToolbarWidth, throttleWindowResize, hideMissingFonts, holdSheetFrame, isDarkTheme, polishFilterButtons, addLinkButton, keepEditorFill, keepFillColors, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
 import { applySnapshot, bookFromBase64, bookToBase64, excelToUniver } from '../lib/workbook';
@@ -235,7 +235,7 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
         },
       };
     }
-    const stopEditorFill = keepEditorFill(univer, (row, column) => workbook.getActiveSheet().getRange(row, column).getBackground() || undefined, (row, column) => typeof workbook.getActiveSheet().getRange(row, column).getValue() === 'number');
+    const stopEditorFill = keepEditorFill(univer, IEditorBridgeService, (row, column) => workbook.getActiveSheet().getRange(row, column).getBackground() || undefined, (row, column) => typeof workbook.getActiveSheet().getRange(row, column).getValue() === 'number');
     workbook.setEditable(!readOnly);
     // Вход в правку ячейки: пустой белый кадр редактора закрываем снимком таблицы (holdSheetFrame).
     const editStart = univerAPI.addEvent(univerAPI.Event.BeforeSheetEditStart, () => holdSheetFrame());

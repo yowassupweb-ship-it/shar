@@ -7,7 +7,6 @@ import { IUniverInstanceService, UniverInstanceType } from '@univerjs/core';
 import { IMenuManagerService, MenuItemType, RibbonStartGroup } from '@univerjs/ui';
 import { Background, Border, Font, IRenderManagerService, Rect, UniverRenderingContext2D } from '@univerjs/engine-render';
 import { DOCS_NORMAL_EDITOR_UNIT_ID_KEY } from '@univerjs/core';
-import { IEditorBridgeService } from '@univerjs/sheets-ui';
 import { defaultTheme, type Theme } from '@univerjs/themes';
 
 /**
@@ -220,11 +219,15 @@ export function holdSheetFrame() {
   window.requestAnimationFrame(tick);
 }
 
-/** Подписка на правку ячейки: покрашенная — рисуем редактор без инверсии. Возвращает отписку. */
-export function keepEditorFill(univer: unknown, cellFill?: (row: number, column: number) => string | undefined, isNumber?: (row: number, column: number) => boolean): () => void {
+type EditorBridge = { currentEditCellState$: { subscribe: (fn: (state: (NonNullable<EditState> & { documentLayoutObject?: { fill?: unknown } }) | null) => void) => { unsubscribe: () => void } } };
+
+/** Подписка на правку ячейки: покрашенная — рисуем редактор без инверсии. Возвращает отписку. editorBridge — токен
+ *  IEditorBridgeService из @univerjs/sheets-ui: его передаёт редактор таблиц, а не импортирует этот модуль — иначе
+ *  код таблиц с движком формул (~3 МБ) попадал в общий кусок и грузился при открытии любого документа. */
+export function keepEditorFill(univer: unknown, editorBridge: unknown, cellFill?: (row: number, column: number) => string | undefined, isNumber?: (row: number, column: number) => boolean): () => void {
   patchEditorContext();
   const injector = (univer as { __getInjector: () => { get: <T>(token: unknown) => T } }).__getInjector();
-  const bridge = injector.get<IEditorBridgeService>(IEditorBridgeService);
+  const bridge = injector.get<EditorBridge>(editorBridge);
   const renders = injector.get<IRenderManagerService>(IRenderManagerService);
   let editing = false;
   const sub = bridge.currentEditCellState$.subscribe((state) => {

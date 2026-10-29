@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { DocSelectionManagerService } from '@univerjs/docs';
-import { DocCanvasPopManagerService } from '@univerjs/docs-ui';
-import { IRenderManagerService } from '@univerjs/engine-render';
+import { DocSelectionManagerService, UniverDocsPlugin } from '@univerjs/docs';
+import { DocCanvasPopManagerService, UniverDocsUIPlugin } from '@univerjs/docs-ui';
+import { IRenderManagerService, UniverRenderEnginePlugin } from '@univerjs/engine-render';
+import { UniverNetworkPlugin } from '@univerjs/network';
+import { UniverUIPlugin } from '@univerjs/ui';
+import '@univerjs/network/facade';
 import { DOC_TOOLBAR } from '../lib/toolbarLayout';
 import { createUniver, ICommandService, IImageIoService, LocaleType, mergeLocales, type IDocumentData } from '@univerjs/presets';
-import { UniverDocsCorePreset } from '@univerjs/preset-docs-core';
 import UniverPresetDocsCoreRuRU from '@univerjs/preset-docs-core/locales/ru-RU';
 import { UniverFindReplacePlugin } from '@univerjs/find-replace';
 import FindReplaceRuRU from '@univerjs/find-replace/locale/ru-RU';
@@ -149,7 +151,13 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
       darkMode: isDarkTheme(theme),
       theme: univerTheme(theme),
       presets: [
-        UniverDocsCorePreset({ container: mount, ribbonType: 'simple', menu: DOC_TOOLBAR, toc: false, header: !readOnly, toolbar: !readOnly, contextMenu: !readOnly }),
+        // То же, что UniverDocsCorePreset, но без движка формул: документу он не нужен, а это ~2,5 МБ кода, которые
+        // грузились и выполнялись при открытии каждого документа.
+        { plugins: [
+          UniverNetworkPlugin, UniverDocsPlugin, UniverRenderEnginePlugin,
+          [UniverUIPlugin, { container: mount, ribbonType: 'simple', menu: DOC_TOOLBAR, header: !readOnly, toolbar: !readOnly, contextMenu: !readOnly }],
+          [UniverDocsUIPlugin, { toc: false }],
+        ] },
         // Картинки: то же, что UniverDocsDrawingPreset, но вставленный файл уходит на сервер, а не в снимок base64.
         { plugins: [[UniverDrawingPlugin, { override: [[IImageIoService, { useClass: UploadingImageIoService }]] }], UniverDrawingUIPlugin, UniverDocsDrawingPlugin, UniverDocsDrawingUIPlugin] },
         // Ссылки: клик — карточка ссылки, Ctrl+клик — открыть в браузере (в приложении — в системном).
@@ -224,6 +232,24 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
     engine.current = { injector, unitId };
     kickCursors.current();
     const anyCommand = univerAPI.addEvent(univerAPI.Event.CommandExecuted, () => kickCursors.current());
+    // Прокрутка документа — не команда: без этого чужой курсор и подсветка комментариев стояли на месте экрана и
+    // «ехали» за прокруткой. Слушаем главный вид Univer (колесо, полоса прокрутки, клавиши, касание); вид появляется
+    // не сразу после создания документа — ждём его по кадрам.
+    let scrollSub: { unsubscribe: () => void } | null = null;
+    let scrollTries = 0;
+    let scrollWait = 0;
+    const watchScroll = () => {
+      scrollWait = 0;
+      try {
+        const unit = injector.get<IRenderManagerService>(IRenderManagerService).getRenderUnitById(unitId) as unknown as
+          { scene?: { getViewport: (key: string) => { onScrollAfter$: { subscribeEvent: (fn: () => void) => { unsubscribe: () => void } } } | undefined } } | null;
+        const viewport = unit?.scene?.getViewport('viewMain');
+        // Только subscribeEvent: emitEvent Univer оповещает своих подписчиков, обычный subscribe из rxjs молчит.
+        if (viewport) { scrollSub = viewport.onScrollAfter$.subscribeEvent(() => kickCursors.current()); return; }
+      } catch { /* редактор ещё не готов */ }
+      if (scrollTries++ < 60) scrollWait = requestAnimationFrame(watchScroll);
+    };
+    watchScroll();
     const selectionSub = injector.get<{ textSelection$: { subscribe: (fn: (p: { unitId: string; textRanges?: Array<{ startOffset: number; endOffset: number; segmentId?: string; segmentPage?: number; direction?: string; isActive?: boolean }> }) => void) => { unsubscribe: () => void } } }>(DocSelectionManagerService)
       .textSelection$.subscribe((p) => {
         if (p.unitId !== unitId) return;
@@ -303,6 +329,8 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
       if (ready) { try { initial.current = localizeImages(doc.save() as unknown as DocSnapshot); } catch { /* уже разобран */ } }
       subscription.dispose();
       anyCommand.dispose();
+      cancelAnimationFrame(scrollWait);
+      scrollSub?.unsubscribe();
       selectionSub.unsubscribe();
       if (commentsBridge) commentsBridge.current = null;
       engine.current = null;
