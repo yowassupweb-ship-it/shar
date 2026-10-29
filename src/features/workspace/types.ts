@@ -58,17 +58,21 @@ export interface Folder {
   ownerId?: string;
   /** Владелец чужой папки, открытой вам (у своих — пусто). */
   ownerName?: string;
-  /** owner — своя; edit/view — папка открыта вам (править документы / только смотреть). */
-  role?: 'owner' | 'edit' | 'view';
+  /** owner — своя; иначе папка открыта вам с этим правом (FolderRole). */
+  role?: 'owner' | FolderRole;
   /** Своя папка: скольким людям и отделам она открыта. */
   shares?: number;
 }
 
-export interface ShareEntry { userId: string; role: 'view' | 'edit'; name: string }
+/** Право на открытую папку: просмотр; правка документов; перемещение и правка — ещё перекладывать материалы и
+ *  папки внутри ветки, заводить папки и класть туда свои материалы. У материалов — только view и edit. */
+export type FolderRole = 'view' | 'edit' | 'move';
+
+export interface ShareEntry { userId: string; role: FolderRole; name: string }
 /** Доступ, выданный отделу: его сотрудники (и подразделов) получают материал в свой «Офис» сразу. */
-export interface DeptShareEntry { departmentId: string; role: 'view' | 'edit'; name: string; members: number }
+export interface DeptShareEntry { departmentId: string; role: FolderRole; name: string; members: number }
 /** Доступ, пришедший от папки выше: действует, но снимается в той папке, где выдан. */
-export interface InheritedShare { kind: 'user' | 'department'; id: string; name: string; role: 'view' | 'edit'; members?: number; folderId: string; folderTitle: string }
+export interface InheritedShare { kind: 'user' | 'department'; id: string; name: string; role: FolderRole; members?: number; folderId: string; folderTitle: string }
 export interface SharesState { shares: ShareEntry[]; departments: DeptShareEntry[]; inherited?: InheritedShare[] }
 export interface LinkEntry { token: string; mode: 'view' | 'edit'; createdAt: string; lastUsedAt: string | null }
 

@@ -9,12 +9,25 @@ import { showToast } from '@/shared/ui/Toast';
 import { myId } from '@/shared/session/session';
 import { workspaceApi } from './api';
 import { InheritedShares } from './InheritedShares';
-import type { DeptShareEntry, Folder, InheritedShare, ShareEntry } from './types';
+import type { DeptShareEntry, Folder, FolderRole, InheritedShare, ShareEntry } from './types';
+
+/** Три права на папку — по возрастанию; «Перемещение и редактирование» — по умолчанию: люди раскладывают сами. */
+const ROLE_OPTIONS: Array<{ value: FolderRole; label: string }> = [
+  { value: 'move', label: 'Перемещение и редактирование' },
+  { value: 'edit', label: 'Редактирование' },
+  { value: 'view', label: 'Просмотр' },
+];
+const ROLE_MESSAGE: Record<FolderRole, string> = {
+  move: 'можно перекладывать материалы и папки внутри, добавлять свои и править документы',
+  edit: 'можно править документы внутри',
+  view: 'для просмотра',
+};
 
 /**
  * Доступ к папке — как к документу, только сразу на всё содержимое: вложенные папки и всё, что владелец туда
  * положит потом. Человек или отдел видят папку у себя в «Офисе» целиком, с той же раскладкой и порядком, и все
- * изменения приходят им сразу. «Может править» — правит документы внутри; саму папку меняет только владелец.
+ * изменения приходят им сразу. «Редактирование» — правит документы внутри; «Перемещение и редактирование» — ещё
+ * перекладывает материалы и папки внутри, заводит папки и кладёт туда свои материалы. Доступ и удаление — у владельца.
  */
 export function FolderShareDialog({ folder, onClose, onChanged }: { folder: Folder; onClose: () => void; onChanged: () => void }) {
   const users = useChatStore((s) => s.users);
@@ -23,7 +36,7 @@ export function FolderShareDialog({ folder, onClose, onChanged }: { folder: Fold
   const [deptShares, setDeptShares] = useState<DeptShareEntry[]>([]);
   const [inherited, setInherited] = useState<InheritedShare[]>([]);
   const [pick, setPick] = useState('');
-  const [role, setRole] = useState<'view' | 'edit'>('edit');
+  const [role, setRole] = useState<FolderRole>('move');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -46,7 +59,7 @@ export function FolderShareDialog({ folder, onClose, onChanged }: { folder: Fold
     [departments, deptShares],
   );
 
-  async function setShare(target: { userId: string } | { departmentId: string }, next: 'view' | 'edit' | null) {
+  async function setShare(target: { userId: string } | { departmentId: string }, next: FolderRole | null) {
     setError('');
     try { apply(await workspaceApi.setFolderShare(folder.id, target, next)); } catch (cause) { fail(cause); }
   }
@@ -65,7 +78,7 @@ export function FolderShareDialog({ folder, onClose, onChanged }: { folder: Fold
       } else {
         apply(await workspaceApi.setFolderShare(folder.id, { userId: pick }, role));
         const chatId = await createChat([pick]);
-        if (chatId) sendText(chatId, `Открыл(а) вам папку «${folder.title}» в «Офисе» — ${role === 'edit' ? 'можно править документы внутри' : 'для просмотра'}.`);
+        if (chatId) sendText(chatId, `Открыл(а) вам папку «${folder.title}» в «Офисе» — ${ROLE_MESSAGE[role]}.`);
         showToast(`Папка открыта: ${people.find((p) => p.id === pick)?.name || 'коллеге'}`, 'success');
       }
       setPick('');
@@ -75,7 +88,7 @@ export function FolderShareDialog({ folder, onClose, onChanged }: { folder: Fold
   return (
     <Sheet title={`Доступ к папке: ${folder.title}`} onClose={onClose}>
       <div className="nws-share">
-        <Group title="Открыть папку" note="Видно всё содержимое, включая вложенные папки и то, что вы положите в неё позже. Раскладку и порядок меняете только вы.">
+        <Group title="Открыть папку" note="Видно всё содержимое, включая вложенные папки и то, что вы положите в неё позже. Перекладывать внутри и добавлять своё могут те, у кого «Перемещение и редактирование».">
           <div className="nx-row nws-add-row">
             <Select
               className="nws-select nws-pick"
@@ -92,8 +105,8 @@ export function FolderShareDialog({ folder, onClose, onChanged }: { folder: Fold
               className="nws-select"
               label="Права"
               value={role}
-              onChange={(v) => setRole(v as 'view' | 'edit')}
-              groups={[{ options: [{ value: 'edit', label: 'Может править документы' }, { value: 'view', label: 'Только смотреть' }] }]}
+              onChange={(v) => setRole(v as FolderRole)}
+              groups={[{ options: ROLE_OPTIONS }]}
             />
             <button type="button" className="nx-primary" disabled={!pick || busy} onClick={() => void give()}>Открыть</button>
           </div>
@@ -107,9 +120,8 @@ export function FolderShareDialog({ folder, onClose, onChanged }: { folder: Fold
                 <span className="nx-row-hint">Отдел · {share.members} чел.</span>
               </span>
               <div className="nx-row-control">
-                <select className="nws-select" value={share.role} onChange={(e) => void setShare({ departmentId: share.departmentId }, e.target.value as 'view' | 'edit')} aria-label={`Права отдела: ${share.name}`}>
-                  <option value="edit">Редакторы</option>
-                  <option value="view">Читатели</option>
+                <select className="nws-select" value={share.role} onChange={(e) => void setShare({ departmentId: share.departmentId }, e.target.value as FolderRole)} aria-label={`Права отдела: ${share.name}`}>
+                  {ROLE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
                 <button type="button" className="nx-icon-btn" onClick={() => void setShare({ departmentId: share.departmentId }, null)} aria-label={`Закрыть папку отделу: ${share.name}`}><X size={15} /></button>
               </div>
@@ -119,9 +131,8 @@ export function FolderShareDialog({ folder, onClose, onChanged }: { folder: Fold
             <div key={share.userId} className="nx-row">
               <span className="nx-row-text"><span className="nx-row-label">{share.name || share.userId}</span></span>
               <div className="nx-row-control">
-                <select className="nws-select" value={share.role} onChange={(e) => void setShare({ userId: share.userId }, e.target.value as 'view' | 'edit')} aria-label={`Права: ${share.name}`}>
-                  <option value="edit">Редактор</option>
-                  <option value="view">Читатель</option>
+                <select className="nws-select" value={share.role} onChange={(e) => void setShare({ userId: share.userId }, e.target.value as FolderRole)} aria-label={`Права: ${share.name}`}>
+                  {ROLE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
                 <button type="button" className="nx-icon-btn" onClick={() => void setShare({ userId: share.userId }, null)} aria-label={`Закрыть папку: ${share.name}`}><X size={15} /></button>
               </div>

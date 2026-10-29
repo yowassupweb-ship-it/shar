@@ -35,6 +35,10 @@ log = logging.getLogger("shar.workspace")
 KINDS = ("note", "table", "document", "presentation")
 ACCESS_LEVELS = ("private", "all")
 ACCESS_MODES = ("edit", "view")
+# Права на открытую папку по возрастанию: просмотр, правка документов, перемещение и правка (перекладывать
+# материалы и папки внутри открытой ветки, заводить в ней папки, класть туда свои материалы).
+FOLDER_ROLES = ("view", "edit", "move")
+_FOLDER_RANK = {role: index for index, role in enumerate(FOLDER_ROLES)}
 
 # Предельный размер содержимого по виду: защита базы от мусора, в том числе при правке по ссылке.
 MAX_BYTES = {"note": 4 * 1024 * 1024, "document": 25 * 1024 * 1024, "table": 25 * 1024 * 1024, "presentation": 45 * 1024 * 1024}
@@ -316,24 +320,58 @@ def dept_members(dept_ids: list[str]) -> set[str]:
     return {str(r["id"]) for r in rows}
 
 
+def move_ready() -> bool:
+    """Включено ли право «перемещение» (столбец placed_by и новые проверки ролей — одним шагом схемы)."""
+    return column_ready("workspace_item_folder", "placed_by")
+
+
+def published_sql(x: str = "x", alias: str = "i") -> str:
+    """Место материала в раскладке, которое видно через открытые папки: его дал сам автор материала — в своей
+    раскладке или (право «перемещение») в раскладке владельца открытой ему папки (placed_by)."""
+    own = f"{x}.user_id = {alias}.owner_id"
+    return f"({own} OR {x}.placed_by = {alias}.owner_id)" if move_ready() else f"({own})"
+
+
 def visible_sql(alias: str = "i") -> str:
     """Условие «пользователь видит материал»; параметры — visible_params(user_id). Через открытую папку виден
-    только материал её владельца, который он сам туда положил: папкой нельзя раздать чужое."""
+    только материал, который туда положил сам его автор: папкой нельзя раздать чужое. Владельцу папки виден и
+    материал, который участник с правом «перемещение» положил в его папку."""
     return (f"({alias}.owner_id = %s OR {alias}.access_level = 'all' "
             f"OR EXISTS (SELECT 1 FROM workspace_item_shares s WHERE s.item_id = {alias}.id AND s.user_id = %s) "
             f"OR EXISTS (SELECT 1 FROM workspace_item_dept_shares d WHERE d.item_id = {alias}.id AND d.department_id = ANY(%s)) "
-            f"OR EXISTS (SELECT 1 FROM workspace_item_folder fx WHERE fx.item_id = {alias}.id AND fx.user_id = {alias}.owner_id "
-            f"AND fx.folder_id = ANY(%s)))")
+            f"OR EXISTS (SELECT 1 FROM workspace_item_folder fx WHERE fx.item_id = {alias}.id AND {published_sql('fx', alias)} "
+            f"AND (fx.folder_id = ANY(%s) OR fx.user_id = %s)))")
 
 
 def visible_params(user_id: str) -> list[Any]:
     depts = user_dept_ids(user_id)
-    return [user_id, user_id, depts, list(shared_folder_roles(user_id, depts))]
+    return [user_id, user_id, depts, list(shared_folder_roles(user_id, depts)), user_id]
+
+
+def owner_place(item_id: Any) -> Optional[dict[str, Any]]:
+    """Где материал лежит для всех, кому открыта папка: {folder_id, folder_owner, user_id} или None."""
+    return db.conn.fetch_one(
+        "SELECT x.folder_id, x.user_id, wf.owner_id AS folder_owner FROM workspace_item_folder x "
+        "JOIN workspace_folders wf ON wf.id = x.folder_id JOIN workspace_items i ON i.id = x.item_id "
+        f"WHERE x.item_id = %s AND {published_sql('x', 'i')} ORDER BY (x.user_id = i.owner_id) DESC LIMIT 1", (int(item_id),))
+
+
+def owner_place_join(alias: str = "i") -> str:
+    """LEFT JOIN ofo — место материала по owner_place для строк списка (folder_id, position, folder_owner)."""
+    return ("LEFT JOIN LATERAL (SELECT x.folder_id, x.position, wf.owner_id AS folder_owner FROM workspace_item_folder x "
+            f"JOIN workspace_folders wf ON wf.id = x.folder_id WHERE x.item_id = {alias}.id AND {published_sql('x', alias)} "
+            f"ORDER BY (x.user_id = {alias}.owner_id) DESC LIMIT 1) ofo ON true ")
+
+
+def stronger_role(a: Optional[str], b: Optional[str]) -> Optional[str]:
+    if not a or not b:
+        return a or b
+    return a if _FOLDER_RANK.get(a, 0) >= _FOLDER_RANK.get(b, 0) else b
 
 
 def shared_folder_roles(user_id: str, depts: list[str] | None = None) -> dict[int, str]:
     """Чужие папки, открытые человеку (поимённо или его отделу), вместе со всеми вложенными: {id папки: право}.
-    Право наследуется вниз; если папка открыта и на чтение, и на правку — правка."""
+    Право наследуется вниз; если папка открыта с разными правами — действует наибольшее (move > edit > view)."""
     if depts is None:
         depts = user_dept_ids(user_id)
     try:
@@ -356,7 +394,7 @@ def shared_folder_roles(user_id: str, depts: list[str] | None = None) -> dict[in
     out: dict[int, str] = {}
     for r in rows:
         fid = int(r["id"])
-        out[fid] = "edit" if r["role"] == "edit" or out.get(fid) == "edit" else "view"
+        out[fid] = stronger_role(out.get(fid), r["role"]) or "view"
     return out
 
 
@@ -409,18 +447,20 @@ def folder_audience(owner_id: str) -> set[str]:
 
 
 def item_folder_audience(row: dict[str, Any]) -> set[str]:
-    """Кому материал виден через открытые папки владельца (папка, куда он его положил, и все выше неё)."""
+    """Кому материал виден через открытые папки (папка, куда его положил автор, и все выше неё), и владелец этой
+    папки — если материал положили в его папку по праву «перемещение»."""
     try:
+        place = owner_place(row["id"])
+        if not place:
+            return set()
         chain = [int(r["id"]) for r in db.conn.fetch_all(
             """WITH RECURSIVE up AS (
-                   SELECT f.id, f.parent_id FROM workspace_item_folder x JOIN workspace_folders f ON f.id = x.folder_id
-                   WHERE x.item_id = %s AND x.user_id = %s
+                   SELECT f.id, f.parent_id FROM workspace_folders f WHERE f.id = %s
                    UNION ALL
                    SELECT p.id, p.parent_id FROM workspace_folders p JOIN up ON p.id = up.parent_id
-               ) SELECT id FROM up""", (int(row["id"]), str(row["owner_id"]))) or []]
-        if not chain:
-            return set()
-        users = {str(r["user_id"]) for r in db.conn.fetch_all("SELECT user_id FROM workspace_folder_shares WHERE folder_id = ANY(%s)", (chain,)) or []}
+               ) SELECT id FROM up""", (int(place["folder_id"]),)) or []]
+        users = {str(place["folder_owner"])}
+        users |= {str(r["user_id"]) for r in db.conn.fetch_all("SELECT user_id FROM workspace_folder_shares WHERE folder_id = ANY(%s)", (chain,)) or []}
         depts = [str(r["department_id"]) for r in db.conn.fetch_all("SELECT department_id FROM workspace_folder_dept_shares WHERE folder_id = ANY(%s)", (chain,)) or []]
     except Exception:
         return set()
@@ -495,16 +535,20 @@ def permissions(row: dict[str, Any], user_id: str, depts: list[str] | None = Non
             roles += [s["role"] for s in db.conn.fetch_all("SELECT role FROM workspace_item_dept_shares WHERE item_id = %s AND department_id = ANY(%s)", (row["id"], depts)) or []]
     else:
         roles = list(roles)
-    # Через открытую папку: куда владелец сам положил материал (список передаёт owner_folder_id готовым).
+    # Через открытую папку: куда автор сам положил материал (список передаёт owner_folder_id готовым).
     if "owner_folder_id" in row:
-        owner_folder = row.get("owner_folder_id")
+        owner_folder, folder_owner = row.get("owner_folder_id"), row.get("owner_folder_owner")
     else:
-        placed = db.conn.fetch_one("SELECT folder_id FROM workspace_item_folder WHERE item_id = %s AND user_id = %s", (row["id"], str(row["owner_id"])))
-        owner_folder = placed["folder_id"] if placed else None
+        placed = owner_place(row["id"]) or {}
+        owner_folder, folder_owner = placed.get("folder_id"), placed.get("folder_owner")
     if owner_folder is not None:
-        via_folder = (folder_roles if folder_roles is not None else shared_folder_roles(user_id, depts)).get(int(owner_folder))
-        if via_folder:
-            roles.append(via_folder)
+        if str(folder_owner or "") == user_id:
+            roles.append("edit")  # участник положил свой материал в мою папку — я его правлю, как и всё в ней
+        else:
+            via_folder = (folder_roles if folder_roles is not None else shared_folder_roles(user_id, depts)).get(int(owner_folder))
+            if via_folder:
+                # «Перемещение» к самому материалу — это правка: раскладку проверяет folders.py.
+                roles.append("view" if via_folder == "view" else "edit")
     if roles:
         role = "edit" if "edit" in roles else "view"
         return {"isOwner": False, "canEdit": role == "edit", "role": role}

@@ -16,7 +16,7 @@ export function InheritedShares({ entries }: { entries: InheritedShare[] }) {
               {entry.kind === 'department' ? `Отдел · ${entry.members ?? 0} чел. · ` : ''}через папку «{entry.folderTitle}»
             </span>
           </span>
-          <span className="nx-row-hint">{entry.role === 'edit' ? 'Правит' : 'Читает'}</span>
+          <span className="nx-row-hint">{entry.role === 'move' ? 'Перемещает и правит' : entry.role === 'edit' ? 'Правит' : 'Читает'}</span>
         </div>
       ))}
     </>

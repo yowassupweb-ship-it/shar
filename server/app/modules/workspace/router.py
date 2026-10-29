@@ -8,6 +8,7 @@
   DELETE /api/workspace/items/{id}                     только владелец
   GET    /api/workspace/items/{id}/shares              кому выдано: поимённо и отделам
   PUT    /api/workspace/items/{id}/shares              {userId | departmentId, role: "view"|"edit"|null}
+                                                       (право «перемещение» — только у папок: folders.py)
   GET    /api/workspace/items/{id}/links               ссылки без входа
   POST   /api/workspace/items/{id}/links               {mode, regenerate?}
   DELETE /api/workspace/items/{id}/links/{mode}        отозвать
@@ -118,9 +119,9 @@ def list_items(kind: Optional[str] = None, q: str = "", templates: bool = False,
         # Своя раскладка; нет её — место в открытой мне папке владельца (общая раскладка у всех, кому открыта).
         "COALESCE(f.folder_id, CASE WHEN ofo.folder_id = ANY(%s) THEN ofo.folder_id END)::text AS folder_id, "
         "CASE WHEN f.folder_id IS NOT NULL THEN f.position ELSE ofo.position END AS folder_position, "
-        f"ofo.folder_id AS owner_folder_id, {root_select} "
+        f"ofo.folder_id AS owner_folder_id, ofo.folder_owner AS owner_folder_owner, {root_select} "
         f"FROM workspace_items i LEFT JOIN workspace_item_folder f ON f.item_id = i.id AND f.user_id = %s "
-        f"LEFT JOIN workspace_item_folder ofo ON ofo.item_id = i.id AND ofo.user_id = i.owner_id {root_join}"
+        f"{store.owner_place_join('i')}{root_join}"
         f"WHERE {' AND '.join(where)} ORDER BY {order} LIMIT %s",
         tuple(store.is_new_params(me.user_id, depts) + hit_params + [shared_ids, me.user_id] + ([me.user_id] if root_order else [])
               + params[:-1] + (rank_params if match else []) + params[-1:]),
@@ -361,8 +362,7 @@ def _shares_payload(item_id: str) -> dict[str, Any]:
     depts = db.conn.fetch_all("SELECT department_id, role FROM workspace_item_dept_shares WHERE item_id = %s ORDER BY created_at", (int(item_id),)) or []
     departments = [{"departmentId": d["department_id"], "role": d["role"], "name": names.get(str(d["department_id"]), d["department_id"]),
                     "members": len(store.dept_members([str(d["department_id"])]))} for d in depts]
-    placed = db.conn.fetch_one("SELECT x.folder_id FROM workspace_item_folder x JOIN workspace_items i ON i.id = x.item_id "
-                               "WHERE x.item_id = %s AND x.user_id = i.owner_id", (int(item_id),)) or {}
+    placed = store.owner_place(item_id) or {}
     return {"shares": out, "departments": departments, "inherited": store.inherited_shares(placed.get("folder_id"))}
 
 

@@ -117,7 +117,7 @@ class Access:
         row = db.conn.fetch_one(
             "SELECT COALESCE(f.folder_id, CASE WHEN ofo.folder_id = ANY(%s) THEN ofo.folder_id END)::text AS folder_id "
             "FROM workspace_items i LEFT JOIN workspace_item_folder f ON f.item_id = i.id AND f.user_id = %s "
-            "LEFT JOIN workspace_item_folder ofo ON ofo.item_id = i.id AND ofo.user_id = i.owner_id WHERE i.id = %s",
+            f"{store.owner_place_join('i')}WHERE i.id = %s",
             (shared_ids, self.me.user_id, int(item_id)))
         return row["folder_id"] if row else None
 

@@ -552,3 +552,66 @@ def test_live_collaboration_orders_ops_and_saves_without_conflicts(anna, boris, 
     after = boris.get(url).json()["item"]["live"]
     assert after["epoch"] != epoch and after["rev"] == 0
     assert boris.get(f"{url}/live", params={"epoch": epoch, "since": 0}).json() == {"reset": True}
+
+
+def test_folder_move_right_lets_people_rearrange_and_add(anna, boris, clara, users):
+    """Право «Перемещение и редактирование»: участник перекладывает материалы и папки внутри открытой ветки,
+    заводит папки и кладёт туда свои материалы; «правка» по-прежнему так не может."""
+    root = anna.post("/api/workspace/folders", json={"title": "Проект"}).json()["folder"]
+    inbox = anna.post("/api/workspace/folders", json={"title": "Входящие", "parentId": root["id"]}).json()["folder"]
+    done = anna.post("/api/workspace/folders", json={"title": "Готово", "parentId": root["id"]}).json()["folder"]
+    plan = _create(anna, "note", title="План", content="пункты")
+    assert anna.put(f"/api/workspace/items/{plan['id']}/folder", json={"folderId": inbox["id"]}).status_code == 200
+    outside = _create(anna, "note", title="Личное", content="не для ветки")
+    anna.put(f"/api/workspace/items/{outside['id']}/shares", json={"userId": users.ids["boris"], "role": "view"})
+
+    # С правом «правка» перекладывать нельзя.
+    anna.put(f"/api/workspace/folders/{root['id']}/shares", json={"userId": users.ids["boris"], "role": "edit"})
+    assert boris.put(f"/api/workspace/items/{plan['id']}/folder", json={"folderId": done["id"]}).status_code == 403
+    assert boris.post("/api/workspace/folders", json={"title": "Моя", "parentId": root["id"]}).status_code == 403
+
+    # «Перемещение»: Борис видит роль, перекладывает материал Анны внутри ветки — у Анны и Клары он тоже переехал.
+    assert anna.put(f"/api/workspace/folders/{root['id']}/shares", json={"userId": users.ids["boris"], "role": "move"}).status_code == 200
+    anna.put(f"/api/workspace/folders/{root['id']}/shares", json={"userId": users.ids["clara"], "role": "view"})
+    assert {f["id"]: f["role"] for f in boris.get("/api/workspace/folders").json()["folders"]}[done["id"]] == "move"
+    assert boris.put(f"/api/workspace/items/{plan['id']}/folder", json={"folderId": done["id"]}).status_code == 200
+    for who in (anna, clara):
+        assert next(i for i in who.get("/api/workspace/items").json()["items"] if i["id"] == plan["id"])["folderId"] == done["id"]
+    got = boris.get(f"/api/workspace/items/{plan['id']}").json()["item"]
+    assert got["canEdit"] and got["role"] == "edit"
+
+    # Чужое, чего нет в ветке, папкой не раздать; вынести материал Анны из ветки тоже нельзя.
+    assert boris.put(f"/api/workspace/items/{outside['id']}/folder", json={"folderId": done["id"]}).status_code == 403
+    assert clara.get(f"/api/workspace/items/{outside['id']}").status_code == 404
+
+    # Новая папка внутри ветки — у владельца ветки; переложить её можно только внутри ветки.
+    sub = boris.post("/api/workspace/folders", json={"title": "Черновики", "parentId": done["id"]})
+    assert sub.status_code == 201, sub.text
+    sub = sub.json()["folder"]
+    assert sub["ownerId"] == users.ids["anna"] and sub["parentId"] == done["id"]
+    assert boris.patch(f"/api/workspace/folders/{sub['id']}", json={"title": "Черновики 2", "parentId": inbox["id"]}).status_code == 200
+    assert {f["id"]: f["parentId"] for f in anna.get("/api/workspace/folders").json()["folders"]}[sub["id"]] == inbox["id"]
+    assert boris.patch(f"/api/workspace/folders/{sub['id']}", json={"parentId": None}).status_code == 403
+    assert boris.delete(f"/api/workspace/folders/{sub['id']}").status_code == 404
+    own = boris.post("/api/workspace/folders", json={"title": "Личная Бориса"}).json()["folder"]
+    assert boris.patch(f"/api/workspace/folders/{sub['id']}", json={"parentId": own["id"]}).status_code == 400
+
+    # Свой новый материал Борис кладёт в ветку — его видят Анна (правит) и Клара (смотрит).
+    draft = _create(boris, "document", title="Черновик Бориса", content=DOC)
+    assert boris.put(f"/api/workspace/folders/{sub['id']}/order", json={"ids": [draft["id"]]}).status_code == 200
+    for who, can_edit in ((anna, True), (clara, False)):
+        row = next(i for i in who.get("/api/workspace/items").json()["items"] if i["id"] == draft["id"])
+        assert row["folderId"] == sub["id"] and row["canEdit"] is can_edit
+    assert next(i for i in boris.get("/api/workspace/items").json()["items"] if i["id"] == draft["id"])["folderId"] == sub["id"]
+    # Анна перекладывает материал Бориса в своей ветке — он остаётся видимым всем.
+    assert anna.put(f"/api/workspace/items/{draft['id']}/folder", json={"folderId": root["id"]}).status_code == 200
+    assert next(i for i in clara.get("/api/workspace/items").json()["items"] if i["id"] == draft["id"])["folderId"] == root["id"]
+
+    # Борис забирает свой материал обратно — из ветки он уходит, Клара его больше не видит.
+    assert boris.put(f"/api/workspace/items/{draft['id']}/folder", json={"folderId": None}).status_code == 200
+    assert clara.get(f"/api/workspace/items/{draft['id']}").status_code == 404
+    assert next(i for i in boris.get("/api/workspace/items").json()["items"] if i["id"] == draft["id"])["folderId"] is None
+
+    # Сняли «перемещение» — снова только правка документов.
+    anna.put(f"/api/workspace/folders/{root['id']}/shares", json={"userId": users.ids["boris"], "role": "edit"})
+    assert boris.put(f"/api/workspace/items/{plan['id']}/folder", json={"folderId": inbox["id"]}).status_code == 403

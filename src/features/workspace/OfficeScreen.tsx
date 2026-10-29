@@ -19,7 +19,7 @@ import { isWorkspaceEvent } from './live';
 import { readPlace, writePlace } from './lib/officeMemory';
 import { canSticky, dragNoteOut, forgetSticky, openSticky, stickyLabel } from './lib/sticky';
 import type { Folder, Item, Kind, Viewer } from './types';
-import { FOLDER_DRAG, FolderRow, isFolderDrag, isItemDrag, ITEM_DRAG, zoneOf, type DropZone } from './Folders';
+import { canArrange, FOLDER_DRAG, FOLDER_ROLE_NOTE, FolderRow, isFolderDrag, isItemDrag, ITEM_DRAG, zoneOf, type DropZone } from './Folders';
 import { PresenceStack } from './PresenceStack';
 import { FolderShareDialog } from './FolderShareDialog';
 import { useDragAutoScroll, useFlip } from './lib/listMotion';
@@ -375,11 +375,16 @@ export default function OfficeScreen() {
     setParams(next, { replace });
   };
 
-  async function createItem(kind: Kind) {
+  /** Создать и открыть; folderId — сразу положить в папку (свою или открытую с правом «Перемещение и редактирование»). */
+  async function createItem(kind: Kind, folderId: string | null = null) {
     setCreate(null);
     setBusy(`new:${kind}`);
     try {
       const item = await workspaceApi.create({ kind, title: '', content: await initialContent(kind) });
+      if (folderId) {
+        toggleFolder(folderId, true);
+        await workspaceApi.placeItem(item.id, folderId).catch((cause) => showToast(cause instanceof Error ? cause.message : 'Не удалось положить в папку', 'error'));
+      }
       select(item.id, filter === 'all' ? 'all' : kind);
       void load();
     } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось создать', 'error'); } finally { setBusy(''); }
@@ -670,9 +675,9 @@ export default function OfficeScreen() {
 
   // Строка материала в папке и вне папок — ещё и цель: отпущенный материал встаёт перед ней или после.
   const [slotOver, setSlotOver] = useState<{ id: string; zone: DropZone } | null>(null);
-  const ownFolder = (id: string | null) => { if (!id) return true; const f = folders.find((x) => x.id === id); return !f?.role || f.role === 'owner'; };
+  const arrangeIn = (id: string | null) => !id || canArrange(folders.find((x) => x.id === id));
   // В поиске перестановка выключена: показан не весь порядок, вставать «между» найденным бессмысленно.
-  const renderSlot = (folderId: string | null) => (item: Item) => (search || !ownFolder(folderId) ? renderRow(item) : (
+  const renderSlot = (folderId: string | null) => (item: Item) => (search || !arrangeIn(folderId) ? renderRow(item) : (
     <div
       key={item.id}
       className="nws-row-slot"
@@ -858,17 +863,26 @@ export default function OfficeScreen() {
       )}
       {folderMenu && (
         <Menu anchor={folderMenu.anchor} label="Папка" onClose={() => setFolderMenu(null)}>
-          {folderMenu.folder.role && folderMenu.folder.role !== 'owner' ? (
+          {folderMenu.folder.role && folderMenu.folder.role !== 'owner' && (
             <MenuItem icon={<Users size={15} />} disabled onSelect={() => undefined}>
-              Открыта вам · {folderMenu.folder.ownerName || 'коллега'}{folderMenu.folder.role === 'view' ? ' · только просмотр' : ''}
+              Открыта вам · {folderMenu.folder.ownerName || 'коллега'}{FOLDER_ROLE_NOTE[folderMenu.folder.role] || ''}
             </MenuItem>
-          ) : (<>
-          <MenuItem icon={<UserPlus size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); setShareFolder(f); }}>Доступ…</MenuItem>
+          )}
+          {/* Своя папка — всё; открытая с правом «Перемещение и редактирование» — всё, кроме доступа, удаления и выноса из ветки. */}
+          {canArrange(folderMenu.folder) && (<>
+          {(!folderMenu.folder.role || folderMenu.folder.role === 'owner') && (
+            <MenuItem icon={<UserPlus size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); setShareFolder(f); }}>Доступ…</MenuItem>
+          )}
           <MenuItem icon={<Pencil size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); setEditingFolder(f.id); }}>Переименовать</MenuItem>
           <MenuItem icon={<FolderPlus size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void newFolder(undefined, f.id); }}>Новая папка внутри</MenuItem>
-          {folderMenu.folder.parentId && (
+          {(!folderMenu.folder.role || folderMenu.folder.role === 'owner') && folderMenu.folder.parentId && (
             <MenuItem icon={<FolderUp size={15} />} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void placeFolder(f.id, null); }}>Вынести на верхний уровень</MenuItem>
           )}
+          <div className="nx-menu-sep" />
+          {KIND_LIST.map((k) => (
+            <MenuItem key={k.kind} icon={<k.icon size={15} />} disabled={Boolean(busy)} onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void createItem(k.kind, f.id); }}>{k.newLabel} здесь</MenuItem>
+          ))}
+          </>)}
           <div className="nx-menu-sep" />
           {FOLDER_SORTS.map((sort) => (
             <MenuItem key={sort.id} icon={(folderSort[folderMenu.folder.id] || 'manual') === sort.id ? <Check size={15} /> : <span className="nws-bar-noicon" />}
@@ -876,6 +890,7 @@ export default function OfficeScreen() {
               {sort.label}
             </MenuItem>
           ))}
+          {(!folderMenu.folder.role || folderMenu.folder.role === 'owner') && (<>
           <div className="nx-menu-sep" />
           <MenuItem icon={<Trash2 size={15} />} tone="danger" onSelect={() => { const f = folderMenu.folder; setFolderMenu(null); void removeFolder(f); }}>Удалить папку</MenuItem>
           </>)}
@@ -884,7 +899,7 @@ export default function OfficeScreen() {
       {shareFolder && <FolderShareDialog folder={shareFolder} onClose={() => setShareFolder(null)} onChanged={() => void load()} />}
       {moveMenu && (
         <Menu anchor={moveMenu.anchor} label="В папку" onClose={() => setMoveMenu(null)}>
-          {folders.filter((f) => !f.role || f.role === 'owner').sort((a, b) => (folderPath.get(a.id) || '').localeCompare(folderPath.get(b.id) || '', 'ru')).map((f) => (
+          {folders.filter(canArrange).sort((a, b) => (folderPath.get(a.id) || '').localeCompare(folderPath.get(b.id) || '', 'ru')).map((f) => (
             <MenuItem key={f.id} icon={<FolderIcon size={15} />} disabled={moveMenu.item.folderId === f.id} onSelect={() => { const i = moveMenu.item; setMoveMenu(null); void moveToFolder(i.id, f.id); }}>{folderPath.get(f.id) || f.title}</MenuItem>
           ))}
           {moveMenu.item.folderId && <MenuItem icon={<FolderMinus size={15} />} onSelect={() => { const i = moveMenu.item; setMoveMenu(null); void moveToFolder(i.id, null); }}>Вынуть из папки</MenuItem>}

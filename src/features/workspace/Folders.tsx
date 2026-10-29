@@ -15,6 +15,12 @@ export const FOLDER_DRAG = 'application/x-shar-folder';
 
 export const isFolderDrag = (e: React.DragEvent) => e.dataTransfer.types.includes(FOLDER_DRAG);
 
+/** Можно ли раскладывать в папке: своя или открытая с правом «Перемещение и редактирование». */
+export const canArrange = (folder: Folder | undefined) => !folder?.role || folder.role === 'owner' || folder.role === 'move';
+
+/** Как назвать право на открытую папку в строке и меню. */
+export const FOLDER_ROLE_NOTE: Record<string, string> = { view: ' · только просмотр', edit: ' · редактирование', move: ' · перемещение и редактирование' };
+
 /** Куда отпускают над строкой: перед ней, после неё или внутрь (только папка). */
 export type DropZone = 'before' | 'after' | 'into';
 
@@ -52,12 +58,13 @@ export function FolderRow({ folder, count, empty, otherKinds, open, terms, editi
   const [over, setOver] = useState<DropZone | null>(null);
   const press = useLongPress((x, y) => onMenu({ x, y }));
   const Icon = open ? FolderOpen : FolderIcon;
-  // Чужая папка, открытая вам: смотреть и открывать документы можно, менять раскладку — только владельцу.
+  // Чужая папка, открытая вам: раскладывать в ней можно с правом «Перемещение и редактирование», иначе — только владельцу.
   const own = !folder.role || folder.role === 'owner';
+  const arrange = canArrange(folder);
   // Значок — только у верхней папки открытой ветки (вложенные открыты вместе с ней) и у своих, открытых напрямую.
   const sharedNote = own
     ? (folder.shares ? `Открыта: ${folder.shares}` : '')
-    : (!folder.parentId ? `Открыта вам · ${folder.ownerName || 'коллега'}${folder.role === 'view' ? ' · только просмотр' : ''}` : '');
+    : (!folder.parentId ? `Открыта вам · ${folder.ownerName || 'коллега'}${FOLDER_ROLE_NOTE[folder.role || ''] || ''}` : '');
   return (
     <div className="nws-folder" data-open={open || undefined}>
       <div
@@ -67,7 +74,7 @@ export function FolderRow({ folder, count, empty, otherKinds, open, terms, editi
         data-drop={over && over !== 'into' ? over : undefined}
         onDragOver={(e) => {
           const item = isItemDrag(e);
-          if (!own || (!item && !isFolderDrag(e))) return;
+          if (!arrange || (!item && !isFolderDrag(e))) return;
           e.preventDefault();
           e.stopPropagation();
           e.dataTransfer.dropEffect = 'move';
@@ -75,7 +82,7 @@ export function FolderRow({ folder, count, empty, otherKinds, open, terms, editi
         }}
         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(null); }}
         onDrop={(e) => {
-          if (!own || (!isItemDrag(e) && !isFolderDrag(e))) return;
+          if (!arrange || (!isItemDrag(e) && !isFolderDrag(e))) return;
           e.preventDefault();
           e.stopPropagation();
           const zone = isItemDrag(e) ? 'into' : zoneOf(e, true);
@@ -111,7 +118,7 @@ export function FolderRow({ folder, count, empty, otherKinds, open, terms, editi
             className="nws-folder-toggle"
             aria-expanded={open}
             onClick={onToggle}
-            draggable={own}
+            draggable={arrange}
             onDragStart={(e) => { e.dataTransfer.setData(FOLDER_DRAG, folder.id); e.dataTransfer.effectAllowed = 'move'; }}
             {...press}
           >
@@ -129,7 +136,7 @@ export function FolderRow({ folder, count, empty, otherKinds, open, terms, editi
           {/* data-flip: подсказка переезжает вместе со строками, а не прыгает, пока выше раскрывают или сворачивают папку. */}
           {empty && (
             <p className="nws-folder-empty" data-flip={`e${folder.id}`}>
-              {otherKinds ? 'Здесь только материалы других видов' : own ? 'Пусто — перетащите сюда материал или папку' : 'Папка пока пустая'}
+              {otherKinds ? 'Здесь только материалы других видов' : arrange ? 'Пусто — перетащите сюда материал или папку' : 'Папка пока пустая'}
             </p>
           )}
         </div>
