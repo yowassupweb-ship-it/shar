@@ -1,0 +1,2 @@
+*.sh text eol=lf
+server/app/modules/core_agents/kit/* text eol=lf

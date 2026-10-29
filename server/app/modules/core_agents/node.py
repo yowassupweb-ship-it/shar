@@ -113,12 +113,17 @@ def delete_node(node_id: int, me: Identity = Depends(require_admin)):
 
 @router.get("/api/core/node/install.sh", response_class=PlainTextResponse)
 def install_script():
-    return PlainTextResponse((KIT / "install.sh").read_text(encoding="utf-8"), media_type="text/x-shellscript")
+    return PlainTextResponse(_kit_text("install.sh"), media_type="text/x-shellscript")
 
 
 @router.get("/api/core/node/agent.mjs", response_class=PlainTextResponse)
 def agent_script():
-    return PlainTextResponse((KIT / "shar-node.mjs").read_text(encoding="utf-8"), media_type="text/javascript")
+    return PlainTextResponse(_kit_text("shar-node.mjs"), media_type="text/javascript")
+
+
+def _kit_text(name: str) -> str:
+    # Из рабочей копии на Windows файл может прийти с CRLF — bash на ноде на нём споткнётся.
+    return (KIT / name).read_bytes().decode("utf-8").replace("\r\n", "\n")
 
 
 # ── нода ─────────────────────────────────────────────────────────────────────
