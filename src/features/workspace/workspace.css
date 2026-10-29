@@ -451,6 +451,28 @@
 .nws-share { display: grid; gap: var(--space-5); }
 .nws-select { max-width: 100%; min-height: 34px; padding: 0 var(--space-3); border: 1px solid var(--border-color); border-radius: var(--radius-pill); background: var(--element-bg); color: var(--text-main); font: inherit; font-size: var(--text-sm); }
 .nws-add-row { gap: var(--space-2); flex-wrap: wrap; }
+/* Выбор, кому дать доступ (PeoplePicker): поле с «фишками», подсказки с аватарками, права и кнопка. */
+.nws-picker { display: grid; gap: var(--space-2); padding: var(--space-3); }
+.nws-picker-box { position: relative; }
+.nws-picker-field { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 44px; padding: 6px 10px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--surface-panel); cursor: text; }
+.nws-picker-field:focus-within { border-color: var(--accent-fill); box-shadow: var(--focus-ring); }
+.nws-picker-input { flex: 1 1 140px; min-width: 120px; height: 30px; border: 0; outline: none; background: transparent; color: var(--text-main); font: inherit; }
+.nx .nws-picker-input:focus-visible { box-shadow: none; }
+.nws-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 4px 2px 3px; border-radius: var(--radius-pill); background: var(--surface-selected); font-size: var(--text-sm); }
+.nws-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nws-chip-x { display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-muted); cursor: pointer; }
+.nws-chip-x:hover { background: var(--surface-hover); color: var(--text-main); }
+/* Поле и подсказки: подсказки — слоем поверх, а не в потоке: иначе их закрытие при нажатии сдвигало кнопку «Отправить» из-под мыши. */
+.nws-picker-list { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; right: 0; display: grid; gap: 1px; max-height: 320px; margin: 0; padding: 4px; overflow-y: auto; list-style: none; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--surface-panel); box-shadow: 0 12px 32px rgb(0 0 0 / 0.16); }
+.nws-picker-group { padding: 6px 8px 2px; color: var(--text-muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); }
+.nws-picker-option { display: flex; align-items: center; gap: var(--space-3); padding: 6px 8px; border-radius: calc(var(--radius-md) - 2px); cursor: pointer; }
+.nws-picker-option[data-active] { background: var(--surface-hover); }
+.nws-picker-dept { display: inline-grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 50%; background: var(--surface-selected); color: var(--text-2); }
+.nws-picker-empty { margin: 0; padding: 4px 2px; color: var(--text-muted); font-size: var(--text-sm); }
+.nws-picker-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: var(--space-2); }
+/* Человек в строке «У кого есть доступ»: аватар, имя, должность. */
+.nws-person { display: flex; align-items: center; gap: var(--space-3); flex: 1 1 auto; min-width: 0; }
+.nws-person .nx-row-label, .nws-person .nx-row-hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nws-add-row .nws-select:first-child { flex: 1 1 160px; min-width: 0; }
 .nws-link-row { flex-wrap: wrap; row-gap: var(--space-2); }
 /* Подпись не сжимается полем со ссылкой: не хватает места — поле уходит на строку ниже. */
