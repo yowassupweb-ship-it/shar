@@ -501,6 +501,55 @@ if (typeof document !== 'undefined' && document.fonts) {
   }
 }
 
+/**
+ * Те же веб-шрифты для раскладки документа в воркере (DocEditor, UniverDocsLayoutWorkerPlugin): воркер не видит
+ * шрифтов страницы, а строки должны переноситься ровно так, как их нарисует холст. Берём начертания из той же
+ * таблицы Google Fonts, только обычное и жирное (другие документ не использует) и только латиницу с кириллицей —
+ * воркер грузит каждое начертание целиком. Пока таблица не пришла (или её нет), docsLayoutFonts() даёт null —
+ * документ раскладывается по-старому, в основном потоке.
+ */
+export interface LayoutFontFace { family: string; source: string; descriptors?: FontFaceDescriptors }
+const LAYOUT_SUBSETS = new Set(['latin', 'latin-ext', 'cyrillic', 'cyrillic-ext']);
+let layoutFaces: LayoutFontFace[] | null = null;
+
+export function parseFontFaces(css: string): LayoutFontFace[] {
+  const out: LayoutFontFace[] = [];
+  for (const [, subset, body] of css.matchAll(/\/\*\s*([\w-]+)\s*\*\/\s*@font-face\s*\{([^}]*)\}/g)) {
+    const prop = (name: string) => new RegExp(`${name}:\\s*([^;]+);`).exec(body)?.[1].trim() ?? '';
+    const family = prop('font-family').replace(/^['"]|['"]$/g, '');
+    const weight = prop('font-weight');
+    const source = prop('src');
+    if (!LAYOUT_SUBSETS.has(subset) || !WEB_FONT_NAMES.has(family) || !['400', '700'].includes(weight) || !source) continue;
+    out.push({ family, source, descriptors: { style: prop('font-style') || 'normal', weight, unicodeRange: prop('unicode-range') || undefined } });
+  }
+  return out;
+}
+
+let fontsLoad: Promise<void> | null = null;
+
+/** Таблица шрифтов — один раз на приложение. Редактор документа ждёт её (не дольше 3 с) вместе со своим кодом,
+ *  чтобы раскладка не зависела от того, кто успел первым: иначе два окна одного документа переносили бы по-разному. */
+export function loadLayoutFonts(): Promise<void> {
+  fontsLoad ??= new Promise<void>((resolve) => {
+    const href = typeof document !== 'undefined' ? document.querySelector<HTMLLinkElement>('link[rel="stylesheet"][href*="fonts.googleapis.com/css"]')?.href : undefined;
+    if (!href) { resolve(); return; }
+    const timer = window.setTimeout(resolve, 3000);
+    void fetch(href)
+      .then((res) => (res.ok ? res.text() : ''))
+      .then((css) => { const faces = parseFontFaces(css); layoutFaces = faces.length ? faces : null; })
+      .catch(() => undefined)
+      .finally(() => { window.clearTimeout(timer); resolve(); });
+  });
+  return fontsLoad;
+}
+void loadLayoutFonts();
+
+export function docsLayoutFonts(): LayoutFontFace[] | null {
+  // Аварийный выключатель на случай расхождений раскладки: localStorage['nx:docs-layout-worker'] = 'off'.
+  try { if (localStorage.getItem('nx:docs-layout-worker') === 'off') return null; } catch { /* хранилище недоступно */ }
+  return layoutFaces;
+}
+
 /** Добавить веб-шрифты в список шрифтов редактора. */
 export function addWebFonts(univerAPI: { addFonts?: (fonts: typeof WEB_FONTS) => void }) {
   try { univerAPI.addFonts?.(WEB_FONTS); } catch { /* старый facade без addFonts — остаются системные */ }

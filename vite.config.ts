@@ -1,7 +1,43 @@
 import { fileURLToPath, URL } from 'node:url';
-import { defineConfig, loadEnv, type ProxyOptions } from 'vite';
+import { defineConfig, loadEnv, type Plugin, type ProxyOptions } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+
+/**
+ * Univer (engine-render) раскладывает текст документа посимвольно и для каждого не-ASCII символа (вся кириллица)
+ * ищет первую графему остатка строки через Intl.Segmenter — по вызову, а то и по два, на каждую букву при каждой
+ * раскладке. Вызов дорогой: в русском документе это была главная статья расходов раскладки. Быстрый путь даёт тот
+ * же ответ без Segmenter для обычных знаков (сверено с Segmenter на 300 000 случайных строк, включая эмодзи и
+ * комбинируемые знаки); для остального Segmenter смотрит окно в 64 знака, а не весь хвост абзаца. Правка нужна и
+ * воркеру раскладки (worker.plugins). Сборка падает, если Univer изменил этот код: правку тогда нужно пересмотреть
+ * (может, её уже сделали в самом Univer).
+ */
+function univerGraphemeWindow(): Plugin {
+  const target = /\/@univerjs\/engine-render\/lib\/es\/index\.js$/;
+  const segmenterDecl = 'const segmenter = new Intl.Segmenter(void 0, { granularity: "grapheme" });';
+  const original = 'return ((_it$next$value = segmenter.segment(text)[Symbol.iterator]().next().value) === null || _it$next$value === void 0 ? void 0 : _it$next$value.segment) ?? null;';
+  const patched = [
+    // Быстрый путь — ровно тот же ответ, что дал бы Segmenter: обычный знак (ASCII без \r, латиница,
+    // кириллица, греческий, иврит без огласовок, типографика, ₽, №), за которым не идёт ничего, что
+    // склеивается с ним в одну графему (комбинируемый знак, ZWJ/ZWNJ, селектор варианта, суррогатная пара).
+    'const c0 = text.charCodeAt(0), c1 = text.charCodeAt(1);',
+    'if (((c0 >= 0x20 && c0 < 0x7F) || (c0 >= 0xA0 && c0 <= 0x05FF && !(c0 >= 0x0300 && c0 <= 0x036F) && !(c0 >= 0x0483 && c0 <= 0x0489) && !(c0 >= 0x0591 && c0 <= 0x05C7))',
+    '  || (c0 >= 0x2010 && c0 <= 0x205E) || (c0 >= 0x20A0 && c0 <= 0x20C0) || (c0 >= 0x2100 && c0 <= 0x214F))',
+    '  && !(c1 >= 0xD800 && c1 <= 0xDFFF) && !(c1 >= 0xFE00 && c1 <= 0xFE0F) && c1 !== 0x200C && c1 !== 0x200D && !__sharMark.test(text[1])) return text[0];',
+    'const head = text.length > 64 ? text.slice(0, 64) : text;',
+    'const first = ((_it$next$value = segmenter.segment(head)[Symbol.iterator]().next().value) === null || _it$next$value === void 0 ? void 0 : _it$next$value.segment) ?? null;',
+    'if (first !== null && head.length < text.length && first.length === head.length) return segmenter.segment(text)[Symbol.iterator]().next().value?.segment ?? null;',
+    'return first;',
+  ].join(' ');
+  return {
+    name: 'shar-univer-grapheme-window',
+    transform(code, id) {
+      if (!target.test(id.split('?')[0].replace(/\\/g, '/'))) return null;
+      if (!code.includes(original) || !code.includes(segmenterDecl)) this.error('Univer engine-render: getFirstGrapheme изменился — пересмотрите правку univerGraphemeWindow в vite.config.ts');
+      return { code: code.replace(segmenterDecl, `${segmenterDecl} const __sharMark = /\\p{M}/u;`).replace(original, patched), map: null };
+    },
+  };
+}
 
 /**
  * Шар — SPA (корень) + свой сервис API (server/, порт 8100).
@@ -42,7 +78,9 @@ export default defineConfig(({ mode }) => {
   };
 
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), univerGraphemeWindow()],
+    // Раскладка документа идёт в воркере (DocEditor, docsLayout.worker.ts): модульный формат, та же правка Univer.
+    worker: { format: 'es', plugins: () => [univerGraphemeWindow()] },
     resolve: {
       alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
     },

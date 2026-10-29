@@ -33,7 +33,7 @@ import type { AccessLevel, AccessMode, Kind, NoteColor } from './types';
 import { Spinner } from '@/shared/ui/Spinner';
 
 // Univer и редактор слайдов тяжёлые: грузятся отдельными кусками, когда нужны.
-const DocEditor = lazy(() => import('./editors/DocEditor'));
+const DocEditor = lazy(() => import('./editors/DocEditor').then(async (m) => { await m.layoutFontsReady(); return m; }));
 const SheetEditor = lazy(() => import('./editors/SheetEditor'));
 const DeckEditor = lazy(() => import('./editors/DeckEditor'));
 

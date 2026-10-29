@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { DocSelectionManagerService, UniverDocsPlugin } from '@univerjs/docs';
+import { DocSelectionManagerService, UniverDocsLayoutWorkerPlugin, UniverDocsPlugin } from '@univerjs/docs';
 import { DocCanvasPopManagerService, UniverDocsUIPlugin } from '@univerjs/docs-ui';
 import { IRenderManagerService, UniverRenderEnginePlugin } from '@univerjs/engine-render';
 import { UniverNetworkPlugin } from '@univerjs/network';
 import { UniverUIPlugin } from '@univerjs/ui';
 import '@univerjs/network/facade';
 import { DOC_TOOLBAR } from '../lib/toolbarLayout';
-import { createUniver, ICommandService, IImageIoService, LocaleType, mergeLocales, type IDocumentData } from '@univerjs/presets';
+import { createUniver, ICommandService, IImageIoService, LocaleType, mergeLocales, type IDocumentData, type IPresetPlugin } from '@univerjs/presets';
 import UniverPresetDocsCoreRuRU from '@univerjs/preset-docs-core/locales/ru-RU';
 import { UniverFindReplacePlugin } from '@univerjs/find-replace';
 import FindReplaceRuRU from '@univerjs/find-replace/locale/ru-RU';
@@ -26,7 +26,7 @@ import '@univerjs/find-replace/lib/index.css';
 import { UploadingImageIoService, uploadPastedImages } from '../lib/imageIo';
 import { SharEmojiPicker } from '@/shared/emoji/SharEmojiPicker';
 import { emptySnapshot, ensureDrawingResource, fingerprint, localizeImages, parseSnapshot, type DocSnapshot } from '../lib/docSnapshot';
-import { addLinkButton, addWebFonts, relayoutOnHostResize, stepToolbarWidth, throttleWindowResize, disableBlockHandle, reserveToolbarSpace, hidePopupsUnderToolbar, docLinkProbe, hideMissingFonts, isDarkTheme, overrideComponent, styleDocSurface, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
+import { addLinkButton, addWebFonts, docsLayoutFonts, loadLayoutFonts, relayoutOnHostResize, stepToolbarWidth, throttleWindowResize, disableBlockHandle, reserveToolbarSpace, hidePopupsUnderToolbar, docLinkProbe, hideMissingFonts, isDarkTheme, overrideComponent, styleDocSurface, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
 import type { EditorProps } from './types';
 import { CursorLayer, type CursorShape } from '../CursorLayer';
 import { bindDoc } from '../live/docOps';
@@ -107,6 +107,9 @@ function measureCursors(injector: Injector, unitId: string, host: HTMLElement, c
  * Google Docs. Правка отдаёт снимок целиком, сервер хранит его как есть. Загружается отдельным куском —
  * Univer тяжёлый, и остальной Шар ради него не ждёт.
  */
+/** Шрифты для раскладки в воркере: ItemView ждёт их вместе с кодом редактора (под тем же скелетоном). */
+export const layoutFontsReady = loadLayoutFonts;
+
 export default function DocEditor({ content, onContent, readOnly, loadKey, visible = true, cursors = [], onCursor, live, commentsBridge, onAddComment, commentQuotes = NO_QUOTES, onCommentQuote }: EditorProps) {
   const onCommentQuoteRef = useRef(onCommentQuote);
   onCommentQuoteRef.current = onCommentQuote;
@@ -145,6 +148,7 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
     const mount = window.document.createElement('div');
     mount.className = 'nws-univer-mount';
     el.appendChild(mount);
+    const layoutFonts = docsLayoutFonts();
     const { univer, univerAPI } = createUniver({
       locale: LocaleType.RU_RU,
       locales: { [LocaleType.RU_RU]: mergeLocales(UniverPresetDocsCoreRuRU, UniverPresetDocsDrawingRuRU, UniverPresetDocsHyperLinkRuRU, FindReplaceRuRU) },
@@ -154,7 +158,15 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
         // То же, что UniverDocsCorePreset, но без движка формул: документу он не нужен, а это ~2,5 МБ кода, которые
         // грузились и выполнялись при открытии каждого документа.
         { plugins: [
-          UniverNetworkPlugin, UniverDocsPlugin, UniverRenderEnginePlugin,
+          UniverNetworkPlugin, UniverDocsPlugin,
+          // Раскладка (строки, страницы) — в отдельном потоке и только изменённого: иначе каждая буква пересчитывала
+          // весь документ в основном потоке, и на слабом ПК печать отставала на секунду. Нужны те же веб-шрифты, что
+          // у холста; пока их нет — раскладка по-старому, в основном потоке.
+          ...(layoutFonts ? [[UniverDocsLayoutWorkerPlugin, {
+            workerFactory: () => new Worker(new URL('../lib/docsLayout.worker.ts', import.meta.url), { type: 'module' }),
+            fontFaces: layoutFonts,
+          }] as IPresetPlugin] : []),
+          UniverRenderEnginePlugin,
           [UniverUIPlugin, { container: mount, ribbonType: 'simple', menu: DOC_TOOLBAR, header: !readOnly, toolbar: !readOnly, contextMenu: !readOnly }],
           [UniverDocsUIPlugin, { toc: false }],
         ] },
