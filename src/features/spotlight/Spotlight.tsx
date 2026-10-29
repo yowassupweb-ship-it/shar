@@ -15,6 +15,7 @@ import { myId } from '@/shared/session/session';
 import { Avatar } from '@/shared/ui/Avatar';
 import { SectionIcon, type SectionIconName } from '@/shared/ui/SectionIcon';
 import { showToast } from '@/shared/ui/Toast';
+import { toggleCorePanel } from '@/features/core/panel';
 import { clearVisits, forgetVisit, getVisits, onVisitsChanged, type Visit } from './history';
 import { norm, relativeTime, scoreText, variants } from './engine';
 import './spotlight.css';
@@ -145,7 +146,8 @@ function buildActions(isAdmin: boolean, tools: Tool[]): Action[] {
     .filter((t) => !['spotlight', 'settings', 'how-to-shar', 'admin'].includes(t.id))
     .map((t) => ({
       id: `tool-${t.id}`, title: t.name, subtitle: t.hint, words: `инструмент tool ${t.id} ${t.hint}`, icon: toolIcon(t),
-      run: t.external ? () => { window.open(t.href, '_blank', 'noopener'); } : go(t.href),
+      // «Ядро» — панель справа, а не страница.
+      run: t.id === 'core' ? toggleCorePanel : t.external ? () => { window.open(t.href, '_blank', 'noopener'); } : go(t.href),
     }));
   const desk = window.sharDesktop;
   const extra: Action[] = desk ? [{ id: 'reload', title: 'Перезагрузить окно', subtitle: 'Обновить интерфейс', words: 'reload refresh обновить перезапустить', icon: <RefreshCw size={16} />, run: () => desk.windowControls.reload?.() }] : [];

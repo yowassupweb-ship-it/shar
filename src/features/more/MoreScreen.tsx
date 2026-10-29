@@ -11,6 +11,7 @@ import { addNavTool, NAV_TOOL_DRAG, removeNavTool } from './navTools';
 import { useToolBadges } from './toolBadges';
 import { navigate } from '@/shared/navigation/navigate';
 import { openSpotlight } from '@/features/spotlight';
+import { toggleCorePanel } from '@/features/core/panel';
 import { myId } from '@/shared/session/session';
 
 /**
@@ -31,6 +32,8 @@ const desktop = (): Desktop | undefined => (window as unknown as { sharDesktop?:
 
 function openTool(t: Tool) {
   if (t.id === 'spotlight') { openSpotlight(); return; }
+  // «Ядро» выезжает панелью справа, раздел «Ещё» остаётся на месте.
+  if (t.id === 'core') { toggleCorePanel(); return; }
   if (t.external) {
     const d = desktop();
     if (d?.openExternal) void d.openExternal(t.href);
@@ -51,6 +54,7 @@ function ToolTile({ t, pinned, count, onMenu }: { t: Tool; pinned: boolean; coun
       href={t.href}
       target={t.external ? '_blank' : undefined}
       rel={t.external ? 'noopener noreferrer' : undefined}
+      data-no-route={t.id === 'core' ? '' : undefined}
       onClick={(e) => { e.preventDefault(); openTool(t); }}
       onContextMenu={(e) => { e.preventDefault(); onMenu(t, { x: e.clientX, y: e.clientY }); }}
       onKeyDown={(e) => {

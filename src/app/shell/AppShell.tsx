@@ -1,6 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router';
-import { Palette as PaletteIcon, PinOff, Settings, type LucideIcon } from 'lucide-react';
+import { Atom, Palette as PaletteIcon, PinOff, Settings, type LucideIcon } from 'lucide-react';
 import { PALETTES, useTheme } from '@/shared/theme/ThemeContext';
 import { Avatar } from '@/shared/ui/Avatar';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
@@ -49,9 +49,20 @@ export interface AppShellProps {
   onNavToolDrop?: (id: string) => void;
   /** «Убрать из меню» — правый щелчок по инструменту. */
   onNavToolRemove?: (id: string) => void;
+  /** Выдвижная панель справа (сейчас — «Ядро»): вторая колонка каркаса, сжимает раздел и меню. */
+  side?: ReactNode;
+  /** Кнопка «Агент» у аватара — открывает и закрывает панель агента (как «Поиск по Шару» в шапке). */
+  agent?: { open: boolean; onToggle: () => void; controls: string };
 }
 
-export interface NavTool { id: string; label: string; href: string; icon: LucideIcon; tint: [string, string]; count: number }
+/**
+ * Инструмент в меню. Обычно — ссылка на свою страницу; инструмент-панель («Ядро») вместо перехода
+ * открывает и закрывает панель (onToggle), а expanded подсвечивает значок, пока она открыта.
+ */
+export interface NavTool {
+  id: string; label: string; href: string; icon: LucideIcon; tint: [string, string]; count: number;
+  onToggle?: () => void; expanded?: boolean; controls?: string;
+}
 
 /** Тот же тип данных, что кладёт плитка «Ещё» при перетаскивании (features/more/navTools). */
 const NAV_TOOL_DRAG = 'application/x-shar-tool';
@@ -104,7 +115,7 @@ function NavIcon({ icon }: { icon: string }) {
   );
 }
 
-const Nav = memo(function Nav({ section, badges, alerts: rawAlerts, visibleTabs, onReselect, account, navTools, onNavToolDrop, onNavToolRemove }: Omit<AppShellProps, 'children' | 'navHidden'>) {
+const Nav = memo(function Nav({ section, badges, alerts: rawAlerts, visibleTabs, onReselect, account, navTools, onNavToolDrop, onNavToolRemove, agent }: Omit<AppShellProps, 'children' | 'navHidden' | 'side'>) {
   const listRef = useRef<HTMLUListElement>(null);
   // Тревога у скрытого раздела иначе пропала бы — переносим её на «Ещё», откуда он открывается.
   const alerts = useMemo(() => {
@@ -231,7 +242,7 @@ const Nav = memo(function Nav({ section, badges, alerts: rawAlerts, visibleTabs,
           );
         })}
         {(navTools || []).map((t) => {
-          const active = pathname === t.href;
+          const active = !t.onToggle && pathname === t.href;
           return (
             <li key={`tool-${t.id}`} data-tool={t.id}>
               <Link
@@ -240,6 +251,10 @@ const Nav = memo(function Nav({ section, badges, alerts: rawAlerts, visibleTabs,
                 title={compact ? t.label : undefined}
                 aria-label={compact ? t.label : undefined}
                 aria-current={active ? 'page' : undefined}
+                aria-expanded={t.onToggle ? Boolean(t.expanded) : undefined}
+                aria-controls={t.onToggle ? t.controls : undefined}
+                data-no-route={t.onToggle ? '' : undefined}
+                onClick={t.onToggle ? (e) => { e.preventDefault(); t.onToggle?.(); } : undefined}
                 onContextMenu={(e) => { if (!onNavToolRemove) return; e.preventDefault(); setToolMenu({ id: t.id, anchor: { x: e.clientX, y: e.clientY } }); }}
               >
                 <span className="nx-nav-icon nx-nav-tool" style={{ '--a': t.tint[0], '--b': t.tint[1] } as CSSProperties} aria-hidden="true"><t.icon size={13} /></span>
@@ -257,19 +272,28 @@ const Nav = memo(function Nav({ section, badges, alerts: rawAlerts, visibleTabs,
           <MenuItem icon={<PinOff size={16} />} onSelect={() => { const id = toolMenu.id; setToolMenu(null); onNavToolRemove?.(id); }}>Убрать из меню</MenuItem>
         </Menu>
       )}
+      {agent && (
+        <button type="button" className="nx-agent-btn" onClick={agent.onToggle} aria-expanded={agent.open} aria-controls={agent.controls}
+          title="Агент — чат с агентами Шара (Ctrl+A)">
+          <Atom size={14} aria-hidden="true" />
+          <span>Агент</span>
+          <kbd>Ctrl A</kbd>
+        </button>
+      )}
       {account && <AccountButton account={account} />}
     </nav>
   );
 });
 
-export default function AppShell({ section, children, badges, alerts, visibleTabs, navHidden, onReselect, account, navTools, onNavToolDrop, onNavToolRemove }: AppShellProps) {
+export default function AppShell({ section, children, badges, alerts, visibleTabs, navHidden, onReselect, account, navTools, onNavToolDrop, onNavToolRemove, side, agent }: AppShellProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   useViewportSync(rootRef);
   return (
     <div ref={rootRef} className="nx nx-app" data-nav-hidden={navHidden ? 'true' : undefined}>
       <main className="nx-app-main">{children}</main>
       <Nav section={section} badges={badges} alerts={alerts} visibleTabs={visibleTabs} onReselect={onReselect} account={account}
-        navTools={navTools} onNavToolDrop={onNavToolDrop} onNavToolRemove={onNavToolRemove} />
+        navTools={navTools} onNavToolDrop={onNavToolDrop} onNavToolRemove={onNavToolRemove} agent={agent} />
+      {side}
       {/* Внутри корня .nx — там живут токены, на которых держится Toast. */}
       <ToastContainer />
     </div>

@@ -25,6 +25,8 @@ import { startMailBadge, useMailBadge } from '@/features/mail/badge';
 import { showToast } from '@/shared/ui/Toast';
 import { SpotlightHost, useVisitTracker } from '@/features/spotlight';
 import { ChatFrame, chatFrameEnabled, subscribeChatFrame } from '@/features/chat';
+import CorePanel, { CORE_PANEL_ID } from '@/features/core/CorePanel';
+import { toggleCorePanel, useCorePanel } from '@/features/core/panel';
 
 /**
  * Корень Шара v2 — живёт над всеми разделами и не пересоздаётся при переходе
@@ -85,13 +87,20 @@ function Workspace({ me }: { me: User }) {
     if (!meFull) return;
     try { localStorage.setItem(navKey, JSON.stringify({ navTools: meFull.navTools || [], enabledTools: meFull.enabledTools || [], role: meFull.role })); } catch { /* приватный режим */ }
   }, [navKey, meFull?.navTools, meFull?.enabledTools, meFull?.role]); // eslint-disable-line react-hooks/exhaustive-deps
-  const navTools = useMemo(() => {
-    const tools = availableTools({ role: navSource?.role || me.role, enabledTools: navSource?.enabledTools });
-    return (navSource?.navTools || [])
-      .map((id) => tools.find((t) => t.id === id && !t.external && t.href.startsWith('/')))
-      .filter((t): t is NonNullable<typeof t> => Boolean(t))
-      .map((t) => ({ id: t.id, label: t.name, href: t.href, icon: t.icon, tint: t.tint, count: toolCounts[t.id] || 0 }));
-  }, [navSource?.navTools, navSource?.enabledTools, navSource?.role, me.role, toolCounts]);
+  const tools = useMemo(
+    () => availableTools({ role: navSource?.role || me.role, enabledTools: navSource?.enabledTools }),
+    [navSource?.enabledTools, navSource?.role, me.role],
+  );
+  // «Ядро» — не страница, а выдвижная панель справа: значок в меню её открывает и закрывает.
+  const coreAvailable = tools.some((t) => t.id === 'core');
+  const coreOpen = useCorePanel((s) => s.open);
+  const navTools = useMemo(() => (navSource?.navTools || [])
+    .map((id) => tools.find((t) => t.id === id && !t.external && t.href.startsWith('/')))
+    .filter((t): t is NonNullable<typeof t> => Boolean(t))
+    .map((t) => ({
+      id: t.id, label: t.name, href: t.href, icon: t.icon, tint: t.tint, count: toolCounts[t.id] || 0,
+      ...(t.id === 'core' ? { onToggle: toggleCorePanel, expanded: coreOpen, controls: CORE_PANEL_ID } : {}),
+    })), [navSource?.navTools, tools, toolCounts, coreOpen]);
   const moreCount = Object.entries(toolCounts).reduce((sum, [id, n]) => sum + (navTools.some((t) => t.id === id) ? 0 : n || 0), 0);
 
   // Layout-эффект, а не обычный: эффекты родителя идут после эффектов детей, и
@@ -209,6 +218,8 @@ function Workspace({ me }: { me: User }) {
         onNavToolDrop={(id) => void addNavTool(id)}
         onNavToolRemove={(id) => void removeNavTool(id)}
         visibleTabs={meFull?.visibleTabs}
+        side={coreAvailable ? <CorePanel /> : null}
+        agent={coreAvailable ? { open: coreOpen, onToggle: toggleCorePanel, controls: CORE_PANEL_ID } : undefined}
         navHidden={opts.navHidden}
         onReselect={opts.onReselect}
         account={{

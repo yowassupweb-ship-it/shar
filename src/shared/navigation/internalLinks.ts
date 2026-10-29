@@ -107,7 +107,9 @@ export function installInternalLinks(): () => void {
   const onClick = (event: MouseEvent) => {
     if (event.defaultPrevented || event.button !== 0 || event.shiftKey || event.altKey) return;
     const anchor = (event.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
-    if (!anchor || anchor.hasAttribute('download') || anchor.dataset.external !== undefined) return;
+    // data-no-route — ссылка-переключатель (значок «Ядра»): адрес у неё для «открыть в новом окне», а щелчок
+    // обрабатывает она сама. Без этого исключения переход сюда перехватывал щелчок раньше её onClick.
+    if (!anchor || anchor.hasAttribute('download') || anchor.dataset.external !== undefined || anchor.dataset.noRoute !== undefined) return;
     const target = sharTarget(anchor.getAttribute('href'));
     if (!target) return;
     event.preventDefault();

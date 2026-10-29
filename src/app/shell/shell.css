@@ -196,3 +196,82 @@
   /* На телефоне аватарки в капсуле нет: профиль, тема и настройки — в разделе «Ещё». */
   .nx-account { display: none; }
 }
+
+/* ── «Ядро»: выдвижная панель справа ──────────────────────────────────────
+   Вторая колонка каркаса на всю высоту (вместе со строкой меню): выезжая, панель
+   сжимает раздел и нижнюю полосу, а не ложится поверх. Ширина колонки анимируется
+   от нуля; содержимое прижато к правому краю и своей ширины не меняет — въезжает
+   справа налево. На телефоне — слой во весь экран. */
+.nx-app { grid-template-columns: minmax(0, 1fr) auto; }
+.nx-app-main { grid-column: 1; grid-row: 1; }
+.nx-nav { grid-column: 1; grid-row: 2; }
+
+.nx-core-panel {
+  position: relative;
+  grid-column: 2;
+  grid-row: 1 / -1;
+  width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface-panel, var(--bg-color));
+  transition: width var(--duration-base) var(--ease-out);
+}
+/* Граница — тенью, а не рамкой: закрытая панель не занимает ни пикселя. Чёткая черта (--border-strong, обычной
+   на светлой теме почти не видно) плюс мягкая тень на раздел — панель читается как слой поверх. */
+.nx-core-panel[data-open] {
+  z-index: 2;
+  width: var(--nx-core-w);
+  box-shadow: -1px 0 0 var(--border-strong, var(--border-color)), -12px 0 28px -20px rgb(0 0 0 / 0.45);
+}
+.nx-core-panel[data-resizing] { transition: none; user-select: none; }
+.nx-core-panel-inner { position: absolute; inset: 0 0 0 auto; width: var(--nx-core-w); }
+.nx-core-sash { position: absolute; inset: 0 auto 0 0; z-index: 3; width: 6px; cursor: col-resize; touch-action: none; }
+.nx-core-sash:hover, .nx-core-panel[data-resizing] .nx-core-sash { background: color-mix(in srgb, var(--accent-color) 35%, transparent); }
+
+/* Кнопка «Агент» у аватара — та же пилюля, что «Поиск по Шару» в шапке окна (.ntb-search). */
+.nx-agent-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  height: 30px;
+  margin: 0 var(--space-2) 0 auto;
+  padding: 0 6px 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--text-main) 6%, transparent);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.nx-agent-btn kbd { padding: 1px 6px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--text-main) 10%, transparent); color: var(--text-2); font: inherit; font-size: 10px; }
+@media (hover: hover) { .nx-agent-btn:hover { background: var(--surface-hover); color: var(--text-main); } }
+.nx-agent-btn:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 1px; }
+.nx-agent-btn[aria-expanded="true"] { border-color: color-mix(in srgb, var(--accent-color) 45%, transparent); background: var(--surface-selected); color: var(--accent-color); }
+
+/* Значок «Ядра» в меню: панель открыта — подсвечен, как открытый раздел. */
+.nx-nav-item[aria-expanded="true"] { background: var(--surface-selected); color: var(--accent-color); }
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-core-panel { transition: none; }
+}
+
+@media (max-width: 640px) {
+  .nx-core-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    width: auto;
+    border: 0;
+    transform: translateX(100%);
+    visibility: hidden;
+    transition: transform var(--duration-base) var(--ease-out), visibility 0s linear var(--duration-base);
+  }
+  .nx-core-panel[data-open] { width: auto; transform: none; visibility: visible; transition: transform var(--duration-base) var(--ease-out); }
+  .nx-core-panel-inner { inset: 0; width: auto; padding-bottom: var(--nx-safe-bottom); }
+  .nx-core-sash { display: none; }
+  /* На телефоне клавиатуры нет, а в капсуле места мало: агент — плиткой «Ядро» в «Ещё». */
+  .nx-agent-btn { display: none; }
+}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Archive, ArchiveRestore, ArrowDown, Atom, ChevronLeft, Lock, MessageSquarePlus, Pencil, Search } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, Atom, ChevronLeft, Lock, MessageSquarePlus, Pencil, Search, X } from 'lucide-react';
 import { realtime } from '@/shared/realtime/realtime';
 import { paths } from '@/shared/navigation/routes';
 import { Spinner } from '@/shared/ui/Spinner';
@@ -10,6 +10,7 @@ import { coreApi, type CoreMessage, type CoreThread } from './api';
 import { Composer, COMMANDS, type ComposerHandle } from './Composer';
 import { MessageItem, type MessageHandlers } from './MessageItem';
 import { formatTokens } from './parts';
+import { setCorePanelThread, useCorePanel } from './panel';
 import {
   createThread, loadAll, loadArchived, loadMessages, loadOlder, patchThread, retryMessage, sendMessage, upsertMessage, upsertThread, useCore,
 } from './store';
@@ -32,15 +33,21 @@ function useNarrow() {
 /**
  * «Ядро» — чат с агентами (по образцу чата MBOX), пока без агентов: треды, сообщения, вложения, ответы,
  * команды, цепочка шагов и ход работы. Включено админам; остальным — когда админ выдаст инструмент.
+ *
+ * Два места: страница /core и выдвижная панель справа (embedded, CorePanel). В панели всегда узкая раскладка
+ * (список или переписка), а открытый чат хранится в панели, а не в адресе — иначе он менял бы адрес раздела слева.
  */
-export default function CoreScreen() {
+export default function CoreScreen({ embedded = false, onClose }: { embedded?: boolean; onClose?: () => void } = {}) {
   const [params, setParams] = useSearchParams();
-  const threadId = params.get('thread');
+  const panelThread = useCorePanel((s) => s.thread);
+  const threadId = embedded ? panelThread : params.get('thread');
   const denied = useCore((s) => s.denied);
   const error = useCore((s) => s.error);
   const threads = useCore((s) => s.threads);
-  const narrow = useNarrow();
+  const narrowScreen = useNarrow();
+  const narrow = embedded || narrowScreen;
   const navigate = useNavigate();
+  const leave = embedded && onClose ? onClose : () => navigate(paths.more);
 
   useEffect(() => { void loadAll(); }, []);
   // Живые события: ответы агентов, свои сообщения с других устройств, переименования и архив.
@@ -50,7 +57,10 @@ export default function CoreScreen() {
     if (e.type === 'core_thread' && e.thread) upsertThread(e.thread);
   }), []);
 
-  const select = useCallback((id: string | null) => setParams(id ? { thread: id } : {}, { replace: false }), [setParams]);
+  const select = useCallback((id: string | null) => {
+    if (embedded) setCorePanelThread(id);
+    else setParams(id ? { thread: id } : {}, { replace: false });
+  }, [embedded, setParams]);
 
   if (denied) {
     return (
@@ -58,7 +68,7 @@ export default function CoreScreen() {
         <Lock size={36} strokeWidth={1.5} aria-hidden="true" />
         <h2>«Ядро» вам пока не включено</h2>
         <p>Это чат с агентами Шара. Сейчас он доступен администраторам — включить его вам может администратор.</p>
-        <button type="button" className="nx-ghost" onClick={() => navigate(paths.more)}>Вернуться в «Ещё»</button>
+        <button type="button" className="nx-ghost" onClick={leave}>{embedded ? 'Закрыть' : 'Вернуться в «Ещё»'}</button>
       </div>
     );
   }
@@ -69,7 +79,7 @@ export default function CoreScreen() {
   const showChat = !narrow || Boolean(threadId);
   return (
     <div className="ncore" data-narrow={narrow || undefined}>
-      {showList && <ThreadList activeId={threadId} onSelect={select} onBack={() => navigate(paths.more)} />}
+      {showList && <ThreadList activeId={threadId} onSelect={select} onBack={leave} embedded={embedded} />}
       {showChat && <Conversation key={threadId || 'new'} threadId={threadId} onSelect={select} narrow={narrow} />}
     </div>
   );
@@ -77,7 +87,7 @@ export default function CoreScreen() {
 
 // ── Список чатов ─────────────────────────────────────────────────────────────
 
-function ThreadList({ activeId, onSelect, onBack }: { activeId: string | null; onSelect: (id: string | null) => void; onBack: () => void }) {
+function ThreadList({ activeId, onSelect, onBack, embedded }: { activeId: string | null; onSelect: (id: string | null) => void; onBack: () => void; embedded: boolean }) {
   const threads = useCore((s) => s.threads) ?? [];
   const archived = useCore((s) => s.archived);
   const [showArchive, setShowArchive] = useState(false);
@@ -92,9 +102,10 @@ function ThreadList({ activeId, onSelect, onBack }: { activeId: string | null; o
   return (
     <aside className="ncore-list" aria-label="Чаты Ядра">
       <header className="ncore-list-head">
-        <button type="button" className="nx-icon-btn ncore-back" onClick={onBack} aria-label="Назад в «Ещё»"><ChevronLeft size={20} /></button>
+        {!embedded && <button type="button" className="nx-icon-btn ncore-back" onClick={onBack} aria-label="Назад в «Ещё»"><ChevronLeft size={20} /></button>}
         <span className="ncore-brand"><Atom size={20} aria-hidden="true" /> Ядро</span>
         <button type="button" className="nx-icon-btn" onClick={() => void newChat()} aria-label="Новый чат" title="Новый чат"><MessageSquarePlus size={18} /></button>
+        {embedded && <button type="button" className="nx-icon-btn" onClick={onBack} aria-label="Закрыть Ядро" title="Закрыть"><X size={18} /></button>}
       </header>
       <label className="ncore-search">
         <Search size={14} aria-hidden="true" />
