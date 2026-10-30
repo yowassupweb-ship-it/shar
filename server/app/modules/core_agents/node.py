@@ -128,8 +128,8 @@ def _agent_hash() -> str:
     return hashlib.sha256(_kit_text("shar-node.mjs").encode("utf-8")).hexdigest()[:16]
 
 
-# GPT и Gemini безопасны с 1.1.0; Kimi умеет отвечать в чате с 1.1.2. Более ранним нодам такие задачи не отдаём.
-PROVIDER_MIN_VERSION = {"gemini": (1, 1, 0), "codex": (1, 1, 0), "kimi": (1, 1, 2)}
+# GPT и Gemini безопасны с 1.1.0; Kimi продолжает сессии в стабильном каталоге диалога с 1.1.3.
+PROVIDER_MIN_VERSION = {"gemini": (1, 1, 0), "codex": (1, 1, 0), "kimi": (1, 1, 3)}
 
 
 def _version(node: dict) -> tuple:

@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "1.1.2";
+const VERSION = "1.1.3";
 const SHAR_URL = String(process.env.SHAR_URL || "").replace(/\/+$/, "");
 const TOKEN = String(process.env.SHAR_NODE_TOKEN || "");
 // Отпечаток этого файла — так же, как его считает Шар (переводы строк без \r): разошёлся с присланным в опросе —
@@ -397,7 +397,7 @@ function streamCli(command, args, opts, entry, handle, state) {
       if (limit && !state.rateLimit) state.rateLimit = { provider: opts.provider, detail: limit, used_percent: 100 };
       if ((code !== 0 && !state.text) || state.failure) {
         const reason = humanError(state.failure) || stripAnsi(tail).trim().split("\n").slice(-4).join(" ") || `выход с кодом ${code}`;
-        if (/session|conversation|thread/i.test(reason) && /not found|no such|does not exist|invalid/i.test(reason) && args.some((a) => /resume|session/.test(a))) {
+        if (/session|conversation|thread/i.test(reason) && /not found|no such|does not exist|invalid|different directory/i.test(reason) && args.some((a) => /resume|session/.test(a))) {
           return reject(new Error(`session not found: ${reason}`));
         }
         state.authExpired = authProblem(reason);
@@ -757,8 +757,8 @@ function runCodex(job, dirs, resumeId, report, entry) {
 // ── Kimi Code (подписка Kimi) ────────────────────────────────────────────────
 
 function kimiFiles(job, dirs) {
-  // Рабочий каталог отдельный на запуск: mcp.json может содержать личные секреты и не пересекается с параллельными ответами.
-  const cwd = path.join(dirs.work, ".shar-kimi", String(job.id).replace(/[^A-Za-z0-9_-]/g, "_"));
+  // Kimi привязывает сессию к рабочему каталогу: он должен быть стабильным для диалога и отдельным от других диалогов.
+  const cwd = path.join(dirs.work, ".shar-kimi", String(job.threadId).replace(/[^A-Za-z0-9_-]/g, "_"));
   fs.mkdirSync(path.join(cwd, ".kimi-code"), { recursive: true, mode: 0o700 });
   const mcpServers = {
     shar: { url: absolute(job.mcp.url), bearerTokenEnvVar: "SHAR_MCP_TOKEN", toolTimeoutMs: 120_000 },
