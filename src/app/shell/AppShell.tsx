@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router';
 import { Palette as PaletteIcon, PinOff, Settings, type LucideIcon } from 'lucide-react';
-import { SectionIcon } from '@/shared/ui/SectionIcon';
+import { CoreIcon, isImageIcon } from '@/shared/ui/CoreIcon';
 import { PALETTES, useTheme } from '@/shared/theme/ThemeContext';
 import { Avatar } from '@/shared/ui/Avatar';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
@@ -258,7 +258,7 @@ const Nav = memo(function Nav({ section, badges, alerts: rawAlerts, visibleTabs,
                 onClick={t.onToggle ? (e) => { e.preventDefault(); t.onToggle?.(); } : undefined}
                 onContextMenu={(e) => { if (!onNavToolRemove) return; e.preventDefault(); setToolMenu({ id: t.id, anchor: { x: e.clientX, y: e.clientY } }); }}
               >
-                <span className="nx-nav-icon nx-nav-tool" style={{ '--a': t.tint[0], '--b': t.tint[1] } as CSSProperties} aria-hidden="true"><t.icon size={13} /></span>
+                <span className="nx-nav-icon nx-nav-tool" data-image={isImageIcon(t.icon) || undefined} style={{ '--a': t.tint[0], '--b': t.tint[1] } as CSSProperties} aria-hidden="true"><t.icon size={isImageIcon(t.icon) ? 22 : 13} /></span>
                 <span className="nx-nav-label">{t.label}</span>
                 {t.count > 0 && (
                   <span className="nx-count nx-nav-badge" aria-label={`Ждут внимания: ${t.count}`}>{t.count > 99 ? '99+' : t.count}</span>
@@ -276,7 +276,7 @@ const Nav = memo(function Nav({ section, badges, alerts: rawAlerts, visibleTabs,
       {agent && (
         <button type="button" className="nx-agent-btn" onClick={agent.onToggle} aria-expanded={agent.open} aria-controls={agent.controls}
           title="Агент — чат с агентами Шара (Ctrl+A)">
-          <SectionIcon name="core" size={20} />
+          <CoreIcon size={20} />
           <span>Агент</span>
           <kbd>Ctrl A</kbd>
         </button>

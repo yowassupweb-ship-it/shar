@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { ArrowUpRight, PanelBottom, PanelBottomClose, Pin, PinOff, Search } from 'lucide-react';
+import { isImageIcon } from '@/shared/ui/CoreIcon';
 import { showToast } from '@/shared/ui/Toast';
 import { ThemePicker } from '@/shared/theme/ThemePicker';
 import { useChatStore } from '@/features/chat';
@@ -66,8 +67,8 @@ function ToolTile({ t, pinned, count, onMenu }: { t: Tool; pinned: boolean; coun
       onDragStart={draggable ? (e) => { e.dataTransfer.setData(NAV_TOOL_DRAG, t.id); e.dataTransfer.effectAllowed = 'copy'; } : undefined}
       {...press}
     >
-      <span className="nmo-icon" style={{ '--a': t.tint[0], '--b': t.tint[1] } as CSSProperties} aria-hidden="true">
-        <Icon size={30} strokeWidth={1.8} />
+      <span className="nmo-icon" data-image={isImageIcon(Icon) || undefined} style={{ '--a': t.tint[0], '--b': t.tint[1] } as CSSProperties} aria-hidden="true">
+        <Icon size={isImageIcon(Icon) ? 60 : 30} strokeWidth={1.8} />
         {t.external && <ArrowUpRight className="nmo-ext" size={12} strokeWidth={2.6} />}
         {count > 0 && <span className="nx-count nmo-badge" aria-label={`Ждут внимания: ${count}`}>{count > 99 ? '99+' : count}</span>}
       </span>

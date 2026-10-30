@@ -121,3 +121,5 @@
   .nsp-foot { display: none; }
 }
 .nsp-field input:focus-visible { outline: none; box-shadow: none; }
+/* «Ядро»: картинка сама — плитка, без цветной подложки. */
+.nsp-kind[data-image] { background: none; box-shadow: none; }

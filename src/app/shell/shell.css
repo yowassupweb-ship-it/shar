@@ -275,3 +275,6 @@
   /* На телефоне клавиатуры нет, а в капсуле места мало: агент — плиткой «Ядро» в «Ещё». */
   .nx-agent-btn { display: none; }
 }
+/* «Ядро»: картинка сама — плитка, без цветной подложки. */
+.nx-nav-tool[data-image] { background: none; box-shadow: none; }
+.nx-core-icon { display: inline-block; flex: none; object-fit: contain; vertical-align: middle; }

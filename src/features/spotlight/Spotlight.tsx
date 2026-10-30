@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { createPortal } from 'react-dom';
 import { create } from 'zustand';
 import { Clock, CornerDownLeft, FileText, RefreshCw, Search, Shield, Trash2, X, Zap } from 'lucide-react';
+import { isImageIcon } from '@/shared/ui/CoreIcon';
 import {
   chatTitle, isFavorites, isGroupChat, isNotifications, lastActivity, otherParticipant, requestJump, useChatStore,
 } from '@/features/chat';
@@ -110,7 +111,8 @@ function kindIcon(kind: keyof typeof KINDS): ReactNode {
 
 /** Плашка инструмента — та же, что в «Ещё»: иконка на его градиенте. */
 function toolIcon(t: Tool): ReactNode {
-  return <span className="nsp-kind" style={{ '--a': t.tint[0], '--b': t.tint[1] } as React.CSSProperties}><t.icon size={15} /></span>;
+  const image = isImageIcon(t.icon);
+  return <span className="nsp-kind" data-image={image || undefined} style={{ '--a': t.tint[0], '--b': t.tint[1] } as React.CSSProperties}><t.icon size={image ? 28 : 15} /></span>;
 }
 
 interface Action { id: string; title: string; subtitle: string; words: string; icon: ReactNode; run: () => void }

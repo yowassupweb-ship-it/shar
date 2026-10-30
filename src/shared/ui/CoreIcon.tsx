@@ -1,10 +1,18 @@
-import { createLucideIcon } from 'lucide-react';
+import { forwardRef } from 'react';
+import type { LucideIcon, LucideProps } from 'lucide-react';
+
+const SRC = '/icons/nav-v2/core.png?v=7';
 
 /**
- * Знак «Ядра» (агенты Шара): шестигранная оболочка и заполненное ядро в центре. Свой, чтобы не путать с атомом
- * в логотипе Шара. Собран как значок lucide — принимает size, strokeWidth и className, встаёт везде вместо Atom.
+ * Знак «Ядра» (агенты Шара) — объёмный атом, та же картинка, что на кнопке «Агент» в нижней панели.
+ * Встаёт везде вместо значка lucide (те же size и className). Плитки с цветной подложкой (Ещё, Настройки, поиск,
+ * нижнее меню) для него подложку не рисуют — см. isImageIcon: картинка сама и есть плитка.
  */
-export const CoreIcon = createLucideIcon('shar-core', [
-  ['path', { d: 'M12 2.6 20.2 7.3v9.4L12 21.4l-8.2-4.7V7.3Z', key: 'shell' }],
-  ['circle', { cx: '12', cy: '12', r: '3.4', fill: 'currentColor', key: 'core' }],
-]);
+const CoreImage = forwardRef<SVGSVGElement, LucideProps>(function CoreIcon({ size = 24, className }, _ref) {
+  return <img className={className ? `nx-core-icon ${className}` : 'nx-core-icon'} src={SRC} alt="" aria-hidden="true" width={size} height={size} draggable={false} />;
+});
+
+export const CoreIcon = CoreImage as unknown as LucideIcon;
+
+/** Значок — картинка, а не линия: плитке не нужна цветная подложка, картинка встаёт во весь её размер. */
+export const isImageIcon = (icon: unknown): boolean => icon === CoreIcon;

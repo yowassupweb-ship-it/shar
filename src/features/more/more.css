@@ -104,3 +104,5 @@
 /* Единичка инструмента (невзятые заявки, диалоги без ответа) — в углу плашки, как на иконке приложения. */
 .nmo-badge { position: absolute; top: -6px; right: -6px; min-width: 20px; height: 20px; padding: 0 6px; box-shadow: 0 0 0 2px var(--surface-app, var(--surface-panel)); }
 .nmo-tile[draggable="true"] { -webkit-user-drag: element; }
+/* «Ядро»: картинка сама — плитка, без цветной подложки. */
+.nmo-icon[data-image] { background: none; box-shadow: none; }

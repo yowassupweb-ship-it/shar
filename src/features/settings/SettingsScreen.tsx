@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Bell, Bot, ChevronLeft, ChevronRight, KeyRound, LayoutGrid, LogOut, MonitorSmartphone, Palette, RotateCw, User, Volume2 } from 'lucide-react';
-import { CoreIcon } from '@/shared/ui/CoreIcon';
+import { CoreIcon, isImageIcon } from '@/shared/ui/CoreIcon';
 import { useAgentBridge } from '@/shared/core/agentBridge';
 import { logout } from '@/shared/session/session';
 import { adoptServerChatPrefs } from '@/shared/settings/chatPrefs';
@@ -124,7 +124,7 @@ export default function SettingsScreen() {
                 aria-current={open === s.id ? 'page' : undefined}
                 onClick={() => go(s.id)}
               >
-                <span className="nst-icon" style={{ '--a': s.tint[0], '--b': s.tint[1] } as CSSProperties} aria-hidden="true"><Icon size={16} /></span>
+                <span className="nst-icon" data-image={isImageIcon(Icon) || undefined} style={{ '--a': s.tint[0], '--b': s.tint[1] } as CSSProperties} aria-hidden="true"><Icon size={isImageIcon(Icon) ? 28 : 16} /></span>
                 <span className="nx-row-label">{s.label}</span>
                 {!wide && <ChevronRight size={16} className="nst-chevron" aria-hidden="true" />}
               </button>

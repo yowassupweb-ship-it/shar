@@ -362,3 +362,5 @@
 .nst-core-mcp-secret { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: var(--space-2); }
 .nst-core-title { display: flex; align-items: center; gap: 5px; }
 .nst-core-title svg { flex: none; }
+/* «Ядро»: картинка сама — плитка, без цветной подложки. */
+.nst-icon[data-image] { background: none; box-shadow: none; }
