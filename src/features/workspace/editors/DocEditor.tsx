@@ -32,6 +32,9 @@ import { CursorLayer, type CursorShape } from '../CursorLayer';
 import { bindDoc } from '../live/docOps';
 import type { CursorPos, RemoteCursor } from '../useCursors';
 
+/** Сколько старый экземпляр редактора остаётся поверх нового при пересоздании, мс. */
+const LEAVE_MS = 700;
+
 /** Курсор в документе: смещения в тексте, раздел (основной текст или колонтитул) и направление выделения. */
 type DocCursor = { s: number; e: number; seg: string; pg: number; b: 0 | 1 };
 
@@ -353,7 +356,11 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
       stopPopupGuard();
       stopToolbarStep();
       stopResizeGate();
-      window.setTimeout(() => { univer.dispose(); mount.remove(); }, 0);
+      // Старый экземпляр не убираем сразу: при пересоздании (агент или версия из истории записали материал мимо
+      // совместной правки) новый рисуется не мгновенно, и на его месте мелькал пустой лист. Старый остаётся поверх,
+      // без ввода, пока новый не нарисуется, и только потом исчезает — подмена выглядит как обновление текста.
+      mount.classList.add('nws-univer-leaving');
+      window.setTimeout(() => { univer.dispose(); mount.remove(); }, LEAVE_MS);
     };
   }, [loadKey, readOnly, theme, live]);
 

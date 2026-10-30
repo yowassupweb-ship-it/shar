@@ -345,6 +345,8 @@
 /* ── Univer: документы и таблицы ──────────────────────────────────────── */
 .nws-univer { position: relative; height: 100%; min-height: 0; }
 .nws-univer-mount { position: absolute; inset: 0; }
+.nws-univer-mount.nws-univer-leaving { z-index: 1; pointer-events: none; animation: nws-univer-leave 160ms ease-in 540ms forwards; }
+@keyframes nws-univer-leave { to { opacity: 0; } }
 /* Univer держит у каретки скрытое поле ввода (ширина 0, data-u-comp="editor"; вешает его в свой корень или в body).
    Общее кольцо фокуса (.nx :focus-visible) рисовало на нём
    синюю точку над курсором — у полей ввода внутри редакторов кольца нет, курсор и выделение рисует сам Univer. */

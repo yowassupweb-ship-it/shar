@@ -29,6 +29,9 @@ import type { CursorPos, RemoteCursor } from '../useCursors';
 import { bindSheet, isSharedSheetMutation } from '../live/sheetOps';
 import { Spinner } from '@/shared/ui/Spinner';
 
+/** Сколько старый экземпляр редактора остаётся поверх нового при пересоздании, мс. */
+const LEAVE_MS = 700;
+
 /** Курсор в таблице: лист и выделенный диапазон (строки и столбцы с нуля). */
 type SheetCursor = { sh: string; r1: number; c1: number; r2: number; c2: number };
 
@@ -376,7 +379,11 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
       stopLinkButton();
       stopToolbarStep();
       stopResizeGate();
-      window.setTimeout(() => { univer.dispose(); mount.remove(); }, 0);
+      // Старый экземпляр не убираем сразу: при пересоздании (агент или версия из истории записали материал мимо
+      // совместной правки) новый рисуется не мгновенно, и на его месте мелькал пустой лист. Старый остаётся поверх,
+      // без ввода, пока новый не нарисуется, и только потом исчезает — подмена выглядит как обновление текста.
+      mount.classList.add('nws-univer-leaving');
+      window.setTimeout(() => { univer.dispose(); mount.remove(); }, LEAVE_MS);
     };
   }, [book, readOnly, theme, live]);
 
