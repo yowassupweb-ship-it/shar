@@ -84,8 +84,10 @@ def test_login_run_and_reply_through_node(client, admin):
             "context": [{"kind": "document", "title": "План", "id": "94", "url": "/office?kind=document&id=94"}]}).json()
         assert sent["reply"]["status"] == "queued"
         run = _poll(client, token).json()["jobs"][0]
-        assert run["kind"] == "run" and run["model"] == "claude-opus-5-5" and run["prompt"] == "Что у меня завтра?"
-        assert "«План»" in run["system"] and run["mcp"]["token"].startswith("shar_mcp_")
+        # «Где я» — в самом сообщении хода (GPT и Gemini при продолжении сессии системную часть не получают),
+        # системная часть от хода к ходу не меняется.
+        assert run["kind"] == "run" and run["model"] == "claude-opus-5-5" and run["prompt"].endswith("\n\nЧто у меня завтра?")
+        assert "«План» (id 94)" in run["prompt"] and "«План»" not in run["system"] and run["mcp"]["token"].startswith("shar_mcp_")
         # Ключ запуска не виден человеку в его списке ключей, но работает — с календарём и задачами.
         assert all(not k["name"].startswith("Ядро") for k in admin.get("/api/mcp/keys").json()["keys"])
         listed = client.post("/api/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
