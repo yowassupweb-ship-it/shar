@@ -214,8 +214,13 @@
   min-height: 0;
   overflow: hidden;
   background: var(--surface-panel, var(--bg-color));
-  transition: width var(--duration-base) var(--ease-out);
 }
+/* Ширину не анимируем: раздел слева (документ, таблица) перекладывался бы в каждом кадре — редактор «Офиса»
+   на каждый кадр перемеряет свою панель инструментов, и открытие шло рывками. Ширина меняется один раз,
+   а мягко въезжает только содержимое панели — это не трогает раскладку раздела. */
+.nx-core-panel[data-open] .nx-core-panel-inner { animation: nx-core-in var(--duration-base) var(--ease-out); }
+@keyframes nx-core-in { from { opacity: 0; transform: translateX(16px); } }
+@media (prefers-reduced-motion: reduce) { .nx-core-panel[data-open] .nx-core-panel-inner { animation: none; } }
 /* Граница — тенью, а не рамкой: закрытая панель не занимает ни пикселя. Чёткая черта (--border-strong, обычной
    на светлой теме почти не видно) плюс мягкая тень на раздел — панель читается как слой поверх. */
 .nx-core-panel[data-open] {
