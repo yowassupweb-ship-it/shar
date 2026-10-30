@@ -27,13 +27,12 @@ import { UploadingImageIoService, uploadPastedImages } from '../lib/imageIo';
 import { SharEmojiPicker } from '@/shared/emoji/SharEmojiPicker';
 import { emptySnapshot, ensureDrawingResource, fingerprint, localizeImages, parseSnapshot, type DocSnapshot } from '../lib/docSnapshot';
 import { addLinkButton, addWebFonts, docsLayoutFonts, loadLayoutFonts, relayoutOnHostResize, stepToolbarWidth, throttleWindowResize, disableBlockHandle, reserveToolbarSpace, hidePopupsUnderToolbar, docLinkProbe, hideMissingFonts, isDarkTheme, overrideComponent, styleDocSurface, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
+import { retireMount, takeOverWhenRendered } from '../lib/univerSwap';
 import type { EditorProps } from './types';
 import { CursorLayer, type CursorShape } from '../CursorLayer';
 import { bindDoc } from '../live/docOps';
 import type { CursorPos, RemoteCursor } from '../useCursors';
 
-/** Сколько старый экземпляр редактора остаётся поверх нового при пересоздании, мс. */
-const LEAVE_MS = 700;
 
 /** Курсор в документе: смещения в тексте, раздел (основной текст или колонтитул) и направление выделения. */
 type DocCursor = { s: number; e: number; seg: string; pg: number; b: 0 | 1 };
@@ -333,6 +332,7 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
       }, 250);
     });
 
+    const stopTakeOver = takeOverWhenRendered(univerAPI, el, mount);
     return () => {
       window.removeEventListener('keydown', onFindKey);
       restoreEmoji();
@@ -356,11 +356,9 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
       stopPopupGuard();
       stopToolbarStep();
       stopResizeGate();
-      // Старый экземпляр не убираем сразу: при пересоздании (агент или версия из истории записали материал мимо
-      // совместной правки) новый рисуется не мгновенно, и на его месте мелькал пустой лист. Старый остаётся поверх,
-      // без ввода, пока новый не нарисуется, и только потом исчезает — подмена выглядит как обновление текста.
-      mount.classList.add('nws-univer-leaving');
-      window.setTimeout(() => { univer.dispose(); mount.remove(); }, LEAVE_MS);
+      // Старый экземпляр остаётся поверх нового, пока тот не отрисуется (lib/univerSwap.ts) — без пустого листа.
+      stopTakeOver();
+      retireMount(mount, () => univer.dispose());
     };
   }, [loadKey, readOnly, theme, live]);
 
