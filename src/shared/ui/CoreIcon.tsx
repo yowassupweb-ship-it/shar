@@ -1,5 +1,5 @@
 import { forwardRef } from 'react';
-import type { LucideIcon, LucideProps } from 'lucide-react';
+import { Atom, type LucideIcon, type LucideProps } from 'lucide-react';
 
 const SRC = '/icons/nav-v2/core.png?v=8';
 
@@ -21,3 +21,6 @@ export const CoreIcon = CoreImage as unknown as LucideIcon;
 
 /** Значок — картинка, а не линия: плитке не нужна цветная подложка, картинка встаёт во весь её размер. */
 export const isImageIcon = (icon: unknown): boolean => icon === CoreIcon;
+
+/** Мини-версия знака «Ядра» — линейный атом: пункты меню, мелкие кнопки и подписи, где объёмная картинка не к месту. */
+export const CoreMini: LucideIcon = Atom;

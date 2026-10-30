@@ -1,6 +1,6 @@
 import { memo, useEffect, useState } from 'react';
 import { AlertTriangle, Brain, Copy, CornerDownRight, FileText, Forward, Hourglass, Reply, RotateCw, ShieldCheck, Square, X } from 'lucide-react';
-import { CoreIcon } from '@/shared/ui/CoreIcon';
+import { CoreMini } from '@/shared/ui/CoreIcon';
 import { formatTime } from '@/shared/ui/format';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
@@ -167,7 +167,7 @@ export const MessageItem = memo(function MessageItem({ message, quote, h }: {
         </Menu>
       )}
       {!mine && (
-        <span className="ncore-agent-avatar" aria-hidden="true">{p.provider ? <BrandMark id={p.provider} size={14} /> : <CoreIcon size={14} />}</span>
+        <span className="ncore-agent-avatar" aria-hidden="true">{p.provider ? <BrandMark id={p.provider} size={14} /> : <CoreMini size={14} />}</span>
       )}
       <div className="ncore-col">
         {!mine && (

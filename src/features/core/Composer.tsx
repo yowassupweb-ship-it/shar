@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUp, CalendarDays, Check, Dumbbell, MoreHorizontal, ShieldCheck, CheckSquare, CornerDownRight, FileSpreadsheet, FileText, Folder, Forward, LayoutGrid, Mail, MessageCircle, MonitorUp,
   Paperclip, Plug, Presentation, Slash, StickyNote, User, X } from 'lucide-react';
-import { CoreIcon } from '@/shared/ui/CoreIcon';
+import { CoreMini } from '@/shared/ui/CoreIcon';
 import { clearAgentAttached, clearAgentForward, detachFromAgent, useAgentBridge, type AgentForward } from '@/shared/core/agentBridge';
 import { navigate } from '@/shared/navigation/navigate';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
@@ -235,7 +235,7 @@ export const Composer = forwardRef<ComposerHandle, {
     <div className="ncore-composer">
       {attached.length > 0 && (
         <div className="ncore-where" aria-label="Отправлено агенту">
-          <span className="ncore-where-label"><CoreIcon size={12} aria-hidden="true" /> Агенту</span>
+          <span className="ncore-where-label"><CoreMini size={12} aria-hidden="true" /> Агенту</span>
           {attached.map((a) => (
             <span key={a.url} className="ncore-where-chip" data-pinned="">
               <span>{a.title}</span>
