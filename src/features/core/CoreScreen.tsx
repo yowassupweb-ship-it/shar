@@ -59,6 +59,14 @@ export default function CoreScreen({ embedded = false, onClose }: { embedded?: b
   const leave = embedded && onClose ? onClose : () => navigate(paths.more);
 
   useEffect(() => { void loadAll(); }, []);
+  // Агентов подключили не здесь (другое окно, другое устройство, администратор) — вернулись в окно или сокет
+  // переподключился, перечитываем список: событие core_account могло пройти мимо.
+  useEffect(() => {
+    const refresh = () => { if (!document.hidden) void coreApi.catalog().then((catalog) => useCore.setState({ catalog })).catch(() => undefined); };
+    window.addEventListener('focus', refresh);
+    const off = realtime.subscribe((event) => { if (event.type === 'resync') refresh(); });
+    return () => { window.removeEventListener('focus', refresh); off(); };
+  }, []);
   // Живые события: ответы агентов, свои сообщения с других устройств, переименования и архив.
   useEffect(() => realtime.subscribe((event) => {
     const e = event as { type?: string; message?: CoreMessage; thread?: CoreThread };

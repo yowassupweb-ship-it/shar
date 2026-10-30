@@ -31,6 +31,9 @@
 .ncore-brand svg { color: var(--text-main); }
 .ncore-search { display: flex; align-items: center; gap: 8px; height: 32px; margin: 0 var(--space-3) var(--space-2); padding: 0 10px; border-radius: 8px; background: var(--ncore-soft); color: var(--text-muted); }
 .ncore-search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--text-main); font: inherit; font-size: var(--text-sm); }
+/* Фокус — на всей плашке, как у полей Шара (.nx-field), а не прямоугольником вокруг самого поля. */
+.nx .ncore-search input:focus-visible { box-shadow: none; }
+.ncore-search:focus-within { box-shadow: var(--focus-ring); }
 .ncore-tabs { margin: 0 var(--space-3) var(--space-2); }
 .ncore-threads { flex: 1; min-height: 0; padding: 0 var(--space-2) var(--space-4); }
 .ncore-thread { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; width: 100%; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--text-main); font: inherit; text-align: left; cursor: pointer; }
@@ -257,7 +260,7 @@
 /* «Видит»: что открыто у человека. Щелчок — зачеркнуть (агенту не уйдёт). */
 .ncore-where { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin: 0 2px 6px; }
 .ncore-where-label { display: inline-flex; align-items: center; gap: 4px; margin-right: 2px; color: var(--text-muted); font-size: 11px; }
-.ncore-where-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; height: 22px; padding: 0 8px 0 6px; border: 0; border-radius: 6px; background: none; box-shadow: inset 0 0 0 1px var(--ncore-line); color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; transition: box-shadow var(--duration-fast) var(--ease-out), color var(--duration-fast); }
+.ncore-where-chip { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: min(100%, 480px); height: 22px; padding: 0 8px 0 6px; border: 0; border-radius: 6px; background: none; box-shadow: inset 0 0 0 1px var(--ncore-line); color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; transition: box-shadow var(--duration-fast) var(--ease-out), color var(--duration-fast); }
 .ncore-where-chip svg { flex: none; color: var(--text-muted); }
 .ncore-where-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ncore-where-chip[data-here] { color: var(--text-main); }
@@ -344,7 +347,8 @@
 @container ncomp (max-width: 640px) {
   .ncore-wide { display: none; }
   .ncore-more { display: grid; }
-  .ncore-bar .nx-select.ncore-picker { min-width: 0; max-width: 140px; }
+  /* Название модели режется, только когда места правда нет: модель сжимается первой, кнопки — нет. */
+  .ncore-bar .nx-select.ncore-picker { flex: 0 1 auto; min-width: 0; max-width: none; }
   .ncore-bar .nx-select.ncore-picker .nx-select-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 @container ncomp (max-width: 380px) {

@@ -780,7 +780,9 @@ function runGemini(job, dirs, resumeId, report, entry) {
       if (event.status && event.status !== "success") state.failure = state.failure || String(event.error?.message || event.status);
     }
   };
-  const env = { ...userEnv(dirs), GEMINI_API_KEY: job.apiKey || "", GEMINI_CLI_SYSTEM_SETTINGS_PATH: settings, GEMINI_SYSTEM_MD: "", GEMINI_CLI_NO_RELAUNCH: "true" };
+  const env = { ...userEnv(dirs), GEMINI_API_KEY: job.apiKey || "", GEMINI_CLI_SYSTEM_SETTINGS_PATH: settings, GEMINI_SYSTEM_MD: "", GEMINI_CLI_NO_RELAUNCH: "true",
+    // Рабочая папка человека на ноде — своя, её создаёт нода: доверяем (иначе Gemini CLI 0.66 молча гасит режим yolo).
+    GEMINI_CLI_TRUST_WORKSPACE: "true" };
   // Правила Шара — в начале первого сообщения сессии: системный промпт Gemini CLI заменять целиком не нужно.
   const base = resumeId ? promptText(job, true) : `${job.system}\n\n---\n\n${promptText(job, false)}`;
   // Картинки — ссылками @файл: Gemini CLI сам подкладывает их модели.
