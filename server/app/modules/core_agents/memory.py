@@ -37,6 +37,10 @@ router = APIRouter()
 
 PROFILE_MAX = 12_000
 PROMPT_PROFILE = 2_500
+PROMPT_PASSPORT = 1_600
+# Общая запись с этим тегом — паспорт компании, целиком в начале каждого запуска; с тегом «о компании» — справочник.
+PASSPORT_TAG = "паспорт"
+REFERENCE_TAG = "о компании"
 NOTE_MAX = 2_000
 SKILL_MAX = 20_000
 NOTES_KEEP = 2_000
@@ -143,15 +147,20 @@ def search_notes(user_id: str, query: str = "", tag: str = "", limit: int = 20, 
     words = [w for w in re.findall(r"\w+", query.lower()) if len(w) > 2][:6]
     where = [{"mine": "user_id = %s AND NOT shared", "company": "shared AND %s <> ''"}.get(scope, "(user_id = %s OR shared)")]
     params: list = [user_id]
-    for word in words:
-        where.append("search LIKE %s")
-        params.append(f"%{word[:max(4, len(word) - 2)]}%")
+    # Слово ищется с начала слова: «инн» найдёт «ИНН», но не «длинные». Буквы перечислены явно — база может быть в локали C.
+    stems = [word[:max(4, len(word) - 2)] for word in words]
+    for stem in stems:
+        where.append("search ~ %s")
+        params.append(f"(^|[^0-9a-zа-яё]){re.escape(stem)}")
     if tag:
         where.append("%s = ANY(tags)")
         params.append(tag.lower())
+    # Выше — записи, у которых слова есть в заголовке (первые ~120 знаков), затем свежие.
+    rank = " + ".join(["(position(%s in left(search, 120)) > 0)::int"] * len(stems)) or "0"
     rows = db.conn.fetch_all(
-        f"SELECT id, user_id, body, tags, actor, shared, created_at FROM core_notes WHERE {' AND '.join(where)} ORDER BY id DESC LIMIT %s",
-        (*params, max(1, min(limit, 200)))) or []
+        f"SELECT id, user_id, body, tags, actor, shared, created_at FROM core_notes WHERE {' AND '.join(where)} "
+        f"ORDER BY {rank} DESC, id DESC LIMIT %s",
+        (*params, *stems, max(1, min(limit, 200)))) or []
     return [{"id": str(r["id"]), "text": r["body"], "tags": list(r["tags"] or []), "by": r["actor"], "shared": r["shared"],
              "mine": r["user_id"] == user_id, "at": r["created_at"].isoformat()} for r in rows]
 
@@ -235,7 +244,13 @@ def prompt_context(user_id: str) -> str:
     if len(body) > PROMPT_PROFILE:
         body = body[:PROMPT_PROFILE].rsplit("\n", 1)[0] + "\n… (целиком — profile_read)"
     parts.append("## Профиль человека (ведёте вы: profile_note / profile_write)\n" + (body or "Пока пусто — заполняйте по ходу работы."))
-    latest = search_notes(user_id, limit=6, scope="company")
+    # Паспорт компании (общая запись с тегом «паспорт») — целиком: агент сразу знает, где работает.
+    passport = search_notes(user_id, tag=PASSPORT_TAG, limit=1, scope="company")
+    if passport:
+        parts.append("## О компании (подробнее — memory_search)\n" + passport[0]["text"][:PROMPT_PASSPORT])
+    # Справочник (паспорт и записи с тегом «о компании») агент ищет сам — в «свежее» он не попадает.
+    latest = [n for n in search_notes(user_id, limit=30, scope="company")
+              if PASSPORT_TAG not in n["tags"] and REFERENCE_TAG not in n["tags"]][:6]
     if latest:
         parts.append("## Свежее в общей памяти компании (всё — memory_search)\n" + "\n".join(f"- {n['text'][:140]}" for n in latest))
     active = skills(user_id, enabled_only=True)
