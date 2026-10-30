@@ -11,9 +11,16 @@ const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)'
 export function useFlip(container: RefObject<HTMLElement | null>, deps: unknown[], resetKey = '') {
   const prev = useRef(new Map<string, number>());
   const lastKey = useRef(resetKey);
+  const lastOrder = useRef('');
   useLayoutEffect(() => {
     const root = container.current;
     if (!root) return;
+    // Порядок строк тот же (открыли материал, сменилось время правки) — переезжать нечему, а замер заставил бы
+    // браузер разложить всю страницу заново (с открытой большой заметкой — 100+ мс на клике).
+    const flips = root.querySelectorAll<HTMLElement>('[data-flip]');
+    const order = Array.from(flips, (el) => el.dataset.flip).join('\n');
+    if (order === lastOrder.current && lastKey.current === resetKey) return;
+    lastOrder.current = order;
     const base = root.getBoundingClientRect().top - root.scrollTop;
     const next = new Map<string, number>();
     const animate = !reducedMotion() && lastKey.current === resetKey;
@@ -21,7 +28,7 @@ export function useFlip(container: RefObject<HTMLElement | null>, deps: unknown[
     // Сначала все замеры, потом все анимации: запуск анимации между замерами сбрасывал стили, и каждый следующий
     // getBoundingClientRect пересчитывал их заново — на сотнях строк раскрытие папки подвисало на сотни миллисекунд.
     const moved: Array<[HTMLElement, number]> = [];
-    root.querySelectorAll<HTMLElement>('[data-flip]').forEach((el) => {
+    flips.forEach((el) => {
       const key = el.dataset.flip as string;
       const top = el.getBoundingClientRect().top - base;
       next.set(key, top);

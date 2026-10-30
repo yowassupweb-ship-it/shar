@@ -10,10 +10,15 @@ type HastNode = { type?: string; position?: { start?: { line?: number } }; prope
 
 /** rehype-плагин: у каждого элемента страницы — номер строки исходника (data-line, с единицы). */
 export function rehypeSourceLines() {
-  return (tree: HastNode) => {
+  return rehypeSourceLinesFrom(0)();
+}
+
+/** То же для куска текста, который начинается не с первой строки: offset — сколько строк исходника выше куска. */
+export function rehypeSourceLinesFrom(offset: number) {
+  return () => (tree: HastNode) => {
     const walk = (node: HastNode) => {
       const line = node.position?.start?.line;
-      if (node.type === 'element' && line) node.properties = { ...node.properties, dataLine: line };
+      if (node.type === 'element' && line) node.properties = { ...node.properties, dataLine: line + offset };
       node.children?.forEach(walk);
     };
     walk(tree);

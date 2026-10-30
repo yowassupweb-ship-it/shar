@@ -1,7 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkBreaks from 'remark-breaks';
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { Components } from 'react-markdown';
 import { Bold, CheckSquare, Plus, Redo2, Undo2, X, Code2, Eye, Heading2, ImagePlus, Italic, Link2, List, ListOrdered, Pencil, Quote, Smile, Strikethrough, Underline } from 'lucide-react';
 import { uploadFileWithProgress } from '@/shared/api/uploadFile';
 import { renderTextWithEmoji } from '@/shared/emoji/emojiText';
@@ -9,11 +7,11 @@ import { SharEmojiPicker } from '@/shared/emoji/SharEmojiPicker';
 import { askConfirm, Menu, type MenuAnchor } from '@/shared/ui/overlay';
 import { merge3, shiftCaret } from '../lib/merge';
 import { highlightMarkdown } from '../lib/mdHighlight';
-import remarkUnderline from '../lib/remarkUnderline';
-import { rehypeSourceLines, showLineInField, showLineInView, topLineOfField, topLineOfView } from '../lib/viewPosition';
+import { showLineInField, showLineInView, topLineOfField, topLineOfView } from '../lib/viewPosition';
 import { cleanTabTitle, parseTabs, serializeTabs } from '../lib/noteTabs';
 import { applyText, diffText, TEXT_OP } from '../live/textOps';
 import { FindBar, findAll } from './FindBar';
+import { NoteView } from './NoteView';
 import type { EditorProps } from './types';
 import type { RemoteCursor } from '../useCursors';
 import { Spinner } from '@/shared/ui/Spinner';
@@ -335,7 +333,10 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
   };
   useEffect(() => { if (!editing) onCursor?.(null); }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
   // Цветной Markdown под прозрачным текстом поля (правка).
-  const coloured = useMemo(() => (editing ? highlightMarkdown(text) : null), [editing, text]);
+  // Подсветка большой заметки (120 тыс. знаков — ~250 мс) не держит переход в правку: поле сразу показывает обычный
+  // текст, цвета ложатся следующим, фоновым проходом (useDeferredValue). Пока их нет, текст поля не прозрачный.
+  const syntaxOn = useDeferredValue(editing, false);
+  const coloured = useMemo(() => (editing && syntaxOn ? highlightMarkdown(text) : null), [editing, syntaxOn, text]);
   useLayoutEffect(() => { if (syntax.current && area.current) syntax.current.scrollTop = area.current.scrollTop; }, [coloured]);
   // Курсоры коллег — только тех, кто в той же вкладке.
   const cursorLayer = useMemo(() => {
@@ -490,6 +491,37 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
   }
 
   // Слой подсветки под полем ввода: тот же текст теми же шрифтами, цветом — только фон у совпадений.
+  // Компоненты просмотра — один объект на всё время (меняется только readOnly): иначе запомненные куски
+  // NoteView перерисовывались бы на каждый ввод. Галочка зовёт свежий toggleTask через ref.
+  const toggleRef = useRef<(index: number) => void>(() => undefined);
+  toggleRef.current = toggleTask;
+  const viewComponents = useMemo<Components>(() => ({
+    p: (props) => <p data-line={props['data-line' as keyof typeof props] as number | undefined}>{withEmoji(props.children, 'p')}</p>,
+    li: ({ children, ...rest }) => <li {...rest}>{withEmoji(children, 'li')}</li>,
+    h1: (props) => <h1 data-line={props['data-line' as keyof typeof props] as number | undefined}>{withEmoji(props.children, 'h1')}</h1>,
+    h2: (props) => <h2 data-line={props['data-line' as keyof typeof props] as number | undefined}>{withEmoji(props.children, 'h2')}</h2>,
+    h3: (props) => <h3 data-line={props['data-line' as keyof typeof props] as number | undefined}>{withEmoji(props.children, 'h3')}</h3>,
+    table: ({ children }) => <ScrollTable className="nws-md-table"><table>{children}</table></ScrollTable>,
+    td: ({ children }) => <td>{withEmoji(children, 'td')}</td>,
+    th: ({ children }) => <th>{withEmoji(children, 'th')}</th>,
+    strong: ({ children }) => <strong>{withEmoji(children, 's')}</strong>,
+    em: ({ children }) => <em>{withEmoji(children, 'e')}</em>,
+    a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>,
+    input: (props) => {
+      if (props.type !== 'checkbox') return <input {...props} />;
+      // Номер галочки берём из самой страницы в момент клика: счётчик при рендере в dev-режиме
+      // (двойной вызов компонентов) убегал и правил не ту строку.
+      return (
+        <input
+          type="checkbox"
+          checked={Boolean(props.checked)}
+          disabled={readOnly}
+          onChange={(e) => toggleRef.current(Array.from(view.current?.querySelectorAll('input[type="checkbox"]') ?? []).indexOf(e.currentTarget))}
+        />
+      );
+    },
+  }), [readOnly]);
+
   const backdrop = useMemo(() => {
     if (!findOpen || !editing || !matches.length) return null;
     const parts: React.ReactNode[] = [];
@@ -541,7 +573,7 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
       )}
 
       {mode === 'edit' && !readOnly ? (
-        <div className="nws-note-edit" data-syntax="true">
+        <div className="nws-note-edit" data-syntax={coloured ? 'true' : undefined}>
           <div className="nws-note-back nws-note-syntax" ref={syntax} aria-hidden="true">{coloured}{'\n'}</div>
           {backdrop && <div className="nws-note-back" ref={back} aria-hidden="true">{backdrop}{'\n'}</div>}
         <textarea
@@ -572,38 +604,7 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
       ) : (
         <article ref={view} className="nws-note-view nx-scroll-y">
           {text.trim() ? (
-            <Markdown
-              remarkPlugins={[remarkGfm, remarkBreaks, remarkUnderline]}
-              rehypePlugins={[rehypeSourceLines]}
-              components={{
-                p: (props) => <p data-line={props['data-line' as keyof typeof props] as number | undefined}>{withEmoji(props.children, 'p')}</p>,
-                li: ({ children, ...rest }) => <li {...rest}>{withEmoji(children, 'li')}</li>,
-                h1: (props) => <h1 data-line={props['data-line' as keyof typeof props] as number | undefined}>{withEmoji(props.children, 'h1')}</h1>,
-                h2: (props) => <h2 data-line={props['data-line' as keyof typeof props] as number | undefined}>{withEmoji(props.children, 'h2')}</h2>,
-                h3: (props) => <h3 data-line={props['data-line' as keyof typeof props] as number | undefined}>{withEmoji(props.children, 'h3')}</h3>,
-                table: ({ children }) => <ScrollTable className="nws-md-table"><table>{children}</table></ScrollTable>,
-                td: ({ children }) => <td>{withEmoji(children, 'td')}</td>,
-                th: ({ children }) => <th>{withEmoji(children, 'th')}</th>,
-                strong: ({ children }) => <strong>{withEmoji(children, 's')}</strong>,
-                em: ({ children }) => <em>{withEmoji(children, 'e')}</em>,
-                a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>,
-                input: (props) => {
-                  if (props.type !== 'checkbox') return <input {...props} />;
-                  // Номер галочки берём из самой страницы в момент клика: счётчик при рендере в dev-режиме
-                  // (двойной вызов компонентов) убегал и правил не ту строку.
-                  return (
-                    <input
-                      type="checkbox"
-                      checked={Boolean(props.checked)}
-                      disabled={readOnly}
-                      onChange={(e) => toggleTask(Array.from(view.current?.querySelectorAll('input[type="checkbox"]') ?? []).indexOf(e.currentTarget))}
-                    />
-                  );
-                },
-              }}
-            >
-              {text}
-            </Markdown>
+            <NoteView text={text} components={viewComponents} revealLine={switching.current?.to === 'preview' ? switching.current.line : 0} />
           ) : (
             <p className="nws-hint">Пусто. Переключитесь на «Правка» и напишите что-нибудь.</p>
           )}
