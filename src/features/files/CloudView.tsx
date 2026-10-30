@@ -5,6 +5,7 @@ import {
   AlertCircle, ArrowUpDown, Check, ChevronRight, Copy, Download, ExternalLink, Folder, FolderInput, FolderPlus, LayoutGrid, Link2, List,
   Mail, MoreHorizontal, Pencil, Pin, PinOff, RotateCw, Send, Trash2, Upload, Users, PenLine } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
+import { AgentMenuItems } from '@/shared/core/AgentMenuItems';
 import { SearchField } from '@/shared/ui/SearchField';
 import { useChatStore, displayName } from '@/features/chat';
 import { useMailConnected, writeMail } from '@/features/mail';
@@ -516,6 +517,8 @@ ${url}` });
           {!canEdit(t.item) && t.kind === 'file' && (
             <MenuItem icon={<Copy size={16} />} onSelect={() => { setMenu(null); void navigator.clipboard.writeText(t.item.name).catch(() => {}); }}>Копировать имя</MenuItem>
           )}
+          <AgentMenuItems hiddenKind={t.kind === 'folder' ? 'cloud_folder' : 'file'} onDone={() => setMenu(null)}
+            target={{ kind: t.kind === 'folder' ? 'folder' : 'file', title: t.item.name, id: String(t.item.id), url: t.kind === 'folder' ? links.folder(String(t.item.id)) : links.file(String(t.item.id)) }} />
         </Menu>
       )}
 

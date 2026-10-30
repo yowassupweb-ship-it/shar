@@ -25,6 +25,7 @@ from app.modules.cloud import router as cloud
 MAX_WRITE = 10 * 1024 * 1024
 MAX_READ = 25 * 1024 * 1024
 MAX_CHARS = 60_000
+DEFAULT_CHARS = 15_000
 TEXT_EXT = {".txt", ".md", ".csv", ".tsv", ".json", ".xml", ".html", ".htm", ".yml", ".yaml", ".log", ".ini", ".sql", ".py", ".js", ".ts", ".css"}
 MIME = {".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv", ".json": "application/json", ".html": "text/html",
         ".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".svg": "image/svg+xml",
@@ -64,23 +65,39 @@ def _folder_view(f: dict[str, Any], me: str) -> dict[str, Any]:
             "mine": str(f.get("ownerId") or "") == me, "open": f"/files?folder={f.get('id')}"}
 
 
+def _hidden(access, file_id: Any = None, folder_id: Any = None, cache: dict | None = None) -> bool:
+    """«Скрыть от агента»: сам файл или любая папка над ним (core_agents/hidden.py)."""
+    from app.modules.core_agents.hidden import cloud_hidden, hidden_ids
+
+    hidden = cache if cache is not None else hidden_ids(access.me.user_id)
+    if file_id is not None and str(file_id) in hidden["file"]:
+        return True
+    return cloud_hidden(access.me.user_id, str(folder_id) if folder_id else None, hidden)
+
+
 def files_list(access, args: dict[str, Any]) -> dict[str, Any]:
+    from app.modules.core_agents.hidden import hidden_ids
+
     me = access.me
+    hidden = hidden_ids(me.user_id)
     folder = str(args.get("folder_id") or "") or None
+    if folder and _hidden(access, folder_id=folder, cache=hidden):
+        raise _err("Папка не найдена")
     query = str(args.get("query") or "").lower().strip()
     if query:  # поиск — по всем видимым файлам, без папок
         files = _call(cloud.get_cloud_files, folderId=None, allFiles=True, me=me)
-        hits = [f for f in files if all(w in str(f.get("name") or "").lower() for w in query.split())]
+        hits = [f for f in files if all(w in str(f.get("name") or "").lower() for w in query.split())
+                and not _hidden(access, f.get("id"), f.get("folderId"), hidden)]
         return {"files": [_file_view(f, me.user_id) for f in hits[:100]], "total": len(hits)}
-    folders = _call(cloud.get_cloud_folders, parentId=folder, me=me)
-    files = _call(cloud.get_cloud_files, folderId=folder, allFiles=False, me=me)
+    folders = [f for f in _call(cloud.get_cloud_folders, parentId=folder, me=me) if str(f.get("id")) not in hidden["cloud_folder"]]
+    files = [f for f in _call(cloud.get_cloud_files, folderId=folder, allFiles=False, me=me) if str(f.get("id")) not in hidden["file"]]
     return {"folderId": folder, "folders": [_folder_view(f, me.user_id) for f in folders],
             "files": [_file_view(f, me.user_id) for f in files[:300]], "total": len(files)}
 
 
 def _visible_file(access, file_id: str) -> dict[str, Any]:
     row = db.get_cloud_file_by_id(str(file_id or ""))
-    if not row or not cloud._can_view_cloud(row, access.me):
+    if not row or not cloud._can_view_cloud(row, access.me) or _hidden(access, row.get("id"), row.get("folder_id")):
         raise _err("Файл не найден или вам не открыт")
     return row
 
@@ -151,7 +168,8 @@ def file_read(access, args: dict[str, Any]) -> dict[str, Any]:
         return {**view, "text": None, "note": "Картинка: откройте по url"}
     text = extract_text(row.get("name") or "", _bytes(row))
     offset = max(0, int(args.get("offset") or 0))
-    chunk = text[offset:offset + MAX_CHARS]
+    limit = max(1000, min(int(args.get("max_chars") or DEFAULT_CHARS), MAX_CHARS))
+    chunk = text[offset:offset + limit]
     return {**view, "text": chunk, "chars": len(text), "nextOffset": offset + len(chunk) if offset + len(chunk) < len(text) else None}
 
 
@@ -235,9 +253,9 @@ TOOLS: list[dict[str, Any]] = [
      "description": "Раздел «Файлы» (облако Шара): папки и файлы в папке (без folder_id — корень) или поиск по имени по всем видимым файлам (query).",
      "inputSchema": {"type": "object", "properties": {"folder_id": _FOLDER, "query": {"type": "string"}}}},
     {"name": "file_read", "app": "files", "handler": file_read, "level": "read",
-     "description": "Текст файла (txt, md, csv, json, html, docx, xlsx, pdf) частями по 60 000 символов (offset/nextOffset) и прямая ссылка url — "
+     "description": "Текст файла (txt, md, csv, json, html, docx, xlsx, pdf) частями по 15 000 символов (max_chars до 60 000; offset/nextOffset) и прямая ссылка url — "
                     "для картинок и прочего бинарного скачайте файл по ней.",
-     "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}}, "required": ["id"]}},
+     "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}, "max_chars": {"type": "integer", "minimum": 1000, "maximum": 60000}}, "required": ["id"]}},
     {"name": "file_write", "app": "files", "handler": file_write, "level": "create",
      "description": "Положить новый файл в «Файлы»: text (txt, md, csv, html…), json или base64 (любой формат), до 10 МБ. "
                     "Отчёт, выгрузку, таблицу для Excel — сюда; документ для совместной правки — лучше create_document в «Офисе».",

@@ -70,19 +70,21 @@ def test_login_run_and_reply_through_node(client, admin):
         admin.post("/api/core/accounts/claude/login/code", json={"code": "abcd-1234"})
         code_job = _poll(client, token).json()["jobs"][0]
         assert code_job["kind"] == "login_code" and code_job["code"] == "abcd-1234"
-        _events(client, token, job["id"], {"type": "login", "state": "done", "account": "me@example.com"})
+        _events(client, token, job["id"], {"type": "login", "state": "done", "account": "me@example.com", "models": [
+            {"id": "claude-opus-5-5", "label": "Opus 5.5"}, {"id": "claude-sonnet-5-5", "label": "Sonnet 5.5"}]})
         card = next(a for a in admin.get("/api/core/accounts").json()["accounts"] if a["provider"] == "claude")
         assert card["state"] == "ready" and card["account"] == "me@example.com"
+        assert card["model"] == "claude-sonnet-5-5" and [m["id"] for m in card["models"]] == ["claude-opus-5-5", "claude-sonnet-5-5"]
         assert [a["id"] for a in admin.get("/api/core/catalog").json()["agents"]] == ["claude"]
 
         # Сообщение → ответ в очереди → нода берёт с ключом MCP и правилами → шаги, текст, итог.
         thread = admin.post("/api/core/threads", json={}).json()["thread"]
         sent = admin.post(f"/api/core/threads/{thread['id']}/messages", json={
-            "id": uuid.uuid4().hex, "body": "Что у меня завтра?", "model": "claude:opus",
+            "id": uuid.uuid4().hex, "body": "Что у меня завтра?", "model": "claude:claude-opus-5-5",
             "context": [{"kind": "document", "title": "План", "id": "94", "url": "/office?kind=document&id=94"}]}).json()
         assert sent["reply"]["status"] == "queued"
         run = _poll(client, token).json()["jobs"][0]
-        assert run["kind"] == "run" and run["model"] == "opus" and run["prompt"] == "Что у меня завтра?"
+        assert run["kind"] == "run" and run["model"] == "claude-opus-5-5" and run["prompt"] == "Что у меня завтра?"
         assert "«План»" in run["system"] and run["mcp"]["token"].startswith("shar_mcp_")
         # Ключ запуска не виден человеку в его списке ключей, но работает — с календарём и задачами.
         assert all(not k["name"].startswith("Ядро") for k in admin.get("/api/mcp/keys").json()["keys"])

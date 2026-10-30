@@ -32,8 +32,9 @@ const CLI = {
 const RUN_TIMEOUT_MS = 30 * 60_000;
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
 // Раздутая сессия дороже новой: каждый шаг пересылает весь контекст. Сначала сжимаем (/compact), потом — заново.
-const COMPACT_AT = 120_000;
-const ROTATE_AT = 180_000;
+// Пороги — как у наблюдателей MBOX (scripts/chat-threads.mjs), проверены там на живых чатах.
+const COMPACT_AT = 80_000;
+const ROTATE_AT = 120_000;
 const MAX_STEP_TEXT = 1500;
 const MAX_STEP_INPUT = 1200;
 const MAX_STEP_OUTPUT = 2500;
@@ -229,7 +230,8 @@ function promptText(job, resumed) {
 
 /** Состояние ответа, общее для всех провайдеров: цепочка шагов, текст, ход работы, лимит. */
 function newState() {
-  return { steps: [], text: "", partial: "", work: {}, rateLimit: null, sessionId: "", failure: "", authExpired: false, contextTokens: 0, model: "" };
+  // limits — все окна лимита подписки, что прислал провайдер за ход (пятичасовое, недельное): Шар показывает их в шапке чата.
+  return { steps: [], text: "", partial: "", work: {}, rateLimit: null, limits: {}, sessionId: "", failure: "", authExpired: false, contextTokens: 0, model: "" };
 }
 
 function limitFromText(text) {
@@ -285,12 +287,13 @@ async function runJob(job) {
     state.work.duration_ms = state.work.duration_ms || Date.now() - startedAt;
     if (state.failure) {
       await report.send({ type: "failed", error: state.failure, body: state.failure, steps: state.steps, work: state.work,
-                          rateLimit: state.rateLimit, authExpired: state.authExpired, model: state.model });
+                          rateLimit: state.rateLimit, authExpired: state.authExpired, model: state.model, limits: Object.values(state.limits) });
     } else {
       // Последняя реплика цепочки и есть ответ — второй раз под ответом её не показываем.
       const steps = state.steps.length && state.steps[state.steps.length - 1].kind === "text" && state.text.startsWith(state.steps[state.steps.length - 1].text.replace(/…$/, ""))
         ? state.steps.slice(0, -1) : state.steps;
-      await report.send({ type: "done", body: state.text || "(агент ничего не ответил)", steps, work: state.work, rateLimit: state.rateLimit, model: state.model });
+      await report.send({ type: "done", body: state.text || "(агент ничего не ответил)", steps, work: state.work, rateLimit: state.rateLimit, model: state.model,
+                          limits: Object.values(state.limits) });
     }
   } catch (error) {
     if (!entry.stopped) await report.send({ type: "failed", error: String(error.message || error).slice(0, 600) });
@@ -391,11 +394,53 @@ function claudeRateLimit(info) {
   };
 }
 
+// ── личные MCP человека ─────────────────────────────────────────────────────
+// Шар присылает их в задаче (job.extraMcp): http — адрес и заголовки, npm — пакет для npx, аргументы и переменные.
+// Секреты живут только в файлах настроек запуска (права 600) и в окружении процесса — и удаляются после хода.
+
+const extraMcp = (job) => (Array.isArray(job.extraMcp) ? job.extraMcp : []).filter((m) => /^[a-z][a-z0-9_-]{1,30}$/.test(m?.name || ""));
+
+function claudeExtra(job) {
+  return Object.fromEntries(extraMcp(job).map((m) => [m.name, m.type === "http"
+    ? { type: "http", url: m.url, headers: m.headers || {} }
+    : { type: "stdio", command: "npx", args: ["-y", m.package, ...(m.args || [])], env: m.env || {} }]));
+}
+
+function geminiExtra(job) {
+  return Object.fromEntries(extraMcp(job).map((m) => [m.name, m.type === "http"
+    ? { httpUrl: m.url, headers: m.headers || {}, timeout: 120_000, trust: true }
+    : { command: "npx", args: ["-y", m.package, ...(m.args || [])], env: m.env || {}, timeout: 120_000, trust: true }]));
+}
+
+/** Codex: настройки флагами -c. Авторизация http — через переменную окружения (bearer_token_env_var): так секрет не
+ *  попадает в командную строку. Массивы TOML (аргументы npm) на Windows через cmd.exe не передать — только на Linux. */
+function codexExtra(job) {
+  const flags = [];
+  const env = {};
+  for (const m of extraMcp(job)) {
+    if (m.type === "http") {
+      flags.push("-c", `mcp_servers.${m.name}.url=${m.url}`);
+      const auth = Object.entries(m.headers || {}).find(([k]) => k.toLowerCase() === "authorization")?.[1] || "";
+      const bearer = String(auth).replace(/^Bearer\s+/i, "");
+      if (bearer) {
+        const varName = `SHAR_MCP_${m.name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+        env[varName] = bearer;
+        flags.push("-c", `mcp_servers.${m.name}.bearer_token_env_var=${varName}`);
+      }
+    } else if (process.platform !== "win32") {
+      flags.push("-c", `mcp_servers.${m.name}.command=npx`, "-c", `mcp_servers.${m.name}.args=${JSON.stringify(["-y", m.package, ...(m.args || [])])}`);
+      for (const [k, v] of Object.entries(m.env || {})) flags.push("-c", `mcp_servers.${m.name}.env.${k}=${JSON.stringify(String(v))}`);
+    }
+  }
+  return { flags, env };
+}
+
 function claudeFiles(job, dirs) {
   const mcp = secretFile(dirs, `mcp-${job.id}.json`, JSON.stringify({
     mcpServers: {
       shar: { type: "http", url: absolute(job.mcp.url), headers: { Authorization: `Bearer ${job.mcp.token}` } },
       ...(browser ? { browser: { type: "stdio", command: browser, args: ["mcp"] } } : {}),
+      ...claudeExtra(job),
     },
   }));
   const system = secretFile(dirs, `system-${job.id}.md`, job.system || "");
@@ -404,9 +449,13 @@ function claudeFiles(job, dirs) {
 
 function runClaude(job, dirs, resumeId, report, entry) {
   const files = claudeFiles(job, dirs);
+  // Экономия контекста (замеры MBOX, claude 2.1.291): из встроенного — только веб и ToolSearch (описания полусотни
+  // инструментов Шара грузятся по требованию, а не в каждый ход), без каталога slash-команд и навыков CLI (−10 тыс.:
+  // наши навыки живут в Шаре), только MCP из --mcp-config.
   const args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
     "--input-format", "text", "--permission-mode", "bypassPermissions", "--setting-sources", "project",
-    "--tools", "WebSearch,WebFetch", "--strict-mcp-config", "--mcp-config", files.mcp, "--append-system-prompt-file", files.system];
+    "--tools", "WebSearch,WebFetch,ToolSearch", "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", files.mcp,
+    "--append-system-prompt-file", files.system];
   if (job.model) args.push("--model", job.model);
   if (["low", "medium", "high"].includes(job.effort)) args.push("--effort", job.effort);
   if (resumeId) args.push("--resume", resumeId);
@@ -423,6 +472,10 @@ function runClaude(job, dirs, resumeId, report, entry) {
     }
     if (event.type === "rate_limit_event" && event.rate_limit_info) {
       const info = event.rate_limit_info;
+      state.limits[info.rateLimitType || "five_hour"] = {
+        type: String(info.rateLimitType || "five_hour"), used: Math.round((Number(info.utilization) || 0) * 100),
+        resetsAt: Number(info.resetsAt) || 0, status: String(info.status || ""), overage: Boolean(info.isUsingOverage),
+      };
       // Плашку показываем, когда окно почти выбрано или уже отказ — на половине окна это был бы шум.
       if (/reject|block|exceed/i.test(String(info.status || "")) || (Number(info.utilization) || 0) >= 0.8) {
         state.rateLimit = claudeRateLimit(info);
@@ -535,7 +588,8 @@ function runCodex(job, dirs, resumeId, report, entry) {
     "-c", `mcp_servers.shar.url=${absolute(job.mcp.url)}`, "-c", "mcp_servers.shar.bearer_token_env_var=SHAR_MCP_TOKEN",
     "-c", "mcp_servers.shar.tool_timeout_sec=120",
     // Массив в TOML — с кавычками; через cmd.exe на Windows их не передать, поэтому браузер у Codex — только на Linux.
-    ...(browser && process.platform !== "win32" ? ["-c", `mcp_servers.browser.command=${browser}`, "-c", 'mcp_servers.browser.args=["mcp"]'] : [])];
+    ...(browser && process.platform !== "win32" ? ["-c", `mcp_servers.browser.command=${browser}`, "-c", 'mcp_servers.browser.args=["mcp"]'] : []),
+    ...codexExtra(job).flags];
   const args = resumeId
     ? ["exec", "resume", "--json", "--skip-git-repo-check", "--ignore-user-config", ...config]
     : ["exec", "--json", "--skip-git-repo-check", "--ignore-user-config", ...config, "-C", dirs.work];
@@ -603,7 +657,7 @@ function runCodex(job, dirs, resumeId, report, entry) {
       state.failure = String(event.message || event.error?.message || event.error || "Codex вернул ошибку");
     }
   };
-  return streamCli(CLI.codex, args, { cwd: dirs.work, env: { ...userEnv(dirs), SHAR_MCP_TOKEN: job.mcp.token }, stdin: prompt, provider: "GPT" }, entry, handle, state);
+  return streamCli(CLI.codex, args, { cwd: dirs.work, env: { ...userEnv(dirs), SHAR_MCP_TOKEN: job.mcp.token, ...codexExtra(job).env }, stdin: prompt, provider: "GPT" }, entry, handle, state);
 }
 
 // ── Gemini CLI (ключ человека) ───────────────────────────────────────────────
@@ -614,6 +668,7 @@ function geminiSettings(job, dirs) {
     mcpServers: {
       shar: { httpUrl: absolute(job.mcp.url), headers: { Authorization: `Bearer ${job.mcp.token}` }, timeout: 120_000, trust: true },
       ...(browser ? { browser: { command: browser, args: ["mcp"], timeout: 120_000, trust: true } } : {}),
+      ...geminiExtra(job),
     },
     general: { disableAutoUpdate: true, checkpointing: { enabled: false } },
     security: { auth: { selectedType: "gemini-api-key" }, folderTrust: { enabled: false } },
@@ -625,7 +680,7 @@ function geminiSettings(job, dirs) {
 function runGemini(job, dirs, resumeId, report, entry) {
   const settings = geminiSettings(job, dirs);
   const system = secretFile(dirs, `gemini-system-${job.id}.md`, job.system || "");
-  const args = ["--output-format", "stream-json", "--approval-mode", "yolo", "--allowed-mcp-server-names", "shar", ...(browser ? ["browser"] : [])];
+  const args = ["--output-format", "stream-json", "--approval-mode", "yolo", "--allowed-mcp-server-names", "shar", ...(browser ? ["browser"] : []), ...extraMcp(job).map((m) => m.name)];
   if (job.model) args.push("-m", job.model);
   if (resumeId) args.push("--resume", resumeId);
   args.push("-p", "");
@@ -709,6 +764,41 @@ async function accountOf(provider, dirs) {
   return { loggedIn: ok, account: ok ? text.split("\n")[0].slice(0, 120) : "" };
 }
 
+/** Какие модели доступны подписке человека — у самого провайдера, а не выдуманный список.
+ *  Claude: /v1/models с его токеном подписки (OAuth); GPT: каталог Codex (`codex debug models`, видимые). */
+async function modelsOf(provider, dirs) {
+  try {
+    if (provider === "claude") {
+      const creds = JSON.parse(fs.readFileSync(path.join(dirs.home, ".claude", ".credentials.json"), "utf8"));
+      const token = creds?.claudeAiOauth?.accessToken;
+      if (!token) return [];
+      const res = await fetch("https://api.anthropic.com/v1/models?limit=100", {
+        headers: { Authorization: `Bearer ${token}`, "anthropic-version": "2023-06-01", "anthropic-beta": "oauth-2025-04-20" },
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return (data.data || []).map((m) => ({ id: String(m.id), label: String(m.display_name || m.id).replace(/^Claude\s+/, "") }));
+    }
+    if (provider === "codex") {
+      const res = await exec(CLI.codex, ["debug", "models"], { env: userEnv(dirs), cwd: dirs.work }, 30_000);
+      const data = JSON.parse(stripAnsi(res.out).slice(stripAnsi(res.out).indexOf("{")));
+      return (data.models || []).filter((m) => m.visibility === "list").map((m) => ({ id: String(m.slug), label: String(m.display_name || m.slug) }));
+    }
+  } catch (error) {
+    log(`модели ${provider}: ${error.message || error}`);
+  }
+  return [];
+}
+
+/** Проверка: вошёл ли человек и какие модели ему доступны (Шар просит после входа и раз в несколько часов). */
+async function checkJob(job) {
+  const dirs = userDirs(job.userId);
+  const acc = await accountOf(job.provider, dirs);
+  const models = acc.loggedIn ? await modelsOf(job.provider, dirs) : [];
+  await reporter(job).send({ type: "account", loggedIn: acc.loggedIn, account: acc.account, models });
+}
+
 async function loginJob(job) {
   const dirs = userDirs(job.userId);
   const report = reporter(job);
@@ -717,7 +807,8 @@ async function loginJob(job) {
   if (SHARED_HOME) {
     // Разработка: вход общий с этой машиной — просто проверяем, что он есть.
     const acc = await accountOf(job.provider, dirs);
-    return report.send(acc.loggedIn ? { type: "login", state: "done", account: acc.account } : { type: "login", state: "failed", message: "На машине разработчика войдите в CLI вручную" });
+    return report.send(acc.loggedIn ? { type: "login", state: "done", account: acc.account, models: await modelsOf(job.provider, dirs) }
+      : { type: "login", state: "failed", message: "На машине разработчика войдите в CLI вручную" });
   }
   const args = job.provider === "claude" ? ["auth", "login"] : ["login", "--device-auth"];
   const child = run(CLI[job.provider], args, { env: { ...userEnv(dirs), BROWSER: "true" }, cwd: dirs.work, pty: true });
@@ -743,7 +834,7 @@ async function loginJob(job) {
     if (session.cancelled) return;
     report.send({ type: "login", state: "verifying", message: "Проверяю вход…" });
     const acc = await accountOf(job.provider, dirs);
-    await report.send(acc.loggedIn ? { type: "login", state: "done", account: acc.account }
+    await report.send(acc.loggedIn ? { type: "login", state: "done", account: acc.account, models: await modelsOf(job.provider, dirs) }
       : { type: "login", state: "failed", message: "Вход не завершён — нажмите «Войти» ещё раз и подтвердите его в браузере" });
   });
 }
@@ -780,6 +871,7 @@ function handleJob(job) {
       : job.kind === "login_code" ? Promise.resolve(loginCode(job))
         : job.kind === "login_cancel" ? loginCancel(job)
           : job.kind === "logout" ? logoutJob(job)
+            : job.kind === "check" ? checkJob(job)
             : Promise.resolve();
   work.catch((error) => log(`задача ${job.id}: ${error.message || error}`));
 }

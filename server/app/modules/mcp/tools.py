@@ -41,6 +41,8 @@ LEVELS = {"read": 0, "edit": 1, "create": 2}
 MAX_TABLE_ROWS = 500
 MAX_TABLE_COLS = 50
 MAX_CHARS = 60_000
+# По умолчанию — кусок поменьше: каждый прочитанный символ агент тащит в контексте до конца сессии.
+DEFAULT_CHARS = 15_000
 HIDDEN = "Материал не найден или этому ключу он не открыт"
 _CELL = re.compile(r"^[A-Z]{1,3}[1-9][0-9]{0,6}$")
 _HYPERLINK_FORMULA = re.compile(r'^=\s*HYPERLINK\(\s*"([^"]+)"\s*(?:[,;]\s*"([^"]*)"\s*)?\)\s*$', re.IGNORECASE)
@@ -74,6 +76,18 @@ class Access:
         by_parent: dict[str, list[str]] = {}
         for f in self.folders:
             by_parent.setdefault(f.get("parentId") or "", []).append(f["id"])
+        # «Скрыть от агента» (core_agents/hidden.py): скрытая папка закрывает всё вложенное, скрытый материал — себя.
+        from app.modules.core_agents.hidden import hidden_ids
+
+        hidden = hidden_ids(self.me.user_id)
+        self.hidden_items = hidden["office_item"]
+        self.hidden_folders: set[str] = set()
+        todo = list(hidden["office_folder"])
+        while todo:
+            fid = todo.pop()
+            if fid not in self.hidden_folders:
+                self.hidden_folders.add(fid)
+                todo += by_parent.get(fid, [])
         self.allowed: set[str] | None = None
         if ctx.scope["folders"] is not None:
             self.allowed = set()
@@ -96,6 +110,8 @@ class Access:
             raise ToolError(f"Этому ключу нельзя {what}: в настройках MCP ему дан доступ «{self.ctx.scope['access']}»")
 
     def folder_ok(self, folder_id: str | None) -> bool:
+        if folder_id is not None and str(folder_id) in self.hidden_folders:
+            return False
         return self.allowed is None or (folder_id is not None and str(folder_id) in self.allowed)
 
     def target_folder(self, folder_id: Any) -> str | None:
@@ -103,11 +119,13 @@ class Access:
         folder = str(folder_id) if folder_id else None
         if self.allowed is not None and not self.folder_ok(folder):
             raise ToolError("Этому ключу открыты только выбранные папки: укажите folder_id одной из них (list_folders)")
-        if folder and folder not in self.paths:
+        if folder and (folder not in self.paths or folder in self.hidden_folders):
             raise ToolError("Папка не найдена")
         return folder
 
-    def visible(self, kind: str, owner_id: str, folder_id: str | None) -> bool:
+    def visible(self, kind: str, owner_id: str, folder_id: str | None, item_id: Any = None) -> bool:
+        if item_id is not None and str(item_id) in self.hidden_items:
+            return False
         return kind in self.kinds and (self.shared or str(owner_id) == self.me.user_id) and self.folder_ok(folder_id)
 
     def item_folder(self, item_id: str) -> str | None:
@@ -130,7 +148,7 @@ class Access:
         except store.WorkspaceError:
             raise ToolError(HIDDEN) from None
         folder = self.item_folder(item_id)
-        if not self.visible(row["kind"], row["owner_id"], folder):
+        if not self.visible(row["kind"], row["owner_id"], folder, item_id):
             raise ToolError(HIDDEN)
         item = store.present(row, self.me.user_id, with_content=content)
         item["folderId"] = folder
@@ -215,7 +233,7 @@ def _create(access: Access, kind: str, title: str, content: str, folder_id: Any)
 
 def _page(text: str, args: dict[str, Any]) -> dict[str, Any]:
     offset = max(0, int(args.get("offset") or 0))
-    limit = max(1000, min(int(args.get("max_chars") or MAX_CHARS), MAX_CHARS))
+    limit = max(1000, min(int(args.get("max_chars") or DEFAULT_CHARS), MAX_CHARS))
     part = text[offset:offset + limit]
     out: dict[str, Any] = {"content": part}
     if offset + limit < len(text):
@@ -309,7 +327,7 @@ def list_items(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     if kind and kind not in access.kinds:
         return {"items": [], "total": 0}
     items = _call(ws.list_items, kind, str(args.get("query") or ""), False, 1000, access.me)["items"]
-    items = [i for i in items if access.visible(i["kind"], i["ownerId"], i.get("folderId"))]
+    items = [i for i in items if access.visible(i["kind"], i["ownerId"], i.get("folderId"), i["id"])]
     if args.get("folder_id"):
         items = [i for i in items if (i.get("folderId") or "") == str(args["folder_id"])]
     offset = max(0, int(args.get("offset") or 0))

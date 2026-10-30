@@ -1,11 +1,15 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, CalendarDays, CheckSquare, CornerDownRight, FileSpreadsheet, FileText, Folder, Forward, LayoutGrid, Mail, MessageCircle, MonitorUp,
-  Paperclip, Plug, Plus, Presentation, Slash, StickyNote, User, X } from 'lucide-react';
-import { clearAgentForward, useAgentBridge, type AgentForward } from '@/shared/core/agentBridge';
+import { ArrowUp, Atom, CalendarDays, Check, Dumbbell, MoreHorizontal, ShieldCheck, CheckSquare, CornerDownRight, FileSpreadsheet, FileText, Folder, Forward, LayoutGrid, Mail, MessageCircle, MonitorUp,
+  Paperclip, Plug, Presentation, Slash, StickyNote, User, X } from 'lucide-react';
+import { clearAgentAttached, clearAgentForward, detachFromAgent, useAgentBridge, type AgentForward } from '@/shared/core/agentBridge';
+import { navigate } from '@/shared/navigation/navigate';
+import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { paths } from '@/shared/navigation/routes';
 import { Select } from '@/shared/ui/Select';
-import type { CoreAttachment, CoreCatalog, CoreContextItem, CoreMessage } from './api';
+import { coreApi, type CoreAttachment, type CoreCatalog, type CoreContextItem, type CoreMessage } from './api';
 import { formatBytes } from './parts';
+import { BrandMark } from './brands';
+import { useCore } from './store';
 import { useWhere, type WhereItem } from './whereAmI';
 
 export interface ComposerCommand { cmd: string; hint: string; admin?: boolean }
@@ -30,8 +34,6 @@ export interface ComposerHandle {
   sendText: (text: string) => void;
 }
 
-/** Знак агента — тот же, что в Настройки → Ядро: буква, без логотипов. */
-const AGENT_MARK: Record<string, string> = { gemini: 'G', claude: 'C', codex: 'O' };
 
 export interface SendOptions { effort: string; model: string; context: CoreContextItem[]; forwarded: AgentForward[] }
 
@@ -102,6 +104,13 @@ export const Composer = forwardRef<ComposerHandle, {
   const [effort, setEffort] = useState('');
   const [picked, setPicked] = useState('');
   const where = useWhere();
+  const attached = useAgentBridge((s) => s.attached);
+  const [more, setMore] = useState<MenuAnchor | null>(null);
+  const effortOptions = [{ value: '', label: 'Обычно' }, ...(catalog?.efforts || []).filter((e) => e.id !== 'medium').map((e) => ({ value: e.id, label: e.label }))];
+  const setMode = (mode: string) => {
+    useCore.setState((st) => (st.catalog ? { catalog: { ...st.catalog, mode } } : st));
+    void coreApi.setMode(mode).catch(() => undefined);
+  };
   const forwarded = useAgentBridge((s) => s.pending);
   const [struck, setStruck] = useState<Set<string>>(() => new Set());
   const agents = catalog?.agents ?? [];
@@ -160,7 +169,7 @@ export const Composer = forwardRef<ComposerHandle, {
 
   const uploading = drafts.some((d) => !d.key && !d.error);
   const ready = drafts.filter((d) => d.key);
-  const canSend = (text.trim() || ready.length || forwarded.length) && !uploading;
+  const canSend = (text.trim() || ready.length || forwarded.length || attached.length) && !uploading;
 
   async function submit(override?: string) {
     const body = (override ?? text).trim();
@@ -174,7 +183,11 @@ export const Composer = forwardRef<ComposerHandle, {
     if (override === undefined) setText('');
     setDrafts((cur) => cur.filter((d) => !d.key));
     setHistoryPos(-1);
-    const context = where.filter((w) => !struck.has(w.key)).map(({ kind, title, id, url }) => ({ kind, title, id, url }));
+    const context = [
+      ...attached.map(({ kind, title, id, url }) => ({ kind, title, id, url })),
+      ...where.filter((w) => !struck.has(w.key) && !attached.some((a) => a.url === w.url)).map(({ kind, title, id, url }) => ({ kind, title, id, url })),
+    ];
+    clearAgentAttached();
     const sentForward = forwarded;
     clearAgentForward();
     // Не ушло — пузырь сам покажет «не отправлено — повторить».
@@ -219,6 +232,17 @@ export const Composer = forwardRef<ComposerHandle, {
   const toggleWhere = (key: string) => setStruck((cur) => { const next = new Set(cur); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   return (
     <div className="ncore-composer">
+      {attached.length > 0 && (
+        <div className="ncore-where" aria-label="Отправлено агенту">
+          <span className="ncore-where-label"><Atom size={12} aria-hidden="true" /> Агенту</span>
+          {attached.map((a) => (
+            <span key={a.url} className="ncore-where-chip" data-pinned="">
+              <span>{a.title}</span>
+              <button type="button" onClick={() => detachFromAgent(a.url)} aria-label={`Не отправлять «${a.title}»`}><X size={11} /></button>
+            </span>
+          ))}
+        </div>
+      )}
       <WhereChips items={where} struck={struck} onToggle={toggleWhere} />
       {forwarded.length > 0 && <ForwardCard items={forwarded} />}
       {suggestions.length > 0 && (
@@ -281,11 +305,10 @@ export const Composer = forwardRef<ComposerHandle, {
                 {agents.map((a) => (
                   <button key={a.id} type="button" role="radio" aria-checked={a.id === agent?.id} className="ncore-agent" data-offline={!a.online || undefined}
                     onClick={() => setPicked(optionOf(a))} title={a.online ? `Ответит ${a.name}` : `${a.name}: нода не на связи — ответ не придёт`}>
-                    <span className="ncore-agent-mark" aria-hidden="true">{AGENT_MARK[a.id] || a.name[0]}</span>
+                    <BrandMark id={a.id} size={14} className="ncore-agent-logo" />
                     <span className="ncore-agent-name">{a.name}</span>
                   </button>
                 ))}
-                <a className="ncore-tool" href={`${paths.settings}?section=core`} title="Подключить ещё агента" aria-label="Подключить ещё агента"><Plus size={15} /></a>
               </span>
               {agent && agent.models.length > 1 && (
                 <Select className="ncore-picker" label={`Модель ${agent.name}`} value={agentValue} onChange={setPicked}
@@ -293,9 +316,40 @@ export const Composer = forwardRef<ComposerHandle, {
               )}
             </>
           )}
+          {/* Широко — нагрузка и режим разрешений на панели; узко — в «⋯» (контейнерный запрос в core.css). */}
           {!!catalog?.efforts.length && (
-            <Select className="ncore-picker" label="Как долго думать перед ответом" value={effort} onChange={setEffort} placeholder="Обычно"
-              groups={[{ options: [{ value: '', label: 'Обычно' }, ...catalog.efforts.filter((e) => e.id !== 'medium').map((e) => ({ value: e.id, label: e.label }))] }]} />
+            <span className="ncore-effort ncore-wide" title="Нагрузка: как долго агент думает перед ответом">
+              <Dumbbell size={14} aria-hidden="true" />
+              <Select className="ncore-picker" label="Нагрузка: как долго думать перед ответом" value={effort} onChange={setEffort} placeholder="Обычно"
+                groups={[{ options: effortOptions }]} />
+            </span>
+          )}
+          {!noAgents && !!catalog?.modes?.length && (
+            <span className="ncore-effort ncore-wide" title="Режим разрешений: что агент делает сам, а что — только с вашего «Разрешить»">
+              <ShieldCheck size={14} aria-hidden="true" />
+              <Select className="ncore-picker" label="Режим разрешений" value={catalog.mode || 'careful'} onChange={setMode}
+                groups={[{ options: catalog.modes.map((m) => ({ value: m.id, label: m.label })) }]} />
+            </span>
+          )}
+          <button type="button" className="ncore-tool ncore-more" aria-label="Ещё настройки ответа" title="Нагрузка, разрешения, подключить агента"
+            onClick={(e) => setMore(more ? null : { element: e.currentTarget, align: 'end', side: 'above' })}>
+            <MoreHorizontal size={16} />
+          </button>
+          {more && (
+            <Menu anchor={more} label="Настройки ответа" onClose={() => setMore(null)} compact>
+              <div className="nx-menu-label ncore-menu-label" role="presentation"><Dumbbell size={12} aria-hidden="true" />Нагрузка</div>
+              {effortOptions.map((o) => (
+                <MenuItem key={o.value || 'normal'} icon={effort === o.value ? <Check size={15} /> : <span className="ncore-menu-gap" />} onSelect={() => { setEffort(o.value); setMore(null); }}>{o.label}</MenuItem>
+              ))}
+              {!noAgents && !!catalog?.modes?.length && (<>
+                <div className="nx-menu-label ncore-menu-label" role="presentation"><ShieldCheck size={12} aria-hidden="true" />Разрешения</div>
+                {catalog.modes.map((m) => (
+                  <MenuItem key={m.id} icon={(catalog.mode || 'careful') === m.id ? <Check size={15} /> : <span className="ncore-menu-gap" />} onSelect={() => { setMode(m.id); setMore(null); }}>{m.label}</MenuItem>
+                ))}
+              </>)}
+              <div className="nx-menu-sep" />
+              <MenuItem icon={<Plug size={15} />} onSelect={() => { setMore(null); navigate(`${paths.settings}?section=core`); }}>Подключить агента</MenuItem>
+            </Menu>
           )}
           <button type="submit" className="ncore-send" disabled={!canSend} aria-label="Отправить" title={uploading ? 'Дождитесь загрузки файлов' : 'Отправить (Enter) · Shift+Enter — новая строка · / — команды'}>
             <ArrowUp size={16} strokeWidth={2.4} />

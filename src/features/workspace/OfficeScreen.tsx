@@ -8,6 +8,8 @@ import Splitter from '@/shared/ui/Splitter';
 import { askConfirm, Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { SendToChatSheet } from './SendToChatSheet';
 import { showToast } from '@/shared/ui/Toast';
+import { AgentMenuItems } from '@/shared/core/AgentMenuItems';
+import { links } from '@/shared/navigation/routes';
 import { myId } from '@/shared/session/session';
 import { useLongPress } from '@/shared/ui/useLongPress';
 import { workspaceApi } from './api';
@@ -942,6 +944,8 @@ export default function OfficeScreen() {
               {sort.label}
             </MenuItem>
           ))}
+          <AgentMenuItems hiddenKind="office_folder" onDone={() => setFolderMenu(null)}
+            target={{ kind: 'folder', title: folderMenu.folder.title, id: String(folderMenu.folder.id), url: `${links.office()}?folder=${folderMenu.folder.id}` }} />
           {/* Чужую открытую папку участник с «перемещением» удалить не может, вложенные в неё — может. */}
           {(!folderMenu.folder.role || folderMenu.folder.role === 'owner' || (folderMenu.folder.role === 'move' && folderMenu.folder.parentId)) && (<>
           <div className="nx-menu-sep" />
@@ -972,6 +976,8 @@ export default function OfficeScreen() {
           {rowMenu.item.isOwner && (
             <MenuItem icon={<Pin size={15} />} onSelect={() => { const i = rowMenu.item; setRowMenu(null); void togglePin(i); }}>{rowMenu.item.pinned ? 'Открепить' : 'Закрепить сверху'}</MenuItem>
           )}
+          <AgentMenuItems hiddenKind="office_item" onDone={() => setRowMenu(null)}
+            target={{ kind: rowMenu.item.kind, title: rowMenu.item.title || 'Без названия', id: String(rowMenu.item.id), url: links.office(rowMenu.item.kind, String(rowMenu.item.id)) }} />
           {(rowMenu.item.isOwner || rowMenu.item.canDelete) && (
             <MenuItem icon={<Trash2 size={15} />} tone="danger" onSelect={() => { const i = rowMenu.item; setRowMenu(null); void removeItem(i); }}>Удалить</MenuItem>
           )}

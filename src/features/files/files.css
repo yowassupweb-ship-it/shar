@@ -48,7 +48,9 @@ button.nf-crumb { cursor: pointer; }
 /* Компьютер: три колонки — путь, поиск, инструменты. Боковые колонки равной ширины, поэтому поиск стоит ровно
    по центру шапки, сколько бы ни занимали путь и кнопки. */
 @media (min-width: 641px) {
-  .nf-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+  /* Правая колонка не уже кнопок: иначе при нехватке места они вылезали влево поверх поиска. Тогда поиск
+     чуть сдвигается от центра — это лучше наложения. */
+  .nf-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr); }
   .nf-left .nf-crumbs { flex: 1 1 auto; }
   .nf-search { width: min(320px, 28vw); }
   .nf-tools { flex-wrap: nowrap; }
@@ -66,8 +68,9 @@ button.nf-crumb { cursor: pointer; }
   .nf-bar { grid-template-columns: auto minmax(160px, 1fr); }
   .nf-tools { grid-column: 1 / -1; justify-content: flex-start; flex-wrap: wrap; }
 }
-/* Средняя ширина: справа не хватает места на подписи — у «Новой папки» и «Загрузить» остаются значки (подсказка — aria-label). */
-@media (min-width: 641px) and (max-width: 1599px) {
+/* Средняя ширина: справа не хватает места на подписи — у «Новой папки» и «Загрузить» остаются значки (подсказка — aria-label).
+   Меряем сам раздел, а не окно: рядом может быть боковая панель или «Ядро». */
+@container nf-view (min-width: 641px) and (max-width: 1499px) {
   .nf-act { width: var(--control-h); min-width: var(--control-h); padding: 0; justify-content: center; }
   .nf-btn-label { display: none; }
 }

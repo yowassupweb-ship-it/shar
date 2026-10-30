@@ -17,7 +17,9 @@ from app.modules.core_agents import memory, store
 
 log = logging.getLogger("shar.core.agents")
 
-HISTORY = 16
+# Новая сессия получает хвост разговора — коротко: длинное прошлое дороже, чем польза от него (сжатое есть в сессии CLI).
+HISTORY = 10
+HISTORY_CHARS = 1500
 JOB_KEY_HOURS = 3
 KINDS = {"note": "заметка", "document": "документ", "table": "таблица", "presentation": "презентация", "task": "задача",
          "event": "событие", "file": "файл", "folder": "папка", "chat": "чат", "mail": "письмо", "section": "раздел"}
@@ -73,7 +75,7 @@ def _history(thread_id: str, before_id: str) -> list[dict]:
         text = (r["body"] or "").strip()
         answered = (r.get("props") or {}).get("answered")
         if text:
-            out.append({"role": r["role"], "actor": r["actor"], "text": text[:4000] + (f"\n[ответ человека: {answered}]" if answered else "")})
+            out.append({"role": r["role"], "actor": r["actor"], "text": text[:HISTORY_CHARS] + (f"\n[ответ человека: {answered}]" if answered else "")})
     return out
 
 
@@ -170,6 +172,9 @@ def build_run(job: dict) -> dict:
         "resume": ((thread.get("sessions") or {}).get(provider) or "") if thread else "",
         "mcp": {"url": _public_url("/api/mcp"), "token": token},
     }
+    from app.modules.core_agents import mcp_servers
+
+    out["extraMcp"] = mcp_servers.for_run(user_id)  # личные MCP человека — с секретами, только в задаче ноде
     if provider == "gemini":
         out["apiKey"] = store.unseal(store.account(user_id, "gemini").get("secret_enc") or "")
     return out

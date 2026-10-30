@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 from app.core import schema
 from app.core.db import db
 from app.core.db.connection import Json
-from app.core.security import Identity, require_admin
+from app.core.security import Identity, current_identity, require_admin
 from app.modules.core_agents import store
 
 router = APIRouter()
@@ -300,6 +300,21 @@ def _ready() -> None:
 
     if not ws_store.table_ready("core_integrations"):
         raise HTTPException(status_code=503, detail="Интеграции ещё не включены на сервере: нужна схема (выкладка с -Schema)")
+
+
+@router.get("/api/core/integrations/mine")
+def my_integrations(me: Identity = Depends(current_identity)):
+    """Какие API компании открыты человеку (Настройки → Ядро) — без ключей и полей."""
+    if not _ready_quiet():
+        return {"integrations": []}
+    return {"integrations": [{k: v for k, v in i.items() if k in ("service", "label", "hint", "docs", "kind")}
+                             for i in listing(me.user_id, me.is_admin) if i["configured"]]}
+
+
+def _ready_quiet() -> bool:
+    from app.modules.workspace import store as ws_store
+
+    return ws_store.table_ready("core_integrations")
 
 
 @router.get("/api/core/integrations")

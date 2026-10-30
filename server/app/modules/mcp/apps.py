@@ -508,6 +508,34 @@ def open_in_shar(access, args: dict[str, Any]) -> dict[str, Any]:
     return {"opened": target}
 
 
+def mcp_list(access, args: dict[str, Any]) -> dict[str, Any]:
+    from app.modules.core_agents import mcp_servers
+
+    return {"servers": mcp_servers.listing(access.me.user_id),
+            "note": "Подключённые MCP становятся доступны со следующего сообщения (в новом ходе)."}
+
+
+def mcp_install(access, args: dict[str, Any]) -> dict[str, Any]:
+    """Поставить человеку MCP-сервер: удалённый по адресу или npm-пакет (нода запустит через npx)."""
+    from app.modules.core_agents import mcp_servers
+
+    try:
+        server = mcp_servers.save(access.me.user_id, str(args.get("name") or ""), {k: v for k, v in args.items() if k != "name"}, access.ctx.key_name)
+    except (mcp_servers.McpError, RuntimeError) as exc:
+        raise _err(str(exc)) from exc
+    return {"installed": server, "note": "Готово. Инструменты этого MCP появятся у вас со следующего сообщения человека — скажите ему об этом."}
+
+
+def mcp_remove(access, args: dict[str, Any]) -> dict[str, Any]:
+    from app.modules.core_agents import mcp_servers
+
+    if args.get("confirm") is not True:
+        raise _err("Удаление MCP нужно подтвердить: confirm: true")
+    if not mcp_servers.remove(access.me.user_id, str(args.get("name") or "")):
+        raise _err("Такого MCP нет (mcp_list)")
+    return {"removed": args.get("name")}
+
+
 _TIME = {"type": "string", "description": "местное время: 2026-11-03T15:00 (или дата 2026-11-03)"}
 _EVENT_PROPS = {
     "title": {"type": "string"}, "start": _TIME, "end": _TIME,
@@ -627,6 +655,20 @@ TOOLS: list[dict[str, Any]] = [
      "description": "Открыть человеку раздел или материал Шара на его экране: документ, таблицу, задачу, календарь, папку файлов (url из ответов "
                     "инструментов). new_window — отдельным окном. Чаты открыть нельзя.",
      "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}, "new_window": {"type": "boolean"}}, "required": ["url"]}},
+    {"name": "mcp_list", "app": "agent", "handler": mcp_list, "level": "read",
+     "description": "Личные MCP-серверы человека, которые подключаются к вашим запускам (кроме MCP Шара).",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "mcp_install", "app": "agent", "handler": mcp_install, "level": "read",
+     "description": "Поставить человеку MCP-сервер, когда он просит или прислал данные: kind=http — url (https) и headers (например {\"Authorization\": \"Bearer …\"}); "
+                    "kind=npm — package (npm-пакет MCP, запустится через npx на ноде), args, env (ключи и токены). Секреты хранятся зашифрованными. "
+                    "Инструменты нового MCP появятся со следующего сообщения. note — что умеет (для человека).",
+     "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "description": "короткое имя латиницей: github, notion"},
+                                                     "kind": {"type": "string", "enum": ["http", "npm"]}, "url": {"type": "string"}, "package": {"type": "string"},
+                                                     "args": {"type": "array", "items": {"type": "string"}}, "headers": {"type": "object"}, "env": {"type": "object"},
+                                                     "note": {"type": "string"}, "enabled": {"type": "boolean"}}, "required": ["name"]}},
+    {"name": "mcp_remove", "app": "agent", "handler": mcp_remove, "level": "read",
+     "description": "Удалить MCP-сервер человека. Нужен confirm: true.",
+     "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "confirm": {"type": "boolean"}}, "required": ["name", "confirm"]}},
     {"name": "skill_list", "app": "agent", "handler": skill_list, "level": "read",
      "description": "Навыки: ваши для этого человека и общие для компании — имя, когда применять, сколько раз применяли.",
      "inputSchema": {"type": "object", "properties": {}}},

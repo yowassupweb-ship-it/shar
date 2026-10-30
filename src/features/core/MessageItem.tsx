@@ -4,6 +4,7 @@ import { formatTime } from '@/shared/ui/format';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
 import type { CoreMessage } from './api';
+import { BrandMark } from './brands';
 import { Chain, EFFORT_LABEL, formatBytes, formatTokens, MarkdownText, modelLabel, workParts } from './parts';
 
 export interface MessageHandlers {
@@ -15,9 +16,6 @@ export interface MessageHandlers {
   /** Переслать текст в чат Шара (меню по правой кнопке). */
   forward: (message: CoreMessage) => void;
 }
-
-/** Знак агента — буква, как в переключателе над полем ввода. */
-const AGENT_MARK: Record<string, string> = { gemini: 'G', claude: 'C', codex: 'O' };
 
 /** Под ответом — коротко: время и сколько токенов; подробности — в подсказке и статистике чата. */
 function workBrief(work: CoreMessage['props']['work']): string {
@@ -168,7 +166,7 @@ export const MessageItem = memo(function MessageItem({ message, quote, h }: {
         </Menu>
       )}
       {!mine && (
-        <span className="ncore-agent-avatar" aria-hidden="true">{AGENT_MARK[p.provider || ''] || <Atom size={14} />}</span>
+        <span className="ncore-agent-avatar" aria-hidden="true">{p.provider ? <BrandMark id={p.provider} size={14} /> : <Atom size={14} />}</span>
       )}
       <div className="ncore-col">
         {!mine && (

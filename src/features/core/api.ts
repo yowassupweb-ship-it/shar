@@ -87,7 +87,10 @@ export interface CoreMessage {
   local?: 'sending' | 'failed';
 }
 
-export interface CoreAgent { id: string; name: string; model: string; models: Array<{ id: string; label: string }>; online: boolean }
+/** Окно лимита подписки (Claude): five_hour, seven_day…; used — %, resetsAt — unix-секунды. */
+export interface CoreLimit { type: string; used: number; resetsAt: number; status: string; overage?: boolean }
+
+export interface CoreAgent { id: string; name: string; model: string; models: Array<{ id: string; label: string }>; online: boolean; limits?: CoreLimit[] }
 
 export interface CoreCatalog {
   /** Подключённые агенты человека (Настройки → Ядро): первый — по умолчанию. */
@@ -96,6 +99,9 @@ export interface CoreCatalog {
   efforts: Array<{ id: string; label: string; hint?: string }>;
   /** Демо-ответ (/demo) — у админа, пока агентов нет. */
   demo: boolean;
+  /** Режим разрешений человека и все режимы (permissions.py). */
+  mode?: string;
+  modes?: Array<{ id: string; label: string; hint: string }>;
 }
 
 export interface SendPayload {
@@ -129,6 +135,7 @@ export interface CoreAccount {
   nodeOnline: boolean;
   error: string;
   login: { state?: 'starting' | 'waiting' | 'verifying'; url?: string; code?: string; message?: string; needsCode?: boolean };
+  limits?: CoreLimit[];
 }
 
 export interface CoreUsageRow { userId: string; name?: string; provider: ProviderId; runs: number; inputTokens: number; cachedTokens: number; outputTokens: number; costUsd: number; lastDay: string }
@@ -145,6 +152,9 @@ export interface CoreAccounts {
 export interface CoreNote { id: string; text: string; tags: string[]; by: string; shared: boolean; mine: boolean; at: string }
 export interface CoreSkill { name: string; description: string; enabled: boolean; uses: number; by: string; shared: boolean; mine: boolean; updatedAt: string; size: number }
 export interface CoreMemory { profile: string; notes: CoreNote[]; skills: CoreSkill[]; canModerate: boolean }
+
+/** Личный MCP-сервер агентов (секреты — только имена ключей). */
+export interface CoreMcpServer { name: string; kind: 'http' | 'npm'; url: string; package: string; args: string[]; secretKeys: string[]; note: string; enabled: boolean; addedBy: string; updatedAt: string | null }
 
 export interface CoreIntegration {
   service: string; label: string; kind: 'builtin' | 'custom'; baseUrl: string; docs: string; hint: string; configured: boolean;
@@ -227,6 +237,12 @@ export const coreApi = {
     call<{ integrations: CoreIntegration[] }>(`/api/core/integrations/${enc(service)}`, { method: 'PUT', json: body }).then((r) => r.integrations),
   deleteIntegration: (service: string) => call<{ integrations: CoreIntegration[] }>(`/api/core/integrations/${enc(service)}`, { method: 'DELETE' }).then((r) => r.integrations),
   testIntegration: (service: string) => call<{ ok: boolean; message: string }>(`/api/core/integrations/${enc(service)}/test`, { method: 'POST' }),
+
+  myIntegrations: () => call<{ integrations: Array<{ service: string; label: string; hint: string; docs: string; kind: string }> }>('/api/core/integrations/mine').then((r) => r.integrations),
+  mcpServers: () => call<{ servers: CoreMcpServer[] }>('/api/core/mcp-servers').then((r) => r.servers),
+  saveMcpServer: (name: string, body: Partial<{ kind: 'http' | 'npm'; url: string; package: string; args: string[]; headers: Record<string, string>; env: Record<string, string>; enabled: boolean; note: string }>) =>
+    call<{ servers: CoreMcpServer[] }>(`/api/core/mcp-servers/${enc(name)}`, { method: 'PUT', json: body }).then((r) => r.servers),
+  deleteMcpServer: (name: string) => call<{ servers: CoreMcpServer[] }>(`/api/core/mcp-servers/${enc(name)}`, { method: 'DELETE' }).then((r) => r.servers),
 
   nodes: () => call<{ nodes: CoreNode[] }>('/api/core/nodes').then((r) => r.nodes),
   createNode: (name: string) => call<{ node: CoreNode; token: string; command: string }>('/api/core/nodes', { method: 'POST', json: { name } }),

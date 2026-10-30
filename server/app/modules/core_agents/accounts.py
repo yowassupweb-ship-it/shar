@@ -58,7 +58,20 @@ def push_account(user_id: str, provider: str) -> None:
         log.debug("core: account push failed: %s", exc)
 
 
+def _refresh_models(user_id: str) -> None:
+    """У подключённой подписки ещё нет списка моделей (или он старше 6 часов) — просим ноду проверить вход и модели."""
+    rows = db.conn.fetch_all(
+        """SELECT a.provider, a.node_id FROM core_accounts a WHERE a.user_id = %s AND a.state = 'ready' AND a.provider <> 'gemini'
+             AND a.node_id IS NOT NULL AND (a.models = '[]'::jsonb OR a.updated_at < now() - interval '6 hours')
+             AND NOT EXISTS (SELECT 1 FROM core_jobs j WHERE j.user_id = a.user_id AND j.provider = a.provider AND j.kind = 'check'
+                             AND j.status IN ('queued', 'taken'))""", (user_id,)) or []
+    for row in rows:
+        if store.node_online(row["node_id"]):
+            store.enqueue("check", user_id, row["provider"], node_id=row["node_id"])
+
+
 def _overview(me: Identity) -> dict:
+    _refresh_models(me.user_id)
     accounts = [store.public_account(store.account(me.user_id, p)) for p in store.PROVIDERS]
     nodes = store.online_nodes()
     return {"accounts": accounts, "node": {"online": bool(nodes), "clis": sorted({p for n in nodes for p in store.PROVIDERS if store.node_has(n, p)})},
@@ -135,7 +148,7 @@ def set_model(provider: str, body: ModelBody, me: Identity = Depends(current_ide
     _guard(me)
     provider = _provider(provider)
     row = store.account(me.user_id, provider)
-    models = row.get("models") or store.LOGIN_MODELS.get(provider, [])
+    models = row.get("models") or [{"id": ""}]
     if body.model and not any(m["id"] == body.model for m in models):
         raise HTTPException(status_code=400, detail="Такой модели нет в списке")
     store.save_account(me.user_id, provider, model=body.model)

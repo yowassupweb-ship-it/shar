@@ -7,8 +7,8 @@ import { paths } from '@/shared/navigation/routes';
 import { Spinner } from '@/shared/ui/Spinner';
 import { showToast } from '@/shared/ui/Toast';
 import { dayKey, formatDay, formatListTime, plural } from '@/shared/ui/format';
-import { coreApi, type CoreMessage, type CoreThread } from './api';
-import { ChatStats } from './ChatStats';
+import { coreApi, type CoreLimit, type CoreMessage, type CoreThread } from './api';
+import { ChatStats, LimitBadges } from './ChatStats';
 import { Composer, COMMANDS, type ComposerHandle, type SendOptions } from './Composer';
 import { MessageItem, type MessageHandlers } from './MessageItem';
 import { formatTokens } from './parts';
@@ -61,6 +61,17 @@ export default function CoreScreen({ embedded = false, onClose }: { embedded?: b
     const e = event as { type?: string; message?: CoreMessage; thread?: CoreThread };
     if (e.type === 'core_message' && e.message) upsertMessage(e.message);
     if (e.type === 'core_thread' && e.thread) upsertThread(e.thread);
+    // Подключение изменилось (модели, лимиты подписки) — каталог агентов обновляется на месте.
+    const acc = (event as { type?: string; account?: { provider: string; state: string; limits?: CoreLimit[]; models?: Array<{ id: string; label: string }>; model?: string } }).account;
+    if (event.type === 'core_account' && acc) {
+      useCore.setState((s) => {
+        if (!s.catalog) return s;
+        const known = s.catalog.agents.some((a) => a.id === acc.provider);
+        if (!known || acc.state !== 'ready') { void loadAll(); return s; }
+        return { catalog: { ...s.catalog, agents: s.catalog.agents.map((a) => (a.id === acc.provider
+          ? { ...a, limits: acc.limits ?? a.limits, models: acc.models?.length ? acc.models : a.models, model: acc.model || a.model } : a)) } };
+      });
+    }
   }), []);
 
   // Узко (панель, телефон) — одно из двух: список чатов или разговор. Открыли «Ядро» — сразу разговор (последний
@@ -326,6 +337,10 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
           </button>
         )}
         <span className="ncore-chat-tools">
+          {(() => {
+            const shown = catalog?.agents.find((a) => a.id === (thread?.peer || '')) ?? catalog?.agents.find((a) => a.limits?.length);
+            return shown ? <LimitBadges limits={shown.limits} agent={shown.name} /> : null;
+          })()}
           {contextLoad && (
             <button type="button" className="ncore-context" data-heavy={contextLoad.share >= 0.6 || undefined} onClick={() => setShowStats((v) => !v)}
               title={`Контекст чата: ${formatTokens(contextLoad.tokens)} токенов — столько агент перечитывает на каждом шаге.${contextLoad.share >= 0.6 ? ' Для новой темы лучше начать новый чат.' : ''}`}>

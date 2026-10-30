@@ -36,6 +36,7 @@ from app.core.security import Identity, current_identity
 router = APIRouter()
 
 PROFILE_MAX = 12_000
+PROMPT_PROFILE = 2_500
 NOTE_MAX = 2_000
 SKILL_MAX = 20_000
 NOTES_KEEP = 2_000
@@ -228,16 +229,19 @@ def delete_skill(user_id: str, name: str, *, shared: bool = False) -> bool:
 def prompt_context(user_id: str) -> str:
     """Начало каждого запуска: профиль, свежее из общей памяти и оглавление навыков (тела — по skill_read,
     чтобы не жечь контекст)."""
+    # Коротко: этот блок едет в каждую новую сессию. Полное — инструментами (profile_read, memory_search, skill_list).
     parts = []
     body = profile(user_id).strip()
+    if len(body) > PROMPT_PROFILE:
+        body = body[:PROMPT_PROFILE].rsplit("\n", 1)[0] + "\n… (целиком — profile_read)"
     parts.append("## Профиль человека (ведёте вы: profile_note / profile_write)\n" + (body or "Пока пусто — заполняйте по ходу работы."))
-    latest = search_notes(user_id, limit=12, scope="company")
+    latest = search_notes(user_id, limit=6, scope="company")
     if latest:
-        parts.append("## Свежее в общей памяти компании (всё — memory_search)\n" + "\n".join(f"- {n['text'][:200]}" for n in latest))
+        parts.append("## Свежее в общей памяти компании (всё — memory_search)\n" + "\n".join(f"- {n['text'][:140]}" for n in latest))
     active = skills(user_id, enabled_only=True)
     if active:
-        parts.append("## Навыки (прочитать перед применением: skill_read)\n"
-                     + "\n".join(f"- {s['name']}{' (общий)' if s['shared'] else ''}: {s['description']}" for s in active[:60]))
+        parts.append("## Навыки (прочитать перед применением: skill_read; все — skill_list)\n"
+                     + "\n".join(f"- {s['name']}{' (общий)' if s['shared'] else ''}: {s['description'][:120]}" for s in active[:25]))
     return "\n\n".join(parts)
 
 

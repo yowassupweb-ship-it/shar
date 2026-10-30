@@ -29,9 +29,9 @@ MODES = {
 DEFAULT = "careful"
 
 # Удаление и необратимое — с разрешением в любом режиме, «под ключ» тоже (так обещает его подпись в настройках).
-ALWAYS_ASK = {"delete_item", "calendar_delete", "task_delete", "file_delete", "integration_delete", "agent_disconnect"}
+ALWAYS_ASK = {"delete_item", "calendar_delete", "task_delete", "file_delete", "integration_delete", "agent_disconnect", "mcp_remove"}
 # Касается других людей или внешних систем.
-SOCIAL = {"integration_save"}
+SOCIAL = {"integration_save", "mcp_install"}
 # Не изменения: чтение, память и навыки агента, вопросы человеку, открыть окно.
 FREE = {"request_permission", "ask_user", "open_in_shar", "profile_note", "profile_write", "memory_add", "skill_write"}
 
@@ -85,7 +85,7 @@ def reason(mode: str, tool: dict[str, Any], args: dict[str, Any], me: str) -> Op
     if mode == "ask":
         return "любое изменение в режиме «Спрашивать всегда»"
     if name in SOCIAL:
-        return "подключение API компании"
+        return "подключение MCP-сервера" if name == "mcp_install" else "подключение API компании"
     if name == "integration_call":
         return "запись во внешний сервис"
     if name in ("task_create", "task_update") and _others(args.get("assignee_ids"), me):

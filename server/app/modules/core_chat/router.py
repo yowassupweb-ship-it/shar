@@ -210,9 +210,13 @@ def catalog(me: Identity = Depends(current_identity)):
     _guard(me)
     from app.modules.core_agents import store as agents
 
+    from app.modules.core_agents import permissions
+
     ready = agents.ready_agents(me.user_id) if agents.ready() else []
-    return {"agents": [{"id": a["provider"], "name": a["label"], "model": a["model"], "models": a["models"], "online": a["nodeOnline"]} for a in ready],
-            "models": [], "efforts": EFFORTS, "demo": me.is_admin}
+    return {"agents": [{"id": a["provider"], "name": a["label"], "model": a["model"], "models": a["models"], "online": a["nodeOnline"],
+                        "limits": a.get("limits") or []} for a in ready],
+            "models": [], "efforts": EFFORTS, "demo": me.is_admin,
+            "mode": permissions.mode_of(me.user_id) if agents.ready() else "careful", "modes": permissions.view()}
 
 
 @router.get("/api/core/threads")

@@ -218,6 +218,10 @@ def _apply_run(job: dict, events: list[dict]) -> dict:
             if update_agent_message(message_id, body=body, props=props or None) is None:
                 return {"stop": True}  # человек остановил ответ
         elif kind in ("done", "failed"):
+            if ev.get("limits"):  # окна лимита подписки — в шапку чата (core_accounts.limits)
+                db.conn.execute_query("UPDATE core_accounts SET limits = %s WHERE user_id = %s AND provider = %s",
+                                      (Json(list(ev["limits"])[:4]), job["user_id"], job["provider"]))
+                accounts.push_account(job["user_id"], job["provider"])
             work = ev.get("work") or {}
             if work:
                 props["work"] = {**work, "cost_usd": store.add_usage(job["user_id"], job["provider"], ev.get("model") or (job.get("payload") or {}).get("model") or "", work)}
@@ -241,7 +245,9 @@ def _apply_account(job: dict, events: list[dict]) -> dict:
             state = ev.get("state") or ""
             login = {k: ev[k] for k in ("state", "url", "code", "message", "needsCode") if k in ev}
             if state == "done":
-                store.save_account(user_id, provider, state="ready", account=str(ev.get("account") or "")[:120], login={}, error="", node_id=job["node_id"])
+                models, model = store.pick_models(provider, ev.get("models") or [], row.get("model") or "")
+                store.save_account(user_id, provider, state="ready", account=str(ev.get("account") or "")[:120], login={}, error="",
+                                   node_id=job["node_id"], models=models, model=model)
                 store.finish_job(job["id"], "done")
             elif state == "failed":
                 store.save_account(user_id, provider, state="ready" if row["state"] == "ready" else "none", login={},
@@ -251,7 +257,9 @@ def _apply_account(job: dict, events: list[dict]) -> dict:
                 store.save_account(user_id, provider, login=login)
         elif kind == "account":  # проверка: вошёл ли человек на самом деле
             if ev.get("loggedIn"):
-                store.save_account(user_id, provider, state="ready", account=str(ev.get("account") or row.get("account") or "")[:120], node_id=job["node_id"])
+                models, model = store.pick_models(provider, ev.get("models") or [], row.get("model") or "")
+                store.save_account(user_id, provider, state="ready", account=str(ev.get("account") or row.get("account") or "")[:120],
+                                   node_id=job["node_id"], **({"models": models, "model": model} if models else {}))
             else:
                 store.save_account(user_id, provider, state="none", account="")
             store.finish_job(job["id"], "done")

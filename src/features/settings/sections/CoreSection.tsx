@@ -3,7 +3,7 @@ import {
   BookOpen, Brain, Building2, Check, Copy, ExternalLink, Gauge, KeyRound, Loader2, LogIn, Plug, Server, ShieldAlert, ShieldCheck, ShieldQuestion,
   Sparkles, Trash2, Unplug, X,
 } from 'lucide-react';
-import { coreApi, formatTokens, type CoreAccount, type CoreAccounts, type CoreMemory, type ProviderId } from '@/features/core';
+import { BrandMark, coreApi, formatTokens, type CoreAccount, type CoreAccounts, type CoreMcpServer, type CoreMemory, type ProviderId } from '@/features/core';
 import { realtime } from '@/shared/realtime/realtime';
 import { askConfirm } from '@/shared/ui/overlay';
 import { Select } from '@/shared/ui/Select';
@@ -17,10 +17,10 @@ import { showToast } from '@/shared/ui/Toast';
  * подписка человека: вход идёт на ноде компании, здесь только ссылка и код. Всё обновляется живыми событиями.
  */
 
-const BRAND: Record<ProviderId, { mark: string; pitch: string }> = {
-  gemini: { mark: 'G', pitch: 'Ключ Google AI Studio или Google Cloud. Платите Google по расходу; у Flash-Lite есть бесплатный уровень.' },
-  claude: { mark: 'C', pitch: 'Ваша подписка Claude (Pro или Max). Вход — один раз, по ссылке; дальше работает само.' },
-  codex: { mark: 'O', pitch: 'Ваша подписка ChatGPT (Plus, Pro, Business). Вход — по ссылке и коду.' },
+const PITCH: Record<ProviderId, string> = {
+  gemini: 'Ключ Google AI Studio или Google Cloud — вставили, и работает. Платите Google по расходу.',
+  claude: 'Ваша подписка Claude (Pro или Max): один раз войти по ссылке.',
+  codex: 'Ваша подписка ChatGPT (Plus, Pro, Business): войти по ссылке и коду.',
 };
 
 const MODE_ICON = { auto: ShieldAlert, careful: ShieldCheck, ask: ShieldQuestion } as const;
@@ -29,15 +29,6 @@ const fail = (cause: unknown) => showToast(cause instanceof Error ? cause.messag
 
 async function copy(text: string) {
   try { await navigator.clipboard.writeText(text); showToast('Скопировано', 'success'); } catch { showToast('Не удалось скопировать', 'error'); }
-}
-
-function Mark({ provider, size = 44 }: { provider: ProviderId; size?: number }) {
-  const b = BRAND[provider];
-  return (
-    <span className="nst-core-mark" style={{ width: size, height: size }} aria-hidden="true">
-      {b.mark}
-    </span>
-  );
 }
 
 function StatusPill({ account }: { account: CoreAccount }) {
@@ -101,9 +92,22 @@ function LoginFlow({ account, onChange }: { account: CoreAccount; onChange: (nex
   );
 }
 
-function AgentCard({ account, nodeOnline, onChange }: { account: CoreAccount; nodeOnline: boolean; onChange: (next: CoreAccounts) => void }) {
+/** Учётная запись словами: «Logged in using ChatGPT» от Codex — «вход через ChatGPT». */
+function accountText(account: CoreAccount): string {
+  const raw = account.account || '';
+  const via = raw.match(/logged in using (.+)/i);
+  if (via) return `вход через ${via[1]}`;
+  return raw || 'вход выполнен';
+}
+
+/**
+ * Агент — строкой на всю ширину: знак, имя и одна строка пояснения слева; статус, модель и действие справа.
+ * Ключ Gemini и шаги входа в подписку — второй строкой внутри той же строки.
+ */
+function AgentRow({ account, nodeOnline, onChange }: { account: CoreAccount; nodeOnline: boolean; onChange: (next: CoreAccounts) => void }) {
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
+  const [keyOpen, setKeyOpen] = useState(false);
   const ready = account.state === 'ready';
   const logging = Boolean(account.login.state);
 
@@ -115,6 +119,7 @@ function AgentCard({ account, nodeOnline, onChange }: { account: CoreAccount; no
     if (key.trim().length < 20) return;
     await run(() => coreApi.setGeminiKey(key.trim()));
     setKey('');
+    setKeyOpen(false);
   };
   const disconnect = async () => {
     const ok = await askConfirm({
@@ -124,62 +129,53 @@ function AgentCard({ account, nodeOnline, onChange }: { account: CoreAccount; no
     });
     if (ok) await run(() => coreApi.disconnect(account.provider));
   };
+  const realModels = account.models.filter((m) => m.id);
 
   return (
-    <article className="nst-core-card" data-state={ready ? 'ready' : logging ? 'busy' : 'off'}>
-      <header className="nst-core-card-head">
-        <Mark provider={account.provider} />
-        <span className="nst-core-card-title">
-          <b>{account.label}</b>
-          <span>{account.vendor}</span>
+    <article className="nst-core-agent" data-state={ready ? 'ready' : logging ? 'busy' : 'off'}>
+      <div className="nst-core-agent-row">
+        <span className="nst-core-logo" aria-hidden="true"><BrandMark id={account.provider} size={20} /></span>
+        <span className="nst-core-agent-main">
+          <b>{account.label} <StatusPill account={account} /></b>
+          <span>{ready ? accountText(account) : PITCH[account.provider]}</span>
+          {account.error && <span className="nst-core-error" role="alert">{account.error}</span>}
         </span>
-        <StatusPill account={account} />
-      </header>
-
-      {ready ? (
-        <div className="nst-core-card-body">
-          <p className="nst-core-who">{account.how === 'key' ? <KeyRound size={13} aria-hidden="true" /> : <LogIn size={13} aria-hidden="true" />} {account.account || 'вход выполнен'}</p>
-          {account.models.length > 1 && (
+        <span className="nst-core-agent-side">
+          {ready && realModels.length > 1 && (
             <Select className="nst-core-model" label={`Модель ${account.label} по умолчанию`} value={account.model}
               onChange={(model) => void run(() => coreApi.setModel(account.provider, model))}
-              groups={[{ options: account.models.map((m) => ({ value: m.id, label: m.label })) }]} />
+              groups={[{ options: realModels.map((m) => ({ value: m.id, label: m.label })) }]} />
           )}
-        </div>
-      ) : logging ? (
-        <LoginFlow account={account} onChange={onChange} />
-      ) : (
-        <div className="nst-core-card-body">
-          <p className="nst-core-pitch">{BRAND[account.provider].pitch}</p>
-          {account.error && <p className="nst-core-error" role="alert">{account.error}</p>}
-        </div>
-      )}
-
-      <footer className="nst-core-card-foot">
-        {account.how === 'key' && !ready && (
-          <form className="nst-core-key" onSubmit={(e) => { e.preventDefault(); void saveKey(); }}>
-            <label className="nx-field nst-core-input">
-              <KeyRound size={15} aria-hidden="true" />
-              <span className="nx-sr">Ключ Google для Gemini</span>
-              <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Вставьте ключ AIza…" autoComplete="off" spellCheck={false} />
-            </label>
-            <button type="submit" className="nx-primary" disabled={key.trim().length < 20 || busy}>
-              {busy ? <Loader2 size={14} className="nx-spin" aria-hidden="true" /> : <Plug size={14} aria-hidden="true" />} Подключить
+          {ready && (
+            <button type="button" className="nx-icon-btn" disabled={busy} onClick={() => void disconnect()} aria-label={`Отключить ${account.label}`} title="Отключить">
+              <Unplug size={16} />
             </button>
-          </form>
-        )}
-        {account.how === 'key' && !ready && (
-          <a className="nst-core-help" href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer noopener">Где взять ключ — Google AI Studio <ExternalLink size={11} aria-hidden="true" /></a>
-        )}
-        {account.how === 'login' && !ready && !logging && (
-          <button type="button" className="nx-primary" disabled={busy || !nodeOnline} onClick={() => void run(() => coreApi.login(account.provider))}
-            title={nodeOnline ? undefined : 'Нода агентов не на связи — её запускает администратор'}>
-            {busy ? <Loader2 size={14} className="nx-spin" aria-hidden="true" /> : <LogIn size={14} aria-hidden="true" />} Войти в {account.label}
+          )}
+          {!ready && !logging && account.how === 'key' && !keyOpen && (
+            <button type="button" className="nx-ghost" onClick={() => setKeyOpen(true)}><KeyRound size={14} aria-hidden="true" /> Вставить ключ</button>
+          )}
+          {!ready && !logging && account.how === 'login' && (
+            <button type="button" className="nx-ghost" disabled={busy || !nodeOnline} onClick={() => void run(() => coreApi.login(account.provider))}
+              title={nodeOnline ? undefined : 'Нода агентов не на связи — её запускает администратор'}>
+              {busy ? <Loader2 size={14} className="nx-spin" aria-hidden="true" /> : <LogIn size={14} aria-hidden="true" />} Войти
+            </button>
+          )}
+        </span>
+      </div>
+      {!ready && account.how === 'key' && keyOpen && (
+        <form className="nst-core-agent-extra nst-core-key" onSubmit={(e) => { e.preventDefault(); void saveKey(); }}>
+          <label className="nx-field nst-core-input">
+            <span className="nx-sr">Ключ Google для Gemini</span>
+            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="AIza…" autoComplete="off" spellCheck={false} autoFocus />
+          </label>
+          <button type="submit" className="nx-primary" disabled={key.trim().length < 20 || busy}>
+            {busy ? <Loader2 size={14} className="nx-spin" aria-hidden="true" /> : <Plug size={14} aria-hidden="true" />} Подключить
           </button>
-        )}
-        {ready && (
-          <button type="button" className="nx-ghost nst-core-off" disabled={busy} onClick={() => void disconnect()}><Unplug size={14} aria-hidden="true" /> Отключить</button>
-        )}
-      </footer>
+          <button type="button" className="nx-icon-btn" onClick={() => { setKeyOpen(false); setKey(''); }} aria-label="Отмена"><X size={16} /></button>
+          <a className="nst-core-help" href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer noopener">Где взять ключ — Google AI Studio <ExternalLink size={11} aria-hidden="true" /></a>
+        </form>
+      )}
+      {logging && <div className="nst-core-agent-extra"><LoginFlow account={account} onChange={onChange} /></div>}
     </article>
   );
 }
@@ -195,7 +191,7 @@ function Usage({ data }: { data: CoreAccounts }) {
         const label = data.accounts.find((a) => a.provider === r.provider)?.label || r.provider;
         return (
           <div key={r.provider} className="nst-core-usage-row">
-            <Mark provider={r.provider} size={28} />
+            <span className="nst-core-logo" data-size="s" aria-hidden="true"><BrandMark id={r.provider} size={15} /></span>
             <span className="nst-core-usage-main">
               <span className="nst-core-usage-top"><b>{label}</b><span>{r.runs} {r.runs % 10 === 1 && r.runs % 100 !== 11 ? 'ответ' : 'ответов'}</span></span>
               <i className="nst-core-bar"><i style={{ width: `${Math.max(2, Math.round((total / max) * 100))}%`, }} /></i>
@@ -207,6 +203,107 @@ function Usage({ data }: { data: CoreAccounts }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/** API компании, открытые человеку: агент зовёт их через Шар, ключей не видит. Выдаёт администратор. */
+function ApisBlock() {
+  const [list, setList] = useState<Array<{ service: string; label: string; hint: string; docs: string }> | null>(null);
+  useEffect(() => { coreApi.myIntegrations().then(setList).catch(() => setList([])); }, []);
+  if (list === null) return <div className="nst-core-agents nst-core-skel" aria-busy="true" />;
+  if (!list.length) return <p className="nx-note">Вам пока не открыт ни один API компании. Метрику, Топвизор, Вордстат и другие открывает администратор (Админка → Ядро).</p>;
+  return (
+    <div className="nst-core-agents">
+      {list.map((i) => (
+        <div key={i.service} className="nst-core-agent">
+          <div className="nst-core-agent-row">
+            <span className="nst-core-logo" aria-hidden="true"><Plug size={17} /></span>
+            <span className="nst-core-agent-main"><b>{i.label}</b><span>{i.hint}</span></span>
+            {i.docs && <a className="nx-icon-btn" href={i.docs} target="_blank" rel="noreferrer noopener" aria-label={`Документация ${i.label}`} title="Документация"><ExternalLink size={15} /></a>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Личные MCP-серверы: подключаются к каждому запуску агента. Добавить — здесь или попросить агента («поставь MCP …»). */
+function McpBlock() {
+  const [list, setList] = useState<CoreMcpServer[] | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({ name: '', kind: 'http' as 'http' | 'npm', target: '', secretName: '', secret: '' });
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => coreApi.mcpServers().then(setList).catch(() => setList([])), []);
+  useEffect(() => { void load(); }, [load]);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const secrets = form.secretName.trim() && form.secret ? { [form.secretName.trim()]: form.secret } : undefined;
+      const body = form.kind === 'http'
+        ? { kind: 'http' as const, url: form.target.trim(), headers: secrets }
+        : { kind: 'npm' as const, package: form.target.trim(), env: secrets };
+      setList(await coreApi.saveMcpServer(form.name.trim().toLowerCase(), body));
+      setAdding(false);
+      setForm({ name: '', kind: 'http', target: '', secretName: '', secret: '' });
+    } catch (cause) { fail(cause); } finally { setBusy(false); }
+  };
+  const remove = async (name: string) => {
+    if (!(await askConfirm({ title: `Удалить MCP «${name}»?`, confirm: 'Удалить', tone: 'danger' }))) return;
+    try { setList(await coreApi.deleteMcpServer(name)); } catch (cause) { fail(cause); }
+  };
+
+  return (
+    <div className="nst-core-tools">
+      {list && list.length > 0 && (
+        <div className="nst-core-agents">
+          {list.map((m) => (
+            <div key={m.name} className="nst-core-agent" data-state={m.enabled ? 'ready' : 'off'}>
+              <div className="nst-core-agent-row">
+                <span className="nst-core-logo" aria-hidden="true"><Server size={16} /></span>
+                <span className="nst-core-agent-main">
+                  <b>{m.name}</b>
+                  <span>{m.kind === 'http' ? m.url : `npm: ${m.package}${m.args.length ? ` ${m.args.join(' ')}` : ''}`}{m.secretKeys.length ? ` · секреты: ${m.secretKeys.join(', ')}` : ''}{m.addedBy ? ` · добавил ${m.addedBy}` : ''}</span>
+                </span>
+                <span className="nst-core-agent-side">
+                  <Switch checked={m.enabled} label={`MCP ${m.name} включён`} onChange={(on) => coreApi.saveMcpServer(m.name, { enabled: on }).then(setList).catch(fail)} />
+                  <button type="button" className="nx-icon-btn" onClick={() => void remove(m.name)} aria-label={`Удалить ${m.name}`} title="Удалить"><Trash2 size={15} /></button>
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {list !== null && !list.length && !adding && (
+        <p className="nx-note">Своих MCP пока нет. Попросите агента: «поставь MCP GitHub» — он подключит сам; или добавьте здесь.</p>
+      )}
+      {adding ? (
+        <form className="nst-core-mcp-form" onSubmit={(e) => { e.preventDefault(); void save(); }}>
+          <nav className="nx-segment" aria-label="Вид MCP">
+            <button type="button" aria-pressed={form.kind === 'http'} onClick={() => setForm({ ...form, kind: 'http' })}>По адресу</button>
+            <button type="button" aria-pressed={form.kind === 'npm'} onClick={() => setForm({ ...form, kind: 'npm' })}>npm-пакет</button>
+          </nav>
+          <label className="nx-field"><span className="nx-sr">Имя</span><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Имя латиницей: github" /></label>
+          <label className="nx-field"><span className="nx-sr">{form.kind === 'http' ? 'Адрес' : 'Пакет'}</span>
+            <input value={form.target} onChange={(e) => setForm({ ...form, target: e.target.value })} placeholder={form.kind === 'http' ? 'https://…/mcp' : '@modelcontextprotocol/server-github'} spellCheck={false} />
+          </label>
+          <div className="nst-core-mcp-secret">
+            <label className="nx-field"><span className="nx-sr">Имя секрета</span>
+              <input value={form.secretName} onChange={(e) => setForm({ ...form, secretName: e.target.value })} placeholder={form.kind === 'http' ? 'Authorization' : 'GITHUB_TOKEN'} spellCheck={false} />
+            </label>
+            <label className="nx-field"><span className="nx-sr">Значение секрета</span>
+              <input type="password" value={form.secret} onChange={(e) => setForm({ ...form, secret: e.target.value })} placeholder={form.kind === 'http' ? 'Bearer …' : 'значение'} autoComplete="off" />
+            </label>
+          </div>
+          <div className="nx-actions">
+            <button type="button" className="nx-ghost" onClick={() => setAdding(false)}>Отмена</button>
+            <button type="submit" className="nx-primary" disabled={busy || !form.name.trim() || !form.target.trim()}><Check size={14} aria-hidden="true" /> Подключить</button>
+          </div>
+        </form>
+      ) : (
+        <button type="button" className="nx-ghost nst-core-add" onClick={() => setAdding(true)}><Server size={14} aria-hidden="true" /> Добавить MCP</button>
+      )}
     </div>
   );
 }
@@ -319,7 +416,7 @@ export default function CoreSection() {
 
   const ready = useMemo(() => data?.accounts.filter((a) => a.state === 'ready') ?? [], [data]);
   if (error) return <p className="nx-note" role="alert">{error}</p>;
-  if (!data) return <div className="nst-core-grid" aria-busy="true">{[0, 1, 2].map((i) => <div key={i} className="nst-core-card nst-core-skel" />)}</div>;
+  if (!data) return <div className="nst-core-agents" aria-busy="true">{[0, 1, 2].map((i) => <div key={i} className="nst-core-agent nst-core-skel" />)}</div>;
 
   const setMode = (mode: string) => coreApi.setMode(mode).then(setData).catch(fail);
 
@@ -339,8 +436,8 @@ export default function CoreSection() {
         </span>
       </section>
 
-      <div className="nst-core-grid">
-        {data.accounts.map((a) => <AgentCard key={a.provider} account={a} nodeOnline={data.node.online && data.node.clis.includes(a.provider)} onChange={setData} />)}
+      <div className="nst-core-agents">
+        {data.accounts.map((a) => <AgentRow key={a.provider} account={a} nodeOnline={data.node.online && data.node.clis.includes(a.provider)} onChange={setData} />)}
       </div>
       {!ready.length && <p className="nx-note nst-core-tip"><Plug size={12} aria-hidden="true" /> Ключ или вход можно прислать и самому агенту в чат — он подключит сам.</p>}
 
@@ -362,8 +459,19 @@ export default function CoreSection() {
       </section>
 
       <section className="nx-block">
-        <h2 className="nx-block-title"><Gauge size={12} aria-hidden="true" /> Расход за 30 дней</h2>
+        <h2 className="nx-block-title nst-core-title"><Gauge size={12} aria-hidden="true" /> Расход за 30 дней</h2>
         <Usage data={data} />
+      </section>
+
+      <section className="nx-block">
+        <h2 className="nx-block-title nst-core-title"><Plug size={12} aria-hidden="true" /> Доступные API</h2>
+        <ApisBlock />
+      </section>
+
+      <section className="nx-block">
+        <h2 className="nx-block-title nst-core-title"><Server size={12} aria-hidden="true" /> MCP-серверы</h2>
+        <p className="nx-note">Свои инструменты для агента: GitHub, Notion, базы — любой MCP по адресу или из npm. Подключаются к каждому его запуску; секреты хранятся зашифрованными.</p>
+        <McpBlock />
       </section>
 
       <section className="nx-block">

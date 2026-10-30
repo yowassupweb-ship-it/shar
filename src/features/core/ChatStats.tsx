@@ -1,9 +1,29 @@
 import { Hourglass } from 'lucide-react';
 import { plural } from '@/shared/ui/format';
-import type { CoreMessage, CoreThread } from './api';
+import type { CoreLimit, CoreMessage, CoreThread } from './api';
 import { formatTokens, modelLabel } from './parts';
 
 const AGENT_NAME: Record<string, string> = { gemini: 'Gemini', claude: 'Claude', codex: 'GPT' };
+const WINDOW_NAME: Record<string, string> = { five_hour: '5 ч', seven_day: 'неделя', seven_day_opus: 'неделя Opus', seven_day_sonnet: 'неделя Sonnet' };
+
+/** Лимиты подписки агента — в шапке чата: сколько окна израсходовано и когда сбросится. */
+export function LimitBadges({ limits, agent }: { limits?: CoreLimit[]; agent: string }) {
+  if (!limits?.length) return null;
+  return (
+    <span className="ncore-limits" aria-label={`Лимиты подписки ${agent}`}>
+      {limits.map((l) => {
+        const reset = l.resetsAt ? new Date(l.resetsAt * 1000).toLocaleString('ru-RU', { weekday: l.type.startsWith('seven') ? 'short' : undefined, hour: '2-digit', minute: '2-digit' }) : '';
+        const tone = /reject|block|exceed/i.test(l.status) || l.used >= 100 ? 'bad' : l.used >= 80 ? 'warn' : undefined;
+        return (
+          <span key={l.type} className="ncore-limit-badge" data-tone={tone} title={`${agent}: ${WINDOW_NAME[l.type] || l.type} — израсходовано ${l.used}%${reset ? `, сбросится ${reset}` : ''}${l.overage ? ', идёт перерасход' : ''}`}>
+            <i><i style={{ width: `${Math.min(100, Math.max(2, l.used))}%` }} /></i>
+            {WINDOW_NAME[l.type] || l.type} {l.used}%
+          </span>
+        );
+      })}
+    </span>
+  );
+}
 
 function seconds(ms: number): string {
   const s = Math.round(ms / 1000);

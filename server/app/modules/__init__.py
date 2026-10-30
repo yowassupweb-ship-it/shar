@@ -44,7 +44,9 @@ def _collect() -> list[APIRouter]:
     from app.modules.workspace import public as workspace_public
     from app.modules.workspace import router as workspace
     from app.modules.core_agents import accounts as core_accounts
+    from app.modules.core_agents import hidden as core_hidden
     from app.modules.core_agents import integrations as core_integrations
+    from app.modules.core_agents import mcp_servers as core_mcp_servers
     from app.modules.core_agents import memory as core_memory
     from app.modules.core_agents import node as core_node
     from app.modules.core_chat import router as core_chat
@@ -54,7 +56,7 @@ def _collect() -> list[APIRouter]:
         realtime, calls_rooms, calls_signaling, mail_messages, mail_sync, accounts, mailboxes, email_chat_rules,
         cloud, uploads, avatars, backgrounds, stickers, calendar_workdays, calendar, todos, notifications, push, requests_mod, admin,
         client_errors, health, utm, og, chats_scheduled, leads, social, integrations, workspace_folders, workspace, workspace_public, search, birthdays,
-        mcp_keys, mcp, core_chat, core_accounts, core_integrations, core_memory, core_node, usage,
+        mcp_keys, mcp, core_chat, core_accounts, core_hidden, core_integrations, core_mcp_servers, core_memory, core_node, usage,
     ]
     return [m.router for m in mods]
 

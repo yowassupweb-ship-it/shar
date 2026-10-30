@@ -41,10 +41,18 @@ PROVIDERS = {
     "codex": {"label": "GPT", "vendor": "OpenAI (Codex)", "how": "login"},
 }
 # Модели подписок — псевдонимы самих CLI: они сами ведут их к актуальным версиям.
-LOGIN_MODELS = {
-    "claude": [{"id": "sonnet", "label": "Sonnet"}, {"id": "opus", "label": "Opus"}, {"id": "haiku", "label": "Haiku"}],
-    "codex": [{"id": "", "label": "По умолчанию"}],
-}
+# Модели подписок нода узнаёт у самого провайдера (kit/shar-node.mjs: modelsOf) — пока не узнала, CLI берёт свою.
+def pick_models(provider: str, models: list[dict], current: str = "") -> tuple[list[dict], str]:
+    """Список моделей от ноды и модель по умолчанию: выбранная человеком, если она ещё есть; иначе для Claude —
+    новейший Sonnet (баланс скорости и ума), для остальных — первая в каталоге."""
+    clean = [{"id": str(m.get("id") or ""), "label": str(m.get("label") or m.get("id") or "")} for m in models if m.get("id")][:40]
+    ids = [m["id"] for m in clean]
+    if current in ids:
+        return clean, current
+    if provider == "claude":
+        sonnet = next((m for m in ids if "sonnet" in m), "")
+        return clean, sonnet or (ids[0] if ids else "")
+    return clean, ids[0] if ids else ""
 # Цены Gemini API за 1 млн токенов, $ (вход / выход), сверенные 29.10.2026 (MBOX #589). Модель без цены здесь —
 # считаем только токены, деньги не выдумываем. Кэш считаем по цене входа (верхняя оценка).
 # Подписки Claude и GPT денег за токены не берут — цену не считаем.
@@ -91,6 +99,8 @@ CREATE TABLE IF NOT EXISTS core_jobs (
     taken_at TIMESTAMPTZ,
     finished_at TIMESTAMPTZ
 );
+-- Последние окна лимита подписки (Claude: пятичасовое, недельное) — нода присылает после каждого ответа.
+ALTER TABLE core_accounts ADD COLUMN IF NOT EXISTS limits JSONB NOT NULL DEFAULT '[]'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_core_jobs_queue ON core_jobs(status, id) WHERE status IN ('queued', 'taken');
 CREATE INDEX IF NOT EXISTS idx_core_jobs_message ON core_jobs(message_id) WHERE message_id <> '';
 CREATE TABLE IF NOT EXISTS core_usage (
@@ -198,13 +208,14 @@ def public_account(row: dict) -> dict:
     provider = row["provider"]
     meta = PROVIDERS[provider]
     node_ok = node_online(row.get("node_id")) if meta["how"] == "login" else bool(online_nodes())
-    models = row.get("models") or LOGIN_MODELS.get(provider, [])
+    models = row.get("models") or [{"id": "", "label": "по умолчанию"}]
     secret = unseal(row.get("secret_enc") or "") if meta["how"] == "key" else ""
     return {
         "provider": provider, "label": meta["label"], "vendor": meta["vendor"], "how": meta["how"], "state": row["state"],
         "account": row.get("account") or "", "model": row.get("model") or (models[0]["id"] if models else ""), "models": models,
         "keyHint": f"…{secret[-4:]}" if secret else "", "nodeOnline": node_ok, "error": row.get("error") or "",
-        "login": row.get("login") or {}, "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None,
+        "login": row.get("login") or {}, "limits": row.get("limits") or [],
+        "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None,
     }
 
 
