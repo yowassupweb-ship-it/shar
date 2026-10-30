@@ -32,10 +32,6 @@ const subscribeMedia = (cb: () => void) => {
 };
 const subscribeNoop = () => () => {};
 
-const VIEW_KEY = 'nxcal:view';
-function readView(): View {
-  try { const v = localStorage.getItem(VIEW_KEY); return v === 'day' || v === 'week' || v === 'month' ? v : 'week'; } catch { return 'week'; }
-}
 
 function rangeOf(view: View, anchor: Date): { from: Date; to: Date } {
   if (view === 'day') return { from: startOfDay(anchor), to: addDays(startOfDay(anchor), 1) };
@@ -68,7 +64,7 @@ function titleOf(view: View, anchor: Date): { main: string; sub?: string } {
 export default function CalendarScreen() {
   const mounted = useSyncExternalStore(subscribeNoop, () => true, () => false);
   const narrow = useSyncExternalStore(subscribeMedia, () => window.matchMedia(NARROW).matches, () => false);
-  const [viewPref, setViewPref] = useState<View>(readView);
+  const [viewPref, setViewPref] = useState<View>('month');
   // На телефоне недели нет: семь колонок по 50px не читаются.
   const view: View = narrow && viewPref === 'week' ? 'month' : viewPref;
   const eventLink = useRef(readEventLink());
@@ -84,10 +80,8 @@ export default function CalendarScreen() {
   useEffect(() => { void loadBirthdays(); }, []);
   const phase = useCalendar((s) => s.phase);
 
-  const setView = useCallback((v: View) => {
-    setViewPref(v);
-    try { localStorage.setItem(VIEW_KEY, v); } catch { /* ignore */ }
-  }, []);
+  // Календарь всегда открывается месяцем; день и неделя — на время просмотра.
+  const setView = useCallback((v: View) => setViewPref(v), []);
 
   const range = useMemo(() => rangeOf(view, anchor), [view, anchor]);
   const fromIso = localIso(range.from);
