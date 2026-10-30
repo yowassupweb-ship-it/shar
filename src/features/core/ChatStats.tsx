@@ -3,7 +3,7 @@ import { plural } from '@/shared/ui/format';
 import type { CoreLimit, CoreMessage, CoreThread } from './api';
 import { formatTokens, modelLabel } from './parts';
 
-const AGENT_NAME: Record<string, string> = { gemini: 'Gemini', claude: 'Claude', codex: 'GPT' };
+const AGENT_NAME: Record<string, string> = { gemini: 'Gemini', claude: 'Claude', codex: 'GPT', kimi: 'Kimi' };
 const WINDOW_NAME: Record<string, string> = { five_hour: '5 ч', seven_day: 'неделя', seven_day_opus: 'неделя Opus', seven_day_sonnet: 'неделя Sonnet' };
 
 /** Лимиты подписки агента — в шапке чата: кольцо израсходованного окна и процент; когда сбросится — в подсказке. */

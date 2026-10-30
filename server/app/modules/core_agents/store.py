@@ -39,6 +39,7 @@ PROVIDERS = {
     "gemini": {"label": "Gemini", "vendor": "Google", "how": "key"},
     "claude": {"label": "Claude", "vendor": "Anthropic", "how": "login"},
     "codex": {"label": "GPT", "vendor": "OpenAI (Codex)", "how": "login"},
+    "kimi": {"label": "Kimi", "vendor": "Moonshot AI (Kimi Code)", "how": "login"},
 }
 # Модели подписок — псевдонимы самих CLI: они сами ведут их к актуальным версиям.
 # Модели подписок нода узнаёт у самого провайдера (kit/shar-node.mjs: modelsOf) — пока не узнала, CLI берёт свою.

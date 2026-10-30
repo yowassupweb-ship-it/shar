@@ -119,7 +119,7 @@ export interface SendPayload {
 
 // ── подключения (Настройки → Ядро) ───────────────────────────────────────────
 
-export type ProviderId = 'gemini' | 'claude' | 'codex';
+export type ProviderId = 'gemini' | 'claude' | 'codex' | 'kimi';
 
 export interface CoreAccount {
   provider: ProviderId;

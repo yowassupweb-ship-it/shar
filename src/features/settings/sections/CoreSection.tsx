@@ -21,6 +21,7 @@ const PITCH: Record<ProviderId, string> = {
   gemini: 'Ключ Google AI Studio или Google Cloud — вставили, и работает. Платите Google по расходу.',
   claude: 'Ваша подписка Claude (Pro или Max): один раз войти по ссылке.',
   codex: 'Ваша подписка ChatGPT (Plus, Pro, Business): войти по ссылке и коду.',
+  kimi: 'Ваша подписка Kimi Code (Moonshot AI): войти по ссылке и коду.',
 };
 
 const MODE_ICON = { auto: ShieldAlert, careful: ShieldCheck, ask: ShieldQuestion } as const;

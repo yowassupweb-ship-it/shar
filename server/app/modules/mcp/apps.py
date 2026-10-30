@@ -707,7 +707,7 @@ TOOLS: list[dict[str, Any]] = [
      "inputSchema": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}},
     {"name": "agent_disconnect", "app": "agent", "handler": agent_disconnect, "level": "read",
      "description": "Отключить агента человека (gemini — стереть ключ; claude, codex — выйти из подписки на ноде). Нужен confirm: true.",
-     "inputSchema": {"type": "object", "properties": {"provider": {"type": "string", "enum": ["gemini", "claude", "codex"]}, "confirm": {"type": "boolean"}},
+     "inputSchema": {"type": "object", "properties": {"provider": {"type": "string", "enum": ["gemini", "claude", "codex", "kimi"]}, "confirm": {"type": "boolean"}},
                      "required": ["provider", "confirm"]}},
     {"name": "open_in_shar", "app": "agent", "handler": open_in_shar, "level": "read",
      "description": "Открыть человеку раздел или материал Шара на его экране: документ, таблицу, задачу, календарь, папку файлов (url из ответов "

@@ -12,8 +12,8 @@ import { timeAgo } from './api';
  */
 
 const fail = (cause: unknown) => showToast(cause instanceof Error ? cause.message : 'Не получилось', 'error');
-const CLI_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', browser: 'Браузер Obscura' };
-const PROVIDER_LABEL: Record<string, string> = { gemini: 'Gemini', claude: 'Claude', codex: 'GPT' };
+const CLI_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', kimi: 'Kimi Code', browser: 'Браузер Obscura' };
+const PROVIDER_LABEL: Record<string, string> = { gemini: 'Gemini', claude: 'Claude', codex: 'GPT', kimi: 'Kimi' };
 
 async function copy(text: string, what = 'Скопировано') {
   try { await navigator.clipboard.writeText(text); showToast(what, 'success'); } catch { showToast('Не удалось скопировать', 'error'); }

@@ -131,7 +131,7 @@ def _agent_hash() -> str:
 # Ноды старше этой версии получали оболочку и файлы у Gemini и видели свой токен в окружении CLI (Codex, Gemini) —
 # таким нодам задачи GPT и Gemini не отдаём, пока их не обновят (перезапуск службы или новая команда установки).
 SAFE_NODE_VERSION = (1, 1, 0)
-UNSAFE_PROVIDERS = ("gemini", "codex")
+UNSAFE_PROVIDERS = ("gemini", "codex", "kimi")
 
 
 def _version(node: dict) -> tuple:
