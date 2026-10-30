@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Archive, ArchiveRestore, ArrowDown, BarChart3, ChevronLeft, Lock, MessageSquarePlus, MoreHorizontal, Pencil, Search, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, BarChart3, ChevronLeft, Hourglass, Lock, MessageSquarePlus, MoreHorizontal, Pencil, Search, X } from 'lucide-react';
 import { CoreIcon } from '@/shared/ui/CoreIcon';
 import { ForwardSheet, insertIntoOpenChat } from '@/features/chat';
 import { realtime } from '@/shared/realtime/realtime';
@@ -368,6 +368,14 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
             {headMenu && (
               <Menu anchor={headMenu} label="Действия с чатом" onClose={() => setHeadMenu(null)} compact>
                 <MenuItem icon={<Pencil size={15} />} onSelect={() => { setHeadMenu(null); setRenaming(true); }}>Переименовать</MenuItem>
+                {catalog?.agents.some((x) => x.id === 'claude') && (
+                  <MenuItem icon={<Hourglass size={15} />} onSelect={() => {
+                    setHeadMenu(null);
+                    coreApi.checkLimits('claude')
+                      .then(() => showToast('Спрашиваю у Claude, сколько осталось, — лимиты в шапке обновятся через несколько секунд', 'info'))
+                      .catch((cause) => showToast(cause instanceof Error ? cause.message : 'Не получилось', 'error'));
+                  }}>Проверить лимиты</MenuItem>
+                )}
                 <MenuItem icon={thread.archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}
                   onSelect={() => { setHeadMenu(null); void patchThread(thread.id, { archived: !thread.archived }).then(() => { if (!thread.archived) onSelect(null); }); }}>
                   {thread.archived ? 'Вернуть из архива' : 'В архив'}

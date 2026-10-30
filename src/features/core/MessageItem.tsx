@@ -54,17 +54,26 @@ function Elapsed({ since }: { since: string }) {
   return <>{s >= 60 ? `${Math.floor(s / 60)} мин ${s % 60} с` : `${s} с`}</>;
 }
 
-function rateLimitText(limit: NonNullable<CoreMessage['props']['rateLimit']>) {
+/** Когда обновится окно лимита. Момент сброса — из события провайдера (resets_at); у старых сообщений его нет —
+ *  считаем от времени самого сообщения, а не от «сейчас» (иначе старая карточка «уезжала» вперёд при каждом показе). */
+function resetMoment(limit: NonNullable<CoreMessage['props']['rateLimit']>, sentAt: string): number {
+  if (limit.resets_at) return limit.resets_at * 1000;
+  if (limit.wait_seconds) return new Date(sentAt).getTime() + limit.wait_seconds * 1000;
+  return 0;
+}
+
+function rateLimitText(limit: NonNullable<CoreMessage['props']['rateLimit']>, sentAt: string) {
   const who = limit.provider ? `Лимит ${limit.provider}` : 'Лимит подписки';
-  const until = limit.wait_seconds
-    ? new Date(Date.now() + limit.wait_seconds * 1000).toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', ...(limit.wait_seconds > 86_400 ? { day: 'numeric', month: 'short' } : {}) })
-    : '';
+  const at = resetMoment(limit, sentAt);
+  if (at && at <= Date.now()) return `${who}: окно с тех пор обновилось`;
+  const sameDay = at && new Date(at).toDateString() === new Date().toDateString();
+  const until = at ? new Date(at).toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', ...(sameDay ? {} : { day: 'numeric', month: 'short' }) }) : '';
   const used = limit.used_percent ?? 100;
   // Окно почти выбрано, но ещё не кончилось — это предупреждение, а не отказ.
   if (used < 100 && !/reject|block|exceed/i.test(limit.status || '')) {
-    return `${who}: израсходовано ${used}%${limit.detail ? ` (${limit.detail})` : ''}${until ? ` — обновится примерно в ${until}` : ''}`;
+    return `${who}: израсходовано ${used}%${limit.detail ? ` (${limit.detail})` : ''}${until ? ` — обновится в ${until}` : ''}`;
   }
-  return `${who} исчерпан${limit.detail ? `: ${limit.detail}` : ''}${until ? ` — снова можно примерно в ${until}` : ''}`;
+  return `${who} исчерпан${limit.detail ? `: ${limit.detail}` : ''}${until ? ` — снова можно в ${until}` : ''}`;
 }
 
 /** Агент просит разрешения (режим «Осторожно» / «Спрашивать всегда»): без «Разрешить» сервер действие не пустит. */
@@ -225,7 +234,7 @@ export const MessageItem = memo(function MessageItem({ message, quote, h }: {
             {!message.local && <time>{formatTime(message.createdAt)}</time>}
           </div>
         )}
-        {p.rateLimit && <p className="ncore-limit" role="status"><Hourglass size={12} aria-hidden="true" /> {rateLimitText(p.rateLimit)}</p>}
+        {p.rateLimit && <p className="ncore-limit" role="status"><Hourglass size={12} aria-hidden="true" /> {rateLimitText(p.rateLimit, message.createdAt)}</p>}
         {!!p.reasoning?.length && (
           <details className="ncore-reasoning">
             <summary><Brain size={12} aria-hidden="true" /> Ход мысли</summary>

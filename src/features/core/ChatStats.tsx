@@ -11,7 +11,9 @@ export function LimitBadges({ limits, agent }: { limits?: CoreLimit[]; agent: st
   if (!limits?.length) return null;
   return (
     <span className="ncore-limits" aria-label={`Лимиты подписки ${agent}`}>
-      {limits.map((l) => {
+      {limits.map((raw) => {
+        // Окно уже сбросилось, а свежих данных ещё нет (они приходят с ответом агента или по «Проверить лимиты») — 0%.
+        const l = raw.resetsAt && raw.resetsAt * 1000 <= Date.now() ? { ...raw, used: 0, status: '', resetsAt: 0 } : raw;
         const reset = l.resetsAt ? new Date(l.resetsAt * 1000).toLocaleString('ru-RU', { weekday: l.type.startsWith('seven') ? 'short' : undefined, hour: '2-digit', minute: '2-digit' }) : '';
         const tone = /reject|block|exceed/i.test(l.status) || l.used >= 100 ? 'bad' : l.used >= 80 ? 'warn' : undefined;
         const used = Math.min(100, Math.max(0, l.used));

@@ -167,6 +167,8 @@ def _take(node: dict) -> Optional[dict]:
             update_agent_message(job["message_id"], status="working", props={"phase": "думает"})
             return dispatch.build_run(job)
         out = {"id": str(job["id"]), "kind": job["kind"], "provider": job["provider"], "userId": job["user_id"]}
+        if job["kind"] == "check" and (job.get("payload") or {}).get("limits"):
+            out["limits"] = True  # кнопка «Проверить лимиты»: нода спросит у провайдера текущие окна
         if job["kind"] == "login_code":
             out["code"] = (job.get("payload") or {}).get("code") or ""
             store.finish_job(job["id"], "done")  # код отдан — задача выполнена, дальше идёт вход
@@ -262,6 +264,9 @@ def _apply_account(job: dict, events: list[dict]) -> dict:
                                    node_id=job["node_id"], **({"models": models, "model": model} if models else {}))
             else:
                 store.save_account(user_id, provider, state="none", account="")
+            if isinstance(ev.get("limits"), list):
+                db.conn.execute_query("UPDATE core_accounts SET limits = %s WHERE user_id = %s AND provider = %s",
+                                      (Json(list(ev["limits"])[:4]), user_id, provider))
             store.finish_job(job["id"], "done")
         elif kind in ("done", "failed"):
             store.finish_job(job["id"], kind, str(ev.get("error") or ""))

@@ -52,7 +52,7 @@ export interface CoreProps {
   model?: string;
   effort?: string;
   work?: CoreWork;
-  rateLimit?: { provider?: string; wait_seconds?: number; used_percent?: number; detail?: string; status?: string };
+  rateLimit?: { provider?: string; wait_seconds?: number; resets_at?: number; used_percent?: number; detail?: string; status?: string };
   failed?: boolean;
   /** Вопрос агента: confirm — да/нет, choice — один вариант, multi — несколько. */
   ask?: { kind: 'confirm' | 'choice' | 'multi' | 'permission'; question?: string; approvalId?: string; tool?: string };
@@ -219,6 +219,8 @@ export const coreApi = {
   login: (provider: ProviderId) => call<CoreAccounts>(`/api/core/accounts/${provider}/login`, { method: 'POST' }),
   loginCode: (provider: ProviderId, code: string) => call<CoreAccounts>(`/api/core/accounts/${provider}/login/code`, { method: 'POST', json: { code } }),
   cancelLogin: (provider: ProviderId) => call<CoreAccounts>(`/api/core/accounts/${provider}/login`, { method: 'DELETE' }),
+  /** Спросить у провайдера текущие окна лимита подписки (пока только Claude); ответ придёт событием core_account. */
+  checkLimits: (provider: ProviderId) => call<{ queued: boolean }>(`/api/core/accounts/${provider}/limits`, { method: 'POST' }),
   disconnect: (provider: ProviderId) => call<CoreAccounts>(`/api/core/accounts/${provider}`, { method: 'DELETE' }),
   setMode: (mode: string) => call<CoreAccounts>('/api/core/settings', { method: 'PUT', json: { mode } }),
   usage: (days = 30, all = false) => call<{ usage: CoreUsageRow[] }>(`/api/core/usage?days=${days}${all ? '&all=1' : ''}`),

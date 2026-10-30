@@ -182,6 +182,21 @@ def start_login(provider: str, me: Identity = Depends(current_identity)):
     return _overview(me)
 
 
+@router.post("/api/core/accounts/{provider}/limits")
+def check_limits(provider: str, me: Identity = Depends(current_identity)):
+    """Кнопка «Проверить лимиты»: нода спросит у провайдера текущие окна подписки. Ответ придёт событием core_account
+    (лимиты в шапке чата обновятся сами). Пока умеет только Claude: GPT и Gemini окон подписки не отдают."""
+    _guard(me)
+    provider = _provider(provider)
+    if provider != "claude":
+        raise HTTPException(status_code=400, detail="Лимиты подписки можно проверить только у Claude")
+    row = store.account(me.user_id, provider)
+    if row.get("state") != "ready" or not row.get("node_id") or not store.node_online(row["node_id"]):
+        raise HTTPException(status_code=409, detail="Claude не подключён или нода агентов не на связи")
+    store.enqueue("check", me.user_id, provider, node_id=row["node_id"], payload={"limits": True})
+    return {"queued": True}
+
+
 class CodeBody(BaseModel):
     code: str = Field(min_length=4, max_length=600)
 

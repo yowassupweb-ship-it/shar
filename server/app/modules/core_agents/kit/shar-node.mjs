@@ -389,6 +389,7 @@ function claudeRateLimit(info) {
     provider: "Claude",
     used_percent: Math.round((Number(info.utilization) || 0) * 100),
     wait_seconds: resetsAt ? Math.max(0, resetsAt - Math.floor(Date.now() / 1000)) : 0,
+    resets_at: resetsAt, // момент сброса (unix, с) — интерфейс показывает его, а не «сейчас + сколько было ждать»
     detail: `${info.rateLimitType === "seven_day" ? "недельное окно" : "пятичасовое окно"}${info.isUsingOverage ? ", идёт перерасход" : ""}`,
     status: String(info.status || ""),
   };
@@ -796,7 +797,31 @@ async function checkJob(job) {
   const dirs = userDirs(job.userId);
   const acc = await accountOf(job.provider, dirs);
   const models = acc.loggedIn ? await modelsOf(job.provider, dirs) : [];
-  await reporter(job).send({ type: "account", loggedIn: acc.loggedIn, account: acc.account, models });
+  const limits = acc.loggedIn && job.limits && job.provider === "claude" ? await claudeLimits(dirs) : null;
+  await reporter(job).send({ type: "account", loggedIn: acc.loggedIn, account: acc.account, models, ...(limits ? { limits } : {}) });
+}
+
+/**
+ * Лимиты подписки Claude по кнопке «Проверить». Отдельного публичного способа узнать их нет — Claude Code присылает
+ * rate_limit_event в ответ на любой запрос. Поэтому — самый дешёвый запрос: Haiku, одно слово, без инструментов и MCP.
+ */
+async function claudeLimits(dirs) {
+  const args = ["-p", "--output-format", "stream-json", "--verbose", "--input-format", "text", "--model", "haiku",
+    "--setting-sources", "project", "--tools", "", "--disable-slash-commands", "--strict-mcp-config", "--max-turns", "1"];
+  const { out } = await exec(CLI.claude, args, { env: userEnv(dirs), cwd: dirs.work, stdin: "Ответь одним словом: ок" }, 90_000);
+  const limits = {};
+  for (const line of out.split("\n")) {
+    if (!line.includes("rate_limit_event")) continue;
+    try {
+      const info = JSON.parse(line).rate_limit_info;
+      if (!info) continue;
+      limits[info.rateLimitType || "five_hour"] = {
+        type: String(info.rateLimitType || "five_hour"), used: Math.round((Number(info.utilization) || 0) * 100),
+        resetsAt: Number(info.resetsAt) || 0, status: String(info.status || ""), overage: Boolean(info.isUsingOverage),
+      };
+    } catch { /* строка не JSON */ }
+  }
+  return Object.values(limits);
 }
 
 async function loginJob(job) {
