@@ -49,7 +49,7 @@
 .ncore-chat[data-dropping]::after { content: ''; position: absolute; inset: 8px; z-index: 4; border: 1.5px dashed var(--text-muted); border-radius: var(--radius-lg); pointer-events: none; }
 .ncore-drop { position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; color: var(--text-main); font-weight: var(--weight-semibold); pointer-events: none; }
 .ncore-chat-head { display: flex; align-items: center; gap: 8px; flex: none; min-height: 46px; padding: 0 var(--space-2) 0 var(--space-3); border-bottom: 1px solid var(--ncore-line); }
-.ncore-chat-mark { display: grid; flex: none; place-items: center; width: 24px; height: 24px; border-radius: 7px; box-shadow: inset 0 0 0 1px var(--ncore-line); background: var(--ncore-soft); }
+.ncore-chat-mark { display: grid; flex: none; place-items: center; width: 22px; height: 22px; }
 .ncore-chat-title { display: grid; gap: 0; min-width: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: default; }
 .ncore-chat-title b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); font-weight: var(--weight-semibold); letter-spacing: -0.005em; line-height: 1.3; }
 .ncore-chat-title > span { overflow: hidden; color: var(--text-muted); font-size: 11px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
@@ -116,8 +116,8 @@
 .ncore-row { display: flex; gap: 9px; margin: 10px 0; }
 .ncore-row[data-mine] { justify-content: flex-end; margin: 10px 0 6px; }
 .ncore-row[data-flash] .ncore-bubble, .ncore-row[data-flash] .ncore-md { background: var(--ncore-soft); transition: background .3s; }
-/* Знак агента: буква провайдера в монохромном квадрате — как в переключателе над полем ввода. */
-.ncore-agent-avatar { display: grid; place-items: center; flex: none; width: 22px; height: 22px; margin-top: 0; border-radius: 6px; box-shadow: inset 0 0 0 1px var(--ncore-line); color: var(--text-main); }
+/* Знак агента — сам логотип, без подложки и рамки; чуть крупнее строки имени и вплотную к ней. */
+.ncore-agent-avatar { display: grid; place-items: center; flex: none; width: 20px; height: 20px; margin-right: -3px; color: var(--text-main); }
 .ncore-col { display: flex; flex: 1; flex-direction: column; align-items: stretch; gap: 4px; min-width: 0; }
 .ncore-row[data-mine] .ncore-col { flex: none; align-items: flex-end; max-width: min(80%, 600px); }
 .ncore-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 20px; font-size: var(--text-xs); color: var(--text-muted); }

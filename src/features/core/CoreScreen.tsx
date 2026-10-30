@@ -334,7 +334,7 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
     >
       <header className="ncore-chat-head">
         {narrow && <button type="button" className="nx-icon-btn" onClick={onList} aria-label="Все чаты" title="Все чаты"><ChevronLeft size={20} /></button>}
-        {headAgent && <span className="ncore-chat-mark" aria-hidden="true"><BrandMark id={headAgent.id} size={14} /></span>}
+        {headAgent && <span className="ncore-chat-mark" aria-hidden="true"><BrandMark id={headAgent.id} size={20} /></span>}
         {renaming && thread ? (
           <input className="ncore-rename" autoFocus defaultValue={thread.title} maxLength={120} aria-label="Название чата"
             onBlur={(e) => { const v = e.currentTarget.value.trim(); setRenaming(false); if (v && v !== thread.title) void patchThread(thread.id, { title: v }); }}

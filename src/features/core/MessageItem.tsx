@@ -167,7 +167,7 @@ export const MessageItem = memo(function MessageItem({ message, quote, h }: {
         </Menu>
       )}
       {!mine && (
-        <span className="ncore-agent-avatar" aria-hidden="true">{p.provider ? <BrandMark id={p.provider} size={14} /> : <CoreMini size={14} />}</span>
+        <span className="ncore-agent-avatar" aria-hidden="true">{p.provider ? <BrandMark id={p.provider} size={18} /> : <CoreMini size={18} />}</span>
       )}
       <div className="ncore-col">
         {!mine && (
