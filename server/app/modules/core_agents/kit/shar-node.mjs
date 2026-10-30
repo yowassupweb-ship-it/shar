@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "1.1.1";
+const VERSION = "1.1.2";
 const SHAR_URL = String(process.env.SHAR_URL || "").replace(/\/+$/, "");
 const TOKEN = String(process.env.SHAR_NODE_TOKEN || "");
 // Отпечаток этого файла — так же, как его считает Шар (переводы строк без \r): разошёлся с присланным в опросе —
@@ -364,6 +364,7 @@ function runProvider(job, dirs, resumeId, report, entry) {
   if (job.provider === "claude") return runClaude(job, dirs, resumeId, report, entry);
   if (job.provider === "codex") return runCodex(job, dirs, resumeId, report, entry);
   if (job.provider === "gemini") return runGemini(job, dirs, resumeId, report, entry);
+  if (job.provider === "kimi") return runKimi(job, dirs, resumeId, report, entry);
   throw new Error(`Неизвестный агент ${job.provider}`);
 }
 
@@ -396,7 +397,7 @@ function streamCli(command, args, opts, entry, handle, state) {
       if (limit && !state.rateLimit) state.rateLimit = { provider: opts.provider, detail: limit, used_percent: 100 };
       if ((code !== 0 && !state.text) || state.failure) {
         const reason = humanError(state.failure) || stripAnsi(tail).trim().split("\n").slice(-4).join(" ") || `выход с кодом ${code}`;
-        if (/session|conversation|thread/i.test(reason) && /not found|no such|does not exist|invalid/i.test(reason) && args.some((a) => /resume/.test(a))) {
+        if (/session|conversation|thread/i.test(reason) && /not found|no such|does not exist|invalid/i.test(reason) && args.some((a) => /resume|session/.test(a))) {
           return reject(new Error(`session not found: ${reason}`));
         }
         state.authExpired = authProblem(reason);
@@ -751,6 +752,105 @@ function runCodex(job, dirs, resumeId, report, entry) {
     }
   };
   return streamCli(CLI.codex, args, { cwd: dirs.work, env: { ...userEnv(dirs), SHAR_MCP_TOKEN: job.mcp.token, ...codexExtra(job).env }, stdin: prompt, provider: "GPT" }, entry, handle, state);
+}
+
+// ── Kimi Code (подписка Kimi) ────────────────────────────────────────────────
+
+function kimiFiles(job, dirs) {
+  // Рабочий каталог отдельный на запуск: mcp.json может содержать личные секреты и не пересекается с параллельными ответами.
+  const cwd = path.join(dirs.work, ".shar-kimi", String(job.id).replace(/[^A-Za-z0-9_-]/g, "_"));
+  fs.mkdirSync(path.join(cwd, ".kimi-code"), { recursive: true, mode: 0o700 });
+  const mcpServers = {
+    shar: { url: absolute(job.mcp.url), bearerTokenEnvVar: "SHAR_MCP_TOKEN", toolTimeoutMs: 120_000 },
+    ...(browser ? { browser: { command: browser, args: ["mcp"], toolTimeoutMs: 120_000 } } : {}),
+    ...Object.fromEntries(extraMcp(job).map((m) => [m.name, m.type === "http"
+      ? { url: m.url, headers: m.headers || {}, toolTimeoutMs: 120_000 }
+      : { command: "npx", args: ["-y", m.package, ...(m.args || [])], env: m.env || {}, toolTimeoutMs: 120_000 }])),
+  };
+  fs.writeFileSync(path.join(cwd, ".kimi-code", "mcp.json"), JSON.stringify({ mcpServers }), { mode: 0o600 });
+  const tools = ["WebSearch", "FetchURL", "ReadMediaFile", "mcp__shar__*", ...(browser ? ["mcp__browser__*"] : []),
+    ...extraMcp(job).map((m) => `mcp__${m.name}__*`)];
+  const agent = path.join(cwd, "shar-agent.md");
+  // Встроенные файлы и оболочка ноды агенту не нужны: доступ к Шару — через MCP, картинки — через ReadMediaFile.
+  fs.writeFileSync(agent, `---\nname: shar\ndescription: Агент Шара\ntools:\n${tools.map((name) => `  - ${name}`).join("\n")}\nsubagents: []\n---\n\n\${base_prompt}\n\n---\n\n${job.system || ""}`, { mode: 0o600 });
+  return { cwd, agent };
+}
+
+function kimiText(value) {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(kimiText).filter(Boolean).join("\n");
+  if (value && typeof value === "object") return kimiText(value.text ?? value.content ?? value.output ?? "");
+  return "";
+}
+
+function runKimi(job, dirs, resumeId, report, entry) {
+  const files = kimiFiles(job, dirs);
+  const args = ["--output-format", "stream-json"];
+  if (job.model) args.push("-m", job.model);
+  if (resumeId) args.push("--session", resumeId);
+  else args.push("--agent-file", files.agent);
+  args.push("-p");
+  const state = newState();
+  state.model = job.model || "";
+  const pending = new Map();
+  report.send({ type: "progress", phase: "запускается" });
+  const handle = (event) => {
+    if (event.session_id) state.sessionId = String(event.session_id);
+    if (event.model) state.model = String(event.model);
+    if (event.type === "turn.step.retrying") { report.send({ type: "progress", phase: "повторяет запрос" }); return; }
+    if (event.role === "assistant") {
+      const text = kimiText(event.content).trim();
+      if (text) {
+        state.text = text;
+        state.partial = text;
+        addStep(state, { kind: "text", text: clip(text, MAX_STEP_TEXT) }, report);
+        report.send({ type: "progress", body: text, phase: "пишет" });
+      }
+      for (const call of event.tool_calls || []) {
+        const fn = call.function || call;
+        const name = toolLabel(fn.name);
+        let input = fn.arguments ?? fn.input ?? "";
+        if (typeof input === "string") { try { input = JSON.parse(input); } catch { /* аргументы могут быть обычной строкой */ } }
+        const step = addStep(state, { kind: "tool", name, hint: hintOf(name, input), input: clip(stringify(input), MAX_STEP_INPUT), at: Date.now() }, report);
+        const id = String(call.id || call.tool_call_id || "");
+        if (step && id) pending.set(id, step);
+        report.send({ type: "progress", phase: HINTS[name]?.toLowerCase() || "работает", body: "" });
+      }
+      return;
+    }
+    if (event.role === "tool") {
+      const id = String(event.tool_call_id || event.id || "");
+      const step = pending.get(id);
+      if (!step) return;
+      pending.delete(id);
+      step.output = clip(kimiText(event.content ?? event.output) || stringify(event.content ?? event.output), MAX_STEP_OUTPUT);
+      step.is_error = Boolean(event.is_error || event.status === "error");
+      step.ms = Date.now() - step.at;
+      delete step.at;
+      report.send({ type: "progress", steps: state.steps, phase: "думает" });
+      return;
+    }
+    if (event.usage) {
+      const u = event.usage;
+      state.work = {
+        input_tokens: Number(u.input_tokens ?? u.input) || 0, cached_input_tokens: Number(u.cached_input_tokens ?? u.cached) || 0,
+        output_tokens: Number(u.output_tokens ?? u.output) || 0, thinking_tokens: Number(u.reasoning_output_tokens ?? u.thoughts) || 0,
+        context_tokens: Number(u.input_tokens ?? u.input) || 0,
+      };
+      state.contextTokens = state.work.context_tokens;
+      return;
+    }
+    if (event.type === "error" || event.type === "turn.failed") {
+      state.failure = String(event.error_message || event.message || event.error?.message || event.error || "Kimi вернул ошибку");
+    }
+  };
+  const base = promptText(job, Boolean(resumeId));
+  const prompt = job.images?.length
+    ? `${base}\n\nПрочитай картинки из вложений через ReadMediaFile: ${job.images.map((img) => img.path).join(", ")}`
+    : base;
+  args.push(prompt);
+  return streamCli(CLI.kimi, args, { cwd: files.cwd, env: { ...userEnv(dirs), SHAR_MCP_TOKEN: job.mcp.token, KIMI_CODE_TRUST_WORKSPACE: "1" }, provider: "Kimi" }, entry, handle, state)
+    .finally(() => { fs.rmSync(files.cwd, { recursive: true, force: true }); });
 }
 
 // ── Gemini CLI (ключ человека) ───────────────────────────────────────────────

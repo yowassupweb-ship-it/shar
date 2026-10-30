@@ -128,10 +128,8 @@ def _agent_hash() -> str:
     return hashlib.sha256(_kit_text("shar-node.mjs").encode("utf-8")).hexdigest()[:16]
 
 
-# Ноды старше этой версии получали оболочку и файлы у Gemini и видели свой токен в окружении CLI (Codex, Gemini) —
-# таким нодам задачи GPT и Gemini не отдаём, пока их не обновят (перезапуск службы или новая команда установки).
-SAFE_NODE_VERSION = (1, 1, 0)
-UNSAFE_PROVIDERS = ("gemini", "codex", "kimi")
+# GPT и Gemini безопасны с 1.1.0; Kimi умеет отвечать в чате с 1.1.2. Более ранним нодам такие задачи не отдаём.
+PROVIDER_MIN_VERSION = {"gemini": (1, 1, 0), "codex": (1, 1, 0), "kimi": (1, 1, 2)}
 
 
 def _version(node: dict) -> tuple:
@@ -180,7 +178,7 @@ def _take(node: dict) -> Optional[dict]:
         if job["kind"] == "run":
             from app.modules.core_chat.router import update_agent_message
 
-            if job["provider"] in UNSAFE_PROVIDERS and _version(node) < SAFE_NODE_VERSION:
+            if _version(node) < PROVIDER_MIN_VERSION.get(job["provider"], (0,)):
                 note = ("Нода агентов устарела и небезопасна для этого агента — администратору: перезапустите службу "
                         "shar-node (sudo systemctl restart shar-node) или выполните новую команду установки из Админки → Ядро.")
                 store.finish_job(job["id"], "failed", note)
