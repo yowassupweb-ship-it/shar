@@ -51,7 +51,11 @@ function snapshot(): Omit<WhereItem, 'here'> | null {
   if (visit) {
     const target = new URL(visit.path, window.location.origin);
     const current = new URLSearchParams(search);
-    const same = target.pathname === pathname && [...target.searchParams].every(([k, v]) => current.get(k) === v);
+    // Адрес в истории бывает полнее адреса окна («Офис» пишет ?kind=document&id=…, а окно открыто как ?id=…):
+    // недостающий в окне параметр не мешает, но id — если он есть — обязан совпасть.
+    const same = target.pathname === pathname
+      && (!target.searchParams.has('id') || current.get('id') === target.searchParams.get('id'))
+      && [...target.searchParams].every(([k, v]) => !current.has(k) || current.get(k) === v);
     if (same) {
       const kind = visit.kind === 'office' ? visit.sub || 'document' : visit.kind === 'tool' ? 'section' : visit.kind;
       return { key: visit.path, kind, title: visit.title, id: visit.id, url: visit.path };
