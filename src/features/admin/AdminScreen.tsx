@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Activity, AlertTriangle, Atom, BarChart3, Building2, ChevronLeft, LayoutDashboard, ScrollText, Settings2, ShieldOff, Users } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart3, Building2, ChevronLeft, LayoutDashboard, ScrollText, Settings2, ShieldOff, Users } from 'lucide-react';
+import { CoreIcon } from '@/shared/ui/CoreIcon';
 import { paths } from '@/shared/navigation/routes';
 import { loadMe } from './api';
 import UsersTab from './UsersTab';
@@ -29,7 +30,7 @@ const TABS = [
   { id: 'status', label: 'Сервер', icon: Activity },
   { id: 'errors', label: 'Ошибки', icon: AlertTriangle },
   { id: 'usage', label: 'Статистика', icon: BarChart3 },
-  { id: 'core', label: 'Ядро', icon: Atom },
+  { id: 'core', label: 'Ядро', icon: CoreIcon },
   { id: 'audit', label: 'Журнал', icon: ScrollText },
   { id: 'settings', label: 'Настройки', icon: Settings2 },
 ] as const;

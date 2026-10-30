@@ -1,6 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router';
-import { Atom, Palette as PaletteIcon, PinOff, Settings, type LucideIcon } from 'lucide-react';
+import { Palette as PaletteIcon, PinOff, Settings, type LucideIcon } from 'lucide-react';
+import { CoreIcon } from '@/shared/ui/CoreIcon';
 import { PALETTES, useTheme } from '@/shared/theme/ThemeContext';
 import { Avatar } from '@/shared/ui/Avatar';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
@@ -275,7 +276,7 @@ const Nav = memo(function Nav({ section, badges, alerts: rawAlerts, visibleTabs,
       {agent && (
         <button type="button" className="nx-agent-btn" onClick={agent.onToggle} aria-expanded={agent.open} aria-controls={agent.controls}
           title="Агент — чат с агентами Шара (Ctrl+A)">
-          <Atom size={14} aria-hidden="true" />
+          <CoreIcon size={14} aria-hidden="true" />
           <span>Агент</span>
           <kbd>Ctrl A</kbd>
         </button>

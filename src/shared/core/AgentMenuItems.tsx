@@ -1,4 +1,5 @@
-import { Atom, EyeOff } from 'lucide-react';
+import { EyeOff } from 'lucide-react';
+import { CoreIcon } from '@/shared/ui/CoreIcon';
 import { MenuItem } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
 import { sendToAgent, setHiddenFromAgent, useAgentBridge, type AgentAttach, type HiddenKind } from './agentBridge';
@@ -21,8 +22,8 @@ export function AgentMenuItems({ target, hiddenKind, onDone }: { target: AgentAt
   return (
     <>
       <div className="nx-menu-sep" />
-      {!hidden && <MenuItem icon={<Atom size={15} />} onSelect={() => { onDone(); sendToAgent(target); }}>Отправить агенту</MenuItem>}
-      <MenuItem icon={hidden ? <Atom size={15} /> : <EyeOff size={15} />} onSelect={toggle}>{hidden ? 'Показать агенту' : 'Скрыть от агента'}</MenuItem>
+      {!hidden && <MenuItem icon={<CoreIcon size={15} />} onSelect={() => { onDone(); sendToAgent(target); }}>Отправить агенту</MenuItem>}
+      <MenuItem icon={hidden ? <CoreIcon size={15} /> : <EyeOff size={15} />} onSelect={toggle}>{hidden ? 'Показать агенту' : 'Скрыть от агента'}</MenuItem>
     </>
   );
 }

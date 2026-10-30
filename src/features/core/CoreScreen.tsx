@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Archive, ArchiveRestore, ArrowDown, Atom, BarChart3, ChevronLeft, Lock, MessageSquarePlus, MoreHorizontal, Pencil, Search, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, BarChart3, ChevronLeft, Lock, MessageSquarePlus, MoreHorizontal, Pencil, Search, X } from 'lucide-react';
+import { CoreIcon } from '@/shared/ui/CoreIcon';
 import { ForwardSheet, insertIntoOpenChat } from '@/features/chat';
 import { realtime } from '@/shared/realtime/realtime';
 import { paths } from '@/shared/navigation/routes';
@@ -126,7 +127,7 @@ function ThreadList({ activeId, onSelect, onBack, embedded }: { activeId: string
     <aside className="ncore-list" aria-label="Чаты Ядра">
       <header className="ncore-list-head">
         {!embedded && <button type="button" className="nx-icon-btn ncore-back" onClick={onBack} aria-label="Назад в «Ещё»"><ChevronLeft size={20} /></button>}
-        <span className="ncore-brand"><Atom size={20} aria-hidden="true" /> Ядро</span>
+        <span className="ncore-brand"><CoreIcon size={20} aria-hidden="true" /> Ядро</span>
         <button type="button" className="nx-icon-btn" onClick={() => void newChat()} aria-label="Новый чат" title="Новый чат"><MessageSquarePlus size={18} /></button>
         {embedded && <button type="button" className="nx-icon-btn" onClick={onBack} aria-label="Закрыть Ядро" title="Закрыть"><X size={18} /></button>}
       </header>
@@ -384,7 +385,7 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
           {threadId && !log?.loaded && <div className="ncore-loading"><Spinner size={22} label="Загружаю" /></div>}
           {(!threadId || (log?.loaded && !messages.length)) && (
             <div className="ncore-empty">
-              <span className="ncore-empty-mark" aria-hidden="true"><Atom size={34} strokeWidth={1.6} /></span>
+              <span className="ncore-empty-mark" aria-hidden="true"><CoreIcon size={34} strokeWidth={1.6} /></span>
               <h2>{threadId ? 'Новый чат' : 'Ядро'}</h2>
               {catalog?.agents.length ? (
                 <>

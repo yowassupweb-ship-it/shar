@@ -4,9 +4,10 @@ import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useR
 import { lazyComponent } from '@/shared/ui/lazy';
 import {
   BellPlus,
-  AlertCircle, ArrowDown, Atom, CheckCheck, Copy, CornerUpLeft, Forward, ImageDown, Pencil,
+  AlertCircle, ArrowDown, CheckCheck, Copy, CornerUpLeft, Forward, ImageDown, Pencil,
   Pin, PinOff, RotateCw, Trash2,
 } from 'lucide-react';
+import { CoreIcon } from '@/shared/ui/CoreIcon';
 import type { Message, User } from '@/shared/types/chat';
 import { QUICK_REACTIONS } from '@/shared/emoji/emojiData';
 import { getAppleEmojiUrl } from '@/shared/emoji/appleEmoji';
@@ -796,7 +797,7 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
             <MenuItem icon={<Forward size={16} />} onSelect={() => { setForwarding([menuMsg]); setMenu(null); }}>Переслать</MenuItem>
           )}
           {!menuPoll && agentOn && (
-            <MenuItem icon={<Atom size={16} />} onSelect={() => { forwardToAgentFrom([menuMsg], (m) => readerName(users[String(m.authorId)])); setMenu(null); }}>Переслать агенту</MenuItem>
+            <MenuItem icon={<CoreIcon size={16} />} onSelect={() => { forwardToAgentFrom([menuMsg], (m) => readerName(users[String(m.authorId)])); setMenu(null); }}>Переслать агенту</MenuItem>
           )}
           {!menuPoll && menuMsg.content && (
             <MenuItem icon={<Copy size={16} />} onSelect={() => { void copySelectionOr(menuMsg); setMenu(null); }}>Копировать</MenuItem>

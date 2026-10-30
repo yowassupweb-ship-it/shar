@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Atom, Bell, Bot, ChevronLeft, ChevronRight, KeyRound, LayoutGrid, LogOut, MonitorSmartphone, Palette, RotateCw, User, Volume2 } from 'lucide-react';
+import { Bell, Bot, ChevronLeft, ChevronRight, KeyRound, LayoutGrid, LogOut, MonitorSmartphone, Palette, RotateCw, User, Volume2 } from 'lucide-react';
+import { CoreIcon } from '@/shared/ui/CoreIcon';
 import { useAgentBridge } from '@/shared/core/agentBridge';
 import { logout } from '@/shared/session/session';
 import { adoptServerChatPrefs } from '@/shared/settings/chatPrefs';
@@ -46,7 +47,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'sounds', label: 'Звуки', icon: Volume2, tint: ['#60a5fa', '#2563eb'] },
   { id: 'notifications', label: 'Уведомления', icon: Bell, tint: ['#fb923c', '#dc2626'] },
   { id: 'sections', label: 'Разделы в меню', icon: LayoutGrid, tint: ['#34d399', '#059669'], needsProfile: true },
-  { id: 'core', label: 'Ядро — агенты', icon: Atom, tint: ['#c084fc', '#4338ca'], needsCore: true },
+  { id: 'core', label: 'Ядро — агенты', icon: CoreIcon, tint: ['#c084fc', '#4338ca'], needsCore: true },
   { id: 'mcp', label: 'MCP', icon: Bot, tint: ['#a78bfa', '#4f46e5'] },
 ];
 

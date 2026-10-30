@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { lazyComponent } from '@/shared/ui/lazy';
 import {
-  ArrowUp, Atom, BarChart3, CornerUpLeft, FileText, Forward, Keyboard, Mic, Paperclip, Pencil, Plus, Smile, Trash2, X,
+  ArrowUp, BarChart3, CornerUpLeft, FileText, Forward, Keyboard, Mic, Paperclip, Pencil, Plus, Smile, Trash2, X,
 } from 'lucide-react';
+import { CoreIcon } from '@/shared/ui/CoreIcon';
 import { plural } from '@/shared/ui/format';
 import { askConfirm, Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
@@ -262,7 +263,7 @@ ${d.text}` : d.text));
           {agentOn && (
             <button type="button" className="nx-icon-btn" disabled={!msgs.length} title="Переслать агенту — он увидит только эти сообщения"
               onClick={() => { forwardToAgentFrom(msgs, (m) => displayName(users[String(m.authorId)])); setSelection(null); }} aria-label="Переслать выбранные агенту">
-              <Atom size={18} aria-hidden="true" />
+              <CoreIcon size={18} aria-hidden="true" />
             </button>
           )}
           <button
