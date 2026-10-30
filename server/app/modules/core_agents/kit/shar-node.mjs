@@ -14,13 +14,20 @@
 // SHAR_NODE_PARALLEL (4), SHAR_NODE_SHARED_HOME=1 — для разработки: CLI работают под входом этой машины.
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const SHAR_URL = String(process.env.SHAR_URL || "").replace(/\/+$/, "");
 const TOKEN = String(process.env.SHAR_NODE_TOKEN || "");
+// Отпечаток этого файла — так же, как его считает Шар (переводы строк без \r): разошёлся с присланным в опросе —
+// пора обновиться.
+const OWN_HASH = (() => {
+  try { return createHash("sha256").update(fs.readFileSync(fileURLToPath(import.meta.url), "utf8").replace(/\r\n/g, "\n")).digest("hex").slice(0, 16); } catch { return ""; }
+})();
 const ROOT = process.env.SHAR_NODE_HOME || path.join(os.homedir(), "shar-node");
 const SHARED_HOME = process.env.SHAR_NODE_SHARED_HOME === "1";
 const PARALLEL = Math.max(1, Number(process.env.SHAR_NODE_PARALLEL) || 4);
@@ -121,8 +128,14 @@ function winQuote(arg) {
   return value === "" || /[\s,;=()]/.test(value) ? `"${value}"` : value;
 }
 
+// Окружение ноды для CLI — без её собственных секретов: токен ноды и всё, что похоже на ключи и пароли, агентам не
+// достаётся (модель с оболочкой иначе читает их командой env — так и случилось с Gemini). Нужное запуску (ключ MCP,
+// ключ Gemini) передаётся явно — аргументом env.
+const SECRET_ENV = /^SHAR_NODE_|TOKEN|SECRET|PASSW|API_?KEY|PRIVATE|CREDENTIAL|^AWS_/i;
+const CHILD_ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !SECRET_ENV.test(k)));
+
 function run(command, args, { env, cwd, stdin = null, pty = false } = {}) {
-  const options = { cwd, env: { ...process.env, ...env }, stdio: ["pipe", "pipe", "pipe"], windowsHide: true };
+  const options = { cwd, env: { ...CHILD_ENV, ...env }, stdio: ["pipe", "pipe", "pipe"], windowsHide: true };
   if (process.platform === "win32") {
     const line = [command, ...args].map(winQuote).join(" ");
     const child = spawn("cmd.exe", ["/d", "/s", "/c", `"${line}"`], { ...options, windowsVerbatimArguments: true });
@@ -652,6 +665,8 @@ function runCodex(job, dirs, resumeId, report, entry) {
     // Codex сам просит подтверждение на инструменты, меняющие данные, а запуск без человека такие вызовы отклоняет
     // («requires approval, but approval policy is never»). Права решает сервер Шара (режим разрешений человека).
     "-c", "mcp_servers.shar.default_tools_approval_mode=approve",
+    // Команды Codex (песочница только на чтение) — с базовым окружением: ключ MCP запуска и прочее им не видно.
+    "-c", "shell_environment_policy.inherit=core",
     // Массив в TOML — с кавычками; через cmd.exe на Windows их не передать, поэтому браузер у Codex — только на Linux.
     ...(browser && process.platform !== "win32" ? ["-c", `mcp_servers.browser.command=${browser}`, "-c", 'mcp_servers.browser.args=["mcp"]', "-c", "mcp_servers.browser.default_tools_approval_mode=approve"] : []),
     ...codexExtra(job).flags];
@@ -734,23 +749,35 @@ function runCodex(job, dirs, resumeId, report, entry) {
 
 // ── Gemini CLI (ключ человека) ───────────────────────────────────────────────
 
+// Встроенные инструменты Gemini CLI, которых у агента Шара быть не должно: оболочка и файлы ноды. Разрешены только
+// веб-поиск и чтение страниц (tools.core), плюс MCP; этот список — вторая страховка (tools.exclude).
+const GEMINI_DENIED = ["run_shell_command", "read_file", "read_many_files", "write_file", "replace", "list_directory", "glob",
+  "search_file_content", "save_memory", "write_todos"];
+
 function geminiSettings(job, dirs) {
-  // Настройки запуска — отдельным файлом (системный уровень Gemini CLI): MCP Шара и ничего из личных настроек машины.
-  return secretFile(dirs, `gemini-${job.id}.json`, JSON.stringify({
+  // Настройки — файлом рабочей папки человека (.gemini/settings.json). Системный файл (GEMINI_CLI_SYSTEM_SETTINGS_PATH)
+  // CLI молча пропускает, если папкой владеет не root, — так ноде доставались оболочка и файлы и не было MCP Шара.
+  // Токен запуска в файл не пишем: ${SHAR_MCP_TOKEN} подставляется из окружения процесса — параллельные ответы
+  // одного человека не мешают друг другу, а файл без секретов Шара.
+  const folder = path.join(dirs.work, ".gemini");
+  fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
+  const file = path.join(folder, "settings.json");
+  fs.writeFileSync(file, JSON.stringify({
     mcpServers: {
-      shar: { httpUrl: absolute(job.mcp.url), headers: { Authorization: `Bearer ${job.mcp.token}` }, timeout: 120_000, trust: true },
+      shar: { httpUrl: absolute(job.mcp.url), headers: { Authorization: "Bearer ${SHAR_MCP_TOKEN}" }, timeout: 120_000, trust: true },
       ...(browser ? { browser: { command: browser, args: ["mcp"], timeout: 120_000, trust: true } } : {}),
       ...geminiExtra(job),
     },
     general: { disableAutoUpdate: true, checkpointing: { enabled: false } },
     security: { auth: { selectedType: "gemini-api-key" }, folderTrust: { enabled: false } },
     privacy: { usageStatisticsEnabled: false },
-    tools: { core: ["google_web_search", "web_fetch"] },
-  }));
+    tools: { core: ["google_web_search", "web_fetch"], exclude: GEMINI_DENIED },
+  }, null, 1), { mode: 0o600 });
+  return file;
 }
 
 function runGemini(job, dirs, resumeId, report, entry) {
-  const settings = geminiSettings(job, dirs);
+  geminiSettings(job, dirs);
   const system = secretFile(dirs, `gemini-system-${job.id}.md`, job.system || "");
   const args = ["--output-format", "stream-json", "--approval-mode", "yolo", "--allowed-mcp-server-names", "shar", ...(browser ? ["browser"] : []), ...extraMcp(job).map((m) => m.name)];
   if (job.model) args.push("-m", job.model);
@@ -805,7 +832,7 @@ function runGemini(job, dirs, resumeId, report, entry) {
       if (event.status && event.status !== "success") state.failure = state.failure || String(event.error?.message || event.status);
     }
   };
-  const env = { ...userEnv(dirs), GEMINI_API_KEY: job.apiKey || "", GEMINI_CLI_SYSTEM_SETTINGS_PATH: settings, GEMINI_SYSTEM_MD: "", GEMINI_CLI_NO_RELAUNCH: "true",
+  const env = { ...userEnv(dirs), GEMINI_API_KEY: job.apiKey || "", SHAR_MCP_TOKEN: job.mcp.token, GEMINI_SYSTEM_MD: "", GEMINI_CLI_NO_RELAUNCH: "true",
     // Рабочая папка человека на ноде — своя, её создаёт нода: доверяем (иначе Gemini CLI 0.66 молча гасит режим yolo).
     GEMINI_CLI_TRUST_WORKSPACE: "true" };
   // Правила Шара — в начале первого сообщения сессии: системный промпт Gemini CLI заменять целиком не нужно.
@@ -986,6 +1013,12 @@ async function main() {
     try {
       const res = await shar("/api/core/node/poll", { version: VERSION, host: os.hostname(), clis: { ...clis, ...(browser ? { browser: "obscura" } : {}) }, running: [...running.keys()], wait: running.size < PARALLEL }, 45_000);
       failures = 0;
+      // Самообновление: Шар раздаёт новую версию агента ноды. В простое выходим — systemd перезапускает службу,
+      // и она перед стартом забирает свежий файл с Шара (ExecStartPre в install.sh). На машине разработчика не нужно.
+      if (res.agent && OWN_HASH && res.agent !== OWN_HASH && !running.size && !SHARED_HOME) {
+        log("на Шаре новая версия агента ноды — перезапускаюсь за ней");
+        process.exit(0);
+      }
       for (const id of res.cancel || []) running.get(String(id))?.stop();
       for (const job of res.jobs || []) handleJob(job);
       if (running.size >= PARALLEL) await sleep(2000);

@@ -121,6 +121,26 @@ def agent_script():
     return PlainTextResponse(_kit_text("shar-node.mjs"), media_type="text/javascript")
 
 
+def _agent_hash() -> str:
+    """Отпечаток актуального агента ноды: нода сверяет его со своим и, разойдясь, в простое перезапускается за свежим."""
+    import hashlib
+
+    return hashlib.sha256(_kit_text("shar-node.mjs").encode("utf-8")).hexdigest()[:16]
+
+
+# Ноды старше этой версии получали оболочку и файлы у Gemini и видели свой токен в окружении CLI (Codex, Gemini) —
+# таким нодам задачи GPT и Gemini не отдаём, пока их не обновят (перезапуск службы или новая команда установки).
+SAFE_NODE_VERSION = (1, 1, 0)
+UNSAFE_PROVIDERS = ("gemini", "codex")
+
+
+def _version(node: dict) -> tuple:
+    try:
+        return tuple(int(x) for x in str((node.get("info") or {}).get("version") or "0").split(".")[:3])
+    except ValueError:
+        return (0,)
+
+
 def _kit_text(name: str) -> str:
     # Из рабочей копии на Windows файл может прийти с CRLF — bash на ноде на нём споткнётся.
     return (KIT / name).read_bytes().decode("utf-8").replace("\r\n", "\n")
@@ -160,6 +180,13 @@ def _take(node: dict) -> Optional[dict]:
         if job["kind"] == "run":
             from app.modules.core_chat.router import update_agent_message
 
+            if job["provider"] in UNSAFE_PROVIDERS and _version(node) < SAFE_NODE_VERSION:
+                note = ("Нода агентов устарела и небезопасна для этого агента — администратору: перезапустите службу "
+                        "shar-node (sudo systemctl restart shar-node) или выполните новую команду установки из Админки → Ядро.")
+                store.finish_job(job["id"], "failed", note)
+                update_agent_message(job["message_id"], body=note, status="failed", props={"failed": True})
+                return _take(node)
+
             current = db.conn.fetch_one("SELECT status FROM core_messages WHERE id = %s", (job["message_id"],))
             if not current or current["status"] == "cancelled":
                 store.finish_job(job["id"], "cancelled")
@@ -190,10 +217,10 @@ async def poll(body: PollBody, request: Request):
         cancel = await run_in_threadpool(store.cancelled_among, node["id"], body.running)
         # Нода ушла, пока мы ждали (перезапуск, сеть) — задачу ей не отдаём: ответ ушёл бы в пустоту.
         if await request.is_disconnected():
-            return {"jobs": [], "cancel": cancel}
+            return {"jobs": [], "cancel": cancel, "agent": _agent_hash()}
         job = await run_in_threadpool(_take, node)
         if job or cancel or time.monotonic() >= deadline or await request.is_disconnected():
-            return {"jobs": [job] if job else [], "cancel": cancel}
+            return {"jobs": [job] if job else [], "cancel": cancel, "agent": _agent_hash()}
         await asyncio.sleep(1.0)
 
 

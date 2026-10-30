@@ -18,7 +18,7 @@ def _node(admin):
 
 
 def _poll(client, token, **body):
-    return client.post("/api/core/node/poll", json={"version": "t", "clis": {"claude": "2", "codex": "1", "gemini": "1"}, "wait": False, **body},
+    return client.post("/api/core/node/poll", json={"version": "1.1.0", "clis": {"claude": "2", "codex": "1", "gemini": "1"}, "wait": False, **body},
                        headers={"Authorization": f"Bearer {token}"})
 
 
@@ -43,7 +43,7 @@ def test_nodes_are_admin_only_and_token_guarded(client, admin, anna):
         node, token = _node(admin)
         assert _poll(client, "shar_node_wrong").status_code == 401
         r = _poll(client, token)
-        assert r.status_code == 200 and r.json() == {"jobs": [], "cancel": []}
+        assert r.status_code == 200 and {k: v for k, v in r.json().items() if k != "agent"} == {"jobs": [], "cancel": []}
         listed = admin.get("/api/core/nodes").json()["nodes"]
         assert listed[0]["online"] and listed[0]["info"]["clis"]["claude"] == "2"
         assert "shar_node_" not in json.dumps(listed).replace(listed[0]["start"], "")
@@ -388,4 +388,25 @@ def test_tours_catalog_search_and_tools(client, admin, monkeypatch):
     finally:
         db.conn.execute_query("DELETE FROM core_tours_snapshots")
         tours._cache["at"] = None
+        _cleanup()
+
+
+def test_outdated_node_gets_no_gemini_or_gpt_and_learns_new_agent(client, admin):
+    """Старая нода (оболочка у Gemini, токен ноды в окружении CLI) не получает задач GPT и Gemini; опрос сообщает
+    отпечаток свежего агента — по нему нода обновляется сама."""
+    try:
+        _, token = _node(admin)
+        old = client.post("/api/core/node/poll", json={"version": "1.0.0", "clis": {"gemini": "1"}, "wait": False},
+                          headers={"Authorization": f"Bearer {token}"}).json()
+        assert len(old["agent"]) == 16
+        uid = admin.get("/api/auth/session").json()["user"]["id"]
+        db.conn.execute_query("INSERT INTO core_accounts (user_id, provider, state) VALUES (%s, 'gemini', 'ready')", (uid,))
+        thread = admin.post("/api/core/threads", json={}).json()["thread"]
+        sent = admin.post(f"/api/core/threads/{thread['id']}/messages", json={"id": uuid.uuid4().hex, "body": "тест"}).json()
+        res = client.post("/api/core/node/poll", json={"version": "1.0.0", "clis": {"gemini": "1"}, "wait": False},
+                          headers={"Authorization": f"Bearer {token}"}).json()
+        assert res["jobs"] == []
+        reply = db.conn.fetch_one("SELECT status, body FROM core_messages WHERE id = %s", (sent["reply"]["id"],))
+        assert reply["status"] == "failed" and "устарела" in reply["body"]
+    finally:
         _cleanup()
