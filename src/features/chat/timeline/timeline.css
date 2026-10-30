@@ -790,7 +790,7 @@ button.cxm-status { cursor: pointer; }
   margin-top: 4px;
 }
 .cxm-foot .cxm-meta { margin-left: auto; padding-bottom: 2px; }
-.cxm-foot .cxm-reactions { flex-wrap: wrap; width: auto; padding: 0; }
+.cxm-foot .cxm-reactions { flex: 0 1 auto; flex-wrap: wrap; min-width: 0; width: auto; padding: 0; }
 .cxm-bubble[data-kind="voice"] .cxm-foot { padding: 0 12px 6px; margin-top: 0; }
 .cxm-bare-meta { padding: 2px 4px 0; text-align: right; }
 .cxm-row[data-mine="true"] .cxm-bare-meta .cxm-meta { color: var(--text-muted); }
