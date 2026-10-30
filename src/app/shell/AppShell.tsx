@@ -276,7 +276,7 @@ const Nav = memo(function Nav({ section, badges, alerts: rawAlerts, visibleTabs,
       {agent && (
         <button type="button" className="nx-agent-btn" onClick={agent.onToggle} aria-expanded={agent.open} aria-controls={agent.controls}
           title="Агент — чат с агентами Шара (Ctrl+A)">
-          <CoreIcon size={20} />
+          <CoreIcon size={17} />
           <span>Агент</span>
           <kbd>Ctrl A</kbd>
         </button>
