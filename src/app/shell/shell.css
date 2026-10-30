@@ -232,11 +232,11 @@
 .nx-agent-btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
   flex: none;
   height: 30px;
   margin: 0 var(--space-2) 0 auto;
-  padding: 0 6px 0 5px;
+  padding: 0 6px 0 8px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--text-main) 6%, transparent);
