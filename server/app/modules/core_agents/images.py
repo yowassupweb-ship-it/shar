@@ -50,18 +50,28 @@ def _model(key: str) -> str:
     if cached and time.time() - cached[0] < 3600:
         return cached[1]
     try:
-        res = requests.get(f"{API}/models", params={"key": key, "pageSize": 200}, timeout=15)
-        res.raise_for_status()
+        # Ключ — заголовком, не в адресе: адрес попадает в тексты ошибок, а они — агенту и в чат.
+        res = requests.get(f"{API}/models", params={"pageSize": 200}, headers={"x-goog-api-key": key}, timeout=15)
+        if res.status_code != 200:
+            raise ImageError(f"Google отказал в списке моделей ({res.status_code}): {_google_error(res)}")
         names = [m["name"] for m in res.json().get("models", [])
                  if "image" in m.get("name", "") and "generateContent" in (m.get("supportedGenerationMethods") or [])
                  and "gemini" in m.get("name", "")]
     except (requests.RequestException, ValueError) as exc:
-        raise ImageError(f"Google не ответил на список моделей: {exc}") from exc
+        raise ImageError(f"Google не ответил на список моделей ({exc.__class__.__name__})") from exc
     if not names:
         raise ImageError("Ключу Google недоступна ни одна модель картинок Gemini — проверьте ключ в AI Studio")
     best = max(names, key=_version)
     _models[stamp] = (time.time(), best)
     return best
+
+
+def _google_error(res) -> str:
+    """Текст ошибки Google без адреса запроса."""
+    try:
+        return str(res.json().get("error", {}).get("message", ""))[:300]
+    except ValueError:
+        return ""
 
 
 def _source(url: str) -> tuple[str, bytes]:
@@ -98,10 +108,10 @@ def generate(user_id: str, prompt: str, *, aspect: str = "", source_url: str = "
     if aspect in ASPECTS:
         config["imageConfig"] = {"aspectRatio": aspect}
     try:
-        res = requests.post(f"{API}/{model}:generateContent", params={"key": key},
+        res = requests.post(f"{API}/{model}:generateContent", headers={"x-goog-api-key": key},
                             json={"contents": [{"role": "user", "parts": parts}], "generationConfig": config}, timeout=TIMEOUT)
     except requests.RequestException as exc:
-        raise ImageError(f"Google не ответил: {exc}") from exc
+        raise ImageError(f"Google не ответил ({exc.__class__.__name__})") from exc
     if res.status_code != 200:
         try:
             detail = res.json().get("error", {}).get("message", "")

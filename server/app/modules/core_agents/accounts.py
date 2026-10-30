@@ -93,7 +93,7 @@ class GeminiBody(BaseModel):
 def _gemini_models(key: str) -> list[dict]:
     """Проверка ключа у Google: список моделей, которые им можно звать. Неверный ключ — понятная ошибка."""
     try:
-        res = requests.get(GOOGLE_MODELS, params={"key": key, "pageSize": 200}, timeout=12)
+        res = requests.get(GOOGLE_MODELS, params={"pageSize": 200}, headers={"x-goog-api-key": key}, timeout=12)  # ключ — не в адресе
     except requests.RequestException as exc:
         raise HTTPException(status_code=502, detail=f"Google не ответил: {exc.__class__.__name__}") from exc
     if res.status_code in (400, 401, 403):

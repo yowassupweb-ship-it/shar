@@ -458,7 +458,7 @@ function codexExtra(job) {
   const env = {};
   for (const m of extraMcp(job)) {
     if (m.type === "http") {
-      flags.push("-c", `mcp_servers.${m.name}.url=${m.url}`);
+      flags.push("-c", `mcp_servers.${m.name}.url=${m.url}`, "-c", `mcp_servers.${m.name}.default_tools_approval_mode=approve`);
       const auth = Object.entries(m.headers || {}).find(([k]) => k.toLowerCase() === "authorization")?.[1] || "";
       const bearer = String(auth).replace(/^Bearer\s+/i, "");
       if (bearer) {
@@ -467,7 +467,7 @@ function codexExtra(job) {
         flags.push("-c", `mcp_servers.${m.name}.bearer_token_env_var=${varName}`);
       }
     } else if (process.platform !== "win32") {
-      flags.push("-c", `mcp_servers.${m.name}.command=npx`, "-c", `mcp_servers.${m.name}.args=${JSON.stringify(["-y", m.package, ...(m.args || [])])}`);
+      flags.push("-c", `mcp_servers.${m.name}.default_tools_approval_mode=approve`, "-c", `mcp_servers.${m.name}.command=npx`, "-c", `mcp_servers.${m.name}.args=${JSON.stringify(["-y", m.package, ...(m.args || [])])}`);
       for (const [k, v] of Object.entries(m.env || {})) flags.push("-c", `mcp_servers.${m.name}.env.${k}=${JSON.stringify(String(v))}`);
     }
   }
@@ -649,8 +649,11 @@ function runCodex(job, dirs, resumeId, report, entry) {
   const config = ["-c", "approval_policy=never", "-c", "sandbox_mode=read-only", "-c", "model_reasoning_summary=auto", "-c", "hide_agent_reasoning=false",
     "-c", `mcp_servers.shar.url=${absolute(job.mcp.url)}`, "-c", "mcp_servers.shar.bearer_token_env_var=SHAR_MCP_TOKEN",
     "-c", "mcp_servers.shar.tool_timeout_sec=120",
+    // Codex сам просит подтверждение на инструменты, меняющие данные, а запуск без человека такие вызовы отклоняет
+    // («requires approval, but approval policy is never»). Права решает сервер Шара (режим разрешений человека).
+    "-c", "mcp_servers.shar.default_tools_approval_mode=approve",
     // Массив в TOML — с кавычками; через cmd.exe на Windows их не передать, поэтому браузер у Codex — только на Linux.
-    ...(browser && process.platform !== "win32" ? ["-c", `mcp_servers.browser.command=${browser}`, "-c", 'mcp_servers.browser.args=["mcp"]'] : []),
+    ...(browser && process.platform !== "win32" ? ["-c", `mcp_servers.browser.command=${browser}`, "-c", 'mcp_servers.browser.args=["mcp"]', "-c", "mcp_servers.browser.default_tools_approval_mode=approve"] : []),
     ...codexExtra(job).flags];
   const args = resumeId
     ? ["exec", "resume", "--json", "--skip-git-repo-check", "--ignore-user-config", ...config]
