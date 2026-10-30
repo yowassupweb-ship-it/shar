@@ -251,6 +251,14 @@ def claim(node: dict) -> Optional[dict]:
            RETURNING *""", (node["id"], node["id"], clis))
 
 
+def requeue_lost(node_id: Any, running: list[str]) -> None:
+    """Ответ, отданный ноде, но ей неизвестный: длинный опрос оборвался (перезапуск ноды, сеть), а сервер успел отдать
+    задачу в него. Нода в каждом опросе присылает, что у неё идёт, — чего там нет дольше 30 с, возвращаем в очередь."""
+    db.conn.execute_query(
+        "UPDATE core_jobs SET status = 'queued', taken_at = NULL WHERE node_id = %s AND status = 'taken' AND kind = 'run' "
+        "AND taken_at < now() - interval '30 seconds' AND NOT (id::text = ANY(%s))", (int(node_id), [str(x) for x in running]))
+
+
 def finish_job(job_id: Any, status: str, error: str = "") -> Optional[dict]:
     row = db.conn.fetch_one(
         "UPDATE core_jobs SET status = %s, error = %s, finished_at = now() WHERE id = %s AND status IN ('queued', 'taken') RETURNING *",

@@ -255,6 +255,42 @@ function authProblem(text) {
   return /not logged in|please (run )?.*login|invalid api key|authentication|unauthori[sz]ed|401|oauth token has expired|re-?authenticate/i.test(String(text || ""));
 }
 
+// ── картинки во вложениях: модель их видит, а не только получает ссылку ────────────────────────────
+// Нода скачивает картинки в рабочую папку человека и передаёт их так, как умеет каждый CLI: Claude — в самом сообщении
+// (--input-format stream-json), Codex — флагом -i, Gemini — ссылкой @файл. Инструмент чтения файлов Claude не даём:
+// он видел бы весь диск ноды. После хода файлы удаляются.
+
+const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+const IMAGE_MAX = 6;
+const IMAGE_EXT = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif" };
+
+async function fetchImages(job, dirs) {
+  const wanted = (job.attachments || []).filter((a) => /^image\//.test(a.type || "") || /\.(png|jpe?g|webp|gif)$/i.test(a.name || "")).slice(0, IMAGE_MAX);
+  if (!wanted.length) return [];
+  const folder = path.join(dirs.work, ".shar-images");
+  fs.mkdirSync(folder, { recursive: true });
+  const out = [];
+  for (const [i, a] of wanted.entries()) {
+    try {
+      const res = await fetch(absolute(a.url), { signal: AbortSignal.timeout(30_000) });
+      if (!res.ok) continue;
+      const data = Buffer.from(await res.arrayBuffer());
+      const mime = (res.headers.get("content-type") || a.type || "").split(";")[0];
+      if (data.length > IMAGE_MAX_BYTES || !IMAGE_EXT[mime]) continue;
+      const file = path.join(folder, `${job.id}-${i}${IMAGE_EXT[mime]}`);
+      fs.writeFileSync(file, data);
+      out.push({ path: file, rel: path.relative(dirs.work, file).split(path.sep).join("/"), name: a.name, mime, data });
+    } catch (error) {
+      log(`задача ${job.id}: картинку «${a.name}» не скачал — ${error.message}`);
+    }
+  }
+  return out;
+}
+
+function dropImages(images) {
+  for (const img of images || []) { try { fs.unlinkSync(img.path); } catch { /* уже нет */ } }
+}
+
 async function runJob(job) {
   const dirs = userDirs(job.userId);
   const report = reporter(job, () => entry.stop());
@@ -271,6 +307,7 @@ async function runJob(job) {
       session = compacted ? { id: compacted, context: 20_000 } : null;
     }
     if (session && session.context > ROTATE_AT) session = null;
+    job.images = await fetchImages(job, dirs);
     let state;
     try {
       state = await runProvider(job, dirs, session?.id || "", report, entry);
@@ -298,6 +335,7 @@ async function runJob(job) {
   } catch (error) {
     if (!entry.stopped) await report.send({ type: "failed", error: String(error.message || error).slice(0, 600) });
   } finally {
+    dropImages(job.images);
     running.delete(job.id);
     await report.flush();
   }
@@ -454,7 +492,7 @@ function runClaude(job, dirs, resumeId, report, entry) {
   // инструментов Шара грузятся по требованию, а не в каждый ход), без каталога slash-команд и навыков CLI (−10 тыс.:
   // наши навыки живут в Шаре), только MCP из --mcp-config.
   const args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-    "--input-format", "text", "--permission-mode", "bypassPermissions", "--setting-sources", "project",
+    "--input-format", job.images?.length ? "stream-json" : "text", "--permission-mode", "bypassPermissions", "--setting-sources", "project",
     "--tools", "WebSearch,WebFetch,ToolSearch", "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", files.mcp,
     "--append-system-prompt-file", files.system];
   if (job.model) args.push("--model", job.model);
@@ -543,7 +581,14 @@ function runClaude(job, dirs, resumeId, report, entry) {
       if (event.is_error) state.failure = state.text || String(event.subtype || "Claude вернул ошибку");
     }
   };
-  return streamCli(CLI.claude, args, { cwd: dirs.work, env: userEnv(dirs), stdin: promptText(job, Boolean(resumeId)), provider: "Claude" }, entry, handle, state)
+  // С картинками — сообщение в формате stream-json: текст и картинки одним сообщением человека.
+  const text = promptText(job, Boolean(resumeId));
+  const stdin = job.images?.length
+    ? `${JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text },
+      ...job.images.map((img) => ({ type: "image", source: { type: "base64", media_type: img.mime, data: img.data.toString("base64") } }))] } })}
+`
+    : text;
+  return streamCli(CLI.claude, args, { cwd: dirs.work, env: userEnv(dirs), stdin, provider: "Claude" }, entry, handle, state)
     .finally(() => { for (const f of Object.values(files)) fs.rmSync(f, { force: true }); });
 }
 
@@ -596,6 +641,7 @@ function runCodex(job, dirs, resumeId, report, entry) {
     : ["exec", "--json", "--skip-git-repo-check", "--ignore-user-config", ...config, "-C", dirs.work];
   if (job.model) args.push("-m", job.model);
   if (["low", "medium", "high"].includes(job.effort)) args.push("-c", `model_reasoning_effort=${job.effort}`);
+  for (const img of job.images || []) args.push("-i", img.path);
   if (resumeId) args.push(resumeId);
   args.push("-");
   const state = newState();
@@ -736,7 +782,9 @@ function runGemini(job, dirs, resumeId, report, entry) {
   };
   const env = { ...userEnv(dirs), GEMINI_API_KEY: job.apiKey || "", GEMINI_CLI_SYSTEM_SETTINGS_PATH: settings, GEMINI_SYSTEM_MD: "", GEMINI_CLI_NO_RELAUNCH: "true" };
   // Правила Шара — в начале первого сообщения сессии: системный промпт Gemini CLI заменять целиком не нужно.
-  const prompt = resumeId ? promptText(job, true) : `${job.system}\n\n---\n\n${promptText(job, false)}`;
+  const base = resumeId ? promptText(job, true) : `${job.system}\n\n---\n\n${promptText(job, false)}`;
+  // Картинки — ссылками @файл: Gemini CLI сам подкладывает их модели.
+  const prompt = job.images?.length ? `${base}\n\nКартинки из вложений: ${job.images.map((img) => `@${img.rel}`).join(" ")}` : base;
   return streamCli(CLI.gemini, args, { cwd: dirs.work, env, stdin: prompt, provider: "Gemini" }, entry, handle, state)
     .finally(() => { fs.rmSync(settings, { force: true }); fs.rmSync(system, { force: true }); });
 }

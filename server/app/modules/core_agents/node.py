@@ -183,9 +183,14 @@ def _take(node: dict) -> Optional[dict]:
 async def poll(body: PollBody, request: Request):
     node = await run_in_threadpool(_node, request)
     deadline = time.monotonic() + (POLL_SECONDS if body.wait else 0)
+    # Отданное ноде, о чём она не знает (оборвался прошлый опрос), — обратно в очередь: иначе ответ висел бы вечно.
+    await run_in_threadpool(store.requeue_lost, node["id"], body.running)
     while True:
         await run_in_threadpool(_seen, node, body)
         cancel = await run_in_threadpool(store.cancelled_among, node["id"], body.running)
+        # Нода ушла, пока мы ждали (перезапуск, сеть) — задачу ей не отдаём: ответ ушёл бы в пустоту.
+        if await request.is_disconnected():
+            return {"jobs": [], "cancel": cancel}
         job = await run_in_threadpool(_take, node)
         if job or cancel or time.monotonic() >= deadline or await request.is_disconnected():
             return {"jobs": [job] if job else [], "cancel": cancel}
