@@ -21,9 +21,9 @@ from app.modules.calendar import router as cal
 from app.modules.core_agents import memory
 from app.modules.todos import router as todos
 
-APPS = ("calendar", "tasks", "files", "people", "agent", "integrations")
+APPS = ("calendar", "tasks", "files", "people", "agent", "integrations", "tours")
 APP_NAMES = {"calendar": "календарь", "tasks": "задачи", "files": "файлы", "people": "люди", "agent": "память и навыки агента",
-             "integrations": "подключённые API компании"}
+             "integrations": "подключённые API компании", "tours": "туры «Вокруг света» (каталог сайта)"}
 
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DATETIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$")
@@ -491,6 +491,49 @@ def image_generate(access, args: dict[str, Any]) -> dict[str, Any]:
                     + (f" Комментарий модели: {file['note']}" if file.get("note") else "")}
 
 
+def _tours(fn, *args, **kwargs):
+    from app.modules.core_agents import tours
+
+    try:
+        return fn(*args, **kwargs)
+    except tours.ToursError as exc:
+        raise _err(str(exc)) from exc
+
+
+def tours_search(access, args: dict[str, Any]) -> dict[str, Any]:
+    from app.modules.core_agents import tours
+
+    own = args.get("own")
+    return _tours(tours.search, query=str(args.get("query") or ""), direction=str(args.get("direction") or ""),
+                  segment=str(args.get("segment") or ""), own=own if isinstance(own, bool) else None,
+                  days_min=int(args.get("days_min") or 0), days_max=int(args.get("days_max") or 0),
+                  date_from=str(args.get("date_from") or ""), date_to=str(args.get("date_to") or ""),
+                  price_max=float(args.get("price_max") or 0), topic=str(args.get("topic") or ""), holiday=str(args.get("holiday") or ""),
+                  free_only=bool(args.get("free_only")), limit=int(args.get("limit") or 20), offset=int(args.get("offset") or 0))
+
+
+def tour_get(access, args: dict[str, Any]) -> dict[str, Any]:
+    from app.modules.core_agents import tours
+
+    try:
+        tour_id = int(str(args.get("id") or "").strip())
+    except ValueError as exc:
+        raise _err("Номер тура — число (как в адресе vs-travel.ru/tour?id=…)") from exc
+    return _tours(tours.tour, tour_id)
+
+
+def tours_directions(access, args: dict[str, Any]) -> dict[str, Any]:
+    from app.modules.core_agents import tours
+
+    return _tours(tours.directions, str(args.get("segment") or ""), str(args.get("query") or ""))
+
+
+def tours_overview(access, args: dict[str, Any]) -> dict[str, Any]:
+    from app.modules.core_agents import tours
+
+    return _tours(tours.overview)
+
+
 def agent_disconnect(access, args: dict[str, Any]) -> dict[str, Any]:
     from app.modules.core_agents import accounts
 
@@ -691,6 +734,25 @@ TOOLS: list[dict[str, Any]] = [
      "inputSchema": {"type": "object", "properties": {"prompt": {"type": "string"}, "aspect": {"type": "string"},
                                                      "source_url": {"type": "string"}, "name": {"type": "string", "description": "имя файла"}},
                      "required": ["prompt"]}},
+    {"name": "tours_overview", "app": "tours", "handler": tours_overview, "level": "read",
+     "description": "Каталог туров «Вокруг света» с сайта: сколько туров, свои/партнёрские, по сегментам, тематики (коллекции) и праздники для фильтров. Начните с него, если не знаете ассортимент.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "tours_search", "app": "tours", "handler": tours_search, "level": "read",
+     "description": "Поиск туров по каталогу сайта: текст (название, маршрут, места, гид, тематика) и фильтры — направление, сегмент, свой (own=true — «Сделано в «Вокруг света»», false — партнёрский), длительность в днях, даты выездов, цена, тематика, праздник, только со свободными местами. "
+                    "Ответ — компактные строки с ближайшими выездами; полностью — tour_get. Цены и места — на момент снимка каталога.",
+     "inputSchema": {"type": "object", "properties": {
+         "query": {"type": "string"}, "direction": {"type": "string", "description": "регион или место: «Карелия», «Суздаль», «Беларусь»"},
+         "segment": {"type": "string", "enum": ["one_day", "multi_day", "abroad"], "description": "one_day — однодневные, multi_day — многодневные по России, abroad — ближнее зарубежье"}, "own": {"type": "boolean"}, "days_min": {"type": "integer"}, "days_max": {"type": "integer"},
+         "date_from": {"type": "string", "description": "ГГГГ-ММ-ДД"}, "date_to": {"type": "string"}, "price_max": {"type": "number"},
+         "topic": {"type": "string", "description": "тематика из tours_overview: «Гастрономические», «Старинные усадьбы»"},
+         "holiday": {"type": "string", "description": "праздник из tours_overview: «майские», «новогодние»"},
+         "free_only": {"type": "boolean"}, "limit": {"type": "integer", "maximum": 50}, "offset": {"type": "integer"}}}},
+    {"name": "tour_get", "app": "tours", "handler": tour_get, "level": "read",
+     "description": "Карточка тура по номеру (как в vs-travel.ru/tour?id=…): маршрут, места, тематики, гид, свой или партнёрский, все выезды с ценой и свободными местами, другие туры того же направления. Программа по дням — на странице тура (url).",
+     "inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]}},
+    {"name": "tours_directions", "app": "tours", "handler": tours_directions, "level": "read",
+     "description": "Направления каталога: сколько туров (своих и партнёрских), выездов впереди, ближайший выезд. Фильтр — сегмент и часть названия.",
+     "inputSchema": {"type": "object", "properties": {"segment": {"type": "string", "enum": ["one_day", "multi_day", "abroad"], "description": "one_day — однодневные, multi_day — многодневные по России, abroad — ближнее зарубежье"}, "query": {"type": "string"}}}},
     {"name": "skill_list", "app": "agent", "handler": skill_list, "level": "read",
      "description": "Навыки: ваши для этого человека и общие для компании — имя, когда применять, сколько раз применяли.",
      "inputSchema": {"type": "object", "properties": {}}},

@@ -330,3 +330,62 @@ def test_company_passport_and_search(admin):
         assert len(found) == 1 and found[0].startswith("Юридические данные")  # «инн» не находит «длинные»
     finally:
         db.conn.execute_query("DELETE FROM core_notes WHERE actor = 'тест'")
+
+
+def test_tours_catalog_search_and_tools(client, admin, monkeypatch):
+    """Каталог туров: снимок с сайта (подменён), направления по географии, фильтры, инструменты агента."""
+    from app.modules.core_agents import tours
+
+    def hit(i, name, route, cities, *, own=False, days=3, kind="bus", razdel="po-rossii", sheets=()):
+        return {"id": i, "tour_name": name, "route_name": route, "cities_names": cities, "tota": own, "duration_val2": days,
+                "duration_type": "day", "type": kind, "razdel": razdel, "TopFilter_russia": 1, "tour_topics": [7], "currency": "RUB",
+                "price": 10000, "tour_sheets": [{"day": d, "price": p, "free_places": f, "holiday": h, "can_by_online": True} for d, p, f, h in sheets]}
+
+    hits = [hit(1, "Кострома и Плёс", "Кострома – Плёс", ["Кострома", "Плёс", "Костромская область"], own=True,
+                sheets=[("2099-05-01", 21000, 5, "may_holidays"), ("2099-06-10", 19000, 0, None)]),
+            hit(2, "Золотое кольцо", "Москва – Кострома – Ярославль", ["Кострома", "Ярославль", "Ярославская область", "Костромская область"],
+                sheets=[("2099-05-02", 25000, 12, "may_holidays")]),
+            hit(3, "Суздаль за день", "Суздаль", ["Суздаль", "Владимирская область"], days=1, kind="one_day_bus", razdel="odnodnevnye",
+                sheets=[("2099-03-01", 4500, 30, None)])]
+    hits += [hit(100 + i, f"Тур {i}", "Казань", ["Казань", "Татарстан"], sheets=[("2099-07-01", 30000, 3, None)]) for i in range(60)]
+
+    def fake_get(url, params=None, **kwargs):
+        class Res:
+            text = json.dumps({"totalHits": len(hits), "totalPages": 1, "hits": hits} if "tour-search" in url else
+                              {"topics": [{"id": "7", "name": "Авторские"}], "holidays": [{"id": "may_holidays", "name": "МАЙСКИЕ ПРАЗДНИКИ"}]})
+
+            def raise_for_status(self):
+                pass
+        return Res()
+
+    monkeypatch.setattr(tours.requests, "get", fake_get)
+    db.conn.execute_query("DELETE FROM core_tours_snapshots")
+    tours._cache["at"] = None
+    try:
+        over = tours.overview()  # снимка нет — забирается сразу
+        assert over["tours"] == 63 and over["own"] == 1 and "МАЙСКИЕ ПРАЗДНИКИ" in over["holidays"]
+        found = tours.search(direction="Кострома", segment="multi_day")
+        assert {t["id"] for t in found["tours"]} == {1, 2}
+        may = tours.search(holiday="майские", own=True)
+        assert [t["id"] for t in may["tours"]] == [1] and may["tours"][0]["next"][0]["holiday"] == "МАЙСКИЕ ПРАЗДНИКИ"
+        assert [t["id"] for t in tours.search(query="кострома", free_only=True, date_from="2099-06-01")["tours"]] == []
+        card = tours.tour(1)
+        assert card["own"] and card["direction"] == "Костромская область" and len(card["next"]) == 2
+        assert tours.search(segment="one_day")["tours"][0]["direction"] == "Суздаль"
+
+        # Инструменты агента — через MCP с ключом запуска.
+        node, token = _node(admin)
+        _poll(client, token)
+        uid = admin.get("/api/auth/session").json()["user"]["id"]
+        db.conn.execute_query("INSERT INTO core_accounts (user_id, provider, state, node_id) VALUES (%s, 'claude', 'ready', %s)", (uid, int(node["id"])))
+        thread = admin.post("/api/core/threads", json={}).json()["thread"]
+        admin.post(f"/api/core/threads/{thread['id']}/messages", json={"id": uuid.uuid4().hex, "body": "Что есть в Кострому?"})
+        run = _poll(client, token).json()["jobs"][0]
+        res = _rpc(client, run["mcp"]["token"], "tours_search", direction="Кострома", own=True)
+        assert res["structuredContent"]["total"] == 1
+        assert _rpc(client, run["mcp"]["token"], "tour_get", id=2)["structuredContent"]["sameDirection"]["total"] >= 1
+        assert _rpc(client, run["mcp"]["token"], "tour_get", id=999)["isError"]
+    finally:
+        db.conn.execute_query("DELETE FROM core_tours_snapshots")
+        tours._cache["at"] = None
+        _cleanup()
