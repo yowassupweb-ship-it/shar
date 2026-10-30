@@ -19,6 +19,22 @@ function goToChat(chatId: string) {
 }
 
 /**
+ * Текст — сразу в поле ввода открытого чата (вкладка «Чаты» или плавающее окно), без выбора чата.
+ * false — открытого поля нет (чат не открыт, только чтение, идёт правка): тогда выбор в ForwardSheet.
+ */
+export function insertIntoOpenChat(text: string): boolean {
+  const chatId = useChatStore.getState().activeChatId;
+  if (!chatId) return false;
+  const detail = { chatId, text, handled: false };
+  window.dispatchEvent(new CustomEvent('nx:insert-text', { detail }));
+  if (!detail.handled) return false;
+  const chat = useChatStore.getState().chats[chatId];
+  const { me, users } = useChatStore.getState();
+  showToast(`Текст в поле ввода «${chat ? chatTitle(chat, me, users) : 'чата'}» — поправьте и отправьте`, 'success');
+  return true;
+}
+
+/**
  * Переслать сообщения в другой чат. Сообщения не уходят сразу: человека переносит в выбранный чат, а они
  * встают в композере вложением — можно дописать комментарий, убрать лишнее и отправить одной кнопкой.
  * Вместо сообщений можно передать текст (ответ агента «Ядра»): он встаёт в поле ввода чата — так же, до отправки.

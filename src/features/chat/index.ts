@@ -22,7 +22,7 @@ export {
 export { requestJump } from './jump';
 export { sendText, openDocument } from './store';
 export { createChat } from './actions';
-export { default as ForwardSheet } from './ForwardSheet';
+export { default as ForwardSheet, insertIntoOpenChat } from './ForwardSheet';
 export type { ChatRow } from './store';
 export { default as ChatFrame } from './frame/ChatFrame';
 export { chatFrameEnabled, setChatFrameEnabled, subscribeChatFrame } from './frame/prefs';

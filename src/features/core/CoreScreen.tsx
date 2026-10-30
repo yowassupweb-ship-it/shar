@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Archive, ArchiveRestore, ArrowDown, Atom, BarChart3, ChevronLeft, Lock, MessageSquarePlus, Pencil, Search, X } from 'lucide-react';
-import { ForwardSheet } from '@/features/chat';
+import { ForwardSheet, insertIntoOpenChat } from '@/features/chat';
 import { realtime } from '@/shared/realtime/realtime';
 import { paths } from '@/shared/navigation/routes';
 import { Spinner } from '@/shared/ui/Spinner';
@@ -302,7 +302,7 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
     answer: (m, value) => { atBottom.current = true; coreApi.answer(m.id, value).then(upsertMessage).catch((cause) => showToast(cause instanceof Error ? cause.message : 'Не получилось', 'error')); },
     cancel: (m) => { coreApi.cancel(m.id).then(upsertMessage).catch((cause) => showToast(cause instanceof Error ? cause.message : 'Не получилось', 'error')); },
     retry: (m) => retryMessage(m.id),
-    forward: (m) => setForwarding(m),
+    forward: (m) => { if (!insertIntoOpenChat(m.body)) setForwarding(m); },
     jump: (id) => {
       const row = scroller.current?.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(id)}"]`);
       if (!row) { showToast('Это сообщение выше — прокрутите историю', 'info'); return; }

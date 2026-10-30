@@ -103,6 +103,22 @@ export default function Composer({ chatId, readOnly }: { chatId: string; readOnl
     return () => window.removeEventListener('nx:insert-emoji', onEmoji);
   }, []);
 
+  // Ответ агента «Ядра» — в конец поля ввода открытого чата (insertIntoOpenChat). Во время правки не трогаем.
+  useEffect(() => {
+    if (readOnly || editingId) return undefined;
+    const onInsert = (e: Event) => {
+      const d = (e as CustomEvent<{ chatId: string; text: string; handled: boolean }>).detail;
+      if (d.chatId !== chatId || !d.text) return;
+      d.handled = true;
+      setText((cur) => (cur.trim() ? `${cur.trimEnd()}
+
+${d.text}` : d.text));
+      requestAnimationFrame(() => ref.current?.caretToEnd());
+    };
+    window.addEventListener('nx:insert-text', onInsert);
+    return () => window.removeEventListener('nx:insert-text', onInsert);
+  }, [chatId, readOnly, editingId]);
+
   const previews = useMemo(() => files.map((f) => ({
     file: f,
     url: f.type.startsWith('image/') ? URL.createObjectURL(f) : null,
