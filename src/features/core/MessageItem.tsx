@@ -214,6 +214,13 @@ export const MessageItem = memo(function MessageItem({ message, quote, h }: {
             {message.local === 'failed' && (
               <button type="button" className="ncore-retry" onClick={() => h.retry(message)}><RotateCw size={11} aria-hidden="true" /> не отправлено — повторить</button>
             )}
+            {!message.local && (
+              <span className="ncore-tools">
+                {!!message.body && <button type="button" onClick={copy} aria-label="Копировать" title="Копировать текст"><Copy size={13} aria-hidden="true" /></button>}
+                {!!message.body && <button type="button" onClick={() => h.forward(message)} aria-label="Переслать в чат" title="Переслать в чат Шара"><Forward size={13} aria-hidden="true" /></button>}
+                <button type="button" onClick={() => h.reply(message)} aria-label="Ответить" title="Ответить на это сообщение"><Reply size={13} aria-hidden="true" /></button>
+              </span>
+            )}
             {!message.local && <time>{formatTime(message.createdAt)}</time>}
           </div>
         )}
@@ -226,12 +233,12 @@ export const MessageItem = memo(function MessageItem({ message, quote, h }: {
         )}
         {!!p.ask?.question && p.ask.kind !== 'permission' && !working && !p.answered && <p className="ncore-ask">{p.ask.question}</p>}
         {!!p.actions?.length && !working && <AskButtons message={message} onAnswer={(value) => h.answer(message, value)} />}
-        {!message.local && !working && (
+        {!mine && !message.local && !working && (
           <div className="ncore-tools">
-            {!!message.body && <button type="button" onClick={copy} title="Скопировать текст"><Copy size={12} aria-hidden="true" /> копировать</button>}
-            {!!message.body && <button type="button" onClick={() => h.forward(message)} title="Переслать в чат Шара"><Forward size={12} aria-hidden="true" /> в чат</button>}
-            {!mine && stats.length > 0 && <span className="ncore-tools-meta" title={stats.join(' · ')}>{workBrief(p.work)}</span>}
-            <button type="button" onClick={() => h.reply(message)} title="Ответить на это сообщение"><Reply size={12} aria-hidden="true" /> ответить</button>
+            {!!message.body && <button type="button" onClick={copy} aria-label="Копировать" title="Копировать текст"><Copy size={13} aria-hidden="true" /></button>}
+            {!!message.body && <button type="button" onClick={() => h.forward(message)} aria-label="Переслать в чат" title="Переслать в чат Шара"><Forward size={13} aria-hidden="true" /></button>}
+            <button type="button" onClick={() => h.reply(message)} aria-label="Ответить" title="Ответить на это сообщение"><Reply size={13} aria-hidden="true" /></button>
+            {stats.length > 0 && <span className="ncore-tools-meta" title={stats.join(' · ')}>{workBrief(p.work)}</span>}
           </div>
         )}
       </div>

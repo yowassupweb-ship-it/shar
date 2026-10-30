@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Archive, ArchiveRestore, ArrowDown, Atom, BarChart3, ChevronLeft, Lock, MessageSquarePlus, Pencil, Search, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, Atom, BarChart3, ChevronLeft, Lock, MessageSquarePlus, MoreHorizontal, Pencil, Search, X } from 'lucide-react';
 import { ForwardSheet, insertIntoOpenChat } from '@/features/chat';
 import { realtime } from '@/shared/realtime/realtime';
 import { paths } from '@/shared/navigation/routes';
+import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { Spinner } from '@/shared/ui/Spinner';
 import { showToast } from '@/shared/ui/Toast';
 import { dayKey, formatDay, formatListTime, plural } from '@/shared/ui/format';
@@ -11,7 +12,8 @@ import { coreApi, type CoreLimit, type CoreMessage, type CoreThread } from './ap
 import { ChatStats, LimitBadges } from './ChatStats';
 import { Composer, COMMANDS, type ComposerHandle, type SendOptions } from './Composer';
 import { MessageItem, type MessageHandlers } from './MessageItem';
-import { formatTokens } from './parts';
+import { BrandMark } from './brands';
+import { formatTokens, modelLabel } from './parts';
 import { setCorePanelThread, useCorePanel } from './panel';
 import {
   createThread, loadAll, loadArchived, loadMessages, loadOlder, patchThread, retryMessage, sendMessage, upsertMessage, upsertThread, useCore,
@@ -182,6 +184,7 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
   const messages = log?.messages ?? EMPTY;
   const [replyTo, setReplyTo] = useState<CoreMessage | null>(null);
   const [forwarding, setForwarding] = useState<CoreMessage | null>(null);
+  const [headMenu, setHeadMenu] = useState<MenuAnchor | null>(null);
   const [showStats, setShowStats] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [dropping, setDropping] = useState(false);
@@ -315,6 +318,10 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
   const contextLoad = thread?.lastWork?.context_tokens && thread.lastWork.context_window
     ? { tokens: thread.lastWork.context_tokens, share: thread.lastWork.context_tokens / thread.lastWork.context_window } : null;
 
+  const headAgent = catalog?.agents.find((a) => a.id === thread?.peer) ?? (thread ? undefined : catalog?.agents[0]);
+  const headModel = [...messages].reverse().find((m) => m.role === 'agent' && m.props.model)?.props.model || headAgent?.model;
+  const limitAgent = headAgent?.limits?.length ? headAgent : catalog?.agents.find((a) => a.limits?.length);
+
   let lastDay = 0;
   return (
     <section
@@ -326,6 +333,7 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
     >
       <header className="ncore-chat-head">
         {narrow && <button type="button" className="nx-icon-btn" onClick={onList} aria-label="Все чаты" title="Все чаты"><ChevronLeft size={20} /></button>}
+        {headAgent && <span className="ncore-chat-mark" aria-hidden="true"><BrandMark id={headAgent.id} size={14} /></span>}
         {renaming && thread ? (
           <input className="ncore-rename" autoFocus defaultValue={thread.title} maxLength={120} aria-label="Название чата"
             onBlur={(e) => { const v = e.currentTarget.value.trim(); setRenaming(false); if (v && v !== thread.title) void patchThread(thread.id, { title: v }); }}
@@ -333,34 +341,40 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
         ) : (
           <button type="button" className="ncore-chat-title" onDoubleClick={() => thread && setRenaming(true)} title={thread ? 'Двойной щелчок — переименовать' : undefined}>
             <b>{thread?.title || 'Новый чат'}</b>
-            {thread && <span>{thread.messages} {plural(thread.messages, ['сообщение', 'сообщения', 'сообщений'])}{thread.archived ? ' · в архиве' : ''}</span>}
+            <span>
+              {headAgent ? <>{headAgent.name}{headModel ? ` ${modelLabel(headModel)}` : ''}</> : null}
+              {thread ? <>{headAgent ? ' · ' : ''}{thread.messages} {plural(thread.messages, ['сообщение', 'сообщения', 'сообщений'])}{thread.archived ? ' · в архиве' : ''}</> : null}
+            </span>
           </button>
         )}
-        <span className="ncore-chat-tools">
-          {(() => {
-            const shown = catalog?.agents.find((a) => a.id === (thread?.peer || '')) ?? catalog?.agents.find((a) => a.limits?.length);
-            return shown ? <LimitBadges limits={shown.limits} agent={shown.name} /> : null;
-          })()}
-          {contextLoad && (
-            <button type="button" className="ncore-context" data-heavy={contextLoad.share >= 0.6 || undefined} onClick={() => setShowStats((v) => !v)}
-              title={`Контекст чата: ${formatTokens(contextLoad.tokens)} токенов — столько агент перечитывает на каждом шаге.${contextLoad.share >= 0.6 ? ' Для новой темы лучше начать новый чат.' : ''}`}>
-              <i><i style={{ width: `${Math.min(100, Math.round(contextLoad.share * 100))}%` }} /></i>
-              {formatTokens(contextLoad.tokens)}
+        {thread && (
+          <span className="ncore-chat-tools">
+            <button type="button" className="ncore-meter" aria-pressed={showStats} onClick={() => setShowStats((v) => !v)} aria-label="Статистика чата"
+              title={contextLoad ? `Статистика чата · контекст ${formatTokens(contextLoad.tokens)} токенов — столько агент перечитывает на каждом шаге${contextLoad.share >= 0.6 ? '. Для новой темы лучше начать новый чат' : ''}` : 'Статистика чата'}>
+              {limitAgent && <LimitBadges limits={limitAgent.limits} agent={limitAgent.name} />}
+              {contextLoad && (
+                <span className="ncore-context" data-heavy={contextLoad.share >= 0.6 || undefined}>
+                  <i><i style={{ width: `${Math.max(2, Math.min(100, Math.round(contextLoad.share * 100)))}%` }} /></i>
+                  {formatTokens(contextLoad.tokens)}
+                </span>
+              )}
+              {!limitAgent && !contextLoad && <BarChart3 size={14} aria-hidden="true" />}
             </button>
-          )}
-          {thread && (
-            <button type="button" className="nx-icon-btn" aria-pressed={showStats} onClick={() => setShowStats((v) => !v)} aria-label="Статистика чата" title="Статистика чата">
-              <BarChart3 size={16} />
+            <button type="button" className="nx-icon-btn ncore-head-more" aria-label="Действия с чатом" title="Переименовать, архив"
+              onClick={(e) => setHeadMenu(headMenu ? null : { element: e.currentTarget, align: 'end' })}>
+              <MoreHorizontal size={16} />
             </button>
-          )}
-          {thread && <button type="button" className="nx-icon-btn" onClick={() => setRenaming(true)} aria-label="Переименовать чат" title="Переименовать"><Pencil size={16} /></button>}
-          {thread && (
-            <button type="button" className="nx-icon-btn" onClick={() => void patchThread(thread.id, { archived: !thread.archived }).then(() => { if (!thread.archived) onSelect(null); })}
-              aria-label={thread.archived ? 'Вернуть из архива' : 'Убрать в архив'} title={thread.archived ? 'Вернуть из архива' : 'Убрать в архив'}>
-              {thread.archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
-            </button>
-          )}
-        </span>
+            {headMenu && (
+              <Menu anchor={headMenu} label="Действия с чатом" onClose={() => setHeadMenu(null)} compact>
+                <MenuItem icon={<Pencil size={15} />} onSelect={() => { setHeadMenu(null); setRenaming(true); }}>Переименовать</MenuItem>
+                <MenuItem icon={thread.archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}
+                  onSelect={() => { setHeadMenu(null); void patchThread(thread.id, { archived: !thread.archived }).then(() => { if (!thread.archived) onSelect(null); }); }}>
+                  {thread.archived ? 'Вернуть из архива' : 'В архив'}
+                </MenuItem>
+              </Menu>
+            )}
+          </span>
+        )}
       </header>
 
       {showStats && <ChatStats thread={thread} messages={messages} />}
