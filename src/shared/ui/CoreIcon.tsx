@@ -1,7 +1,7 @@
 import { forwardRef } from 'react';
 import type { LucideIcon, LucideProps } from 'lucide-react';
 
-const SRC = '/icons/nav-v2/core.png?v=7';
+const SRC = '/icons/nav-v2/core.png?v=8';
 
 /**
  * Знак «Ядра» (агенты Шара) — объёмный атом, та же картинка, что на кнопке «Агент» в нижней панели.
