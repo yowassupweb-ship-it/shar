@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// Нода «Ядра» Шара: личные агенты сотрудников (Claude Code, Codex, Gemini CLI) на сервере компании.
+// Нода «Ядра» Шара: личные агенты сотрудников (Claude Code, Codex, Gemini CLI, Kimi Code) на сервере компании.
 //
 // Нода сама звонит в Шар — длинный опрос POST /api/core/node/poll (держит до 25 с, пока нет работы), так что ей не
 // нужен белый адрес. Задачи:
 //   run          ответить в чате «Ядра»: запустить CLI провайдера, поток событий → шаги, текст, ход работы, лимиты
-//   login        войти в подписку человека (claude auth login / codex login --device-auth) в его личном каталоге
+//   login        войти в подписку человека (claude auth login / codex login --device-auth / kimi login) в его каталоге
 //   login_code   код со страницы входа Claude → в идущий вход
 //   login_cancel / logout
 // Каталог человека — <SHAR_NODE_HOME>/users/<id>: там его вход в подписки, сессии CLI и рабочая папка. Учётные данные
@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "1.1.0";
+const VERSION = "1.1.1";
 const SHAR_URL = String(process.env.SHAR_URL || "").replace(/\/+$/, "");
 const TOKEN = String(process.env.SHAR_NODE_TOKEN || "");
 // Отпечаток этого файла — так же, как его считает Шар (переводы строк без \r): разошёлся с присланным в опросе —
@@ -35,6 +35,7 @@ const CLI = {
   claude: process.env.CLAUDE_COMMAND || "claude",
   codex: process.env.CODEX_COMMAND || "codex",
   gemini: process.env.GEMINI_COMMAND || "gemini",
+  kimi: process.env.KIMI_COMMAND || "kimi",
 };
 const RUN_TIMEOUT_MS = 30 * 60_000;
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
@@ -195,14 +196,19 @@ function userDirs(userId) {
   const safe = String(userId).replace(/[^A-Za-z0-9_-]/g, "_");
   const base = path.join(ROOT, "users", safe);
   const home = SHARED_HOME ? os.homedir() : path.join(base, "home");
-  const dirs = { base, home, work: path.join(base, "work"), runs: path.join(base, "runs"), codexHome: SHARED_HOME ? path.join(os.homedir(), ".codex") : path.join(base, "home", ".codex") };
-  for (const dir of [dirs.work, dirs.runs, ...(SHARED_HOME ? [] : [dirs.home, dirs.codexHome])]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const dirs = {
+    base, home, work: path.join(base, "work"), runs: path.join(base, "runs"),
+    codexHome: SHARED_HOME ? path.join(os.homedir(), ".codex") : path.join(base, "home", ".codex"),
+    kimiHome: SHARED_HOME ? path.join(os.homedir(), ".kimi-code") : path.join(base, "home", ".kimi-code"),
+  };
+  for (const dir of [dirs.work, dirs.runs, ...(SHARED_HOME ? [] : [dirs.home, dirs.codexHome, dirs.kimiHome])]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dirs;
 }
 
 function userEnv(dirs) {
   if (SHARED_HOME) return {};
-  return { HOME: dirs.home, USERPROFILE: dirs.home, CODEX_HOME: dirs.codexHome, XDG_CONFIG_HOME: path.join(dirs.home, ".config") };
+  return { HOME: dirs.home, USERPROFILE: dirs.home, CODEX_HOME: dirs.codexHome, KIMI_CODE_HOME: dirs.kimiHome,
+    XDG_CONFIG_HOME: path.join(dirs.home, ".config") };
 }
 
 /** Секреты запуска — в файлы с правами 600 в каталоге человека, а не в командную строку (её видно в ps). */
@@ -777,7 +783,7 @@ function geminiSettings(job, dirs) {
 }
 
 function runGemini(job, dirs, resumeId, report, entry) {
-  geminiSettings(job, dirs);
+  const settings = geminiSettings(job, dirs);
   const system = secretFile(dirs, `gemini-system-${job.id}.md`, job.system || "");
   const args = ["--output-format", "stream-json", "--approval-mode", "yolo", "--allowed-mcp-server-names", "shar", ...(browser ? ["browser"] : []), ...extraMcp(job).map((m) => m.name)];
   if (job.model) args.push("-m", job.model);
@@ -849,6 +855,16 @@ const logins = new Map(); // `${user}:${provider}` → { child, done }
 const CLI_URL = /https:\/\/[^\s"'<>\x1b]+/;
 const USER_CODE = /\b([A-Z0-9]{4,5}-[A-Z0-9]{4,6})\b/;
 
+function kimiCredentials(dirs) {
+  const folder = path.join(dirs.kimiHome, "credentials");
+  try {
+    return fs.readdirSync(folder, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map((entry) => path.join(folder, entry.name));
+  } catch {
+    return [];
+  }
+}
+
 async function accountOf(provider, dirs) {
   const env = userEnv(dirs);
   if (provider === "claude") {
@@ -860,6 +876,10 @@ async function accountOf(provider, dirs) {
     } catch {
       return { loggedIn: res.code === 0 && !/not logged in|please log in/i.test(text), account: "" };
     }
+  }
+  if (provider === "kimi") {
+    // У Kimi нет login status: наличие OAuth-файла проверяем без чтения самого токена.
+    return { loggedIn: kimiCredentials(dirs).length > 0, account: "" };
   }
   const res = await exec(CLI.codex, ["login", "status"], { env, cwd: dirs.work }, 30_000);
   const text = stripAnsi(res.out).trim();
@@ -937,7 +957,7 @@ async function loginJob(job) {
     return report.send(acc.loggedIn ? { type: "login", state: "done", account: acc.account, models: await modelsOf(job.provider, dirs) }
       : { type: "login", state: "failed", message: "На машине разработчика войдите в CLI вручную" });
   }
-  const args = job.provider === "claude" ? ["auth", "login"] : ["login", "--device-auth"];
+  const args = job.provider === "claude" ? ["auth", "login"] : job.provider === "codex" ? ["login", "--device-auth"] : ["login"];
   const child = run(CLI[job.provider], args, { env: { ...userEnv(dirs), BROWSER: "true" }, cwd: dirs.work, pty: true });
   const session = { child, url: "", code: "", buffer: "" };
   logins.set(key, session);
@@ -945,7 +965,7 @@ async function loginJob(job) {
   const onData = (chunk) => {
     session.buffer = `${session.buffer}${stripAnsi(chunk.toString("utf8"))}`.slice(-6000);
     const url = session.buffer.match(CLI_URL)?.[0]?.replace(/[).,]+$/, "");
-    const code = job.provider === "codex" ? session.buffer.match(USER_CODE)?.[1] || "" : "";
+    const code = ["codex", "kimi"].includes(job.provider) ? session.buffer.match(USER_CODE)?.[1] || "" : "";
     if ((url && url !== session.url) || (code && code !== session.code)) {
       session.url = url || session.url;
       session.code = code || session.code;
@@ -983,6 +1003,8 @@ async function logoutJob(job) {
   if (!SHARED_HOME) {
     if (job.provider === "claude") await exec(CLI.claude, ["auth", "logout"], { env: userEnv(dirs), cwd: dirs.work });
     if (job.provider === "codex") await exec(CLI.codex, ["logout"], { env: userEnv(dirs), cwd: dirs.work });
+    // Kimi предлагает /logout только в интерактивном интерфейсе; в изолированном каталоге удаляем его OAuth-файлы.
+    if (job.provider === "kimi") for (const file of kimiCredentials(dirs)) fs.rmSync(file, { force: true });
   }
   await report.send({ type: "done" });
 }

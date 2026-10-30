@@ -3,14 +3,14 @@
   GET    /api/core/accounts                       мои подключения, есть ли нода на связи, расход за 30 дней
   PUT    /api/core/accounts/gemini                {key} — ключ Google Cloud / AI Studio: проверяем у Google и сохраняем
   PATCH  /api/core/accounts/{provider}            {model} — модель по умолчанию
-  POST   /api/core/accounts/{provider}/login      войти в подписку (claude, codex): нода запускает вход в CLI
+  POST   /api/core/accounts/{provider}/login      войти в подписку (claude, codex, kimi): нода запускает вход в CLI
   POST   /api/core/accounts/{provider}/login/code {code} — код со страницы входа (Claude просит вставить его обратно)
   DELETE /api/core/accounts/{provider}/login      отменить вход
   DELETE /api/core/accounts/{provider}            отключить (ключ стираем, на ноде — выход из CLI)
   GET    /api/core/usage?days=30&all=0            расход: мой; all=1 — по всей компании (админ)
 
-Вход в подписку: Шар ставит ноде задачу login, нода запускает `claude auth login` / `codex login --device-auth`
-в личном каталоге человека и присылает ссылку (и код у Codex). Человек открывает ссылку у себя и подтверждает —
+Вход в подписку: Шар ставит ноде задачу login, нода запускает `claude auth login` / `codex login --device-auth` / `kimi login`
+в личном каталоге человека и присылает ссылку (и код у Codex и Kimi). Человек открывает ссылку у себя и подтверждает —
 дальше всё работает само. Ход входа нода пишет в core_accounts.login, интерфейс видит его живым событием.
 """
 

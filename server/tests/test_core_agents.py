@@ -111,6 +111,21 @@ def test_login_run_and_reply_through_node(client, admin):
         _cleanup()
 
 
+def test_kimi_login_is_available_when_node_reports_cli(client, admin):
+    try:
+        _, token = _node(admin)
+        _poll(client, token, clis={"kimi": "2.4.1"})
+        r = admin.post("/api/core/accounts/kimi/login")
+        assert r.status_code == 200 and "kimi" in r.json()["node"]["clis"]
+        job = _poll(client, token, clis={"kimi": "2.4.1"}).json()["jobs"][0]
+        assert job["kind"] == "login" and job["provider"] == "kimi"
+        _events(client, token, job["id"], {"type": "login", "state": "waiting", "url": "https://kimi.ai/code", "code": "ABCD-1234"})
+        card = next(a for a in admin.get("/api/core/accounts").json()["accounts"] if a["provider"] == "kimi")
+        assert card["login"]["code"] == "ABCD-1234" and not card["login"].get("needsCode")
+    finally:
+        _cleanup()
+
+
 def test_stop_cancels_job_and_node_learns(client, admin):
     try:
         _, token = _node(admin)

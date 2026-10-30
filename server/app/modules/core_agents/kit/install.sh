@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Нода «Ядра» Шара на Ubuntu/Debian: Node.js, Claude Code, Codex CLI, Gemini CLI и агент ноды как служба systemd.
+# Нода «Ядра» Шара на Ubuntu/Debian: Node.js, Claude Code, Codex CLI, Gemini CLI, Kimi Code и агент ноды как служба systemd.
 #
 #   curl -fsSL https://<шар>/api/core/node/install.sh | sudo bash -s -- https://<шар> <токен ноды>
 #
@@ -45,9 +45,9 @@ if [ "$need_node" = 1 ]; then
   apt-get install -y -qq nodejs >/dev/null
 fi
 
-say "Claude Code, Codex, Gemini CLI"
+say "Claude Code, Codex, Gemini CLI, Kimi Code"
 # Ставим глобально: один набор на ноду, у каждого сотрудника — свой каталог со входом.
-npm install -g --no-audit --no-fund @anthropic-ai/claude-code @openai/codex @google/gemini-cli >/dev/null 2>&1 \
+npm install -g --no-audit --no-fund @anthropic-ai/claude-code @openai/codex @google/gemini-cli @moonshot-ai/kimi-code >/dev/null 2>&1 \
   || fail "Не удалось поставить CLI агентов (npm install -g …)"
 
 say "Браузер для агентов (Obscura)"
