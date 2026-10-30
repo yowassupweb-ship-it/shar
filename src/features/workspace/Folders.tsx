@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { HiddenMark } from '@/shared/core/HiddenMark';
 import { ChevronRight, Folder as FolderIcon, FolderOpen, Users } from 'lucide-react';
 import { useLongPress } from '@/shared/ui/useLongPress';
 import type { MenuAnchor } from '@/shared/ui/overlay';
@@ -125,6 +126,7 @@ export function FolderRow({ folder, count, empty, otherKinds, open, terms, editi
             <ChevronRight size={14} className="nws-folder-chevron" aria-hidden="true" />
             <Icon size={18} className="nws-folder-icon" aria-hidden="true" />
             <span className="nws-folder-title"><Highlight text={folder.title} terms={terms ?? []} /></span>
+            <HiddenMark kind="office_folder" id={String(folder.id)} />
             {sharedNote && <span className="nws-folder-shared" title={sharedNote} aria-label={sharedNote}><Users size={13} aria-hidden="true" /></span>}
             <span className="nws-folder-count">{count || ''}</span>
           </button>

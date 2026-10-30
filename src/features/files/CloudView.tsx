@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { HiddenMark } from '@/shared/core/HiddenMark';
 import { realtime } from '@/shared/realtime/realtime';
 import { lazyComponent } from '@/shared/ui/lazy';
 import {
@@ -290,7 +291,7 @@ ${url}` });
 
   const nameOrInput = (t: Target) => (renaming === t.item.id ? (
     <InlineName initial={t.item.name} onCommit={(n) => void commitRename(t, n)} onCancel={() => setRenaming(null)} />
-  ) : <span className="nf-name" title={t.item.name}>{t.item.name}</span>);
+  ) : <span className="nf-name" title={t.item.name}>{t.item.name}<HiddenMark kind={t.kind === 'folder' ? 'cloud_folder' : 'file'} id={String(t.item.id)} /></span>);
 
   // ── Разметка ──────────────────────────────────────────────────────────────
   let body: ReactNode;

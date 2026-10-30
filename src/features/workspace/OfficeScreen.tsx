@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { HiddenMark } from '@/shared/core/HiddenMark';
 import { useSearchParams } from 'react-router';
 import { Check, ChevronsDownUp, ChevronsUpDown, Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, UserPlus, LayoutGrid, Lock, MonitorUp, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
 import { useShellOptions } from '@/shared/shell/ShellContext';
@@ -149,7 +150,7 @@ const ItemRow = memo(function ItemRow({ item, active, terms, snippet, onOpen, on
             }}
           />
         ) : (
-          <span className="nws-row-title">{item.isNew && <span className="nws-new">Новое</span>}<Highlight text={item.title || info.untitled} terms={terms ?? []} /></span>
+          <span className="nws-row-title">{item.isNew && <span className="nws-new">Новое</span>}<Highlight text={item.title || info.untitled} terms={terms ?? []} /><HiddenMark kind="office_item" id={String(item.id)} /></span>
         )}
         <span className="nws-row-snippet" data-hit={snippet ? 'true' : undefined}>
           <Highlight text={item.kind === 'note' ? plainSnippet(snippet || item.snippet) : (snippet || item.snippet)} terms={terms ?? []} />

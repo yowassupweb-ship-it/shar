@@ -963,3 +963,6 @@ html[data-platform="electron"][data-theme="black"]:has(.nx) #shar-titlebar {
 /* Верхняя полоса прокрутки широкой таблицы (ScrollTable): только полоса, без содержимого. */
 .nx-table-topbar { max-width: 100%; height: 12px; overflow-x: auto; overflow-y: hidden; }
 .nx-table-topbar > div { height: 1px; }
+
+/* «Скрыто от агента» — перечёркнутый глаз после названия (shared/core/HiddenMark.tsx). */
+.nx-agent-hidden { display: inline-flex; flex: none; align-items: center; margin-left: 6px; color: var(--text-muted); vertical-align: -1px; }
