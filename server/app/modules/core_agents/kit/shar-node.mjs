@@ -627,10 +627,26 @@ async function compactCommand(job, dirs, report) {
 
 // ── Codex (подписка ChatGPT) ─────────────────────────────────────────────────
 
+/** Текст рассуждения из любой версии Codex CLI: строка, массив частей или вложенный объект (как в MBOX). */
+function reasoningText(item) {
+  const parts = [];
+  const take = (value) => {
+    if (!value) return;
+    if (typeof value === "string") { parts.push(value); return; }
+    if (Array.isArray(value)) { value.forEach(take); return; }
+    if (typeof value === "object") take(value.text ?? value.summary_text ?? value.content ?? value.summary);
+  };
+  take(item.text);
+  if (!parts.length) take(item.summary);
+  if (!parts.length) take(item.content);
+  if (!parts.length) take(item.reasoning);
+  return parts.join("\n\n").replace(/\*\*/g, "").trim();
+}
+
 function runCodex(job, dirs, resumeId, report, entry) {
   // Вся настройка — флагами: личный config.toml машины (модель по умолчанию, свои MCP) ноде не указ.
   // Ключ MCP — в переменной окружения запуска, во флагах только адрес.
-  const config = ["-c", "approval_policy=never", "-c", "sandbox_mode=read-only", "-c", "model_reasoning_summary=auto",
+  const config = ["-c", "approval_policy=never", "-c", "sandbox_mode=read-only", "-c", "model_reasoning_summary=auto", "-c", "hide_agent_reasoning=false",
     "-c", `mcp_servers.shar.url=${absolute(job.mcp.url)}`, "-c", "mcp_servers.shar.bearer_token_env_var=SHAR_MCP_TOKEN",
     "-c", "mcp_servers.shar.tool_timeout_sec=120",
     // Массив в TOML — с кавычками; через cmd.exe на Windows их не передать, поэтому браузер у Codex — только на Linux.
@@ -653,6 +669,12 @@ function runCodex(job, dirs, resumeId, report, entry) {
   const toolName = (item) => (item.tool ? String(item.tool) : item.type === "web_search" ? "web_search" : item.command ? "shell" : "");
   const handle = (event) => {
     if (!event.type && event.msg?.type) event = event.msg;
+    // Прежний формат Codex: рассуждение и ответ — отдельными событиями, а не item.* (как в MBOX).
+    if (event.type === "agent_reasoning" || event.type === "agent_reasoning_raw_content") {
+      event = { type: "item.completed", item: { type: "reasoning", text: event.text } };
+    } else if (event.type === "agent_message" && event.message && !event.item) {
+      event = { type: "item.completed", item: { type: "agent_message", text: event.message } };
+    }
     if (event.type === "thread.started" && event.thread_id) { state.sessionId = String(event.thread_id); return; }
     if (event.type === "turn.started") { report.send({ type: "progress", phase: "думает" }); return; }
     if (event.type === "turn.completed") {
@@ -674,7 +696,7 @@ function runCodex(job, dirs, resumeId, report, entry) {
         return;
       }
       if (item.type === "reasoning" && event.type === "item.completed") {
-        const text = String(item.text || item.summary?.map?.((s) => s.text).join("\n") || "").replace(/\*\*/g, "").trim();
+        const text = reasoningText(item);
         if (text) addStep(state, { kind: "text", text: clip(text, MAX_STEP_TEXT) }, report);
         report.send({ type: "progress", phase: "думает" });
         return;
