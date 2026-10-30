@@ -476,6 +476,21 @@ def connect_gemini(access, args: dict[str, Any]) -> dict[str, Any]:
             "note": "Ключ сохранён зашифрованным. Посоветуйте человеку удалить сообщение с ключом из чата."}
 
 
+def image_generate(access, args: dict[str, Any]) -> dict[str, Any]:
+    """Нарисовать картинку (или поправить присланную) — Gemini по ключу человека; картинка — в ответ агента и в «Файлы → Агенты»."""
+    from app.modules.core_agents import images
+
+    try:
+        file = images.generate(access.me.user_id, str(args.get("prompt") or ""), aspect=str(args.get("aspect") or ""),
+                               source_url=str(args.get("source_url") or ""), name=str(args.get("name") or ""))
+    except images.ImageError as exc:
+        raise _err(str(exc)) from exc
+    images.attach_to_job(str(access.ctx.scope.get("job") or ""), file)
+    return {"image": {"name": file["name"], "url": file["url"], "model": file["model"]},
+            "note": "Картинка уже показана человеку в чате под вашим ответом — не вставляйте её ссылкой ещё раз."
+                    + (f" Комментарий модели: {file['note']}" if file.get("note") else "")}
+
+
 def agent_disconnect(access, args: dict[str, Any]) -> dict[str, Any]:
     from app.modules.core_agents import accounts
 
@@ -669,6 +684,13 @@ TOOLS: list[dict[str, Any]] = [
     {"name": "mcp_remove", "app": "agent", "handler": mcp_remove, "level": "read",
      "description": "Удалить MCP-сервер человека. Нужен confirm: true.",
      "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "confirm": {"type": "boolean"}}, "required": ["name", "confirm"]}},
+    {"name": "image_generate", "app": "files", "handler": image_generate, "level": "create",
+     "description": "Нарисовать картинку по описанию или поправить готовую (source_url — вложение человека или адрес картинки). "
+                    "Рисует Gemini по ключу человека — Claude и GPT тоже могут звать. Картинка сама появится в чате под ответом и "
+                    "в «Файлах → Агенты». prompt — подробно: что, стиль, свет, текст на картинке; aspect — 1:1, 16:9, 9:16, 4:3, 3:4.",
+     "inputSchema": {"type": "object", "properties": {"prompt": {"type": "string"}, "aspect": {"type": "string"},
+                                                     "source_url": {"type": "string"}, "name": {"type": "string", "description": "имя файла"}},
+                     "required": ["prompt"]}},
     {"name": "skill_list", "app": "agent", "handler": skill_list, "level": "read",
      "description": "Навыки: ваши для этого человека и общие для компании — имя, когда применять, сколько раз применяли.",
      "inputSchema": {"type": "object", "properties": {}}},

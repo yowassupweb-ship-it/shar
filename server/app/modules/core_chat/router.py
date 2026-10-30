@@ -228,6 +228,42 @@ def list_threads(archived: bool = False, me: Identity = Depends(current_identity
     return {"threads": [_thread_view(r, stats.get(r["id"])) for r in rows]}
 
 
+# ── «Файлы → Агенты»: вложения чатов «Ядра» — то, что прислал человек, и то, что сделали агенты (картинки) ──────────
+
+_FILES_SQL = """
+    SELECT m.id AS message_id, m.thread_id, m.role, m.actor, m.created_at, t.title, a.value AS att
+    FROM core_messages m JOIN core_threads t ON t.id = m.thread_id
+    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.props->'attachments', '[]'::jsonb)) a
+    WHERE t.user_id = %s AND m.status <> 'cancelled'"""
+
+
+def _agent_file(r: dict, me: Identity) -> dict:
+    att = r["att"] or {}
+    mine = r["role"] == "user"
+    return {"messageId": r["message_id"], "chatId": r["thread_id"], "authorId": me.user_id if mine else str(r["actor"] or "agent"),
+            "authorName": "Вы" if mine else str(r["actor"] or "Агент"),
+            "chatName": r["title"] or "Чат с агентом", "url": att.get("url") or "", "filename": att.get("name") or "файл",
+            "fileType": "image" if str(att.get("type") or "").startswith("image/") else "file", "mimeType": att.get("type") or "",
+            "size": att.get("size"), "createdAt": _iso(r["created_at"])}
+
+
+@router.get("/api/core/files/chats")
+def agent_file_chats(me: Identity = Depends(current_identity)):
+    """Чаты «Ядра», где есть вложения, — с числом файлов (как «Из чатов» в «Файлах»)."""
+    _guard(me)
+    rows = db.conn.fetch_all(
+        f"SELECT thread_id, max(title) AS title, count(*)::int AS n, max(created_at) AS last_at FROM ({_FILES_SQL}) f "
+        "GROUP BY thread_id ORDER BY last_at DESC LIMIT 300", (me.user_id,)) or []
+    return [{"chatId": r["thread_id"], "chatName": r["title"] or "Чат с агентом", "count": r["n"], "lastAt": _iso(r["last_at"])} for r in rows]
+
+
+@router.get("/api/core/files")
+def agent_files(threadId: str, me: Identity = Depends(current_identity)):  # noqa: N803 — имя как у /api/cloud/attachments
+    _guard(me)
+    rows = db.conn.fetch_all(f"{_FILES_SQL} AND m.thread_id = %s ORDER BY m.created_at DESC LIMIT 500", (me.user_id, threadId)) or []
+    return [_agent_file(r, me) for r in rows if (r["att"] or {}).get("url")]
+
+
 @router.post("/api/core/threads", status_code=201)
 def create_thread(body: ThreadBody, me: Identity = Depends(current_identity)):
     _guard(me)

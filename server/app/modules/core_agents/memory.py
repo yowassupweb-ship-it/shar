@@ -156,10 +156,10 @@ def search_notes(user_id: str, query: str = "", tag: str = "", limit: int = 20, 
         where.append("%s = ANY(tags)")
         params.append(tag.lower())
     # Выше — записи, у которых слова есть в заголовке (первые ~120 знаков), затем свежие.
-    rank = " + ".join(["(position(%s in left(search, 120)) > 0)::int"] * len(stems)) or "0"
+    rank = " + ".join(["(position(%s in left(search, 120)) > 0)::int"] * len(stems))
     rows = db.conn.fetch_all(
         f"SELECT id, user_id, body, tags, actor, shared, created_at FROM core_notes WHERE {' AND '.join(where)} "
-        f"ORDER BY {rank} DESC, id DESC LIMIT %s",
+        f"ORDER BY {f'{rank} DESC, ' if rank else ''}id DESC LIMIT %s",
         (*params, *stems, max(1, min(limit, 200)))) or []
     return [{"id": str(r["id"]), "text": r["body"], "tags": list(r["tags"] or []), "by": r["actor"], "shared": r["shared"],
              "mine": r["user_id"] == user_id, "at": r["created_at"].isoformat()} for r in rows]

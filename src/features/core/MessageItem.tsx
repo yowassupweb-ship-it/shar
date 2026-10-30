@@ -1,12 +1,15 @@
 import { memo, useEffect, useState } from 'react';
 import { AlertTriangle, Brain, Copy, CornerDownRight, FileText, Forward, Hourglass, Reply, RotateCw, ShieldCheck, Square, X } from 'lucide-react';
 import { CoreMini } from '@/shared/ui/CoreIcon';
+import { lazyComponent } from '@/shared/ui/lazy';
 import { formatTime } from '@/shared/ui/format';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
 import type { CoreMessage } from './api';
 import { BrandMark } from './brands';
 import { Chain, EFFORT_LABEL, formatBytes, formatTokens, MarkdownText, modelLabel, workParts } from './parts';
+
+const ImageViewer = lazyComponent(() => import('@/shared/ui/ImageViewer'));
 
 export interface MessageHandlers {
   reply: (message: CoreMessage) => void;
@@ -29,19 +32,26 @@ function workBrief(work: CoreMessage['props']['work']): string {
 const isImage = (type: string, name: string) => type.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/i.test(name);
 
 function Attachments({ files }: { files: NonNullable<CoreMessage['props']['attachments']> }) {
+  const [viewer, setViewer] = useState<number | null>(null);
+  const images = files.filter((file) => isImage(file.type, file.name));
   return (
     <div className="ncore-atts">
       {files.map((file) => (isImage(file.type, file.name) ? (
-        <a key={file.key} className="ncore-att-image" href={file.url} target="_blank" rel="noreferrer noopener" title={file.name}>
+        // Картинка (своя или нарисованная агентом) — просмотр на весь экран, как в чатах, со всеми картинками ответа.
+        <a key={file.key || file.url} className="ncore-att-image" href={file.url} title={file.name}
+          onClick={(e) => { if (e.ctrlKey || e.metaKey || e.button !== 0) return; e.preventDefault(); setViewer(images.indexOf(file)); }}>
           <img src={file.url} alt={file.name} loading="lazy" decoding="async" />
         </a>
       ) : (
-        <a key={file.key} className="ncore-att" href={file.url} target="_blank" rel="noreferrer noopener" title={file.name}>
+        <a key={file.key || file.url} className="ncore-att" href={file.url} target="_blank" rel="noreferrer noopener" title={file.name}>
           <FileText size={16} aria-hidden="true" />
           <span className="ncore-att-name">{file.name}</span>
           <span className="ncore-att-size">{formatBytes(file.size)}</span>
         </a>
       )))}
+      {viewer !== null && (
+        <ImageViewer items={images.map((file) => ({ url: file.url, name: file.name }))} start={viewer} onClose={() => setViewer(null)} />
+      )}
     </div>
   );
 }

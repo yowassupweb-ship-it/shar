@@ -5,7 +5,7 @@ import type { ViewerItem } from '@/shared/ui/ImageViewer';
 import { SearchField } from '@/shared/ui/SearchField';
 import { Avatar } from '@/shared/ui/Avatar';
 import { thumbUrl } from '@/shared/ui/media';
-import { cachedChatFiles, cachedChatFolders, fileUrl, fmtBytes, fmtDate, kindOf, loadChatFiles, loadChatFolders, type ChatAttachment, type ChatFolder } from './api';
+import { CHAT_SOURCE, fileUrl, fmtBytes, fmtDate, kindOf, type ChatAttachment, type ChatFolder, type FilesSource } from './api';
 import { FileGlyph } from './FileGlyph';
 import { downloadOnClick } from '@/shared/platform/download';
 import { canOpenInEditor, openInEditor, viewKindOf, type FileRef } from '@/features/workspace';
@@ -21,19 +21,19 @@ const ImageViewer = lazyComponent(() => import('@/shared/ui/ImageViewer'));
 
 type Filter = 'all' | 'media' | 'docs';
 
-export function ChatList({ lead, onOpen }: { lead?: ReactNode; onOpen: (c: ChatFolder) => void }) {
-  const [list, setList] = useState(cachedChatFolders);
-  const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>(() => (cachedChatFolders() ? 'ready' : 'loading'));
+export function ChatList({ lead, onOpen, source = CHAT_SOURCE }: { lead?: ReactNode; onOpen: (c: ChatFolder) => void; source?: FilesSource }) {
+  const [list, setList] = useState(source.cachedFolders);
+  const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>(() => (source.cachedFolders() ? 'ready' : 'loading'));
   const [query, setQuery] = useState('');
 
   const load = useCallback(async () => {
-    try { setList(await loadChatFolders()); setPhase('ready'); } catch { setPhase((p) => (p === 'ready' ? p : 'error')); }
-  }, []);
+    try { setList(await source.loadFolders()); setPhase('ready'); } catch { setPhase((p) => (p === 'ready' ? p : 'error')); }
+  }, [source]);
   useEffect(() => {
     let alive = true;
-    loadChatFolders().then((l) => { if (alive) { setList(l); setPhase('ready'); } }).catch(() => { if (alive) setPhase((p) => (p === 'ready' ? p : 'error')); });
+    source.loadFolders().then((l) => { if (alive) { setList(l); setPhase('ready'); } }).catch(() => { if (alive) setPhase((p) => (p === 'ready' ? p : 'error')); });
     return () => { alive = false; };
-  }, []);
+  }, [source]);
 
   const q = query.trim().toLowerCase();
   const shown = (list || []).filter((c) => !q || c.chatName.toLowerCase().includes(q));
@@ -63,14 +63,14 @@ export function ChatList({ lead, onOpen }: { lead?: ReactNode; onOpen: (c: ChatF
         ) : !shown.length ? (
           <div className="nx-state">
             <MessageSquareText size={28} aria-hidden="true" />
-            <h2>{q ? 'Такого чата нет' : 'В чатах пока нет файлов'}</h2>
-            <p>{q ? 'Попробуйте другое название.' : 'Здесь соберутся фото и документы, которые присылали в переписках.'}</p>
+            <h2>{q ? 'Такого чата нет' : source.emptyTitle}</h2>
+            <p>{q ? 'Попробуйте другое название.' : source.emptyText}</p>
           </div>
         ) : (
           <div className="nf-rows">
             {shown.map((c) => (
               <button key={c.chatId} type="button" className="nf-row" onClick={() => onOpen(c)}>
-                <Avatar name={c.chatName} seed={c.chatId} src={c.chatAvatar || undefined} person={!c.isGroup} size={36} />
+                {source.icon ? <span className="nf-source-icon" aria-hidden="true">{source.icon}</span> : <Avatar name={c.chatName} seed={c.chatId} src={c.chatAvatar || undefined} person={!c.isGroup} size={36} />}
                 <span className="nf-text">
                   <span className="nf-name">{c.chatName}</span>
                   <span className="nf-meta">{c.count} · {fmtDate(c.lastAt)}</span>
@@ -85,9 +85,9 @@ export function ChatList({ lead, onOpen }: { lead?: ReactNode; onOpen: (c: ChatF
   );
 }
 
-export function ChatFiles({ lead, chat, onBack }: { lead?: ReactNode; chat: { chatId: string; chatName: string }; onBack: () => void }) {
-  const [list, setList] = useState(() => cachedChatFiles(chat.chatId));
-  const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>(() => (cachedChatFiles(chat.chatId) ? 'ready' : 'loading'));
+export function ChatFiles({ lead, chat, onBack, source = CHAT_SOURCE }: { lead?: ReactNode; chat: { chatId: string; chatName: string }; onBack: () => void; source?: FilesSource }) {
+  const [list, setList] = useState(() => source.cachedFiles(chat.chatId));
+  const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>(() => (source.cachedFiles(chat.chatId) ? 'ready' : 'loading'));
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
   const [viewer, setViewer] = useState<{ items: ViewerItem[]; start: number } | null>(null);
@@ -95,13 +95,13 @@ export function ChatFiles({ lead, chat, onBack }: { lead?: ReactNode; chat: { ch
   const [doc, setDoc] = useState<FileRef | null>(null);
 
   const load = useCallback(async () => {
-    try { setList(await loadChatFiles(chat.chatId)); setPhase('ready'); } catch { setPhase((p) => (p === 'ready' ? p : 'error')); }
-  }, [chat.chatId]);
+    try { setList(await source.loadFiles(chat.chatId)); setPhase('ready'); } catch { setPhase((p) => (p === 'ready' ? p : 'error')); }
+  }, [chat.chatId, source]);
   useEffect(() => {
     let alive = true;
-    loadChatFiles(chat.chatId).then((l) => { if (alive) { setList(l); setPhase('ready'); } }).catch(() => { if (alive) setPhase((p) => (p === 'ready' ? p : 'error')); });
+    source.loadFiles(chat.chatId).then((l) => { if (alive) { setList(l); setPhase('ready'); } }).catch(() => { if (alive) setPhase((p) => (p === 'ready' ? p : 'error')); });
     return () => { alive = false; };
-  }, [chat.chatId]);
+  }, [chat.chatId, source]);
 
   const q = query.trim().toLowerCase();
   const { media, docs } = useMemo(() => {
@@ -121,7 +121,7 @@ export function ChatFiles({ lead, chat, onBack }: { lead?: ReactNode; chat: { ch
 
   // Пока открываем сам чат; прокрутку к сообщению добавим, когда чат научится ?msg=.
   const jump = () => {
-    window.dispatchEvent(new CustomEvent('nx:open-chat', { detail: chat.chatId }));
+    source.openChat(chat.chatId);
   };
 
   return (

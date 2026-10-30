@@ -271,3 +271,55 @@ export async function shareToChat(chatId: string, item: { id: string; name: stri
   });
   if (!res.ok) throw new Error(String(res.status));
 }
+
+// ── Источники для «Из чатов» и «Агенты»: одинаковый вид, разные данные ─────────────────────────────
+
+/** Откуда раздел берёт папки-чаты и их вложения: переписки Шара или чаты с агентами «Ядра». */
+export interface FilesSource {
+  loadFolders: () => Promise<ChatFolder[]>;
+  cachedFolders: () => ChatFolder[] | null;
+  loadFiles: (chatId: string) => Promise<ChatAttachment[]>;
+  cachedFiles: (chatId: string) => ChatAttachment[] | null;
+  /** «Показать в чате». */
+  openChat: (chatId: string) => void;
+  emptyTitle: string;
+  emptyText: string;
+  /** Значок вместо аватара чата. */
+  icon?: import('react').ReactNode;
+}
+
+export const CHAT_SOURCE: FilesSource = {
+  loadFolders: loadChatFolders,
+  cachedFolders: cachedChatFolders,
+  loadFiles: loadChatFiles,
+  cachedFiles: cachedChatFiles,
+  openChat: (chatId) => { window.dispatchEvent(new CustomEvent('nx:open-chat', { detail: chatId })); },
+  emptyTitle: 'В чатах пока нет файлов',
+  emptyText: 'Здесь соберутся фото и документы, которые присылали в переписках.',
+};
+
+let agentFoldersCache: ChatFolder[] | null = null;
+const agentFilesCache = new Map<string, ChatAttachment[]>();
+
+/** Чаты «Ядра» с вложениями: что прислал человек и что сделали агенты (картинки). */
+export async function loadAgentFolders(): Promise<ChatFolder[]> {
+  const list = await json<ChatFolder[]>(await fetch('/api/core/files/chats', { cache: 'no-store' }));
+  agentFoldersCache = Array.isArray(list) ? list : [];
+  return agentFoldersCache;
+}
+
+export async function loadAgentFiles(threadId: string): Promise<ChatAttachment[]> {
+  const list = await json<ChatAttachment[]>(await fetch(`/api/core/files?threadId=${encodeURIComponent(threadId)}`, { cache: 'no-store' }));
+  const out = Array.isArray(list) ? list : [];
+  agentFilesCache.set(threadId, out);
+  return out;
+}
+
+export const AGENT_SOURCE: Omit<FilesSource, 'icon' | 'openChat'> = {
+  loadFolders: loadAgentFolders,
+  cachedFolders: () => agentFoldersCache,
+  loadFiles: loadAgentFiles,
+  cachedFiles: (id) => agentFilesCache.get(id) || null,
+  emptyTitle: 'У агентов пока нет файлов',
+  emptyText: 'Здесь соберутся вложения из чатов «Ядра» и всё, что сделали агенты, — например, картинки.',
+};

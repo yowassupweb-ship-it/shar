@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { showToast } from '@/shared/ui/Toast';
 import { useShellOptions } from '@/shared/shell/ShellContext';
-import { folderChain, getFile, type CloudFolder } from './api';
+import { Bot } from 'lucide-react';
+import { useAgentBridge } from '@/shared/core/agentBridge';
+import { navigate } from '@/shared/navigation/navigate';
+import { paths } from '@/shared/navigation/routes';
+import { AGENT_SOURCE, folderChain, getFile, type CloudFolder, type FilesSource } from './api';
 import CloudView from './CloudView';
 import { ChatFiles, ChatList } from './ChatFilesView';
 
 /**
- * Раздел «Файлы» нового шара: «Мои файлы» (облако с папками) и «Из чатов»
+ * Раздел «Файлы» нового шара: «Мои файлы» (облако с папками), «Из чатов» и — у кого включено «Ядро» — «Агенты»
  * (всё, что присылали в переписках). Переключатель — в шапке, без сайдбара.
  *
  * Адрес — источник правды: `?folder=`, `?file=`, `?chat=`. Ссылкой можно поделиться, «назад» в браузере работает.
@@ -14,22 +18,31 @@ import { ChatFiles, ChatList } from './ChatFilesView';
 
 type View =
   | { kind: 'cloud'; folderId: string | null; fileId?: string | null }
-  | { kind: 'chats'; chatId: string | null; chatName?: string };
+  | { kind: 'chats'; chatId: string | null; chatName?: string }
+  | { kind: 'agents'; chatId: string | null; chatName?: string };
+
+/** «Агенты»: вложения чатов «Ядра» и то, что сделали агенты. «Показать в чате» открывает чат «Ядра». */
+const AGENTS: FilesSource = {
+  ...AGENT_SOURCE,
+  icon: <Bot size={20} />,
+  openChat: (id) => navigate(`${paths.core}?thread=${encodeURIComponent(id)}`),
+};
 
 const subscribeNoop = () => () => {};
 
 function readView(): View {
   const p = new URLSearchParams(window.location.search);
   if (p.has('chat')) return { kind: 'chats', chatId: p.get('chat') || null, chatName: p.get('name') || undefined };
+  if (p.has('agent')) return { kind: 'agents', chatId: p.get('agent') || null, chatName: p.get('name') || undefined };
   return { kind: 'cloud', folderId: p.get('folder'), fileId: p.get('file') };
 }
 
 function writeView(v: View, push = true) {
   const url = new URL(window.location.href);
-  for (const k of ['folder', 'file', 'chat', 'name']) url.searchParams.delete(k);
+  for (const k of ['folder', 'file', 'chat', 'agent', 'name']) url.searchParams.delete(k);
   if (v.kind === 'cloud' && v.folderId) url.searchParams.set('folder', v.folderId);
-  if (v.kind === 'chats') {
-    url.searchParams.set('chat', v.chatId || '');
+  if (v.kind === 'chats' || v.kind === 'agents') {
+    url.searchParams.set(v.kind === 'chats' ? 'chat' : 'agent', v.chatId || '');
     if (v.chatId && v.chatName) url.searchParams.set('name', v.chatName);
   }
   if (url.href === window.location.href) return;
@@ -41,6 +54,7 @@ export default function FilesScreen() {
   const [view, setView] = useState<View>(() => (typeof window === 'undefined' ? { kind: 'cloud', folderId: null } : readView()));
   const [trail, setTrail] = useState<CloudFolder[]>([]);
   const [highlight, setHighlight] = useState<string | null>(null);
+  const agentOn = useAgentBridge((s) => s.available);
   const cachedTrail = useRef<CloudFolder[]>([]);
   useEffect(() => { cachedTrail.current = trail; }, [trail]);
 
@@ -93,6 +107,7 @@ export default function FilesScreen() {
     <div className="nx-segment nf-switch" role="group" aria-label="Раздел">
       <button type="button" aria-pressed={view.kind === 'cloud'} onClick={() => crumb(-1)}>Мои файлы</button>
       <button type="button" aria-pressed={view.kind === 'chats'} onClick={() => go({ kind: 'chats', chatId: null })}>Из чатов</button>
+      {agentOn && <button type="button" aria-pressed={view.kind === 'agents'} onClick={() => go({ kind: 'agents', chatId: null })}>Агенты</button>}
     </div>
   );
 
@@ -102,6 +117,10 @@ export default function FilesScreen() {
       {view.kind === 'chats' && !view.chatId && <ChatList lead={lead} onOpen={(c) => go({ kind: 'chats', chatId: c.chatId, chatName: c.chatName })} />}
       {view.kind === 'chats' && view.chatId && (
         <ChatFiles lead={lead} key={view.chatId} chat={{ chatId: view.chatId, chatName: view.chatName || 'Чат' }} onBack={() => go({ kind: 'chats', chatId: null })} />
+      )}
+      {view.kind === 'agents' && !view.chatId && <ChatList lead={lead} source={AGENTS} onOpen={(c) => go({ kind: 'agents', chatId: c.chatId, chatName: c.chatName })} />}
+      {view.kind === 'agents' && view.chatId && (
+        <ChatFiles lead={lead} source={AGENTS} key={`a${view.chatId}`} chat={{ chatId: view.chatId, chatName: view.chatName || 'Чат с агентом' }} onBack={() => go({ kind: 'agents', chatId: null })} />
       )}
     </main>
   );

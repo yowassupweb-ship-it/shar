@@ -409,3 +409,6 @@ button.nf-row { cursor: pointer; }
 .nf-doc .cxp-head { display: flex; align-items: center; gap: var(--space-2); flex: none; min-height: 56px; padding: 0 var(--space-2) 0 var(--space-4); border-bottom: 1px solid var(--border-color); }
 .nf-doc .cxp-body { flex: 1; min-height: 0; overflow: hidden; }
 .nf-doc-loading { display: grid; place-items: center; width: min(900px, 94vw); height: 100%; background: var(--surface-panel); color: var(--text-muted); }
+
+/* «Агенты»: значок вместо аватара чата (у чатов «Ядра» аватара нет). */
+.nf-source-icon { display: grid; flex: none; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: var(--surface-hover); color: var(--text-2); }

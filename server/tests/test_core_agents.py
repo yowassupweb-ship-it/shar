@@ -250,3 +250,83 @@ def test_forwarded_reaches_agent_and_chats_stay_closed(client, admin):
         assert _rpc(client, run["mcp"]["token"], "open_in_shar", url="/office?kind=document&id=1")["structuredContent"]["opened"]
     finally:
         _cleanup()
+
+
+def test_image_generate_attaches_to_answer_and_lands_in_agent_files(client, admin, monkeypatch):
+    """Картинка: Gemini по ключу человека (Google подменён), файл — в загрузки, к ответу агента и в «Файлы → Агенты»."""
+    import base64
+
+    from app.modules.core_agents import images, store
+
+    class Res:
+        def __init__(self, data, status=200):
+            self._data, self.status_code, self.text = data, status, ""
+
+        def json(self):
+            return self._data
+
+        def raise_for_status(self):
+            pass
+
+    png = base64.b64encode(b"\x89PNG\r\n\x1a\nfake").decode()
+    monkeypatch.setattr(images.requests, "get", lambda *a, **k: Res({"models": [
+        {"name": "models/gemini-2.5-flash-image", "supportedGenerationMethods": ["generateContent"]},
+        {"name": "models/gemini-3-flash-image-preview", "supportedGenerationMethods": ["generateContent"]},
+        {"name": "models/gemini-3-pro", "supportedGenerationMethods": ["generateContent"]}]}))
+    sent_to: list[str] = []
+
+    def post(url, **kwargs):
+        sent_to.append(url)
+        return Res({"candidates": [{"content": {"parts": [{"text": "Готово"}, {"inlineData": {"mimeType": "image/png", "data": png}}]}}],
+                    "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 1290}})
+
+    monkeypatch.setattr(images.requests, "post", post)
+    images._models.clear()
+    try:
+        node, token = _node(admin)
+        _poll(client, token)
+        uid = admin.get("/api/auth/session").json()["user"]["id"]
+        thread = admin.post("/api/core/threads", json={}).json()["thread"]
+        # Без ключа Gemini — понятная ошибка, что подключить.
+        db.conn.execute_query("INSERT INTO core_accounts (user_id, provider, state, node_id) VALUES (%s, 'claude', 'ready', %s)", (uid, int(node["id"])))
+        sent = admin.post(f"/api/core/threads/{thread['id']}/messages", json={"id": uuid.uuid4().hex, "body": "Нарисуй Кострому"}).json()
+        run = _poll(client, token).json()["jobs"][0]
+        no_key = _rpc(client, run["mcp"]["token"], "image_generate", prompt="Кострома на закате")
+        assert no_key["isError"] and "Gemini" in json.dumps(no_key, ensure_ascii=False)
+
+        db.conn.execute_query("INSERT INTO core_accounts (user_id, provider, state, secret_enc) VALUES (%s, 'gemini', 'ready', %s)",
+                              (uid, store.seal("AIza-test")))
+        made = _rpc(client, run["mcp"]["token"], "image_generate", prompt="Кострома на закате", aspect="16:9")
+        assert not made.get("isError"), made
+        image = made["structuredContent"]["image"]
+        assert image["url"].startswith("/api/uploads/") and image["model"] == "gemini-3-flash-image-preview"
+        assert "gemini-3-flash-image-preview:generateContent" in sent_to[-1]
+
+        reply = db.conn.fetch_one("SELECT props FROM core_messages WHERE id = %s", (sent["reply"]["id"],))
+        assert reply["props"]["attachments"][0]["url"] == image["url"]
+        chats = admin.get("/api/core/files/chats").json()
+        assert chats and chats[0]["chatId"] == thread["id"] and chats[0]["count"] == 1
+        files = admin.get("/api/core/files", params={"threadId": thread["id"]}).json()
+        assert files[0]["url"] == image["url"] and files[0]["fileType"] == "image" and files[0]["authorName"] == "Claude"
+    finally:
+        _cleanup()
+
+
+def test_company_passport_and_search(admin):
+    """Паспорт компании — в начале каждого запуска; справочник не забивает «свежее»; поиск — с начала слова."""
+    from app.modules.core_agents import memory
+
+    uid = admin.get("/api/auth/session").json()["user"]["id"]
+    try:
+        memory.add_note(uid, "Юридические данные\n\nИНН 7708596369", ["о компании", "реквизиты"], "тест", shared=True)
+        memory.add_note(uid, "Длинные маршруты по Карелии", ["о компании"], "тест", shared=True)
+        memory.add_note(uid, "Паспорт компании\n\nТуроператор с 1995 года", ["о компании", "паспорт"], "тест", shared=True)
+        memory.add_note(uid, "Свежая договорённость про отчёты", [], "тест", shared=True)
+        ctx = memory.prompt_context(uid)
+        assert "## О компании" in ctx and "Туроператор с 1995 года" in ctx
+        fresh = ctx.split("## Свежее", 1)[1] if "## Свежее" in ctx else ""
+        assert "Свежая договорённость" in fresh and "ИНН" not in fresh
+        found = [n["text"] for n in memory.search_notes(uid, "ИНН")]
+        assert len(found) == 1 and found[0].startswith("Юридические данные")  # «инн» не находит «длинные»
+    finally:
+        db.conn.execute_query("DELETE FROM core_notes WHERE actor = 'тест'")

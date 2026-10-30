@@ -149,6 +149,12 @@ async def upload_file(file: UploadFile = File(...), me: Identity = Depends(curre
     if transcoded:
         content, effective_filename, content_type = transcoded
 
+    return await run_in_threadpool(save_upload_bytes, effective_filename, content, content_type, me.user_id)
+
+
+def save_upload_bytes(effective_filename: str, content: bytes, content_type: Optional[str], user_id: str) -> dict:
+    """Сохранить готовые байты как загрузку (S3 или локальный диск) — для ручки загрузки и для того, что делают
+    агенты «Ядра» (картинки): у файла тот же адрес /api/uploads/…, что у вложений чата."""
     content_type = _neutralize_html_content_type(effective_filename, content_type)
     unique_filename = new_upload_name(effective_filename)
     key = f"uploads/{unique_filename}"
@@ -159,15 +165,15 @@ async def upload_file(file: UploadFile = File(...), me: Identity = Depends(curre
         local_path = UPLOAD_DIR / "uploads" / unique_filename
         local_path.parent.mkdir(parents=True, exist_ok=True)
         local_path.write_bytes(content)
-        logger.info("[Upload] local %s (%d bytes) by %s", key, len(content), me.user_id)
+        logger.info("[Upload] local %s (%d bytes) by %s", key, len(content), user_id)
         return {"success": True, "url": proxy_url, "filename": effective_filename, "key": key,
                 "size": len(content), "storage": "local", "type": ftype}
     try:
-        size = await run_in_threadpool(s3_storage.upload_fileobj, io.BytesIO(content), key, content_type)
+        size = s3_storage.upload_fileobj(io.BytesIO(content), key, content_type)
     except Exception:
         logger.exception("[Upload] S3 upload failed for %s", key)
         raise HTTPException(status_code=502, detail="Не удалось сохранить файл")
-    logger.info("[Upload] s3 %s (%d bytes) by %s", key, size, me.user_id)
+    logger.info("[Upload] s3 %s (%d bytes) by %s", key, size, user_id)
     return {"success": True, "url": proxy_url, "filename": effective_filename, "key": key,
             "size": size, "storage": "s3", "type": ftype}
 
