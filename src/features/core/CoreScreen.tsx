@@ -386,7 +386,7 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
         )}
       </header>
 
-      {showStats && <ChatStats thread={thread} messages={messages} />}
+      {showStats && <ChatStats thread={thread} messages={messages} limits={limitAgent?.limits} agent={limitAgent?.name} />}
       <div className="ncore-log nx-scroll-y" ref={scroller} onScroll={onScroll} role="log" aria-label="Сообщения">
         <div className="ncore-log-inner">
           {log?.loadingOlder && <div className="ncore-older"><Spinner size={16} label="Загружаю историю" /></div>}

@@ -41,7 +41,7 @@ function seconds(ms: number): string {
  * доля из кэша, ответы и их время по агентам, последний лимит подписки. Денег нет: Claude и GPT — по подписке,
  * расход Gemini по ключу — в Настройки → Ядро.
  */
-export function ChatStats({ thread, messages }: { thread: CoreThread | null; messages: CoreMessage[] }) {
+export function ChatStats({ thread, messages, limits, agent }: { thread: CoreThread | null; messages: CoreMessage[]; limits?: CoreLimit[]; agent?: string }) {
   const answers = messages.filter((m) => m.role === 'agent' && m.status !== 'queued' && m.status !== 'working');
   const total = { input: 0, cached: 0, output: 0, ms: 0, steps: 0, failed: 0 };
   const byAgent = new Map<string, { runs: number; ms: number; model: string }>();
@@ -63,7 +63,6 @@ export function ChatStats({ thread, messages }: { thread: CoreThread | null; mes
   const context = thread?.lastWork?.context_tokens || 0;
   const window = thread?.lastWork?.context_window || 0;
   const share = window ? Math.min(1, context / window) : 0;
-  const limit = [...answers].reverse().find((m) => m.props.rateLimit)?.props.rateLimit;
 
   return (
     <section className="ncore-stats" aria-label="Статистика чата">
@@ -101,10 +100,11 @@ export function ChatStats({ thread, messages }: { thread: CoreThread | null; mes
           </span>
         </div>
       )}
-      {limit && (
-        <div className="ncore-stat" data-wide="" data-tone="warn">
+      {!!limits?.length && (
+        <div className="ncore-stat" data-wide="">
           <span className="ncore-stat-label"><Hourglass size={11} aria-hidden="true" /> Лимит подписки</span>
-          <span className="ncore-stat-hint">{limit.provider ? `${limit.provider}: ` : ''}{limit.used_percent ?? 100}%{limit.detail ? ` · ${limit.detail}` : ''}</span>
+          <LimitBadges limits={limits} agent={agent || 'Claude'} />
+          <span className="ncore-stat-hint">Свежее — «⋯» → «Проверить лимиты»</span>
         </div>
       )}
     </section>

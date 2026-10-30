@@ -79,7 +79,8 @@
 .ncore-rename { flex: 1; min-width: 0; height: 32px; padding: 0 var(--space-2); border: 1px solid var(--text-muted); border-radius: 6px; background: var(--element-bg); color: var(--text-main); font: inherit; }
 
 /* Статистика чата — полоса плиток под шапкой. */
-.ncore-stats { display: flex; flex-wrap: wrap; flex: none; max-height: 45%; overflow-y: auto; border-bottom: 1px solid var(--ncore-line); }
+/* Откидная статистика — слой над лентой: мягкая тень снизу отделяет её от сообщений. */
+.ncore-stats { position: relative; z-index: 1; display: flex; flex-wrap: wrap; flex: none; max-height: 45%; overflow-y: auto; border-bottom: 1px solid var(--ncore-line); background: var(--surface-panel, var(--bg-color)); box-shadow: 0 10px 20px -12px rgb(0 0 0 / 0.28); }
 .ncore-stat { display: grid; flex: 1 1 150px; align-content: start; gap: 3px; padding: 10px 14px; box-shadow: inset -1px -1px 0 var(--ncore-line); }
 .ncore-stat[data-wide] { flex-basis: 300px; }
 .ncore-stat-label { display: inline-flex; align-items: center; gap: 4px; color: var(--text-muted); font-size: 11px; font-weight: var(--weight-semibold); letter-spacing: .03em; text-transform: uppercase; }
@@ -355,3 +356,4 @@
 @media (hover: hover) { .ncore-where-chip[data-pinned] button:hover { background: var(--ncore-soft); color: var(--text-main); } }
 
 /* Лимиты подписки в шапке чата. */
+.ncore[data-narrow] .ncore-stat .ncore-limit-name { display: inline; }
