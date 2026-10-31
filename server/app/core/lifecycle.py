@@ -107,11 +107,11 @@ async def run(settings: Settings):
     tasks.append(asyncio.create_task(birthday_loop(), name="birthdays"))
     # Отложенные сообщения — тоже новая задача; одну строку берёт один процесс (см. chats.scheduled).
     tasks.append(asyncio.create_task(scheduled_loop(), name="scheduled-messages"))
-    if settings.scheduled_jobs:
-        from app.modules.core_agents.schedules import schedule_loop
+    from app.modules.core_agents.schedules import schedule_loop
 
+    tasks.append(asyncio.create_task(schedule_loop(), name="core-agent-schedules"))
+    if settings.scheduled_jobs:
         tasks.append(asyncio.create_task(reminder_loop(), name="reminders"))
-        tasks.append(asyncio.create_task(schedule_loop(), name="core-agent-schedules"))
     else:
         log.info("scheduled jobs disabled")
     if settings.mail_watch:
