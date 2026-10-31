@@ -12,6 +12,7 @@ def _collect() -> list[APIRouter]:
     from app.modules.admin import router as admin
     from app.modules.auth import router as auth
     from app.modules.birthdays import router as birthdays
+    from app.modules.calendar import reminders as calendar_reminders  # регистрация схемы до миграций
     from app.modules.calendar import router as calendar
     from app.modules.calendar import workdays as calendar_workdays
     from app.modules.chats import scheduled as chats_scheduled
@@ -49,6 +50,7 @@ def _collect() -> list[APIRouter]:
     from app.modules.core_agents import mcp_servers as core_mcp_servers
     from app.modules.core_agents import memory as core_memory
     from app.modules.core_agents import node as core_node
+    from app.modules.core_agents import schedules as core_schedules  # регистрация схемы до миграций
     from app.modules.core_agents import tours as core_tours
     from app.modules.core_chat import router as core_chat
 

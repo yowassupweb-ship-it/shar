@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 import anyio.to_thread
 
+from app.core import schema
 from app.core.db import db
 from app.core.helpers import _ru_when, _truthy
 from app.modules.chats.chat_notifications import send_notification_message
@@ -20,7 +21,20 @@ logger = logging.getLogger(__name__)
 # worked while a tab was open. This loop runs on the server: every minute it finds
 # events whose "remind N minutes before" moment just passed and sends each recipient
 # a notification (which also web-pushes), so reminders arrive even with the PWA closed.
-_fired_reminders: set = set()
+schema.register("calendar_reminder_receipts", """
+CREATE TABLE IF NOT EXISTS calendar_reminder_receipts (
+    reminder_key TEXT PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_calendar_reminder_receipts_created ON calendar_reminder_receipts(created_at);
+""")
+
+
+def _claim(key: str) -> bool:
+    """Один запуск на весь кластер и после перезапуска: отметка в базе, а не в памяти процесса."""
+    return bool(db.conn.fetch_one(
+        "INSERT INTO calendar_reminder_receipts (reminder_key) VALUES (%s) ON CONFLICT (reminder_key) DO NOTHING RETURNING reminder_key",
+        (key[:500],)))
 
 
 def _event_recipients(ev: dict) -> set:
@@ -74,9 +88,8 @@ def _check_due_reminders() -> None:
                 continue
             master_id = str(ev.get('masterId') or ev.get('id'))
             key = f"{master_id}|{start.strftime('%Y-%m-%dT%H:%M')}|{reminder_time.strftime('%H:%M')}"
-            if key in _fired_reminders:
+            if not _claim(key):
                 continue
-            _fired_reminders.add(key)
             title = ev.get('title') or 'Событие'
             when = 'сейчас' if int(rmb) == 0 else _ru_when(str(start_iso), all_day)
             note = str(ev.get('description') or '').strip()
@@ -116,9 +129,8 @@ def _check_due_reminders() -> None:
             if not (now - timedelta(seconds=80) <= reminder_dt <= now + timedelta(seconds=10)):
                 continue
             key = f"task-{t.get('id')}|{reminder_dt.strftime('%Y-%m-%dT%H:%M')}"
-            if key in _fired_reminders:
+            if not _claim(key):
                 continue
-            _fired_reminders.add(key)
             recipients = set()
             for i in (t.get('assigned_to_ids') or []):
                 if i:
@@ -153,9 +165,8 @@ def _check_due_reminders() -> None:
                 if due != today:
                     continue
                 key = f"deadline|{t.get('id')}|{today}"
-                if key in _fired_reminders:
+                if not _claim(key):
                     continue
-                _fired_reminders.add(key)
                 people = _task_assignees(t) or {str(x) for x in (t.get('author_id'), t.get('assigned_by_id')) if x}
                 title = t.get('title') or 'Задача'
                 for uid in people:
@@ -164,8 +175,7 @@ def _check_due_reminders() -> None:
             except Exception:
                 continue
 
-    if len(_fired_reminders) > 8000:
-        _fired_reminders.clear()
+    db.conn.execute_query("DELETE FROM calendar_reminder_receipts WHERE created_at < now() - interval '90 days'")
     if fired:
         logger.info(f"[reminders] sent {fired} reminder notification(s)")
 

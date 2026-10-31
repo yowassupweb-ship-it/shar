@@ -85,7 +85,7 @@ def test_protocol_and_tools_follow_access_level(client, anna):
     note = client.post("/api/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers={"Authorization": f"Bearer {token}"})
     assert note.status_code == 202
     names = {t["name"] for t in _rpc(client, token, "tools/list").json()["result"]["tools"]}
-    assert names == {"list_items", "list_folders", "read_item", "list_comments"}
+    assert names == {"list_items", "list_folders", "read_item", "list_comments", "resolve_item", "item_versions", "diff_item", "capabilities", "tool_search"}
     denied = _call(client, token, "create_note", title="x", markdown="y")
     assert denied["isError"] and "не открыт" in denied["content"][0]["text"]
     assert _rpc(client, token, "nope").json()["error"]["code"] == -32601
@@ -212,3 +212,53 @@ def test_agent_comments_on_a_document(client, anna):
     assert len(_ok(client, token, "list_comments", id=doc["id"], include_resolved=True)["threads"]) == 1
     # человек видит то же самое в Шаре
     assert anna.get(f"/api/workspace/items/{doc['id']}/comments").json()["comments"][0]["authorName"]
+
+
+def test_preview_insert_versions_ranges_and_links(client, anna):
+    token, _ = _key(anna)
+    note = _ok(client, token, "create_note", title="Предпросмотр", markdown="Было")
+    preview = _ok(client, token, "edit_note", id=note["id"], old_text="Было", new_text="Стало", dry_run=True)
+    assert preview["preview"] and preview["changed"] and "-Было" in preview["diff"] and "+Стало" in preview["diff"]
+    assert _ok(client, token, "read_item", id=note["id"])["content"] == "Было"
+    saved = _ok(client, token, "edit_note", id=note["id"], old_text="Было", new_text="Стало")
+    assert saved["updatedAt"] and saved["updatedAt"] != preview["baseUpdatedAt"]
+    versions = _ok(client, token, "item_versions", id=note["id"])
+    assert versions["versions"] and versions["canRestore"]
+    changed = _ok(client, token, "diff_item", id=note["id"], version_id=versions["versions"][0]["id"])
+    assert changed["changed"] and "+Стало" in changed["diff"]
+    restoring = _ok(client, token, "restore_item_version", id=note["id"], version_id=versions["versions"][0]["id"], dry_run=True)
+    assert restoring["preview"] and "+Было" in restoring["diff"]
+    restored = _ok(client, token, "restore_item_version", id=note["id"], version_id=versions["versions"][0]["id"], confirm=True)
+    assert restored["restored"] and _ok(client, token, "read_item", id=note["id"])["content"] == "Было"
+    missing = _call(client, token, "edit_note", id=note["id"], old_text="Нет", new_text="x")
+    assert missing["error"]["code"] == "text_not_found"
+
+    doc = _ok(client, token, "create_document", title="Вставка", markdown="# Первый\nТекст **жирный**\n## Конец")
+    inserted = _ok(client, token, "update_document", id=doc["id"], mode="insert", after_text="Текст жирный", markdown="## Середина\nНовый абзац")
+    assert inserted["mode"] == "insert" and inserted["updatedAt"]
+    markdown = _ok(client, token, "read_item", id=doc["id"])["content"]
+    assert markdown.index("Текст **жирный**") < markdown.index("## Середина") < markdown.index("## Конец")
+    assert "Текст **жирный**" in markdown
+
+    table = _ok(client, token, "create_table", title="Диапазоны", sheets=[
+        {"name": "Первый", "rows": [["Название", "Число"], ["А", 2], ["Б", 3]]},
+        {"name": "Второй", "rows": [["Колонка"]]},
+    ])
+    batch = _ok(client, token, "update_table", id=table["id"], operations=[
+        {"sheet": "Первый", "cells": [{"ref": "B2", "value": "=A2*2"}]},
+        {"sheet": "Второй", "append_rows": [["Добавлено"]]},
+    ])
+    assert len(batch["operations"]) == 2 and batch["operations"][0]["cellRefs"] == ["B2"]
+    page = _ok(client, token, "read_item", id=table["id"], sheet="Первый", max_rows=2)["sheets"][0]
+    assert page["hasMore"] and page["nextRange"] == "A3:B3" and page["rows"][1][1] == "=A2*2"
+    cells = _ok(client, token, "read_item", id=table["id"], sheet="Второй", range="A1:A2")["sheets"][0]
+    assert cells["rows"] == [["Колонка"], ["Добавлено"]] and not cells["hasMore"]
+
+    internal = _ok(client, token, "resolve_item", url=f"/office?kind=note&id={note['id']}")
+    assert internal["id"] == note["id"]
+    public = anna.post(f"/api/workspace/items/{note['id']}/links", json={"mode": "view"}).json()["link"]["token"]
+    assert _ok(client, token, "resolve_item", url=f"https://shar.example/d/{public}")["id"] == note["id"]
+    rights = _ok(client, token, "capabilities", id=note["id"])
+    assert rights["item"]["canEdit"] and rights["serverTime"]
+    found = _ok(client, token, "tool_search", query="версии", include_schema=True)
+    assert any(t["name"] == "item_versions" and "inputSchema" in t for t in found["tools"])

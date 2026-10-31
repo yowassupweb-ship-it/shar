@@ -30,11 +30,14 @@ PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 SERVER_INFO = {"name": "shar-office", "title": "Шар · Офис", "version": "1.1.0"}
 INSTRUCTIONS = (
     "Документы, заметки, таблицы и презентации «Офиса» Шара — от имени владельца ключа, с его правами и только там, "
-    "куда он открыл доступ этому ключу. Сначала найдите материал (list_items, list_folders), прочитайте (read_item), "
-    "правьте точечно (edit_note, edit_document, update_table). Перед каждой правкой сохраняется версия — человек может "
-    "вернуть прежнее. Если материал изменили, пока вы работали, правка не пройдёт: перечитайте и повторите. "
-    "Ссылка на материал Шара — поле url из list_items/read_item (/office?kind=<вид>&id=<id>), домен в ссылку не нужен; "
-    "ссылки вида /d/<токен> и /t/<токен> — публичные, их выдаёт человек, по id они не открываются."
+    "куда он открыл доступ этому ключу. Сначала найдите материал (list_items, list_folders, resolve_item), прочитайте "
+    "(read_item). capabilities заранее показывает права и серверное время, tool_search — компактную справку. Перед "
+    "рискованной правкой используйте dry_run=true: ответ содержит diff и ничего не записывает. update_document mode=insert "
+    "вставляет после after_text; read_item у таблицы принимает sheet/range и возвращает hasMore/nextRange. История и diff — "
+    "item_versions/diff_item, восстановление — restore_item_version с confirm=true. Ответ записи содержит новый updatedAt. "
+    "Если код ошибки stale_version — перечитайте и повторите; text_not_found — возьмите точный фрагмент из read_item; "
+    "permission_required — запросите разрешение человека. Ссылка на материал — поле url; публичные /d/… и /t/… открываются "
+    "через resolve_item без расширения прав ключа."
 )
 CALLS_PER_MINUTE = 120
 
@@ -55,11 +58,13 @@ def _call_tool(ctx: keys.KeyContext, name: str, args: dict[str, Any]) -> dict[st
         data = tools.run(ctx, tool, args)
     except tools.ToolError as exc:
         keys.log_call(ctx, name, item_id, error=str(exc))
-        return {"isError": True, "content": [{"type": "text", "text": str(exc)}]}
+        return {"isError": True, "error": {"code": exc.code, "message": str(exc)},
+                "content": [{"type": "text", "text": str(exc)}]}
     except Exception as exc:
         log.exception("mcp tool %s failed for %s", name, ctx.me.user_id)
         keys.log_call(ctx, name, item_id, error="Внутренняя ошибка")
-        return {"isError": True, "content": [{"type": "text", "text": f"Не получилось: {exc}"}]}
+        return {"isError": True, "error": {"code": "tool_error", "message": str(exc)},
+                "content": [{"type": "text", "text": f"Не получилось: {exc}"}]}
     if name not in ("list_items", "list_folders") and not name.endswith(("_list", "_read", "_search")):  # чтение в журнал не пишем: шум
         keys.log_call(ctx, name, str(data.get("id") or item_id), str(data.get("title") or ""))
     text = json.dumps(data, ensure_ascii=False, default=str)  # даты задач и событий приходят datetime

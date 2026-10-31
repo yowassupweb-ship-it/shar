@@ -207,6 +207,43 @@ def append_markdown(snapshot: dict[str, Any], markdown: str) -> dict[str, Any]:
     return snapshot
 
 
+def insert_markdown(snapshot: dict[str, Any], markdown: str, after_text: str) -> dict[str, Any]:
+    """Вставить абзацы после абзаца с точным фрагментом, сохранив разметку остального документа."""
+    if not after_text or any(ch in after_text for ch in "\r\n"):
+        raise TextNotFound("Для вставки укажите after_text — точный фрагмент одного абзаца")
+    body = snapshot.setdefault("body", {})
+    stream = str(body.get("dataStream") or "")
+    count = stream.count(after_text)
+    if not count:
+        raise TextNotFound("Абзац с таким after_text не найден: возьмите точный фрагмент из read_item format=text")
+    if count > 1:
+        raise TextNotFound(f"after_text встречается {count} раз: уточните фрагмент")
+    anchor = stream.find(after_text) + len(after_text)
+    paragraph_end = stream.find("\r", anchor)
+    at = paragraph_end + 1 if paragraph_end >= 0 else len(stream)
+    built = _build(markdown, base=at)
+    added = len(built["stream"])
+    body["dataStream"] = stream[:at] + built["stream"] + stream[at:]
+    for key in ("paragraphs", "sectionBreaks", "customBlocks"):
+        for item in body.get(key) or []:
+            if int(item.get("startIndex", 0)) >= at:
+                item["startIndex"] = int(item.get("startIndex", 0)) + added
+    for run in body.get("textRuns") or []:
+        for key in ("st", "ed"):
+            if int(run.get(key, 0)) >= at:
+                run[key] = int(run.get(key, 0)) + added
+    for key in ("customRanges", "customDecorations", "tables"):
+        for item in body.get(key) or []:
+            for field in ("startIndex", "endIndex"):
+                if int(item.get(field, 0)) >= at:
+                    item[field] = int(item.get(field, 0)) + added
+    body["paragraphs"] = list(body.get("paragraphs") or []) + built["paragraphs"]
+    body["textRuns"] = list(body.get("textRuns") or []) + built["textRuns"]
+    if built["customRanges"]:
+        body["customRanges"] = list(body.get("customRanges") or []) + built["customRanges"]
+    return snapshot
+
+
 def snapshot_text(snapshot: dict[str, Any]) -> str:
     """Чистый текст документа — тот, в котором ищет replace_text (абзацы — строками, без разметки)."""
     stream = str((snapshot.get("body") or {}).get("dataStream") or "")

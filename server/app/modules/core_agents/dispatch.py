@@ -101,7 +101,7 @@ def _mcp_key(user_id: str, provider: str, message_id: str) -> tuple[str, int]:
     from app.modules.core_agents import permissions
 
     scope = {"access": "create", "kinds": list(keys.KINDS), "folders": None, "shared": True, "apps": list(apps.APPS), "job": message_id,
-             "mode": permissions.mode_of(user_id)}
+             "provider": provider, "mode": permissions.mode_of(user_id)}
     row = db.conn.fetch_one(
         "INSERT INTO mcp_keys (user_id, name, token_hash, token_start, scope, expires_at) "
         "VALUES (%s, %s, %s, %s, %s, now() + make_interval(hours => %s)) RETURNING id",
@@ -117,7 +117,11 @@ SYSTEM = """Вы — личный агент сотрудника в Шаре (�
 - Всё в Шаре вы делаете инструментами MCP сервера «shar»: «Офис» (заметки, документы, таблицы), календарь, задачи,
   «Файлы», люди, память и навыки. Права — ровно права человека.
 - Человек работает рядом с вами в реальном времени: документ, который вы правите, у него может быть открыт.
-  Правьте точечно (edit_document, edit_note, update_table с cells), не переписывайте целиком без просьбы.
+  Правьте точечно (edit_document, edit_note, update_table с cells), не переписывайте целиком без просьбы. Перед рискованной
+  правкой используйте dry_run=true и покажите человеку diff; запись делайте отдельным вызовом без dry_run.
+- По коду ошибки действуйте точно: stale_version — перечитайте материал; text_not_found — возьмите фрагмент из свежего
+  read_item; permission_required — request_permission; permission_denied/not_found — не повторяйте тот же вызов вслепую.
+- {image_rule}
 - «В документе», «здесь», «сюда», «в таблице» без названия — это открытое у человека сейчас (строка «Сейчас у меня
   на экране» в начале его сообщения; первым — то, что перед глазами), даже если раньше в разговоре был другой
   документ: пишите в него. Новый материал создавайте, только если просят новый или ничего
@@ -131,6 +135,8 @@ SYSTEM = """Вы — личный агент сотрудника в Шаре (�
   следующим сообщением. Лучше один точный вопрос, чем работа «мимо».
 - Переписки (чаты, почта, соцсети) вам закрыты. Если нужен их текст — попросите переслать («Переслать агенту»).
 - Показать человеку материал — open_in_shar (документ, задачу, календарь), а не только ссылкой.
+- «Напомни позже», «запусти завтра», «проверяй каждый день/неделю» — agent_schedule, а не обещание написать самому.
+  Текущие входящие уведомления — events_list. Разовый запуск требует at, ежедневный — time, еженедельный — time и weekdays.
 - Подстраивайтесь под человека: поправил вашу работу или сказал «всегда/никогда» — profile_note. Важный факт,
   договорённость, где что лежит — memory_add (полезное всей компании — shared: true). Повторяющаяся задача или
   человек объяснил, как её делать, — skill_write. Перед задачей посмотрите, нет ли навыка под неё.
@@ -161,6 +167,9 @@ def build_run(job: dict) -> dict:
         company=_company(), name=user.get("name") or user.get("username") or "сотрудник",
         position=f", {user['position']}" if user.get("position") else "",
         now=datetime.now().strftime("%A, %d.%m.%Y %H:%M"), mode=_mode_text(user_id),
+        image_rule=("Для картинок используйте свой встроенный image_gen (не MCP image_generate): он работает через вашу "
+                    "подписку GPT; готовый файл Шар покажет человеку сам." if provider == "codex" else
+                    "Для картинок — MCP image_generate; если Gemini не подключён или лимит исчерпан, сообщите точную причину."),
         memory=memory.prompt_context(user_id) if _memory_ready() else "")
     reply = props.get("replyTo") or {}
     # Ответ кнопкой разрешения: человек видит «Разрешить», агенту уходит служебное — с approval_id.

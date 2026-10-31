@@ -17,12 +17,15 @@
 from __future__ import annotations
 
 import base64
+import difflib
 import io
 import json
 import logging
 import re
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 from fastapi import HTTPException
 
@@ -51,14 +54,20 @@ _HYPERLINK_FORMULA = re.compile(r'^=\s*HYPERLINK\(\s*"([^"]+)"\s*(?:[,;]\s*"([^"
 class ToolError(Exception):
     """Ошибка, которую агент должен увидеть текстом (isError), а не сбоем протокола."""
 
+    def __init__(self, message: str, code: str = "tool_error"):
+        super().__init__(message)
+        self.code = code
+
 
 def _call(fn: Callable[..., Any], *args: Any) -> Any:
     try:
         return fn(*args)
     except HTTPException as exc:
-        raise ToolError(str(exc.detail)) from exc
+        code = "not_found" if exc.status_code == 404 else "permission_denied" if exc.status_code == 403 else "tool_error"
+        raise ToolError(str(exc.detail), code) from exc
     except store.WorkspaceError as exc:
-        raise ToolError(exc.message) from exc
+        code = "not_found" if exc.status == 404 else "permission_denied" if exc.status == 403 else "tool_error"
+        raise ToolError(exc.message, code) from exc
 
 
 # ── доступ ключа ────────────────────────────────────────────────────────────
@@ -107,7 +116,7 @@ class Access:
 
     def need(self, level: str, what: str) -> None:
         if self.level < LEVELS[level]:
-            raise ToolError(f"Этому ключу нельзя {what}: в настройках MCP ему дан доступ «{self.ctx.scope['access']}»")
+            raise ToolError(f"Этому ключу нельзя {what}: в настройках MCP ему дан доступ «{self.ctx.scope['access']}»", "permission_denied")
 
     def folder_ok(self, folder_id: str | None) -> bool:
         if folder_id is not None and str(folder_id) in self.hidden_folders:
@@ -146,10 +155,10 @@ class Access:
         try:
             row = store.get_visible(item_id, self.me.user_id, content=content)
         except store.WorkspaceError:
-            raise ToolError(HIDDEN) from None
+            raise ToolError(HIDDEN, "not_found") from None
         folder = self.item_folder(item_id)
         if not self.visible(row["kind"], row["owner_id"], folder, item_id):
-            raise ToolError(HIDDEN)
+            raise ToolError(HIDDEN, "not_found")
         item = store.present(row, self.me.user_id, with_content=content)
         item["folderId"] = folder
         return item
@@ -190,11 +199,10 @@ def _via(access: Access) -> str:
     return f"агент «{access.ctx.key_name}»"
 
 
-def _write(access: Access, item: dict[str, Any], **fields: Any) -> None:
-    """Записать правку агента: граница в истории «До правки агента», запись с пометкой «через агента» и с проверкой,
-    что материал не изменили тем временем."""
+def _write(access: Access, item: dict[str, Any], **fields: Any) -> dict[str, Any]:
+    """Записать правку агента и вернуть подтверждение фактически сохранённой версии."""
     if not item.get("canEdit"):
-        raise ToolError("Этот материал вам открыт только для просмотра")
+        raise ToolError("Этот материал вам открыт только для просмотра", "permission_denied")
     via = _via(access)
     if "content" in fields:
         row = store.get_row(item["id"])
@@ -205,14 +213,42 @@ def _write(access: Access, item: dict[str, Any], **fields: Any) -> None:
     patch = ws.ItemPatch(**fields, **({"baseUpdatedAt": item["updatedAt"]} if "content" in fields else {}))
     token = store.EDIT_VIA.set(via)
     try:
-        _call(ws.patch_item, item["id"], patch, access.me)
+        saved = _call(ws.patch_item, item["id"], patch, access.me)["item"]
     except ToolError as exc:
         if "изменили" in str(exc):
-            raise ToolError("Материал изменили, пока агент работал: перечитайте его (read_item) и повторите правку") from exc
+            raise ToolError("Материал изменили, пока агент работал: перечитайте его (read_item) и повторите правку", "stale_version") from exc
         raise
     finally:
         store.EDIT_VIA.reset(token)
     _notify_self(access, item["id"], item["kind"], content="content" in fields or "title" in fields)
+    return {"id": item["id"], "updatedAt": saved["updatedAt"]}
+
+
+def _text(item: dict[str, Any], content: str | None = None) -> str:
+    """Человекочитаемое содержимое для diff и предпросмотра, без служебного JSON/base64."""
+    kind, raw = item["kind"], item.get("content") if content is None else content
+    raw = raw or ""
+    if kind == "note":
+        return raw
+    if kind == "document":
+        try:
+            return docformat.snapshot_to_markdown(json.loads(raw))
+        except (ValueError, TypeError, AttributeError):
+            return ""
+    if kind == "table":
+        try:
+            return "\n".join(f"[{sheet['name']}]\n" + "\n".join("\t".join(str(v) for v in row) for row in sheet["rows"])
+                             for sheet in _table_rows(raw, {"max_rows": MAX_TABLE_ROWS, "max_cols": MAX_TABLE_COLS}))
+        except Exception:  # noqa: BLE001 — старое представление остаётся доступным даже для повреждённой книги
+            return store.text_of(kind, raw)
+    return store.text_of(kind, raw)
+
+
+def _preview(item: dict[str, Any], content: str) -> dict[str, Any]:
+    before, after = _text(item), _text(item, content)
+    diff = "\n".join(difflib.unified_diff(before.splitlines(), after.splitlines(), fromfile="До", tofile="После", lineterm=""))
+    return {"id": item["id"], "preview": True, "baseUpdatedAt": item["updatedAt"], "changed": before != after,
+            "diff": diff[:MAX_CHARS], "diffTruncated": len(diff) > MAX_CHARS}
 
 
 def _create(access: Access, kind: str, title: str, content: str, folder_id: Any) -> dict[str, Any]:
@@ -241,33 +277,70 @@ def _page(text: str, args: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _table_rows(content: str) -> list[dict[str, Any]]:
+def _table_rows(content: str, args: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     from openpyxl import load_workbook
+    from openpyxl.utils import get_column_letter, range_boundaries
 
-    # Не read_only: гиперссылки ячеек в этом режиме недоступны, а агенту надо видеть, куда ведёт ячейка.
-    book = load_workbook(io.BytesIO(base64.b64decode(content)), data_only=True)
-    sheets = []
-    for sheet in book.worksheets:
+    args = args or {}
+    # Не read_only: нужны формулы и гиперссылки; data_only=True вернул бы только старый кеш результата формулы.
+    book = load_workbook(io.BytesIO(base64.b64decode(content)), data_only=False)
+    selected = str(args.get("sheet") or "")
+    if selected and selected not in book.sheetnames:
+        raise ToolError(f"Нет листа «{selected}». Листы: {', '.join(book.sheetnames)}", "not_found")
+    sheets = [book[selected]] if selected else list(book.worksheets)
+    requested = str(args.get("range") or "").strip().upper()
+    if requested and not re.fullmatch(r"[A-Z]{1,3}[1-9][0-9]{0,6}(?::[A-Z]{1,3}[1-9][0-9]{0,6})?", requested):
+        raise ToolError("range — диапазон латиницей, например A1:B20; лист укажите отдельно в sheet")
+    if requested and len(sheets) > 1:
+        sheets = sheets[:1]
+    offset = max(0, int(args.get("offset") or 0))
+    if offset and len(sheets) > 1:
+        raise ToolError("offset работает для одного листа: укажите sheet")
+    max_rows = max(1, min(int(args.get("max_rows") or MAX_TABLE_ROWS), MAX_TABLE_ROWS))
+    max_cols = max(1, min(int(args.get("max_cols") or MAX_TABLE_COLS), MAX_TABLE_COLS))
+    result = []
+    for sheet in sheets:
+        # iter_rows создаёт пустые ячейки до запрошенной границы, поэтому исходный размер запоминаем до чтения.
+        total_rows, total_cols = sheet.max_row or 0, sheet.max_column or 0
+        if requested:
+            first_col, first_row, last_col, last_row = range_boundaries(requested)
+            last_row = min(last_row, first_row + max_rows - 1)
+            last_col = min(last_col, first_col + max_cols - 1)
+        else:
+            first_col = first_row = 1
+            first_row += offset
+            last_row = first_row + max_rows - 1
+            last_col = min(max_cols, total_cols)
         rows: list[list[Any]] = []
         links: dict[str, str] = {}
-        for row in sheet.iter_rows(max_row=MAX_TABLE_ROWS, max_col=MAX_TABLE_COLS):
+        for row in sheet.iter_rows(min_row=first_row, max_row=last_row, min_col=first_col, max_col=last_col):
             values = []
             for cell in row:
-                v = cell.value
-                values.append("" if v is None else (v if isinstance(v, (int, float, bool)) else str(v)))
+                values.append(_cell_value(cell.value) if cell.value is not None else "")
                 link = cell.hyperlink
                 if link is not None and (link.target or link.location):
                     links[cell.coordinate] = str(link.target or f"#{link.location}")
             rows.append(values)
         while rows and not any(str(v).strip() for v in rows[-1]):
             rows.pop()
-        # Пустые столбцы справа не нужны агенту (строки отдаются до max_col).
-        width = max((max((i + 1 for i, v in enumerate(r) if str(v).strip()), default=0) for r in rows), default=0)
-        entry: dict[str, Any] = {"name": sheet.title, "rows": [r[:width] for r in rows], "truncated": (sheet.max_row or 0) > MAX_TABLE_ROWS}
+        if not requested:
+            width = max((max((i + 1 for i, v in enumerate(r) if str(v).strip()), default=0) for r in rows), default=0)
+            rows = [r[:width] for r in rows]
+        actual_last_row = first_row + len(rows) - 1
+        has_more = last_row < total_rows or last_col < total_cols
+        next_first = max(first_row, actual_last_row + 1)
+        entry: dict[str, Any] = {
+            "name": sheet.title, "rows": rows, "totalRows": total_rows, "totalColumns": total_cols,
+            "hasMore": has_more, "truncated": has_more,
+            "range": f"{get_column_letter(first_col)}{first_row}:{get_column_letter(last_col)}{last_row}",
+        }
+        if has_more:
+            entry["nextOffset"] = next_first - 1
+            entry["nextRange"] = f"{get_column_letter(first_col)}{next_first}:{get_column_letter(last_col)}{min(next_first + max_rows - 1, total_rows)}"
         if links:
-            entry["links"] = links  # {"F11": "https://…"} — куда ведёт ячейка; значение ячейки — её текст в rows
-        sheets.append(entry)
-    return sheets
+            entry["links"] = links
+        result.append(entry)
+    return result
 
 
 def _cell_value(value: Any) -> Any:
@@ -363,7 +436,10 @@ def read_item(access: Access, args: dict[str, Any]) -> dict[str, Any]:
         out.update(format="text" if plain else "markdown", **_page(text, args))
     elif item["kind"] == "table":
         try:
-            out.update(format="sheets", sheets=_table_rows(content))
+            sheets = _table_rows(content, args)
+            out.update(format="sheets", sheets=sheets, sheetNames=[s["name"] for s in sheets])
+        except ToolError:
+            raise
         except Exception as exc:
             raise ToolError(f"Таблицу не удалось прочитать: {exc}") from exc
     else:
@@ -384,8 +460,9 @@ def update_note(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     if (args.get("mode") or "replace") == "append":
         base = item.get("content") or ""
         text = f"{base.rstrip()}\n\n{text}" if base.strip() else text
-    _write(access, item, content=text, **({"title": str(args["title"])} if args.get("title") else {}))
-    return {"id": item["id"], "ok": True}
+    if args.get("dry_run"):
+        return _preview(item, text)
+    return {**_write(access, item, content=text, **({"title": str(args["title"])} if args.get("title") else {})), "ok": True}
 
 
 def edit_note(access: Access, args: dict[str, Any]) -> dict[str, Any]:
@@ -397,11 +474,13 @@ def edit_note(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     content = item.get("content") or ""
     count = content.count(old) if old else 0
     if not count:
-        raise ToolError("Такого текста в заметке нет: перечитайте её (read_item) и возьмите точный кусок")
+        raise ToolError("Такого текста в заметке нет: перечитайте её (read_item) и возьмите точный кусок", "text_not_found")
     if count > 1 and not args.get("replace_all"):
-        raise ToolError(f"Текст встречается {count} раз: возьмите кусок длиннее или включите replace_all")
-    _write(access, item, content=content.replace(old, new) if args.get("replace_all") else content.replace(old, new, 1))
-    return {"id": item["id"], "replaced": count if args.get("replace_all") else 1}
+        raise ToolError(f"Текст встречается {count} раз: возьмите кусок длиннее или включите replace_all", "text_not_unique")
+    updated = content.replace(old, new) if args.get("replace_all") else content.replace(old, new, 1)
+    if args.get("dry_run"):
+        return {**_preview(item, updated), "replaced": count if args.get("replace_all") else 1}
+    return {**_write(access, item, content=updated), "replaced": count if args.get("replace_all") else 1}
 
 
 def create_document(access: Access, args: dict[str, Any]) -> dict[str, Any]:
@@ -423,13 +502,22 @@ def _document(access: Access, args: dict[str, Any]) -> tuple[dict[str, Any], dic
 
 def update_document(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     item, snapshot = _document(access, args)
-    markdown = str(args.get("markdown") or "")
-    if (args.get("mode") or "append") == "append":
-        snapshot = docformat.append_markdown(snapshot, markdown)
-    else:
-        snapshot = docformat.markdown_to_snapshot(item["title"], markdown)
-    _write(access, item, content=json.dumps(snapshot, ensure_ascii=False))
-    return {"id": item["id"], "ok": True}
+    markdown, mode = str(args.get("markdown") or ""), str(args.get("mode") or "append")
+    try:
+        if mode == "append":
+            snapshot = docformat.append_markdown(snapshot, markdown)
+        elif mode == "insert":
+            snapshot = docformat.insert_markdown(snapshot, markdown, str(args.get("after_text") or ""))
+        elif mode == "replace":
+            snapshot = docformat.markdown_to_snapshot(item["title"], markdown)
+        else:
+            raise ToolError("mode — append, insert или replace")
+    except docformat.TextNotFound as exc:
+        raise ToolError(str(exc), "text_not_found") from exc
+    content = json.dumps(snapshot, ensure_ascii=False)
+    if args.get("dry_run"):
+        return _preview(item, content)
+    return {**_write(access, item, content=content), "ok": True, "mode": mode}
 
 
 def edit_document(access: Access, args: dict[str, Any]) -> dict[str, Any]:
@@ -438,9 +526,11 @@ def edit_document(access: Access, args: dict[str, Any]) -> dict[str, Any]:
         count = docformat.replace_text(snapshot, str(args.get("old_text") or ""), str(args.get("new_text") or ""),
                                        replace_all=bool(args.get("replace_all")))
     except docformat.TextNotFound as exc:
-        raise ToolError(str(exc)) from exc
-    _write(access, item, content=json.dumps(snapshot, ensure_ascii=False))
-    return {"id": item["id"], "replaced": count}
+        raise ToolError(str(exc), "text_not_found") from exc
+    content = json.dumps(snapshot, ensure_ascii=False)
+    if args.get("dry_run"):
+        return {**_preview(item, content), "replaced": count}
+    return {**_write(access, item, content=content), "replaced": count}
 
 
 def create_table(access: Access, args: dict[str, Any]) -> dict[str, Any]:
@@ -457,37 +547,50 @@ def update_table(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     item = access.load(args.get("id"))
     if item["kind"] != "table":
         raise ToolError(f"Это {KIND_NAMES[item['kind']]}, а не таблица")
-    cells = args.get("cells") or []
-    rows = args.get("append_rows") or []
-    drop = args.get("delete_rows") or []
-    if not cells and not rows and not drop and not args.get("create_sheet"):
-        raise ToolError("Нечего менять: передайте cells, append_rows, delete_rows и/или create_sheet")
-    if len(cells) > 2000 or len(rows) > 2000 or len(drop) > 2000:
-        raise ToolError("За раз — не больше 2000 ячеек и 2000 строк")
-    if not all(isinstance(n, int) and n >= 1 for n in drop):
-        raise ToolError("delete_rows — номера строк листа, начиная с 1")
+    operations = args.get("operations")
+    if operations is None:
+        operations = [args]
+    if not isinstance(operations, list) or not operations or len(operations) > 50:
+        raise ToolError("operations — от 1 до 50 операций {sheet, cells, append_rows, delete_rows, create_sheet}")
     book = load_workbook(io.BytesIO(base64.b64decode(item.get("content") or "")))
-    name = args.get("sheet")
-    if name and name not in book.sheetnames:
-        # Новый лист — только по явной просьбе, чтобы опечатка в имени не плодила пустые листы.
-        if not args.get("create_sheet"):
-            raise ToolError(f"Нет листа «{name}». Листы: {', '.join(book.sheetnames)}. Чтобы создать — create_sheet: true")
-        book.create_sheet(str(name)[:31])
-    sheet = book[name] if name else book.worksheets[0]
-    for cell in cells:
-        ref = str((cell or {}).get("ref") or "").upper()
-        if not _CELL.match(ref):
-            raise ToolError(f"Неверный адрес ячейки «{ref}»: нужен вид B2")
-        _write_cell(sheet, ref, cell)
-    for row in rows:
-        sheet.append([_cell_value(v) for v in list(row)[:MAX_TABLE_COLS * 4]])
-    # Удаляем с конца, чтобы номера оставшихся строк не съезжали; номера — как в read_item (шапка = 1).
-    for n in sorted(set(drop), reverse=True):
-        sheet.delete_rows(n)
+    results = []
+    for operation in operations:
+        if not isinstance(operation, dict):
+            raise ToolError("Каждая операция таблицы — объект")
+        cells, rows, drop = operation.get("cells") or [], operation.get("append_rows") or [], operation.get("delete_rows") or []
+        if not cells and not rows and not drop and not operation.get("create_sheet"):
+            raise ToolError("Нечего менять: передайте cells, append_rows, delete_rows и/или create_sheet")
+        if len(cells) > 2000 or len(rows) > 2000 or len(drop) > 2000:
+            raise ToolError("В одной операции — не больше 2000 ячеек и 2000 строк")
+        if not all(isinstance(n, int) and n >= 1 for n in drop):
+            raise ToolError("delete_rows — номера строк листа, начиная с 1")
+        name = operation.get("sheet")
+        if name and name not in book.sheetnames:
+            # Новый лист — только по явной просьбе, чтобы опечатка в имени не плодила пустые листы.
+            if not operation.get("create_sheet"):
+                raise ToolError(f"Нет листа «{name}». Листы: {', '.join(book.sheetnames)}. Чтобы создать — create_sheet: true", "not_found")
+            book.create_sheet(str(name)[:31])
+        sheet = book[name] if name else book.worksheets[0]
+        refs = []
+        for cell in cells:
+            ref = str((cell or {}).get("ref") or "").upper()
+            if not _CELL.fullmatch(ref):
+                raise ToolError(f"Неверный адрес ячейки «{ref}»: нужен вид B2 латиницей")
+            _write_cell(sheet, ref, cell)
+            refs.append(ref)
+        for row in rows:
+            sheet.append([_cell_value(v) for v in list(row)[:MAX_TABLE_COLS * 4]])
+        # Удаляем с конца, чтобы номера оставшихся строк не съезжали; номера — как в read_item (шапка = 1).
+        for n in sorted(set(drop), reverse=True):
+            sheet.delete_rows(n)
+        results.append({"sheet": sheet.title, "cells": len(cells), "cellRefs": refs,
+                        "appendedRows": len(rows), "deletedRows": len(set(drop))})
     out = io.BytesIO()
     book.save(out)
-    _write(access, item, content=base64.b64encode(out.getvalue()).decode("ascii"))
-    return {"id": item["id"], "sheet": sheet.title, "cells": len(cells), "appendedRows": len(rows), "deletedRows": len(set(drop))}
+    content = base64.b64encode(out.getvalue()).decode("ascii")
+    if args.get("dry_run"):
+        return {**_preview(item, content), "operations": results}
+    return {**_write(access, item, content=content), **results[0], "operations": results}
 
 
 def _threads(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -537,14 +640,105 @@ def resolve_comment(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     return {"threadId": comment["id"], "resolved": comment["resolved"]}
 
 
+def resolve_item(access: Access, args: dict[str, Any]) -> dict[str, Any]:
+    """Открыть внутреннюю или публичную ссылку, не расширяя доступ ключа по публичному токену."""
+    raw = str(args.get("url") or "").strip()
+    parsed = urlparse(raw if "://" in raw else f"https://shar.local{raw if raw.startswith('/') else '/' + raw}")
+    item_id = ""
+    if parsed.path == "/office":
+        query = parse_qs(parsed.query)
+        item_id = str((query.get("id") or [""])[0])
+    else:
+        match = re.fullmatch(r"/[dtnp]/([A-Za-z0-9_-]{16,128})", parsed.path)
+        if match:
+            link = db.conn.fetch_one("SELECT item_id FROM workspace_item_links WHERE token = %s", (match.group(1),))
+            item_id = str(link["item_id"]) if link else ""
+    if not item_id:
+        raise ToolError("Это не ссылка на материал Шара: нужны /office?kind=…&id=…, /d/… или /t/…", "not_found")
+    return _brief(access.load(item_id, content=False), access)
+
+
+def item_versions(access: Access, args: dict[str, Any]) -> dict[str, Any]:
+    item = access.load(args.get("id"), content=False)
+    return {"id": item["id"], **_call(ws.list_versions, item["id"], access.me)}
+
+
+def _version_content(access: Access, item_id: str, version_id: Any) -> dict[str, Any]:
+    return _call(ws.get_version, item_id, str(version_id or ""), access.me)["version"]
+
+
+def diff_item(access: Access, args: dict[str, Any]) -> dict[str, Any]:
+    item = access.load(args.get("id"))
+    version_id = args.get("version_id")
+    if not version_id:
+        versions = _call(ws.list_versions, item["id"], access.me)["versions"]
+        if not versions:
+            return {"id": item["id"], "updatedAt": item["updatedAt"], "changed": False, "diff": "", "message": "Сохранённых версий ещё нет"}
+        version_id = versions[0]["id"]
+    version = _version_content(access, item["id"], version_id)
+    before = _text({"kind": item["kind"]}, version.get("content") or "")
+    after = _text(item)
+    diff = "\n".join(difflib.unified_diff(before.splitlines(), after.splitlines(), fromfile=f"Версия {version_id}", tofile="Сейчас", lineterm=""))
+    return {"id": item["id"], "versionId": str(version_id), "versionCreatedAt": version["createdAt"],
+            "updatedAt": item["updatedAt"], "changed": before != after, "diff": diff[:MAX_CHARS], "diffTruncated": len(diff) > MAX_CHARS}
+
+
+def restore_item_version(access: Access, args: dict[str, Any]) -> dict[str, Any]:
+    access.need("edit", "восстанавливать версии")
+    item = access.load(args.get("id"))
+    version = _version_content(access, item["id"], args.get("version_id"))
+    if args.get("dry_run"):
+        return {**_preview(item, version.get("content") or ""), "versionId": version["id"]}
+    if args.get("confirm") is not True:
+        raise ToolError("Восстановление заменит текущее содержимое (оно сохранится версией «Перед восстановлением»). Сначала dry_run=true, затем confirm=true")
+    token = store.EDIT_VIA.set(_via(access))
+    try:
+        saved = _call(ws.restore_version, item["id"], version["id"], access.me)["item"]
+    finally:
+        store.EDIT_VIA.reset(token)
+    _notify_self(access, item["id"], item["kind"], content=True)
+    return {"id": item["id"], "versionId": version["id"], "updatedAt": saved["updatedAt"], "restored": True}
+
+
+def capabilities(access: Access, args: dict[str, Any]) -> dict[str, Any]:
+    now = datetime.now().astimezone()
+    out: dict[str, Any] = {
+        "scope": access.ctx.scope, "serverTime": now.isoformat(timespec="seconds"), "timeZone": now.tzname() or "local",
+        "tools": [{"name": t["name"], "level": t["level"], **({"app": t["app"]} if t.get("app") else {})}
+                  for t in TOOLS if _open(access.ctx, t)],
+    }
+    if args.get("id"):
+        item = access.load(args["id"], content=False)
+        out["item"] = {**_brief(item, access), "canRead": True}
+    return out
+
+
+def tool_search(access: Access, args: dict[str, Any]) -> dict[str, Any]:
+    query, level = str(args.get("query") or "").strip().casefold(), str(args.get("level") or "")
+    found = []
+    for tool in TOOLS:
+        if not _open(access.ctx, tool) or level and tool["level"] != level:
+            continue
+        haystack = f"{tool['name']} {tool['description']} {tool.get('app', '')}".casefold()
+        if query and not all(word in haystack for word in query.split()):
+            continue
+        entry = {"name": tool["name"], "description": tool["description"], "level": tool["level"]}
+        if tool.get("app"):
+            entry["app"] = tool["app"]
+        if args.get("include_schema"):
+            entry["inputSchema"] = tool["inputSchema"]
+        found.append(entry)
+    return {"tools": found[:50], "total": len(found), "truncated": len(found) > 50}
+
+
 def rename_item(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     access.need("edit", "править материалы")
     item = access.load(args.get("id"), content=False)
     title = str(args.get("title") or "").strip()
     if not title:
         raise ToolError("Нужно название")
-    _write(access, item, title=title)
-    return {"id": item["id"], "title": title[:200]}
+    saved = _write(access, item, title=title)
+    return {"id": item["id"], "title": title[:200], "updatedAt": saved["updatedAt"]}
 
 
 def delete_item(access: Access, args: dict[str, Any]) -> dict[str, Any]:
@@ -579,6 +773,22 @@ _ID = {"type": "string", "description": "id материала (из list_items)
 _FOLDER = {"type": "string", "description": "id папки (из list_folders). Если ключу открыты только выбранные папки — обязателен"}
 _PAGE = {"offset": {"type": "integer", "minimum": 0, "description": "с какого символа (для длинных материалов, см. nextOffset)"},
          "max_chars": {"type": "integer", "minimum": 1000, "maximum": MAX_CHARS}}
+_DRY_RUN = {"dry_run": {"type": "boolean", "default": False, "description": "true — только diff и базовая версия, ничего не записывать"}}
+_TABLE_READ = {
+    "sheet": {"type": "string", "description": "один лист книги"},
+    "range": {"type": "string", "description": "диапазон латиницей, например A1:B20"},
+    "offset": {"type": "integer", "minimum": 0, "description": "для таблицы — сколько строк пропустить; укажите sheet"},
+    "max_rows": {"type": "integer", "minimum": 1, "maximum": MAX_TABLE_ROWS, "default": MAX_TABLE_ROWS},
+    "max_cols": {"type": "integer", "minimum": 1, "maximum": MAX_TABLE_COLS, "default": MAX_TABLE_COLS},
+}
+_CELLS = {"type": "array", "items": {"type": "object", "properties": {
+    "ref": {"type": "string", "description": "адрес латиницей, например B2"}, "value": {},
+    "link": {"type": "string", "description": "адрес ссылки ячейки"}}, "required": ["ref"]}}
+_TABLE_OPERATION = {"type": "object", "properties": {
+    "sheet": {"type": "string"}, "cells": _CELLS,
+    "append_rows": {"type": "array", "items": {"type": "array", "items": {}}},
+    "delete_rows": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+    "create_sheet": {"type": "boolean"}}}
 
 TOOLS: list[dict[str, Any]] = [
     {"name": "list_items", "handler": list_items, "level": "read",
@@ -592,39 +802,57 @@ TOOLS: list[dict[str, Any]] = [
      "description": "Папки, открытые этому ключу, с путём и числом материалов каждого вида.",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "read_item", "handler": read_item, "level": "read",
-     "description": "Содержимое материала. Заметка — Markdown; документ — Markdown (format=text — чистый текст, по нему ищет edit_document); "
-                    "таблица — листы со строками ячеек (до 500 строк); презентация — текст слайдов. Длинное — частями (offset, nextOffset). "
-                    "У таблицы у листа есть links: {ячейка: адрес} для ячеек со ссылкой. В ответе url — готовый внутренний адрес материала для ссылок из других материалов.",
-     "inputSchema": {"type": "object", "properties": {"id": _ID, "format": {"type": "string", "enum": ["markdown", "text"]}, **_PAGE}, "required": ["id"]}},
+     "description": "Содержимое материала. Для таблицы доступны sheet, range и пагинация; ответ содержит hasMore/nextRange и формулы ячеек. "
+                    "Для edit_document используйте format=text. Длинные текстовые материалы читайте частями по nextOffset.",
+     "inputSchema": {"type": "object", "properties": {"id": _ID, "format": {"type": "string", "enum": ["markdown", "text"]},
+                                                     **_PAGE, **_TABLE_READ}, "required": ["id"]}},
+    {"name": "resolve_item", "handler": resolve_item, "level": "read",
+     "description": "Найти материал по внутренней ссылке /office?kind=…&id=… или публичной /d/…, /t/…. Права ключа не расширяются.",
+     "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}},
+    {"name": "item_versions", "handler": item_versions, "level": "read",
+     "description": "Версии материала: история сохранений, id, время, автор, метка; можно ли восстановить.",
+     "inputSchema": {"type": "object", "properties": {"id": _ID}, "required": ["id"]}},
+    {"name": "diff_item", "handler": diff_item, "level": "read",
+     "description": "Unified diff текущего содержимого с версией version_id или с последней сохранённой версией.",
+     "inputSchema": {"type": "object", "properties": {"id": _ID, "version_id": {"type": "string"}}, "required": ["id"]}},
+    {"name": "capabilities", "handler": capabilities, "level": "read",
+     "description": "Актуальные права ключа, серверное время и компактный список доступных инструментов; с id — права на материал.",
+     "inputSchema": {"type": "object", "properties": {"id": _ID}}},
+    {"name": "tool_search", "handler": tool_search, "level": "read",
+     "description": "Компактный поиск доступных инструментов по назначению и уровню. Схемы параметров — только с include_schema=true.",
+     "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "level": {"type": "string", "enum": list(LEVELS)},
+                                                     "include_schema": {"type": "boolean", "default": False}}}},
     {"name": "edit_note", "handler": edit_note, "level": "edit",
      "description": "Точечная правка заметки: заменить кусок old_text (точный текст из read_item) на new_text. Остальное не трогается.",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "old_text": {"type": "string"}, "new_text": {"type": "string"},
-                                                     "replace_all": {"type": "boolean", "default": False}}, "required": ["id", "old_text", "new_text"]}},
+                                                     "replace_all": {"type": "boolean", "default": False}, **_DRY_RUN}, "required": ["id", "old_text", "new_text"]}},
     {"name": "update_note", "handler": update_note, "level": "edit",
      "description": "Переписать заметку целиком (mode=replace; строки вкладок `<!-- shar-tab: … -->` сохраняйте) или дописать в конец (mode=append).",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "markdown": {"type": "string"}, "mode": {"type": "string", "enum": ["replace", "append"], "default": "replace"},
-                                                     "title": {"type": "string", "description": "новое название (необязательно)"}}, "required": ["id", "markdown"]}},
+                                                     "title": {"type": "string", "description": "новое название (необязательно)"}, **_DRY_RUN}, "required": ["id", "markdown"]}},
     {"name": "edit_document", "handler": edit_document, "level": "edit",
      "description": "Точечная правка документа с сохранением оформления: заменить old_text на new_text внутри абзаца. "
                     "Текст — точный, без разметки Markdown (read_item с format=text), без переносов строк.",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "old_text": {"type": "string"}, "new_text": {"type": "string"},
-                                                     "replace_all": {"type": "boolean", "default": False}}, "required": ["id", "old_text", "new_text"]}},
+                                                     "replace_all": {"type": "boolean", "default": False}, **_DRY_RUN}, "required": ["id", "old_text", "new_text"]}},
     {"name": "update_document", "handler": update_document, "level": "edit",
-     "description": "Дописать Markdown в конец документа с сохранением оформления (mode=append, по умолчанию) или пересобрать документ из Markdown "
-                    "(mode=replace: сложное оформление, таблицы и картинки пропадут).",
-     "inputSchema": {"type": "object", "properties": {"id": _ID, "markdown": {"type": "string"}, "mode": {"type": "string", "enum": ["append", "replace"], "default": "append"}},
-                     "required": ["id", "markdown"]}},
+     "description": "Дописать Markdown в конец (append), вставить после абзаца с after_text (insert) или пересобрать документ (replace, оформление пропадёт).",
+     "inputSchema": {"type": "object", "properties": {"id": _ID, "markdown": {"type": "string"},
+                                                     "mode": {"type": "string", "enum": ["append", "insert", "replace"], "default": "append"},
+                                                     "after_text": {"type": "string", "description": "для insert — уникальный фрагмент одного абзаца из format=text"},
+                                                     **_DRY_RUN}, "required": ["id", "markdown"]}},
     {"name": "update_table", "handler": update_table, "level": "edit",
-     "description": "Изменить таблицу: значения ячеек по адресам (cells: [{ref: \"B2\", value}], формула — строкой с «=») и/или строки в конец листа (append_rows), удалить строки (delete_rows: номера с 1), создать лист (create_sheet: true вместе с sheet). "
-                    "Лист — sheet (по умолчанию первый). Запись value заменяет и старую ссылку ячейки (value: null очищает ячейку и ссылку). "
-                    "Ссылка ячейки: {ref, value: \"текст\", link: \"https://…\"} (или value: {text, hyperlink}, или формула =HYPERLINK(\"адрес\"; \"текст\")). "
-                    "Ссылка на материал Шара — url из list_items/read_item (вид /office?kind=document&id=94); ссылки /d/…, /t/… — публичные, по id не работают.",
+     "description": "Изменить ячейки, строки и листы. operations — несколько листов атомарно одной записью. value заменяет прежнюю ссылку; формулы передаются строками с =.",
      "inputSchema": {"type": "object", "properties": {
-         "id": _ID, "sheet": {"type": "string"},
-         "cells": {"type": "array", "items": {"type": "object", "properties": {"ref": {"type": "string"}, "value": {}, "link": {"type": "string", "description": "адрес ссылки ячейки"}}, "required": ["ref"]}},
+         "id": _ID, "sheet": {"type": "string"}, "cells": _CELLS,
          "append_rows": {"type": "array", "items": {"type": "array", "items": {}}},
-         "delete_rows": {"type": "array", "items": {"type": "integer"}},
-         "create_sheet": {"type": "boolean"}}, "required": ["id"]}},
+         "delete_rows": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+         "create_sheet": {"type": "boolean"},
+         "operations": {"type": "array", "maxItems": 50, "items": _TABLE_OPERATION}, **_DRY_RUN}, "required": ["id"]}},
+    {"name": "restore_item_version", "handler": restore_item_version, "level": "edit",
+     "description": "Вернуть сохранённую версию. Сначала dry_run=true для diff; для записи обязателен confirm=true. Текущее состояние тоже сохраняется.",
+     "inputSchema": {"type": "object", "properties": {"id": _ID, "version_id": {"type": "string"}, "confirm": {"type": "boolean"}, **_DRY_RUN},
+                     "required": ["id", "version_id"]}},
     {"name": "list_comments", "handler": list_comments, "level": "read",
      "description": "Комментарии документа или таблицы ветками: к чему привязаны (anchor: text — цитата, cell — лист и ячейка), автор, ответы, решено ли. "
                     "По умолчанию только открытые ветки; include_resolved=true — и закрытые.",
@@ -698,13 +926,13 @@ def summary(ctx: KeyContext) -> str:
 
 def run(ctx: KeyContext, tool: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
     if not _open(ctx, tool):
-        raise ToolError(f"Этому ключу инструмент {tool['name']} не открыт")
+        raise ToolError(f"Этому ключу инструмент {tool['name']} не открыт", "permission_denied")
     if ctx.scope.get("job"):  # запуск «Ядра»: режим разрешений человека держит сервер (core_agents/permissions.py)
         from app.modules.core_agents import permissions
 
         why = permissions.reason(ctx.scope.get("mode") or permissions.DEFAULT, tool, args, ctx.me.user_id)
-        if why and not permissions.consume(args.get("approval_id"), ctx.me.user_id, tool["name"]):
+        if why and not args.get("dry_run") and not permissions.consume(args.get("approval_id"), ctx.me.user_id, tool["name"]):
             raise ToolError(f"Нужно разрешение человека ({why}). Вызовите request_permission(tool=\"{tool['name']}\", summary=что именно и с чем "
                             "сделаете — одной фразой), коротко скажите, что ждёте, и закончите ответ. Если человек разрешит, придёт "
-                            "approval_id — повторите вызов с ним.")
+                            "approval_id — повторите вызов с ним.", "permission_required")
     return tool["handler"](Access(ctx), args)

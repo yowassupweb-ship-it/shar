@@ -315,16 +315,26 @@ def people_search(access, args: dict[str, Any]) -> dict[str, Any]:
     from app.core.db import db
 
     query = str(args.get("query") or "").lower().strip()
+    department = str(args.get("department") or "").lower().strip()
     rows = db.get_users() or []
+    departments = {str(d["id"]): d for d in (db.get_departments() or [])}
     out = []
     for u in rows:
         name = u.get("name") or u.get("username") or ""
-        hay = f"{name} {u.get('username') or ''} {u.get('position') or ''} {u.get('department') or ''}".lower()
+        dept_id = str(u.get("department") or "")
+        dept = departments.get(dept_id) or {}
+        dept_name = str(dept.get("name") or dept_id)
+        hay = f"{name} {u.get('username') or ''} {u.get('position') or ''} {dept_id} {dept_name}".lower()
         if query and not all(w in hay for w in query.split()):
             continue
-        out.append({"id": str(u.get("id")), "name": name, "position": u.get("position") or "", "department": u.get("department") or "",
+        if department and department not in f"{dept_id} {dept_name}".lower():
+            continue
+        out.append({"id": str(u.get("id")), "name": name, "position": u.get("position") or "",
+                    "department": dept_name, "departmentId": dept_id, "parentDepartmentId": dept.get("parentId") or None,
                     "me": str(u.get("id")) == access.me.user_id})
-    return {"people": out[:50], "total": len(out)}
+    return {"people": out[:100], "total": len(out),
+            "departments": [{"id": str(d["id"]), "name": d["name"], "parentId": d.get("parentId") or None}
+                            for d in departments.values()]}
 
 
 # ── память и навыки ──────────────────────────────────────────────────────────
@@ -544,6 +554,59 @@ def agent_disconnect(access, args: dict[str, Any]) -> dict[str, Any]:
     return {"disconnected": provider}
 
 
+def events_list(access, args: dict[str, Any]) -> dict[str, Any]:
+    """Входящие уведомления человека — только чтение, без пометки «прочитано»."""
+    from app.core.db import db
+
+    limit = max(1, min(int(args.get("limit") or 30), 100))
+    unread = " AND NOT read" if args.get("unread_only") else ""
+    rows = db.conn.fetch_all(
+        f"SELECT * FROM user_notifications WHERE to_user_id = %s{unread} ORDER BY created_at DESC LIMIT %s",
+        (access.me.user_id, limit + 1)) or []
+    events = [{"id": r["id"], "type": r["type"], "message": r.get("message") or "", "read": bool(r.get("read")),
+               "taskId": r.get("todo_id"), "eventId": r.get("event_id"), "from": r.get("from_user_name") or "",
+               "createdAt": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else str(r["created_at"])}
+              for r in rows[:limit]]
+    return {"events": events, "hasMore": len(rows) > limit,
+            "note": "Это входящие уведомления, а не лента всех изменений материалов. Прочитанность не меняется."}
+
+
+def agent_schedule(access, args: dict[str, Any]) -> dict[str, Any]:
+    from app.core.db import db
+    from app.modules.core_agents import schedules
+
+    thread_id = str(args.get("thread_id") or "")
+    if not thread_id and access.ctx.scope.get("job"):
+        job = db.conn.fetch_one("SELECT payload FROM core_jobs WHERE message_id = %s ORDER BY id DESC LIMIT 1",
+                                (access.ctx.scope["job"],)) or {}
+        thread_id = str((job.get("payload") or {}).get("threadId") or "")
+    try:
+        made = schedules.create(access.me.user_id, prompt=str(args.get("prompt") or ""), thread_id=thread_id,
+                                frequency=str(args.get("frequency") or "once"), at=str(args.get("at") or ""),
+                                run_time=str(args.get("time") or "09:00"), weekdays=args.get("weekdays"),
+                                provider=str(args.get("provider") or ""), effort=str(args.get("effort") or "medium"))
+    except schedules.ScheduleError as exc:
+        raise _err(str(exc)) from exc
+    return {"created": made, "note": "В назначенное время агент напишет в этот чат «Ядра», даже если Шар закрыт."}
+
+
+def agent_schedules(access, args: dict[str, Any]) -> dict[str, Any]:
+    from app.modules.core_agents import schedules
+
+    return {"schedules": schedules.listing(access.me.user_id)}
+
+
+def agent_schedule_cancel(access, args: dict[str, Any]) -> dict[str, Any]:
+    from app.modules.core_agents import schedules
+
+    if args.get("confirm") is not True:
+        raise _err("Отмену расписания нужно подтвердить: confirm: true")
+    schedule_id = str(args.get("id") or "")
+    if not schedules.cancel(access.me.user_id, schedule_id):
+        raise _err("Расписание не найдено")
+    return {"id": schedule_id, "cancelled": True}
+
+
 # Переписки (чаты, почта, соцсети) агенту закрыты совсем: ни инструментов, ни открытия окна. Нужное человек пересылает сам.
 _CLOSED_PATHS = ("/chats", "/chat", "/messages", "/m/", "/mail", "/social")
 
@@ -651,8 +714,9 @@ TOOLS: list[dict[str, Any]] = [
      "description": "Удалить задачу (может автор или постановщик). Нужен confirm: true. Закрыть выполненную — task_update с done: true, а не удаление.",
      "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "confirm": {"type": "boolean"}}, "required": ["id", "confirm"]}},
     {"name": "people_search", "app": "people", "handler": people_search, "level": "read",
-     "description": "Сотрудники: id, имя, должность, отдел. Нужен для исполнителей задач и участников событий.",
-     "inputSchema": {"type": "object", "properties": {"query": {"type": "string", "description": "имя, логин, должность или отдел"}}}},
+     "description": "Сотрудники и оргструктура: id, имя, должность, отдел и родительский отдел. department ограничивает список отделом; без query возвращает сотрудников целиком.",
+     "inputSchema": {"type": "object", "properties": {"query": {"type": "string", "description": "имя, логин, должность или отдел"},
+                                                     "department": {"type": "string", "description": "id или название отдела"}}}},
     {"name": "profile_read", "app": "agent", "handler": profile_read, "level": "read",
      "description": "Профиль человека, который вы ведёте: кто он, как любит работать, что поправлял за вами.",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -727,6 +791,28 @@ TOOLS: list[dict[str, Any]] = [
     {"name": "mcp_remove", "app": "agent", "handler": mcp_remove, "level": "read",
      "description": "Удалить MCP-сервер человека. Нужен confirm: true.",
      "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "confirm": {"type": "boolean"}}, "required": ["name", "confirm"]}},
+    {"name": "events_list", "app": "agent", "handler": events_list, "level": "read",
+     "description": "Входящие уведомления человека (задачи, календарь, интеграции), новые сверху. Только чтение: прочитанность не меняется. "
+                    "Это не лента всех правок документов; для периодической проверки материала создайте agent_schedule.",
+     "inputSchema": {"type": "object", "properties": {"unread_only": {"type": "boolean"},
+                                                     "limit": {"type": "integer", "minimum": 1, "maximum": 100}}}},
+    {"name": "agent_schedule", "app": "agent", "handler": agent_schedule, "level": "create",
+     "description": "Запустить себя позже или регулярно: в назначенное время в чате «Ядра» появится prompt и обычный запуск агента, "
+                    "даже когда Шар закрыт. once — at; daily — time; weekly — time и weekdays (0=пн, 6=вс). Время местное. "
+                    "Без thread_id используется текущий чат. Для проверки уведомлений в prompt попросите сначала events_list.",
+     "inputSchema": {"type": "object", "properties": {
+         "prompt": {"type": "string", "maxLength": 20000}, "thread_id": {"type": "string"},
+         "frequency": {"type": "string", "enum": ["once", "daily", "weekly"]}, "at": _TIME,
+         "time": {"type": "string", "description": "HH:MM для daily/weekly, по умолчанию 09:00"},
+         "weekdays": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 6}},
+         "provider": {"type": "string", "description": "например codex или claude:model; по умолчанию текущий агент"},
+         "effort": {"type": "string", "enum": ["low", "medium", "high"]}}, "required": ["prompt", "frequency"]}},
+    {"name": "agent_schedules", "app": "agent", "handler": agent_schedules, "level": "read",
+     "description": "Мои запланированные запуски агента: ближайшее время, периодичность, чат и прошлый запуск.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "agent_schedule_cancel", "app": "agent", "handler": agent_schedule_cancel, "level": "create",
+     "description": "Отменить запланированный запуск по id из agent_schedules. Уже созданный ответ агента не останавливает. Нужен confirm: true.",
+     "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "confirm": {"type": "boolean"}}, "required": ["id", "confirm"]}},
     {"name": "image_generate", "app": "files", "handler": image_generate, "level": "create",
      "description": "Нарисовать картинку по описанию или поправить готовую (source_url — вложение человека или адрес картинки). "
                     "Рисует Gemini по ключу человека — Claude и GPT тоже могут звать. Картинка сама появится в чате под ответом и "

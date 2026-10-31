@@ -128,8 +128,8 @@ def _agent_hash() -> str:
     return hashlib.sha256(_kit_text("shar-node.mjs").encode("utf-8")).hexdigest()[:16]
 
 
-# GPT и Gemini безопасны с 1.1.0; Kimi восстанавливает MCP при продолжении диалога с 1.2.2.
-PROVIDER_MIN_VERSION = {"gemini": (1, 1, 0), "codex": (1, 1, 0), "kimi": (1, 2, 2)}
+# GPT получает встроенную генерацию картинок с 1.2.4; Kimi восстанавливает MCP при продолжении диалога с 1.2.2.
+PROVIDER_MIN_VERSION = {"gemini": (1, 1, 0), "codex": (1, 2, 4), "kimi": (1, 2, 2)}
 
 
 def _version(node: dict) -> tuple:
@@ -236,6 +236,17 @@ def _apply_run(job: dict, events: list[dict]) -> dict:
             payload = job.get("payload") or {}
             db.conn.execute_query("UPDATE core_threads SET sessions = sessions || %s WHERE id = %s",
                                   (Json({job["provider"]: str(ev["id"])[:200]}), payload.get("threadId")))
+            continue
+        if kind == "attachment":
+            from app.modules.core_agents import images
+
+            try:
+                if len(str(ev.get("data") or "")) > 48 * 1024 * 1024:
+                    raise images.ImageError("Картинка больше допустимых 32 МБ")
+                images.save_native(message_id, job["user_id"], event_id=str(ev.get("eventId") or "")[:160],
+                                   data=str(ev.get("data") or ""), name=str(ev.get("name") or ""))
+            except images.ImageError as exc:
+                update_agent_message(message_id, props={"reasoning": str(exc)})
             continue
         props: dict[str, Any] = {}
         for key in ("phase", "reasoning", "rateLimit", "work", "model"):

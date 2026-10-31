@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "1.2.2";
+const VERSION = "1.2.4";
 const SHAR_URL = String(process.env.SHAR_URL || "").replace(/\/+$/, "");
 const TOKEN = String(process.env.SHAR_NODE_TOKEN || "");
 // Отпечаток этого файла — так же, как его считает Шар (переводы строк без \r): разошёлся с присланным в опросе —
@@ -409,7 +409,31 @@ function streamCli(command, args, opts, entry, handle, state) {
   });
 }
 
-function addStep(state, step, report) {
+function stableValue(value) {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableValue(value[key])]));
+  return value;
+}
+
+function addStep(state, step, report, entry = null) {
+  if (step.kind === "tool") {
+    state.toolCalls ||= new Map();
+    let signature = `${step.name}:${step.input || ""}`;
+    try { signature = `${step.name}:${JSON.stringify(stableValue(JSON.parse(step.input || "{}")))}`; } catch { /* текст команды уже однозначен */ }
+    const count = (state.toolCalls.get(signature) || 0) + 1;
+    state.toolCalls.set(signature, count);
+    if (count > 1) step.repeat = count;
+    if (count === 3) report.send({ type: "progress", reasoning: `Третий одинаковый вызов ${step.name}; ещё один остановит ответ` });
+    if (count >= 4) {
+      state.failure = `Остановлено: агент четыре раза повторил одинаковый вызов ${step.name} с теми же параметрами`;
+      step.is_error = true;
+      step.output = state.failure;
+      state.steps.push(step);
+      report.send({ type: "progress", steps: state.steps, reasoning: state.failure });
+      try { entry?.child?.kill(); } catch { /* процесс уже завершился */ }
+      return step;
+    }
+  }
   if (state.steps.length >= 400) return null;
   state.steps.push(step);
   report.send({ type: "progress", steps: state.steps });
@@ -564,7 +588,7 @@ function runClaude(job, dirs, resumeId, report, entry) {
         }
         if (block.type === "tool_use") {
           const name = toolLabel(block.name);
-          const step = addStep(state, { kind: "tool", name, hint: hintOf(name, block.input), input: clip(stringify(block.input), MAX_STEP_INPUT), at: Date.now() }, report);
+          const step = addStep(state, { kind: "tool", name, hint: hintOf(name, block.input), input: clip(stringify(block.input), MAX_STEP_INPUT), at: Date.now() }, report, entry);
           if (step && block.id) pending.set(block.id, step);
           report.send({ type: "progress", phase: HINTS[name]?.toLowerCase() || "работает", body: "" });
         }
@@ -668,6 +692,7 @@ function runCodex(job, dirs, resumeId, report, entry) {
   // Вся настройка — флагами: личный config.toml машины (модель по умолчанию, свои MCP) ноде не указ.
   // Ключ MCP — в переменной окружения запуска, во флагах только адрес.
   const config = ["-c", "approval_policy=never", "-c", "sandbox_mode=read-only", "-c", "model_reasoning_summary=auto", "-c", "hide_agent_reasoning=false",
+    "-c", "features.image_generation=true",
     "-c", `mcp_servers.shar.url=${absolute(job.mcp.url)}`, "-c", "mcp_servers.shar.bearer_token_env_var=SHAR_MCP_TOKEN",
     "-c", "mcp_servers.shar.tool_timeout_sec=120",
     // Codex сам просит подтверждение на инструменты, меняющие данные, а запуск без человека такие вызовы отклоняет
@@ -715,6 +740,35 @@ function runCodex(job, dirs, resumeId, report, entry) {
     }
     if ((event.type === "item.started" || event.type === "item.completed") && event.item) {
       const item = event.item;
+      if (item.type === "image_generation" || item.type === "imageGeneration") {
+        const key = String(item.id || item.call_id || "image");
+        if (event.type === "item.started") {
+          const step = addStep(state, { kind: "tool", name: "image_gen", hint: "Рисует картинку", input: clip(stringify({ prompt: item.revised_prompt || "" }), MAX_STEP_INPUT), at: Date.now() }, report, entry);
+          if (step) pending.set(key, step);
+          return;
+        }
+        const step = pending.get(key);
+        if (step) {
+          step.output = item.status === "failed" ? String(item.failure || "Генерация не удалась") : "Картинка готова";
+          step.is_error = item.status === "failed";
+          step.ms = step.at ? Date.now() - step.at : 0;
+          delete step.at;
+          pending.delete(key);
+        }
+        let data = typeof item.image === "string" ? item.image : item.image?.result || item.result || "";
+        if (!data && item.saved_path) {
+          const file = path.resolve(String(item.saved_path));
+          const root = path.resolve(dirs.work) + path.sep;
+          if (file.startsWith(root)) { try { data = fs.readFileSync(file).toString("base64"); } catch { /* сообщим ниже */ } }
+        }
+        if (data && item.status !== "failed") {
+          report.send({ type: "attachment", eventId: `${job.id}:${key}`, name: "картинка-gpt.png", data });
+          report.send({ type: "progress", steps: state.steps, phase: "картинка готова" });
+        } else if (item.status === "failed") {
+          report.send({ type: "progress", steps: state.steps, reasoning: `GPT не создал картинку: ${stringify(item.failure || "неизвестная ошибка")}` });
+        }
+        return;
+      }
       if (item.type === "agent_message" && event.type === "item.completed") {
         state.text = String(item.text || "").trim();
         if (state.text) addStep(state, { kind: "text", text: clip(state.text, MAX_STEP_TEXT) }, report);
@@ -733,7 +787,7 @@ function runCodex(job, dirs, resumeId, report, entry) {
       const known = key ? pending.get(key) : null;
       if (event.type === "item.started" || !known) {
         const input = item.arguments ?? item.input ?? item.query ?? item.command ?? "";
-        const step = known || addStep(state, { kind: "tool", name, hint: hintOf(name, typeof input === "object" ? input : { query: input }), input: clip(stringify(input), MAX_STEP_INPUT), at: Date.now() }, report);
+        const step = known || addStep(state, { kind: "tool", name, hint: hintOf(name, typeof input === "object" ? input : { query: input }), input: clip(stringify(input), MAX_STEP_INPUT), at: Date.now() }, report, entry);
         if (step && key && event.type === "item.started") pending.set(key, step);
         report.send({ type: "progress", phase: HINTS[name]?.toLowerCase() || "работает" });
         if (event.type === "item.started") return;
@@ -840,7 +894,7 @@ async function runKimi(job, dirs, resumeId, report, entry) {
       answering = false;
       const name = toolLabel(u.toolName || u.name || u.title);
       const input = u.rawInput ?? u.input ?? {};
-      const step = addStep(state, { kind: "tool", name, hint: hintOf(name, input), input: clip(stringify(input), MAX_STEP_INPUT), at: Date.now() }, report);
+      const step = addStep(state, { kind: "tool", name, hint: hintOf(name, input), input: clip(stringify(input), MAX_STEP_INPUT), at: Date.now() }, report, entry);
       const id = String(u.toolCallId || u.id || "");
       if (step && id) toolSteps.set(id, step);
       report.send({ type: "progress", phase: HINTS[name]?.toLowerCase() || "работает", body: "" });
@@ -937,7 +991,7 @@ async function runKimi(job, dirs, resumeId, report, entry) {
   } catch (error) {
     if (entry.stopped) return state;
     if (resumeId && /session|conversation|thread|not found|different directory/i.test(String(error.message))) throw error;
-    state.failure = clip(humanError(error.message || error), 500);
+    state.failure = state.failure || clip(humanError(error.message || error), 500);
     state.authExpired = authProblem(state.failure);
     return state;
   } finally {
@@ -1003,7 +1057,7 @@ function runGemini(job, dirs, resumeId, report, entry) {
       if (state.partial.trim()) addStep(state, { kind: "text", text: clip(state.partial.trim(), MAX_STEP_TEXT) }, report);
       state.partial = "";
       const name = toolLabel(String(event.tool_name || "").replace(/^shar__|^mcp_shar_/, ""));
-      const step = addStep(state, { kind: "tool", name, hint: hintOf(name, event.parameters), input: clip(stringify(event.parameters), MAX_STEP_INPUT), at: Date.now() }, report);
+      const step = addStep(state, { kind: "tool", name, hint: hintOf(name, event.parameters), input: clip(stringify(event.parameters), MAX_STEP_INPUT), at: Date.now() }, report, entry);
       if (step && event.tool_id) pending.set(event.tool_id, step);
       report.send({ type: "progress", phase: HINTS[name]?.toLowerCase() || "работает", body: "" });
       return;

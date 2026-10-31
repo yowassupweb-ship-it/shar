@@ -323,6 +323,14 @@ def test_image_generate_attaches_to_answer_and_lands_in_agent_files(client, admi
         assert chats and chats[0]["chatId"] == thread["id"] and chats[0]["count"] == 1
         files = admin.get("/api/core/files", params={"threadId": thread["id"]}).json()
         assert files[0]["url"] == image["url"] and files[0]["fileType"] == "image" and files[0]["authorName"] == "Claude"
+
+        native = {"type": "attachment", "eventId": "run:image-1", "name": "картинка-gpt.png", "data": png}
+        _events(client, token, run["id"], native)
+        _events(client, token, run["id"], native)  # повтор доставки не создаёт вторую картинку
+        reply = db.conn.fetch_one("SELECT props FROM core_messages WHERE id = %s", (sent["reply"]["id"],))
+        assert len(reply["props"]["attachments"]) == 2
+        assert reply["props"]["attachments"][1]["eventId"] == "run:image-1"
+        assert "встроенный image_gen" in run["system"] if run["provider"] == "codex" else "MCP image_generate" in run["system"]
     finally:
         _cleanup()
 

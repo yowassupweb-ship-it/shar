@@ -1,11 +1,10 @@
-"""Картинки для агентов «Ядра»: генерация и правка через Gemini по ключу человека (Настройки → Ядро → Gemini).
+"""Картинки для агентов «Ядра»: у GPT — встроенный image_gen на ноде, у остальных — Gemini по ключу человека.
 
-Рисует любой агент — Claude, GPT или Gemini — инструментом MCP image_generate: сам Шар зовёт модель картинок Google
-ключом человека, кладёт файл туда же, куда вложения чатов (/api/uploads/…), и прикрепляет к ответу агента —
-картинка сразу видна в чате и лежит в «Файлах → Агенты». Без ключа Gemini — понятная ошибка, что подключить.
+GPT рисует через свою подписку Codex; нода присылает готовые байты событием attachment, а save_native проверяет их и
+прикрепляет к ответу. Claude, Kimi и Gemini зовут MCP image_generate: Шар обращается к модели картинок Google ключом
+человека. Файлы в обоих путях попадают в /api/uploads/… и «Файлы → Агенты».
 
-Модель — самая новая из доступных ключу «…-image» (список моделей ключа, кэш на час): так не нужно править код,
-когда Google выпускает новую.
+Модель Gemini — самая новая из доступных ключу «…-image» (список моделей ключа, кэш на час).
 """
 from __future__ import annotations
 
@@ -150,6 +149,39 @@ def _count_usage(user_id: str, usage: dict, model: str) -> None:
         pass
 
 
+def save_native(message_id: str, user_id: str, *, event_id: str, data: str, name: str = "") -> dict:
+    """PNG/JPEG/WebP из встроенного image_gen ноды: проверить байты, сохранить и прикрепить один раз."""
+    row = db.conn.fetch_one("SELECT props FROM core_messages WHERE id = %s", (message_id,))
+    if not row:
+        raise ImageError("Ответ агента уже закрыт")
+    existing = list((row.get("props") or {}).get("attachments") or [])
+    duplicate = next((f for f in existing if event_id and f.get("eventId") == event_id), None)
+    if duplicate:
+        return duplicate
+    try:
+        raw = base64.b64decode(data, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise ImageError("Нода прислала повреждённую картинку") from exc
+    if not raw or len(raw) > 32 * 1024 * 1024:
+        raise ImageError("Картинка пустая или больше 32 МБ")
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        mime, ext = "image/png", ".png"
+    elif raw.startswith(b"\xff\xd8\xff"):
+        mime, ext = "image/jpeg", ".jpg"
+    elif raw.startswith(b"RIFF") and raw[8:12] == b"WEBP":
+        mime, ext = "image/webp", ".webp"
+    else:
+        raise ImageError("Встроенный генератор вернул не PNG, JPEG или WebP")
+    safe = re.sub(r"[^\w\- ]+", "", name)[:50].strip() or "картинка-gpt"
+    from app.modules.files.uploads import save_upload_bytes
+
+    saved = save_upload_bytes(f"{safe}{ext}", raw, mime, user_id)
+    file = {"name": saved["filename"], "url": saved["url"], "size": saved["size"], "type": mime, "key": saved["key"],
+            "eventId": event_id}
+    attach_to_job(message_id, file)
+    return file
+
+
 def attach_to_job(message_id: str, file: dict) -> None:
     """Прикрепить картинку к ответу агента, который сейчас работает (ключ MCP запуска знает его id)."""
     if not message_id:
@@ -158,7 +190,9 @@ def attach_to_job(message_id: str, file: dict) -> None:
     if not row:
         return
     files = list((row.get("props") or {}).get("attachments") or [])
-    files.append({k: file[k] for k in ("name", "url", "size", "type", "key") if k in file})
+    if file.get("eventId") and any(f.get("eventId") == file["eventId"] for f in files):
+        return
+    files.append({k: file[k] for k in ("name", "url", "size", "type", "key", "eventId") if k in file})
     from app.modules.core_chat.router import update_agent_message
 
     update_agent_message(message_id, props={"attachments": files[-20:]})
