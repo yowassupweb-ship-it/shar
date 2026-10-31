@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "1.1.3";
+const VERSION = "1.2.0";
 const SHAR_URL = String(process.env.SHAR_URL || "").replace(/\/+$/, "");
 const TOKEN = String(process.env.SHAR_NODE_TOKEN || "");
 // Отпечаток этого файла — так же, как его считает Шар (переводы строк без \r): разошёлся с присланным в опросе —
@@ -759,21 +759,25 @@ function runCodex(job, dirs, resumeId, report, entry) {
 function kimiFiles(job, dirs) {
   // Kimi привязывает сессию к рабочему каталогу: он должен быть стабильным для диалога и отдельным от других диалогов.
   const cwd = path.join(dirs.work, ".shar-kimi", String(job.threadId).replace(/[^A-Za-z0-9_-]/g, "_"));
-  fs.mkdirSync(path.join(cwd, ".kimi-code"), { recursive: true, mode: 0o700 });
-  const mcpServers = {
-    shar: { url: absolute(job.mcp.url), bearerTokenEnvVar: "SHAR_MCP_TOKEN", toolTimeoutMs: 120_000 },
-    ...(browser ? { browser: { command: browser, args: ["mcp"], toolTimeoutMs: 120_000 } } : {}),
-    ...Object.fromEntries(extraMcp(job).map((m) => [m.name, m.type === "http"
-      ? { url: m.url, headers: m.headers || {}, toolTimeoutMs: 120_000 }
-      : { command: "npx", args: ["-y", m.package, ...(m.args || [])], env: m.env || {}, toolTimeoutMs: 120_000 }])),
-  };
-  fs.writeFileSync(path.join(cwd, ".kimi-code", "mcp.json"), JSON.stringify({ mcpServers }), { mode: 0o600 });
+  fs.mkdirSync(cwd, { recursive: true, mode: 0o700 });
   const tools = ["WebSearch", "FetchURL", "ReadMediaFile", "mcp__shar__*", ...(browser ? ["mcp__browser__*"] : []),
     ...extraMcp(job).map((m) => `mcp__${m.name}__*`)];
   const agent = path.join(cwd, "shar-agent.md");
   // Встроенные файлы и оболочка ноды агенту не нужны: доступ к Шару — через MCP, картинки — через ReadMediaFile.
   fs.writeFileSync(agent, `---\nname: shar\ndescription: Агент Шара\ntools:\n${tools.map((name) => `  - ${name}`).join("\n")}\nsubagents: []\n---\n\n\${base_prompt}\n\n---\n\n${job.system || ""}`, { mode: 0o600 });
   return { cwd, agent };
+}
+
+function kimiMcp(job) {
+  const headers = (values) => Object.entries(values || {}).map(([name, value]) => ({ name, value: String(value) }));
+  const env = (values) => Object.entries(values || {}).map(([name, value]) => ({ name, value: String(value) }));
+  return [
+    { name: "shar", url: absolute(job.mcp.url), headers: headers({ Authorization: `Bearer ${job.mcp.token}` }) },
+    ...(browser ? [{ name: "browser", command: browser, args: ["mcp"], env: [] }] : []),
+    ...extraMcp(job).map((m) => m.type === "http"
+      ? { name: m.name, url: m.url, headers: headers(m.headers) }
+      : { name: m.name, command: "npx", args: ["-y", m.package, ...(m.args || [])], env: env(m.env) }),
+  ];
 }
 
 function kimiText(value) {
@@ -783,74 +787,135 @@ function kimiText(value) {
   return "";
 }
 
-function runKimi(job, dirs, resumeId, report, entry) {
+// ACP, в отличие от stream-json, присылает ответ фрагментами: Шар показывает его по мере написания.
+async function runKimi(job, dirs, resumeId, report, entry) {
   const files = kimiFiles(job, dirs);
-  const args = ["--output-format", "stream-json"];
-  if (job.model) args.push("-m", job.model);
-  if (resumeId) args.push("--session", resumeId);
-  else args.push("--agent-file", files.agent);
-  args.push("-p");
   const state = newState();
   state.model = job.model || "";
+  const child = run(CLI.kimi, [...(resumeId ? [] : ["--agent-file", files.agent]), "acp"],
+    { cwd: files.cwd, env: { ...userEnv(dirs), KIMI_CODE_TRUST_WORKSPACE: "1" } });
+  entry.child = child;
   const pending = new Map();
-  report.send({ type: "progress", phase: "запускается" });
-  const handle = (event) => {
-    if (event.session_id) state.sessionId = String(event.session_id);
-    if (event.model) state.model = String(event.model);
-    if (event.type === "turn.step.retrying") { report.send({ type: "progress", phase: "повторяет запрос" }); return; }
-    if (event.role === "assistant") {
-      const text = kimiText(event.content).trim();
-      if (text) {
-        state.text = text;
-        state.partial = text;
-        addStep(state, { kind: "text", text: clip(text, MAX_STEP_TEXT) }, report);
-        report.send({ type: "progress", body: text, phase: "пишет" });
-      }
-      for (const call of event.tool_calls || []) {
-        const fn = call.function || call;
-        const name = toolLabel(fn.name);
-        let input = fn.arguments ?? fn.input ?? "";
-        if (typeof input === "string") { try { input = JSON.parse(input); } catch { /* аргументы могут быть обычной строкой */ } }
-        const step = addStep(state, { kind: "tool", name, hint: hintOf(name, input), input: clip(stringify(input), MAX_STEP_INPUT), at: Date.now() }, report);
-        const id = String(call.id || call.tool_call_id || "");
-        if (step && id) pending.set(id, step);
-        report.send({ type: "progress", phase: HINTS[name]?.toLowerCase() || "работает", body: "" });
-      }
+  const toolSteps = new Map();
+  let nextId = 0;
+  let buffer = "";
+  let tail = "";
+  let answering = false;
+  const timer = setTimeout(() => { state.failure = "Агент работал дольше 30 минут — остановлен"; child.kill(); }, RUN_TIMEOUT_MS);
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  const write = (message) => child.stdin.write(`${JSON.stringify(message)}\n`);
+  const request = (method, params) => new Promise((resolve, reject) => {
+    const id = ++nextId;
+    pending.set(id, { resolve, reject });
+    write({ jsonrpc: "2.0", id, method, params });
+  });
+  const failPending = (error) => {
+    for (const item of pending.values()) item.reject(error);
+    pending.clear();
+  };
+  child.on("error", (error) => failPending(error));
+  child.on("close", () => failPending(new Error(stripAnsi(tail).trim() || "Kimi завершил процесс")));
+  child.stderr.on("data", (chunk) => { tail = `${tail}${chunk}`.slice(-3000); });
+  const update = (message) => {
+    const u = message.params?.update || {};
+    const kind = u.sessionUpdate;
+    if (kind === "agent_thought_chunk") { report.send({ type: "progress", phase: "думает" }); return; }
+    if (kind === "agent_message_chunk") {
+      const text = kimiText(u.content);
+      if (!text) return;
+      if (!answering) { state.text = ""; answering = true; }
+      state.text += text;
+      state.partial = state.text;
+      report.send({ type: "progress", body: state.text, phase: "пишет" });
       return;
     }
-    if (event.role === "tool") {
-      const id = String(event.tool_call_id || event.id || "");
-      const step = pending.get(id);
+    if (kind === "tool_call") {
+      if (answering && state.text) addStep(state, { kind: "text", text: clip(state.text, MAX_STEP_TEXT) }, report);
+      answering = false;
+      const name = toolLabel(u.toolName || u.name || u.title);
+      const input = u.rawInput ?? u.input ?? {};
+      const step = addStep(state, { kind: "tool", name, hint: hintOf(name, input), input: clip(stringify(input), MAX_STEP_INPUT), at: Date.now() }, report);
+      const id = String(u.toolCallId || u.id || "");
+      if (step && id) toolSteps.set(id, step);
+      report.send({ type: "progress", phase: HINTS[name]?.toLowerCase() || "работает", body: "" });
+      return;
+    }
+    if (kind === "tool_call_update") {
+      const id = String(u.toolCallId || u.id || "");
+      const step = toolSteps.get(id);
       if (!step) return;
-      pending.delete(id);
-      step.output = clip(kimiText(event.content ?? event.output) || stringify(event.content ?? event.output), MAX_STEP_OUTPUT);
-      step.is_error = Boolean(event.is_error || event.status === "error");
+      toolSteps.delete(id);
+      const output = u.content ?? u.rawOutput ?? u.output ?? "";
+      step.output = clip(kimiText(output) || stringify(output), MAX_STEP_OUTPUT);
+      step.is_error = u.status === "failed";
       step.ms = Date.now() - step.at;
       delete step.at;
       report.send({ type: "progress", steps: state.steps, phase: "думает" });
       return;
     }
-    if (event.usage) {
-      const u = event.usage;
-      state.work = {
-        input_tokens: Number(u.input_tokens ?? u.input) || 0, cached_input_tokens: Number(u.cached_input_tokens ?? u.cached) || 0,
-        output_tokens: Number(u.output_tokens ?? u.output) || 0, thinking_tokens: Number(u.reasoning_output_tokens ?? u.thoughts) || 0,
-        context_tokens: Number(u.input_tokens ?? u.input) || 0,
-      };
-      state.contextTokens = state.work.context_tokens;
-      return;
-    }
-    if (event.type === "error" || event.type === "turn.failed") {
-      state.failure = String(event.error_message || event.message || event.error?.message || event.error || "Kimi вернул ошибку");
+    if (kind === "plan") { report.send({ type: "progress", phase: "планирует" }); return; }
+    if (kind === "usage_update") {
+      state.contextTokens = Number(u.used ?? u.tokens) || 0;
+      state.work = { ...state.work, context_tokens: state.contextTokens };
     }
   };
-  const base = promptText(job, Boolean(resumeId));
-  const prompt = job.images?.length
-    ? `${base}\n\nПрочитай картинки из вложений через ReadMediaFile: ${job.images.map((img) => img.path).join(", ")}`
-    : base;
-  args.push(prompt);
-  return streamCli(CLI.kimi, args, { cwd: files.cwd, env: { ...userEnv(dirs), SHAR_MCP_TOKEN: job.mcp.token, KIMI_CODE_TRUST_WORKSPACE: "1" }, provider: "Kimi" }, entry, handle, state)
-    .finally(() => { fs.rmSync(files.cwd, { recursive: true, force: true }); });
+  child.stdout.on("data", (chunk) => {
+    buffer += chunk;
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let message;
+      try { message = JSON.parse(line); } catch { continue; }
+      if (message.method === "session/update") { update(message); continue; }
+      if (message.method && message.id !== undefined) {
+        if (message.method === "session/request_permission") {
+          const options = message.params?.options || [];
+          const option = options.find((o) => o.kind === "allow_once") || options.find((o) => o.kind === "allow_always") || options[0];
+          write({ jsonrpc: "2.0", id: message.id, result: { outcome: option ? { outcome: "selected", optionId: option.optionId } : { outcome: "cancelled" } } });
+        } else write({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Инструмент недоступен агенту Шара" } });
+        continue;
+      }
+      const waiter = pending.get(message.id);
+      if (!waiter) continue;
+      pending.delete(message.id);
+      if (message.error) waiter.reject(new Error(message.error.message || "Kimi вернул ошибку"));
+      else waiter.resolve(message.result || {});
+    }
+  });
+  try {
+    report.send({ type: "progress", phase: "подключается" });
+    await request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } });
+    report.send({ type: "progress", phase: "готовит диалог" });
+    const session = await request(resumeId ? "session/resume" : "session/new", {
+      ...(resumeId ? { sessionId: resumeId } : {}), cwd: files.cwd, mcpServers: kimiMcp(job),
+    });
+    state.sessionId = String(session.sessionId || resumeId || "");
+    if (job.model) await request("session/set_config_option", { sessionId: state.sessionId, configId: "model", value: job.model });
+    const thinking = { low: "low", medium: "high", high: "max" }[job.effort];
+    if (thinking) await request("session/set_config_option", { sessionId: state.sessionId, configId: "thinking", value: thinking });
+    await request("session/set_mode", { sessionId: state.sessionId, modeId: "auto" });
+    report.send({ type: "progress", phase: "думает" });
+    const base = promptText(job, Boolean(resumeId));
+    const prompt = job.images?.length
+      ? `${base}\n\nПрочитай картинки из вложений через ReadMediaFile: ${job.images.map((img) => img.path).join(", ")}`
+      : base;
+    await request("session/prompt", { sessionId: state.sessionId, prompt: [{ type: "text", text: prompt }] });
+    if (answering && state.text) addStep(state, { kind: "text", text: clip(state.text, MAX_STEP_TEXT) }, report);
+    return state;
+  } catch (error) {
+    if (entry.stopped) return state;
+    if (resumeId && /session|conversation|thread|not found|different directory/i.test(String(error.message))) throw error;
+    state.failure = clip(humanError(error.message || error), 500);
+    state.authExpired = authProblem(state.failure);
+    return state;
+  } finally {
+    clearTimeout(timer);
+    try { child.stdin.end(); } catch { /* процесс уже завершился */ }
+    await Promise.race([closed, sleep(2000)]);
+    if (child.exitCode === null) child.kill();
+    fs.rmSync(files.cwd, { recursive: true, force: true });
+  }
 }
 
 // ── Gemini CLI (ключ человека) ───────────────────────────────────────────────
@@ -987,6 +1052,57 @@ async function accountOf(provider, dirs) {
   return { loggedIn: ok, account: ok ? text.split("\n")[0].slice(0, 120) : "" };
 }
 
+async function kimiModels(dirs) {
+  const cwd = path.join(dirs.work, ".shar-kimi", "catalog");
+  fs.mkdirSync(cwd, { recursive: true, mode: 0o700 });
+  const child = run(CLI.kimi, ["acp"], { cwd, env: { ...userEnv(dirs), KIMI_CODE_TRUST_WORKSPACE: "1" } });
+  const pending = new Map();
+  let nextId = 0;
+  let buffer = "";
+  const timer = setTimeout(() => child.kill(), 30_000);
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  const request = (method, params) => new Promise((resolve, reject) => {
+    const id = ++nextId;
+    pending.set(id, { resolve, reject });
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+  });
+  child.stdout.on("data", (chunk) => {
+    buffer += chunk;
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      let message;
+      try { message = JSON.parse(line); } catch { continue; }
+      const waiter = pending.get(message.id);
+      if (!waiter) continue;
+      pending.delete(message.id);
+      if (message.error) waiter.reject(new Error(message.error.message || "Kimi вернул ошибку"));
+      else waiter.resolve(message.result || {});
+    }
+  });
+  child.on("close", () => {
+    for (const item of pending.values()) item.reject(new Error("Kimi завершил процесс"));
+    pending.clear();
+  });
+  let sessionId = "";
+  try {
+    await request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } });
+    const session = await request("session/new", { cwd, mcpServers: [] });
+    sessionId = session.sessionId || "";
+    const option = (session.configOptions || []).find((item) => item.id === "model");
+    return (option?.options || []).map((item) => ({ id: String(item.value), label: String(item.name || item.value) }));
+  } finally {
+    if (sessionId) {
+      try { await Promise.race([request("session/delete", { sessionId }), sleep(2000)]); } catch { /* каталог уже закрывается */ }
+    }
+    clearTimeout(timer);
+    try { child.stdin.end(); } catch { /* процесс уже завершился */ }
+    await Promise.race([closed, sleep(2000)]);
+    if (child.exitCode === null) child.kill();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+}
+
 /** Какие модели доступны подписке человека — у самого провайдера, а не выдуманный список.
  *  Claude: /v1/models с его токеном подписки (OAuth); GPT: каталог Codex (`codex debug models`, видимые). */
 async function modelsOf(provider, dirs) {
@@ -1003,6 +1119,7 @@ async function modelsOf(provider, dirs) {
       const data = await res.json();
       return (data.data || []).map((m) => ({ id: String(m.id), label: String(m.display_name || m.id).replace(/^Claude\s+/, "") }));
     }
+    if (provider === "kimi") return await kimiModels(dirs);
     if (provider === "codex") {
       const res = await exec(CLI.codex, ["debug", "models"], { env: userEnv(dirs), cwd: dirs.work }, 30_000);
       const data = JSON.parse(stripAnsi(res.out).slice(stripAnsi(res.out).indexOf("{")));
