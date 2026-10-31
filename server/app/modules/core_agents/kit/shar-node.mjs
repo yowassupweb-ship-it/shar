@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "1.2.1";
+const VERSION = "1.2.2";
 const SHAR_URL = String(process.env.SHAR_URL || "").replace(/\/+$/, "");
 const TOKEN = String(process.env.SHAR_NODE_TOKEN || "");
 // Отпечаток этого файла — так же, как его считает Шар (переводы строк без \r): разошёлся с присланным в опросе —
@@ -773,11 +773,11 @@ function kimiMcp(job) {
   const headers = (values) => Object.entries(values || {}).map(([name, value]) => ({ name, value: String(value) }));
   const env = (values) => Object.entries(values || {}).map(([name, value]) => ({ name, value: String(value) }));
   return [
-    { name: "shar", url: absolute(job.mcp.url), headers: headers({ Authorization: `Bearer ${job.mcp.token}` }) },
-    ...(browser ? [{ name: "browser", command: browser, args: ["mcp"], env: [] }] : []),
+    { name: "shar", type: "http", url: absolute(job.mcp.url), headers: headers({ Authorization: `Bearer ${job.mcp.token}` }) },
+    ...(browser ? [{ name: "browser", type: "stdio", command: browser, args: ["mcp"], env: [] }] : []),
     ...extraMcp(job).map((m) => m.type === "http"
-      ? { name: m.name, url: m.url, headers: headers(m.headers) }
-      : { name: m.name, command: "npx", args: ["-y", m.package, ...(m.args || [])], env: env(m.env) }),
+      ? { name: m.name, type: "http", url: m.url, headers: headers(m.headers) }
+      : { name: m.name, type: "stdio", command: "npx", args: ["-y", m.package, ...(m.args || [])], env: env(m.env) }),
   ];
 }
 
@@ -793,7 +793,7 @@ async function runKimi(job, dirs, resumeId, report, entry) {
   const files = kimiFiles(job, dirs);
   const state = newState();
   state.model = job.model || "";
-  const child = run(CLI.kimi, [...(resumeId ? [] : ["--agent-file", files.agent]), "acp"],
+  const child = run(CLI.kimi, ["--agent-file", files.agent, "acp"],
     { cwd: files.cwd, env: { ...userEnv(dirs), KIMI_CODE_TRUST_WORKSPACE: "1" } });
   entry.child = child;
   const pending = new Map();
@@ -801,6 +801,7 @@ async function runKimi(job, dirs, resumeId, report, entry) {
   let nextId = 0;
   let buffer = "";
   let tail = "";
+  let restoring = Boolean(resumeId);
   let answering = false;
   let usageCommand = false;
   let usageText = "";
@@ -872,7 +873,7 @@ async function runKimi(job, dirs, resumeId, report, entry) {
       if (!line.trim()) continue;
       let message;
       try { message = JSON.parse(line); } catch { continue; }
-      if (message.method === "session/update") { update(message); continue; }
+      if (message.method === "session/update") { if (!restoring) update(message); continue; }
       if (message.method && message.id !== undefined) {
         if (message.method === "session/request_permission") {
           const options = message.params?.options || [];
@@ -892,9 +893,11 @@ async function runKimi(job, dirs, resumeId, report, entry) {
     report.send({ type: "progress", phase: "подключается" });
     await request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } });
     report.send({ type: "progress", phase: "готовит диалог" });
-    const session = await request(resumeId ? "session/resume" : "session/new", {
+    // load, в отличие от resume, заново подключает MCP; его replay истории отброшен выше.
+    const session = await request(resumeId ? "session/load" : "session/new", {
       ...(resumeId ? { sessionId: resumeId } : {}), cwd: files.cwd, mcpServers: kimiMcp(job),
     });
+    restoring = false;
     state.sessionId = String(session.sessionId || resumeId || "");
     if (job.model) await request("session/set_config_option", { sessionId: state.sessionId, configId: "model", value: job.model });
     const thinking = { low: "low", medium: "high", high: "max" }[job.effort];
