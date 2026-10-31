@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "1.2.0";
+const VERSION = "1.2.1";
 const SHAR_URL = String(process.env.SHAR_URL || "").replace(/\/+$/, "");
 const TOKEN = String(process.env.SHAR_NODE_TOKEN || "");
 // Отпечаток этого файла — так же, как его считает Шар (переводы строк без \r): разошёлся с присланным в опросе —
@@ -218,7 +218,7 @@ function secretFile(dirs, name, text) {
   return file;
 }
 
-// Сессии CLI по чатам: { "<провайдер>:<чат>": { id, context } } — чтобы продолжать разговор, а не начинать заново.
+// Сессии CLI по чатам: id и контекст для продолжения; у Kimi также накопленные токены — база расхода следующего ответа.
 function sessionsFile(dirs) { return path.join(dirs.base, "sessions.json"); }
 function readSessions(dirs) { try { return JSON.parse(fs.readFileSync(sessionsFile(dirs), "utf8")); } catch { return {}; } }
 function saveSession(dirs, key, value) {
@@ -337,7 +337,8 @@ async function runJob(job) {
     }
     if (entry.stopped) return;
     if (state.sessionId) {
-      saveSession(dirs, key, { id: state.sessionId, context: state.contextTokens || state.work.input_tokens || 0 });
+      saveSession(dirs, key, { id: state.sessionId, context: state.contextTokens || state.work.input_tokens || 0,
+        ...(state.sessionUsage ? { input: state.sessionUsage.input, output: state.sessionUsage.output } : {}) });
       await report.send({ type: "session", id: state.sessionId });
     }
     state.work.duration_ms = state.work.duration_ms || Date.now() - startedAt;
@@ -801,6 +802,9 @@ async function runKimi(job, dirs, resumeId, report, entry) {
   let buffer = "";
   let tail = "";
   let answering = false;
+  let usageCommand = false;
+  let usageText = "";
+  const previous = resumeId ? readSessions(dirs)[`kimi:${job.threadId}`] : null;
   const timer = setTimeout(() => { state.failure = "Агент работал дольше 30 минут — остановлен"; child.kill(); }, RUN_TIMEOUT_MS);
   const closed = new Promise((resolve) => child.once("close", resolve));
   const write = (message) => child.stdin.write(`${JSON.stringify(message)}\n`);
@@ -823,6 +827,7 @@ async function runKimi(job, dirs, resumeId, report, entry) {
     if (kind === "agent_message_chunk") {
       const text = kimiText(u.content);
       if (!text) return;
+      if (usageCommand) { usageText += text; return; }
       if (!answering) { state.text = ""; answering = true; }
       state.text += text;
       state.partial = state.text;
@@ -856,7 +861,7 @@ async function runKimi(job, dirs, resumeId, report, entry) {
     if (kind === "plan") { report.send({ type: "progress", phase: "планирует" }); return; }
     if (kind === "usage_update") {
       state.contextTokens = Number(u.used ?? u.tokens) || 0;
-      state.work = { ...state.work, context_tokens: state.contextTokens };
+      state.work = { ...state.work, context_tokens: state.contextTokens, context_window: Number(u.size ?? u.limit) || 0 };
     }
   };
   child.stdout.on("data", (chunk) => {
@@ -902,6 +907,29 @@ async function runKimi(job, dirs, resumeId, report, entry) {
       : base;
     await request("session/prompt", { sessionId: state.sessionId, prompt: [{ type: "text", text: prompt }] });
     if (answering && state.text) addStep(state, { kind: "text", text: clip(state.text, MAX_STEP_TEXT) }, report);
+    // Локальная команда Kimi: контекст и суммарные токены сессии, не новый запрос к модели.
+    try {
+      usageCommand = true;
+      await request("session/prompt", { sessionId: state.sessionId, prompt: [{ type: "text", text: "/usage" }] });
+      const context = usageText.match(/Context:\s*(\d+)\s*\/\s*(\d+)/i);
+      if (context) {
+        state.contextTokens = Number(context[1]);
+        state.work = { ...state.work, context_tokens: state.contextTokens, context_window: Number(context[2]) };
+      }
+      const totals = usageText.match(/Session total:\s*(\d+) input,\s*(\d+) output/i);
+      if (totals) {
+        const input = Number(totals[1]);
+        const output = Number(totals[2]);
+        state.sessionUsage = { input, output };
+        // До первой новой записи у старой сессии нет базы: показываем расход со следующего ответа, не всю историю сразу.
+        if (!resumeId || (Number.isFinite(previous?.input) && Number.isFinite(previous?.output))) {
+          state.work = { ...state.work, input_tokens: Math.max(0, input - (previous?.input || 0)),
+            output_tokens: Math.max(0, output - (previous?.output || 0)) };
+        }
+      }
+    } catch (error) {
+      log(`задача ${job.id}: расход Kimi не получен — ${error.message || error}`);
+    }
     return state;
   } catch (error) {
     if (entry.stopped) return state;

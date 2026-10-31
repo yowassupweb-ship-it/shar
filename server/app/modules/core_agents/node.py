@@ -128,8 +128,8 @@ def _agent_hash() -> str:
     return hashlib.sha256(_kit_text("shar-node.mjs").encode("utf-8")).hexdigest()[:16]
 
 
-# GPT и Gemini безопасны с 1.1.0; Kimi передаёт поток ответа и настройки модели через ACP с 1.2.0.
-PROVIDER_MIN_VERSION = {"gemini": (1, 1, 0), "codex": (1, 1, 0), "kimi": (1, 2, 0)}
+# GPT и Gemini безопасны с 1.1.0; Kimi передаёт поток ответа и расход через ACP с 1.2.1.
+PROVIDER_MIN_VERSION = {"gemini": (1, 1, 0), "codex": (1, 1, 0), "kimi": (1, 2, 1)}
 
 
 def _version(node: dict) -> tuple:
