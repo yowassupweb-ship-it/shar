@@ -103,9 +103,16 @@ def _iso(value: Any) -> str:
     return value.isoformat() if hasattr(value, "isoformat") else str(value or "")
 
 
+def _message_props(value: Optional[dict]) -> dict:
+    props = dict(value or {})
+    if isinstance(props.get("reasoning"), str):
+        props["reasoning"] = [props["reasoning"]]
+    return props
+
+
 def present_message(row: dict) -> dict:
     return {"id": row["id"], "threadId": row["thread_id"], "role": row["role"], "actor": row["actor"], "body": row["body"],
-            "props": row.get("props") or {}, "status": row["status"], "createdAt": _iso(row["created_at"])}
+            "props": _message_props(row.get("props")), "status": row["status"], "createdAt": _iso(row["created_at"])}
 
 
 def _thread_view(row: dict, stats: Optional[dict] = None) -> dict:
@@ -177,7 +184,7 @@ def update_agent_message(message_id: str, *, body: Optional[str] = None, status:
         params.append(status)
     if props:
         sets.append("props = props || %s")
-        params.append(Json(props))
+        params.append(Json(_message_props(props)))
     if not sets:
         return None
     row = db.conn.fetch_one(f"UPDATE core_messages SET {', '.join(sets)} WHERE id = %s AND status <> 'cancelled' RETURNING *", (*params, message_id))

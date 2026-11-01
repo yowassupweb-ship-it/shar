@@ -95,12 +95,15 @@ def test_login_run_and_reply_through_node(client, admin):
         names = {t["name"] for t in listed}
         assert {"calendar_create", "task_create", "files_list", "memory_add", "skill_write", "ask_user"} <= names
 
-        _events(client, token, run["id"], {"type": "progress", "phase": "думает", "steps": [{"kind": "tool", "name": "calendar_list"}]})
+        _events(client, token, run["id"], {"type": "progress", "phase": "думает", "reasoning": "Повторный вызов",
+                                           "steps": [{"kind": "tool", "name": "calendar_list"}]})
         _events(client, token, run["id"], {"type": "session", "id": "sess-1"},
                 {"type": "done", "body": "Завтра свободно.", "work": {"input_tokens": 1000, "output_tokens": 50}, "model": "claude-opus"})
         messages = admin.get(f"/api/core/threads/{thread['id']}/messages").json()["messages"]
         reply = messages[-1]
         assert reply["status"] == "done" and reply["body"] == "Завтра свободно." and reply["props"]["steps"][0]["name"] == "calendar_list"
+        assert reply["props"]["reasoning"] == ["Повторный вызов"]
+        assert db.conn.fetch_one("SELECT props FROM core_messages WHERE id = %s", (reply["id"],))["props"]["reasoning"] == ["Повторный вызов"]
         assert db.conn.fetch_one("SELECT sessions FROM core_threads WHERE id = %s", (thread["id"],))["sessions"] == {"claude": "sess-1"}
         # Запуск закончен — ключ отозван.
         assert client.post("/api/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
