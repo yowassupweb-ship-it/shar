@@ -316,24 +316,46 @@ def people_search(access, args: dict[str, Any]) -> dict[str, Any]:
 
     query = str(args.get("query") or "").lower().strip()
     department = str(args.get("department") or "").lower().strip()
+    offset = max(0, int(args.get("offset") or 0))
+    limit = max(1, min(int(args.get("limit") or 100), 200))
     rows = db.get_users() or []
     departments = {str(d["id"]): d for d in (db.get_departments() or [])}
+    selected = {did for did, d in departments.items() if department in f"{did} {d.get('name') or ''}".lower()} if department else set()
+    if selected and args.get("include_subdepartments", True):
+        pending = list(selected)
+        while pending:
+            parent = pending.pop()
+            for did, d in departments.items():
+                if str(d.get("parentId") or "") == parent and did not in selected:
+                    selected.add(did)
+                    pending.append(did)
+    heads: dict[str, list[dict[str, str]]] = {did: [] for did in departments}
+    for u in rows:
+        if u.get("is_department_head") or u.get("isDepartmentHead"):
+            did = str(u.get("department") or "")
+            if did in heads:
+                heads[did].append({"id": str(u["id"]), "name": u.get("name") or u.get("username") or ""})
     out = []
     for u in rows:
         name = u.get("name") or u.get("username") or ""
         dept_id = str(u.get("department") or "")
+        dept_ids = list(dict.fromkeys([dept_id, *[str(d) for d in (u.get("department_ids") or u.get("departmentIds") or []) if d]]))
         dept = departments.get(dept_id) or {}
         dept_name = str(dept.get("name") or dept_id)
-        hay = f"{name} {u.get('username') or ''} {u.get('position') or ''} {dept_id} {dept_name}".lower()
+        dept_terms = " ".join(f"{did} {(departments.get(did) or {}).get('name') or ''}" for did in dept_ids)
+        hay = f"{name} {u.get('username') or ''} {u.get('position') or ''} {dept_terms}".lower()
         if query and not all(w in hay for w in query.split()):
             continue
-        if department and department not in f"{dept_id} {dept_name}".lower():
+        if department and not (selected.intersection(dept_ids) or department in f"{dept_id} {dept_name}".lower()):
             continue
         out.append({"id": str(u.get("id")), "name": name, "position": u.get("position") or "",
                     "department": dept_name, "departmentId": dept_id, "parentDepartmentId": dept.get("parentId") or None,
+                    "departmentIds": dept_ids, "isDepartmentHead": bool(u.get("is_department_head") or u.get("isDepartmentHead")),
                     "me": str(u.get("id")) == access.me.user_id})
-    return {"people": out[:100], "total": len(out),
-            "departments": [{"id": str(d["id"]), "name": d["name"], "parentId": d.get("parentId") or None}
+    return {"people": out[offset:offset + limit], "total": len(out), "hasMore": offset + limit < len(out),
+            "nextOffset": offset + limit if offset + limit < len(out) else None,
+            "departments": [{"id": str(d["id"]), "name": d["name"], "parentId": d.get("parentId") or None,
+                             "heads": heads.get(str(d["id"]), [])}
                             for d in departments.values()]}
 
 
@@ -401,12 +423,24 @@ def request_permission(access, args: dict[str, Any]) -> dict[str, Any]:
     message_id = access.ctx.scope.get("job")
     if not message_id:
         raise _err("Разрешение спрашивают только из чата «Ядра»")
+    tools = args.get("tools")
     tool = str(args.get("tool") or "").strip()
     summary = " ".join(str(args.get("summary") or "").split())[:500]
-    if not tool or not summary:
-        raise _err("Нужны tool (какой инструмент) и summary (что именно сделаете — одной фразой)")
-    approval_id = permissions.request(access.me.user_id, message_id, tool, summary)
+    if not summary or not (tool or tools):
+        raise _err("Нужны tool или tools (список инструментов) и summary (что сделаете)")
+    names = tools if tools is not None else [tool]
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        raise _err("tools — список названий инструментов")
+    from app.modules.mcp.tools import TOOLS, _open
+    available = {t["name"] for t in TOOLS if _open(access.ctx, t)}
+    if any(name not in available for name in names):
+        raise _err("В списке есть инструмент, не открытый этому ключу")
+    try:
+        approval_id = permissions.request(access.me.user_id, message_id, names, summary)
+    except ValueError as exc:
+        raise _err(str(exc)) from exc
     return {"asked": True, "approval": approval_id,
+            "tools": list(dict.fromkeys(names)),
             "note": "Карточка «Разрешить / Запретить» показана. Коротко скажите, что ждёте решения, и закончите ответ."}
 
 
@@ -714,9 +748,12 @@ TOOLS: list[dict[str, Any]] = [
      "description": "Удалить задачу (может автор или постановщик). Нужен confirm: true. Закрыть выполненную — task_update с done: true, а не удаление.",
      "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "confirm": {"type": "boolean"}}, "required": ["id", "confirm"]}},
     {"name": "people_search", "app": "people", "handler": people_search, "level": "read",
-     "description": "Сотрудники и оргструктура: id, имя, должность, отдел и родительский отдел. department ограничивает список отделом; без query возвращает сотрудников целиком.",
+     "description": "Сотрудники и оргструктура: отделы и их руководители (heads), все сотрудники отдела и подразделов, страницы по limit/offset.",
      "inputSchema": {"type": "object", "properties": {"query": {"type": "string", "description": "имя, логин, должность или отдел"},
-                                                     "department": {"type": "string", "description": "id или название отдела"}}}},
+                                                     "department": {"type": "string", "description": "id или название отдела"},
+                                                     "include_subdepartments": {"type": "boolean", "default": True},
+                                                     "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                                                     "offset": {"type": "integer", "minimum": 0}}}},
     {"name": "profile_read", "app": "agent", "handler": profile_read, "level": "read",
      "description": "Профиль человека, который вы ведёте: кто он, как любит работать, что поправлял за вами.",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -737,9 +774,10 @@ TOOLS: list[dict[str, Any]] = [
      "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "tag": {"type": "string"}, "limit": {"type": "integer"},
                                                      "scope": {"type": "string", "enum": ["all", "mine", "company"]}}}},
     {"name": "request_permission", "app": "agent", "handler": request_permission, "level": "read",
-     "description": "Попросить у человека разрешение на действие, которое его режим без согласия не пускает (сервер ответил «Нужно разрешение»). "
-                    "summary — что именно и с чем сделаете, одной фразой. После вызова закончите ответ: решение придёт следующим сообщением с approval_id.",
-     "inputSchema": {"type": "object", "properties": {"tool": {"type": "string"}, "summary": {"type": "string"}}, "required": ["tool", "summary"]}},
+     "description": "Попросить разрешение на одно действие (tool) или план из нескольких инструментов (tools, до 10): одно одобрение действует 15 минут только для перечисленных инструментов. "
+                    "summary — конкретный план. После вызова закончите ответ: решение придёт следующим сообщением с approval_id.",
+     "inputSchema": {"type": "object", "properties": {"tool": {"type": "string"}, "tools": {"type": "array", "maxItems": 10, "items": {"type": "string"}},
+                                                     "summary": {"type": "string"}}, "required": ["summary"]}},
     {"name": "ask_user", "app": "agent", "handler": ask_user, "level": "read",
      "description": "Спросить человека с кнопками под вашим ответом: confirm — да/нет, choice — один вариант, multi — несколько. "
                     "Для подтверждения удаления, выбора из вариантов, уточнения. После вызова закончите ответ — выбор придёт следующим сообщением.",

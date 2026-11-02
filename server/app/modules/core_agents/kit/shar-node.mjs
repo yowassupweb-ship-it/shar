@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "1.2.7";
+const VERSION = "1.2.8";
 const SHAR_URL = String(process.env.SHAR_URL || "").replace(/\/+$/, "");
 const TOKEN = String(process.env.SHAR_NODE_TOKEN || "");
 // Отпечаток этого файла — так же, как его считает Шар (переводы строк без \r): разошёлся с присланным в опросе —
@@ -248,10 +248,11 @@ function promptText(job, resumed) {
 
 // Возможности MCP меняются быстрее сессий CLI. Краткая памятка предотвращает повторение уже снятых ограничений.
 const OFFICE_GUIDE = `Актуальные возможности Шара: list_items даёт snippet; read_item читает документ по id и таблицу по sheet/range.
-Документ: update_document mode=insert с after_text вставляет в середину; edit_document replacements заменяет до 50 строк за одну запись, сохраняя оформление. Заметка: edit_note replacements правит несколько фрагментов за одну запись. Таблица: update_table operations меняет несколько листов атомарно.
-Для изменений с прошлого визита — item_versions и diff_item; перед рискованной записью — dry_run (он показывает diff). Ответ записи содержит updatedAt.
+Документ: update_document mode=insert с after_text вставляет в середину; edit_document replacements заменяет до 50 строк за одну запись, сохраняя оформление. Заметка: read_item показывает вкладки, tab читает одну; edit_note с tab правит только выбранную вкладку, replacements — несколько фрагментов. Таблица: update_table operations меняет несколько листов атомарно.
+Для изменений с прошлого визита — changes_list(since=время прошлого визита), затем item_versions и diff_item; перед рискованной записью — dry_run (он показывает diff). Ответ записи содержит updatedAt.
+edit_note и edit_document сначала ищут точное совпадение, затем безопасно учитывают типографские пробелы, тире и кавычки; если совпадений несколько — уточните фрагмент.
 Файлы: files_list → file_read; file_write создаёт новый или заменяет байты по id + base_updated_at; file_edit правит текст на месте (включая группу строк); file_update меняет имя/папку, file_delete удаляет свой файл после подтверждения.
-Одобренный approval_id действует 15 минут для повторных вызовов того же инструмента в рамках согласованной работы.`;
+Одобренный approval_id действует 15 минут для повторных вызовов того же инструмента; request_permission(tools=[...], summary=конкретный план) позволяет одним согласием открыть несколько перечисленных инструментов.`;
 
 function currentRules(job) {
   // Codex и Gemini при --resume не получают новый системный блок: повторяем лишь изменяемые правила и памятку.

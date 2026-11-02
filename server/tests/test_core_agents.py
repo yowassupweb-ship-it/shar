@@ -202,7 +202,7 @@ def test_calendar_tasks_memory_tools(client, admin, anna, users):
         hits = _rpc(client, token, "memory_search", query="прайс карелии")["structuredContent"]["notes"]
         assert hits and hits[0]["shared"]
         _rpc(client, token, "skill_write", name="tour-summary", description="Сводка по туру", body="1. Найти программу\n2. Цены")
-        assert _rpc(client, token, "skill_read", name="tour-summary")["structuredContent"]["uses"] == 0
+        assert _rpc(client, token, "skill_read", name="tour-summary")["structuredContent"]["uses"] == 1
         assert anna.get("/api/core/memory").status_code == 403  # «Ядро» Анне не выдано — настройки закрыты
         written = _rpc(client, token, "file_write", name="итог.csv", text="тур;цена\nКарелия;100")["structuredContent"]["created"]
         read = _rpc(client, token, "file_read", id=written["id"])["structuredContent"]
@@ -230,6 +230,26 @@ def test_calendar_tasks_memory_tools(client, admin, anna, users):
     finally:
         db.conn.execute_query("UPDATE mcp_keys SET revoked_at = now() WHERE id = %s", (key_id,))
         db.conn.execute_query("DELETE FROM core_notes; DELETE FROM core_skills; DELETE FROM core_profiles;")
+
+
+def test_people_search_reports_department_heads_and_members_in_subdepartments(monkeypatch):
+    from types import SimpleNamespace
+    from app.core.db import db
+    from app.modules.mcp.apps import people_search
+
+    monkeypatch.setattr(db, "get_departments", lambda: [
+        {"id": "product", "name": "Продукт", "parentId": None},
+        {"id": "design", "name": "Дизайн", "parentId": "product"},
+    ])
+    monkeypatch.setattr(db, "get_users", lambda: [
+        {"id": "1", "name": "Анна", "department": "product", "is_department_head": True},
+        {"id": "2", "name": "Борис", "department": "design", "department_ids": ["design"]},
+    ])
+    access = SimpleNamespace(me=SimpleNamespace(user_id="1"))
+    result = people_search(access, {"department": "Продукт", "limit": 1})
+    assert result["total"] == 2 and result["hasMore"] and result["nextOffset"] == 1
+    assert result["departments"][0]["heads"] == [{"id": "1", "name": "Анна"}]
+    assert people_search(access, {"department": "Продукт", "offset": 1})["people"][0]["name"] == "Борис"
 
 
 def test_personal_mcp_keys_dont_get_calendar_by_default(client, anna):
@@ -267,6 +287,18 @@ def test_permission_mode_is_enforced_by_server(client, admin, users):
         again = _rpc(client, token, "task_create", title="Ещё одна")["structuredContent"]["created"]
         assert _rpc(client, token, "calendar_delete", id="x", confirm=True, approval_id=asked["approval"])["isError"]
         assert _rpc(client, token, "task_delete", id=again["id"], confirm=True, approval_id=asked["approval"])["structuredContent"]["deleted"]
+        # Одно согласие на план может покрыть разные инструменты, но только перечисленные.
+        followup = post_agent_message(uid, thread["id"], "Claude", status="working", props={"provider": "claude"})
+        bundle_token, bundle_key = dispatch._mcp_key(uid, "claude", followup["id"])
+        bundled = _rpc(client, bundle_token, "request_permission", tools=["task_delete", "calendar_delete"],
+                       summary="Удалю тестовые задачу и событие")["structuredContent"]
+        card = admin.get(f"/api/core/threads/{thread['id']}/messages").json()["messages"][-1]
+        assert "task_delete" in card["props"]["ask"]["question"] and "calendar_delete" in card["props"]["ask"]["question"]
+        admin.post(f"/api/core/messages/{followup['id']}/answer", json={"value": "Разрешить"})
+        assert permissions.consume(bundled["approval"], uid, "task_delete")
+        assert permissions.consume(bundled["approval"], uid, "calendar_delete")
+        assert not permissions.consume(bundled["approval"], uid, "file_delete")
+        db.conn.execute_query("UPDATE mcp_keys SET revoked_at = now() WHERE id = %s", (bundle_key,))
         db.conn.execute_query("UPDATE core_approvals SET decided_at = now() - interval '1 hour' WHERE id = %s", (asked["approval"],))
         third = _rpc(client, token, "task_create", title="Третья")["structuredContent"]["created"]
         assert _rpc(client, token, "task_delete", id=third["id"], confirm=True, approval_id=asked["approval"])["isError"]

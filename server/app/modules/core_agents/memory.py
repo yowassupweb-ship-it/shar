@@ -196,7 +196,7 @@ def skill(user_id: str, name: str, *, count_use: bool = False) -> Optional[dict]
     if count_use:
         db.conn.execute_query("UPDATE core_skills SET uses = uses + 1 WHERE user_id = %s AND name = %s", (row["user_id"], name))
     return {"name": row["name"], "description": row["description"], "body": row["body"], "enabled": row["enabled"],
-            "uses": row["uses"], "shared": row["user_id"] == COMPANY, "authorId": row["author_id"]}
+            "uses": row["uses"] + (1 if count_use else 0), "shared": row["user_id"] == COMPANY, "authorId": row["author_id"]}
 
 
 def write_skill(user_id: str, name: str, description: str, body: str, actor: str, enabled: Optional[bool] = None,

@@ -27,6 +27,16 @@ def test_reminder_claim_survives_process_memory():
         db.conn.execute_query("DELETE FROM calendar_reminder_receipts WHERE reminder_key = %s", (key,))
 
 
+def test_agent_schedule_uses_moscow_time_independent_of_host_timezone():
+    from app.modules.core_agents import schedules
+
+    local = schedules._parse_at("2026-11-03T09:00")
+    assert local.utcoffset() == timedelta(hours=3)
+    assert local.astimezone(timezone.utc).hour == 6
+    next_run = schedules._following("09:00", [], after=datetime(2026, 11, 2, 5, 0, tzinfo=timezone.utc))
+    assert next_run.astimezone(timezone.utc) == datetime(2026, 11, 2, 6, 0, tzinfo=timezone.utc)
+
+
 def test_agent_schedule_dispatches_once_and_lists_events(client, admin, users):
     from app.modules.core_agents import dispatch, permissions, schedules
     from app.modules.notifications.router import create_notification

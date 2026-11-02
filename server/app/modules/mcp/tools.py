@@ -277,6 +277,32 @@ def _page(text: str, args: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _note_tabs(content: str) -> list[dict[str, Any]]:
+    """Границы вкладок как в noteTabs.ts: служебные строки остаются вне редактируемого текста."""
+    markers = list(re.finditer(r"(?m)^<!-- shar-tab: (.*?) -->\n?", content))
+    tabs = []
+    start = 0
+    title = "Основная"
+    for marker in markers:
+        if marker.start() == 0:
+            title, start = marker.group(1), marker.end()
+            continue
+        end = marker.start() - (1 if content[marker.start() - 1:marker.start()] == "\n" else 0)
+        tabs.append({"title": title, "start": start, "end": end})
+        title, start = marker.group(1), marker.end()
+    tabs.append({"title": title, "start": start, "end": len(content)})
+    return tabs
+
+
+def _note_tab(content: str, name: str) -> dict[str, Any]:
+    matches = [tab for tab in _note_tabs(content) if tab["title"].casefold() == name.casefold()]
+    if not matches:
+        raise ToolError(f"Вкладка «{name}» не найдена. Доступны: {', '.join(t['title'] for t in _note_tabs(content))}", "not_found")
+    if len(matches) > 1:
+        raise ToolError(f"Название «{name}» повторяется: выберите уникальную вкладку", "text_not_unique")
+    return matches[0]
+
+
 def _table_rows(content: str, args: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     from openpyxl import load_workbook
     from openpyxl.utils import get_column_letter, range_boundaries
@@ -425,6 +451,12 @@ def read_item(access: Access, args: dict[str, Any]) -> dict[str, Any]:
                            "folder": access.paths.get(item.get("folderId") or "", ""),
                            "canEdit": bool(item.get("canEdit")) and access.level >= LEVELS["edit"]}
     if item["kind"] == "note":
+        tabs = _note_tabs(content)
+        out["tabs"] = [{"title": tab["title"], "chars": tab["end"] - tab["start"]} for tab in tabs]
+        if args.get("tab"):
+            tab = _note_tab(content, str(args["tab"]))
+            content = content[tab["start"]:tab["end"]]
+            out["tab"] = tab["title"]
         out.update(format="markdown", **_page(content, args))
     elif item["kind"] == "document":
         try:
@@ -479,22 +511,35 @@ def _replacements(args: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def edit_note(access: Access, args: dict[str, Any]) -> dict[str, Any]:
+    from app.modules.mcp import textmatch
+
     access.need("edit", "править материалы")
     item = access.load(args.get("id"))
     if item["kind"] != "note":
         raise ToolError(f"Это {KIND_NAMES[item['kind']]}, а не заметка")
     content = item.get("content") or ""
+    tab_name = str(args.get("tab") or "")
+    tab = _note_tab(content, tab_name) if tab_name else None
+    segment = content[tab["start"]:tab["end"]] if tab else content
     replaced = 0
     for edit in _replacements(args):
         old, new = edit["old_text"], edit["new_text"]
-        count = content.count(old)
+        if tab and re.search(r"(?m)^<!-- shar-tab:", new):
+            raise ToolError("При правке одной вкладки нельзя добавлять служебный маркер другой вкладки")
+        matches, _ = textmatch.spans(segment, old)
+        count = len(matches)
         if not count:
             raise ToolError("Такого текста в заметке нет: перечитайте её (read_item) и возьмите точный кусок", "text_not_found")
         if count > 1 and not edit.get("replace_all", args.get("replace_all")):
             raise ToolError(f"Текст встречается {count} раз: возьмите кусок длиннее или включите replace_all", "text_not_unique")
         all_matches = edit.get("replace_all", args.get("replace_all"))
-        content = content.replace(old, new) if all_matches else content.replace(old, new, 1)
+        for start, end in reversed(matches if all_matches else matches[:1]):
+            segment = segment[:start] + new + segment[end:]
         replaced += count if all_matches else 1
+    if tab:
+        content = content[:tab["start"]] + segment + content[tab["end"]:]
+    else:
+        content = segment
     if args.get("dry_run"):
         return {**_preview(item, content), "replaced": replaced}
     return {**_write(access, item, content=content), "replaced": replaced}
@@ -681,6 +726,70 @@ def item_versions(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     return {"id": item["id"], **_call(ws.list_versions, item["id"], access.me)}
 
 
+def changes_list(access: Access, args: dict[str, Any]) -> dict[str, Any]:
+    """Изменения видимых материалов и комментариев после заданного времени."""
+    from datetime import timezone
+
+    since = str(args.get("since") or "")
+    try:
+        start = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        if start.tzinfo is None:
+            raise ValueError
+    except ValueError:
+        raise ToolError("since — время с часовым поясом, например 2026-11-02T12:00:00+03:00") from None
+    limit = max(1, min(int(args.get("limit") or 50), 100))
+    cursor = str(args.get("cursor") or "")
+    after = (start, "", 0)
+    if cursor:
+        try:
+            stamp, kind, row_id = cursor.rsplit("|", 2)
+            after = (datetime.fromisoformat(stamp), kind, int(row_id))
+            if after[0].tzinfo is None or kind not in ("item", "comment") or after[0] < start:
+                raise ValueError
+        except ValueError:
+            raise ToolError("Неверный cursor: возьмите nextCursor из предыдущего ответа") from None
+    until = datetime.now(timezone.utc)
+    comments_sql = (
+        "UNION ALL SELECT c.updated_at AS at, 'comment' AS kind, c.id AS event_id, c.item_id, "
+        "left(c.body, 300) AS body FROM workspace_item_comments c WHERE c.updated_at > %s AND c.updated_at <= %s"
+        if store.table_ready("workspace_item_comments") else ""
+    )
+    events: list[dict[str, Any]] = []
+    scanned = 0
+    # Сканируем и невидимые записи, но наружу отдаём только прошедшие Access.load.
+    while len(events) < limit and scanned < 1000:
+        sql = ("SELECT * FROM (SELECT i.updated_at AS at, 'item' AS kind, i.id AS event_id, i.id AS item_id, "
+               "'' AS body FROM workspace_items i WHERE i.updated_at > %s AND i.updated_at <= %s "
+               + comments_sql + ") feed WHERE (at, kind, event_id) > (%s, %s, %s) "
+               "ORDER BY at, kind, event_id LIMIT 100")
+        params = (start, until, *((start, until) if comments_sql else ()), *after)
+        rows = db.conn.fetch_all(sql, params) or []
+        if not rows:
+            break
+        for row in rows:
+            scanned += 1
+            after = (row["at"], row["kind"], int(row["event_id"]))
+            try:
+                item = access.load(str(row["item_id"]), content=False)
+            except ToolError:
+                continue
+            event = {"type": "comment" if row["kind"] == "comment" else "item_changed",
+                     "at": row["at"].isoformat(), "item": _brief(item, access)}
+            if row["kind"] == "comment":
+                event["commentId"] = str(row["event_id"])
+                event["commentPreview"] = row["body"]
+            else:
+                event["hint"] = "Для подробностей: item_versions и diff_item"
+            events.append(event)
+            if len(events) >= limit:
+                break
+        if len(rows) < 100:
+            break
+    next_cursor = f"{after[0].isoformat()}|{after[1]}|{after[2]}" if scanned else None
+    return {"events": events, "nextCursor": next_cursor, "hasMore": len(events) >= limit or scanned >= 1000,
+            "serverTime": until.isoformat(), "note": "Лента включает текущее состояние материалов и новые/изменённые комментарии; изменения задачи смотрите через events_list."}
+
+
 def _version_content(access: Access, item_id: str, version_id: Any) -> dict[str, Any]:
     return _call(ws.get_version, item_id, str(version_id or ""), access.me)["version"]
 
@@ -820,9 +929,10 @@ TOOLS: list[dict[str, Any]] = [
      "description": "Папки, открытые этому ключу, с путём и числом материалов каждого вида.",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "read_item", "handler": read_item, "level": "read",
-     "description": "Содержимое материала. Для таблицы доступны sheet, range и пагинация; ответ содержит hasMore/nextRange и формулы ячеек. "
+     "description": "Содержимое материала. Заметка возвращает названия вкладок; tab читает одну вкладку. Для таблицы доступны sheet, range и пагинация; ответ содержит hasMore/nextRange и формулы ячеек. "
                     "Для edit_document используйте format=text. Длинные текстовые материалы читайте частями по nextOffset.",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "format": {"type": "string", "enum": ["markdown", "text"]},
+                                                     "tab": {"type": "string", "description": "название вкладки заметки"},
                                                      **_PAGE, **_TABLE_READ}, "required": ["id"]}},
     {"name": "resolve_item", "handler": resolve_item, "level": "read",
      "description": "Найти материал по внутренней ссылке /office?kind=…&id=… или публичной /d/…, /t/…. Права ключа не расширяются.",
@@ -830,6 +940,11 @@ TOOLS: list[dict[str, Any]] = [
     {"name": "item_versions", "handler": item_versions, "level": "read",
      "description": "Версии материала: история сохранений, id, время, автор, метка; можно ли восстановить.",
      "inputSchema": {"type": "object", "properties": {"id": _ID}, "required": ["id"]}},
+    {"name": "changes_list", "handler": changes_list, "level": "read",
+     "description": "Что изменилось в доступном «Офисе» после since: материалы и комментарии. Верните nextCursor при следующем вызове; детали материала — diff_item.",
+     "inputSchema": {"type": "object", "properties": {"since": {"type": "string", "description": "ISO-время с часовым поясом"},
+                                                     "cursor": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}},
+                     "required": ["since"]}},
     {"name": "diff_item", "handler": diff_item, "level": "read",
      "description": "Unified diff текущего содержимого с версией version_id или с последней сохранённой версией.",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "version_id": {"type": "string"}}, "required": ["id"]}},
@@ -841,8 +956,9 @@ TOOLS: list[dict[str, Any]] = [
      "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "level": {"type": "string", "enum": list(LEVELS)},
                                                      "include_schema": {"type": "boolean", "default": False}}}},
     {"name": "edit_note", "handler": edit_note, "level": "edit",
-     "description": "Точечная правка заметки: old_text/new_text или replacements — до 50 замен атомарно. Текст берите из read_item.",
+     "description": "Точечная правка заметки: old_text/new_text или replacements — до 50 замен атомарно. tab ограничивает поиск одной вкладкой и сохраняет служебную разметку. Текст берите из read_item.",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "old_text": {"type": "string"}, "new_text": {"type": "string"},
+                                                     "tab": {"type": "string", "description": "название вкладки из read_item"},
                                                      "replacements": {"type": "array", "maxItems": 50, "items": {"type": "object", "properties": {"old_text": {"type": "string"}, "new_text": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["old_text", "new_text"]}},
                                                      "replace_all": {"type": "boolean", "default": False}, **_DRY_RUN}, "required": ["id"]}},
     {"name": "update_note", "handler": update_note, "level": "edit",

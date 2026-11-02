@@ -130,7 +130,8 @@ SYSTEM = """Вы — личный агент сотрудника в Шаре (�
   это (read_item по id из строки «Сейчас у меня на экране») и только потом отвечайте или спрашивайте. Не спрашивайте
   то, что видно в самом материале: где что стоит, какой диапазон, что уже написано.
 - Режим разрешений человека: {mode}. Где нужно его согласие, сервер не выполнит инструмент без approval_id — тогда
-  вызовите request_permission (что именно сделаете, одной фразой), коротко скажите, что ждёте, и закончите ответ.
+  вызовите request_permission с конкретным планом (tools — список, если нужно несколько инструментов), коротко скажите,
+  что ждёте, и закончите ответ.
 - Не уверены, чего хочет человек, или есть варианты — спросите ask_user с кнопками и закончите ответ: выбор придёт
   следующим сообщением. Лучше один точный вопрос, чем работа «мимо».
 - Переписки (чаты, почта, соцсети) вам закрыты. Если нужен их текст — попросите переслать («Переслать агенту»).
@@ -147,7 +148,7 @@ SYSTEM = """Вы — личный агент сотрудника в Шаре (�
 
 def build_run(job: dict) -> dict:
     """Задача run для ноды целиком. Вызывается при взятии — профиль и ключи самые свежие, секреты в очереди не лежат."""
-    from datetime import datetime
+    from datetime import datetime, timedelta, timezone
 
     payload = job.get("payload") or {}
     user_id = job["user_id"]
@@ -166,7 +167,7 @@ def build_run(job: dict) -> dict:
     system = SYSTEM.format(
         company=_company(), name=user.get("name") or user.get("username") or "сотрудник",
         position=f", {user['position']}" if user.get("position") else "",
-        now=datetime.now().strftime("%A, %d.%m.%Y %H:%M"), mode=_mode_text(user_id),
+        now=datetime.now(timezone(timedelta(hours=3))).strftime("%A, %d.%m.%Y %H:%M МСК"), mode=_mode_text(user_id),
         image_rule=("Для картинок используйте свой встроенный image_gen (не MCP image_generate): он работает через вашу "
                     "подписку GPT; готовый файл Шар покажет человеку сам." if provider == "codex" else
                     "Для картинок — MCP image_generate; если Gemini не подключён или лимит исчерпан, сообщите точную причину."),

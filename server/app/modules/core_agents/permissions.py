@@ -16,6 +16,8 @@ approval_id не выполнится. Агент зовёт request_permission 
 from __future__ import annotations
 
 import uuid
+import json
+import re
 from typing import Any, Optional
 
 from app.core import schema
@@ -95,14 +97,22 @@ def reason(mode: str, tool: dict[str, Any], args: dict[str, Any], me: str) -> Op
     return None
 
 
-def request(user_id: str, message_id: str, tool: str, summary: str) -> str:
+def request(user_id: str, message_id: str, tool: str | list[str], summary: str) -> str:
+    names = [tool] if isinstance(tool, str) else tool
+    if not isinstance(names, list) or not 1 <= len(names) <= 10 or any(
+        not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", name) for name in names
+    ):
+        raise ValueError("Укажите от 1 до 10 названий инструментов")
+    names = list(dict.fromkeys(names))
+    stored = names[0] if len(names) == 1 else json.dumps(names)
+    question = summary[:500] if len(names) == 1 else f"{summary[:380]} (инструменты: {', '.join(names)})"[:500]
     approval_id = uuid.uuid4().hex[:16]
     db.conn.execute_query("INSERT INTO core_approvals (id, user_id, message_id, tool, summary) VALUES (%s, %s, %s, %s, %s)",
-                          (approval_id, user_id, message_id, tool, summary[:500]))
+                          (approval_id, user_id, message_id, stored, question))
     from app.modules.core_chat.router import update_agent_message
 
     update_agent_message(message_id, props={
-        "ask": {"kind": "permission", "question": summary[:500], "approvalId": approval_id, "tool": tool},
+        "ask": {"kind": "permission", "question": question, "approvalId": approval_id, "tool": stored},
         "actions": [{"label": "Разрешить", "value": "Разрешить"}, {"label": "Запретить", "value": "Запретить"}],
     })
     return approval_id
@@ -121,9 +131,20 @@ def consume(approval_id: Any, user_id: str, tool: str) -> bool:
     """Разрешение на этот инструмент действует APPROVAL_MINUTES после «Разрешить» — на всю пачку, о которой спросили."""
     if not approval_id:
         return False
-    return bool(db.conn.fetch_one(
-        "SELECT id FROM core_approvals WHERE id = %s AND user_id = %s AND tool = %s AND status = 'granted' "
-        f"AND decided_at > now() - interval '{APPROVAL_MINUTES} minutes'", (str(approval_id), user_id, tool)))
+    row = db.conn.fetch_one(
+        "SELECT tool FROM core_approvals WHERE id = %s AND user_id = %s AND status = 'granted' "
+        f"AND decided_at > now() - interval '{APPROVAL_MINUTES} minutes'", (str(approval_id), user_id))
+    if not row:
+        return False
+    stored = row["tool"]
+    if stored == tool:
+        return True
+    if not stored.startswith("["):
+        return False
+    try:
+        return tool in json.loads(stored)
+    except (ValueError, TypeError):
+        return False
 
 
 def view() -> list[dict]:

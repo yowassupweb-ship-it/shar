@@ -16,6 +16,8 @@ import time
 from itertools import pairwise
 from typing import Any
 
+from app.modules.mcp import textmatch
+
 PAGE = {"width": 794, "height": 1124, "margin": 72}
 HEADING_SIZE = {1: 28, 2: 22, 3: 18}
 HYPERLINK = 0  # CustomRangeType.HYPERLINK
@@ -280,11 +282,8 @@ def replace_text(snapshot: dict[str, Any], old: str, new: str, *, replace_all: b
         raise TextNotFound("Замена работает внутри абзаца: без переносов строк в тексте")
     body = snapshot.setdefault("body", {})
     stream = str(body.get("dataStream") or "")
-    found = []
-    start = stream.find(old)
-    while start >= 0:
-        found.append(start)
-        start = stream.find(old, start + len(old))
+    matches, _ = textmatch.spans(stream, old)
+    found = [start for start, _ in matches]
     if not found:
         raise TextNotFound("Такого текста в документе нет (ищется точный текст без разметки Markdown)")
     if len(found) > 1 and not replace_all:

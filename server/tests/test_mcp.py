@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 from app.modules.mcp import docformat
 
@@ -75,6 +76,62 @@ def test_grouped_text_edits_are_atomic_and_keep_document_formatting(client, anna
     assert anna.delete(f"/api/mcp/keys/{key['id']}").status_code == 200
 
 
+def test_typographic_text_matching_is_unique_and_keeps_formatting(client, anna):
+    token, key = _key(anna)
+    try:
+        note = _ok(client, token, "create_note", title="Пробелы", markdown="Срок — 5\u00a0дней")
+        assert _ok(client, token, "edit_note", id=note["id"], old_text="Срок - 5 дней", new_text="Срок — 6 дней")["replaced"] == 1
+        assert _ok(client, token, "read_item", id=note["id"])["content"] == "Срок — 6 дней"
+        _ok(client, token, "update_note", id=note["id"], markdown="А—Б и А–Б")
+        ambiguous = _call(client, token, "edit_note", id=note["id"], old_text="А-Б", new_text="X")
+        assert ambiguous["isError"] and ambiguous["error"]["code"] == "text_not_unique"
+
+        doc = _ok(client, token, "create_document", title="План", markdown="**Срок — 5\u00a0дней** и итог")
+        assert _ok(client, token, "edit_document", id=doc["id"], old_text="Срок - 5 дней", new_text="Срок — 6 дней")["replaced"] == 1
+        assert "**Срок — 6 дней**" in _ok(client, token, "read_item", id=doc["id"])["content"]
+    finally:
+        anna.delete(f"/api/mcp/keys/{key['id']}")
+
+
+def test_note_tab_read_and_edit_stay_within_selected_tab(client, anna):
+    token, key = _key(anna)
+    try:
+        note = _ok(client, token, "create_note", title="Вкладки", markdown="Одинаковая строка\n<!-- shar-tab: План -->\nОдинаковая строка")
+        shown = _ok(client, token, "read_item", id=note["id"])
+        assert [tab["title"] for tab in shown["tabs"]] == ["Основная", "План"]
+        tab = _ok(client, token, "read_item", id=note["id"], tab="План")
+        assert tab["content"] == "Одинаковая строка" and tab["tab"] == "План"
+        changed = _ok(client, token, "edit_note", id=note["id"], tab="План",
+                      old_text="Одинаковая строка", new_text="Новая строка")
+        assert changed["replaced"] == 1
+        assert _ok(client, token, "read_item", id=note["id"])["content"] == "Одинаковая строка\n<!-- shar-tab: План -->\nНовая строка"
+    finally:
+        anna.delete(f"/api/mcp/keys/{key['id']}")
+
+
+def test_changes_list_paginates_items_and_comments_without_leaking_private_items(client, anna, boris):
+    since = datetime.now(timezone.utc).isoformat()
+    token, key = _key(anna)
+    other, other_key = _key(boris)
+    try:
+        note = _ok(client, token, "create_note", title="Лента тест", markdown="Первая версия")
+        _ok(client, token, "add_comment", id=note["id"], text="Проверить абзац")
+        found = []
+        cursor = None
+        for _ in range(5):
+            page = _ok(client, token, "changes_list", since=since, cursor=cursor, limit=1)
+            found.extend(e for e in page["events"] if e["item"]["id"] == note["id"])
+            cursor = page["nextCursor"]
+            if not page["hasMore"]:
+                break
+        assert {e["type"] for e in found} == {"item_changed", "comment"}
+        private = _ok(client, other, "changes_list", since=since)
+        assert all(e["item"]["id"] != note["id"] for e in private["events"])
+    finally:
+        anna.delete(f"/api/mcp/keys/{key['id']}")
+        boris.delete(f"/api/mcp/keys/{other_key['id']}")
+
+
 def test_keys_are_personal_revocable_and_expire(client, anna, boris):
     token, key = _key(anna)
     assert token.startswith("shar_mcp_")
@@ -107,7 +164,7 @@ def test_protocol_and_tools_follow_access_level(client, anna):
     note = client.post("/api/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers={"Authorization": f"Bearer {token}"})
     assert note.status_code == 202
     names = {t["name"] for t in _rpc(client, token, "tools/list").json()["result"]["tools"]}
-    assert names == {"list_items", "list_folders", "read_item", "list_comments", "resolve_item", "item_versions", "diff_item", "capabilities", "tool_search"}
+    assert names == {"list_items", "list_folders", "read_item", "list_comments", "resolve_item", "item_versions", "diff_item", "changes_list", "capabilities", "tool_search"}
     denied = _call(client, token, "create_note", title="x", markdown="y")
     assert denied["isError"] and "не открыт" in denied["content"][0]["text"]
     assert _rpc(client, token, "nope").json()["error"]["code"] == -32601

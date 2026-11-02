@@ -49,6 +49,7 @@ CREATE INDEX IF NOT EXISTS idx_core_agent_schedules_user ON core_agent_schedules
 MAX_PER_USER = 50
 MAX_PROMPT = 20_000
 TICK_SECONDS = 15
+LOCAL_TZ = timezone(timedelta(hours=3))  # Время Шара для сотрудников — МСК, независимо от зоны хоста.
 _TIME = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
 
@@ -61,7 +62,7 @@ def _aware(value: datetime) -> datetime:
 
 
 def _local(value: datetime) -> datetime:
-    return _aware(value).astimezone().replace(tzinfo=None)
+    return _aware(value).astimezone(LOCAL_TZ).replace(tzinfo=None)
 
 
 def _iso(value: Any) -> Optional[str]:
@@ -79,7 +80,7 @@ def _parse_at(value: str) -> datetime:
     except ValueError as exc:
         raise ScheduleError("Нужно время at: 2026-11-03T15:00") from exc
     if parsed.tzinfo is None:
-        parsed = parsed.astimezone()
+        parsed = parsed.replace(tzinfo=LOCAL_TZ)
     return parsed
 
 
@@ -91,7 +92,7 @@ def _following(run_time: str, weekdays: list[int], *, after: datetime, start: Op
     allowed = set(weekdays)
     for _ in range(8):
         if candidate > _local(after) and (not allowed or candidate.weekday() in allowed):
-            return candidate.astimezone()
+            return candidate.replace(tzinfo=LOCAL_TZ)
         candidate += timedelta(days=1)
     raise ScheduleError("Не удалось вычислить следующий запуск")
 
