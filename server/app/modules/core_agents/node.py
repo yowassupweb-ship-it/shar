@@ -7,7 +7,7 @@
   DELETE /api/core/nodes/{id}
 
 Нода (Authorization: Bearer shar_node_…):
-  POST   /api/core/node/poll             {version, clis, running: [id задач]} → {jobs, cancel}; держит до 25 с, пока нет работы
+  POST   /api/core/node/poll             {version, clis, running: [id задач], slots: свободные места} → {jobs, cancel}; держит до 25 с, пока нет работы
   POST   /api/core/node/jobs/{id}/events {events: [...]} — ход задачи (шаги, текст, итог, ход входа)
 
 Без секретов (их скачивает установщик):
@@ -160,6 +160,7 @@ class PollBody(BaseModel):
     host: str = Field(default="", max_length=120)
     clis: dict[str, str] = Field(default_factory=dict)
     running: list[str] = Field(default_factory=list, max_length=200)
+    slots: int = Field(default=1, ge=0, le=200)  # старые ноды не передают slots и по-прежнему получают одну задачу
     wait: bool = True
 
 
@@ -207,19 +208,19 @@ def _take(node: dict) -> Optional[dict]:
 @router.post("/api/core/node/poll")
 async def poll(body: PollBody, request: Request):
     node = await run_in_threadpool(_node, request)
-    deadline = time.monotonic() + (POLL_SECONDS if body.wait else 0)
+    deadline = time.monotonic() + (POLL_SECONDS if body.wait and body.slots else 0)
     # Отданное ноде, о чём она не знает (оборвался прошлый опрос), — обратно в очередь: иначе ответ висел бы вечно.
     await run_in_threadpool(store.requeue_lost, node["id"], body.running)
+    await run_in_threadpool(_seen, node, body)
     while True:
-        await run_in_threadpool(_seen, node, body)
         cancel = await run_in_threadpool(store.cancelled_among, node["id"], body.running)
         # Нода ушла, пока мы ждали (перезапуск, сеть) — задачу ей не отдаём: ответ ушёл бы в пустоту.
         if await request.is_disconnected():
             return {"jobs": [], "cancel": cancel, "agent": _agent_hash()}
-        job = await run_in_threadpool(_take, node)
+        job = await run_in_threadpool(_take, node) if body.slots else None
         if job or cancel or time.monotonic() >= deadline or await request.is_disconnected():
             return {"jobs": [job] if job else [], "cancel": cancel, "agent": _agent_hash()}
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.5)
 
 
 class EventsBody(BaseModel):

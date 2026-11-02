@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "1.2.4";
+const VERSION = "1.2.5";
 const SHAR_URL = String(process.env.SHAR_URL || "").replace(/\/+$/, "");
 const TOKEN = String(process.env.SHAR_NODE_TOKEN || "");
 // Отпечаток этого файла — так же, как его считает Шар (переводы строк без \r): разошёлся с присланным в опросе —
@@ -172,14 +172,13 @@ function exec(command, args, opts = {}, timeoutMs = 60_000) {
 const stripAnsi = (text) => String(text || "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\x1b\][^\x07]*\x07/g, "").replace(/\r/g, "");
 
 async function detectClis() {
-  const found = {};
-  for (const [provider, command] of Object.entries(CLI)) {
+  const versions = await Promise.all(Object.entries(CLI).map(async ([provider, command]) => {
     const res = await exec(command, ["--version"], {}, 30_000);
     const version = stripAnsi(res.out).trim().split("\n").pop();
-    if (res.code === 0 && version) found[provider] = version.slice(0, 60);
-  }
+    return [provider, res.code === 0 && version ? version.slice(0, 60) : ""];
+  }));
   browser = findObscura();
-  return found;
+  return Object.fromEntries(versions.filter(([, version]) => version));
 }
 
 // Браузер для агентов — Obscura (MCP по stdio): страницы, формы, скриншоты. Ставит его установщик ноды; нет — агенты
@@ -1335,7 +1334,8 @@ async function main() {
   let failures = 0;
   for (;;) {
     try {
-      const res = await shar("/api/core/node/poll", { version: VERSION, host: os.hostname(), clis: { ...clis, ...(browser ? { browser: "obscura" } : {}) }, running: [...running.keys()], wait: running.size < PARALLEL }, 45_000);
+      const slots = Math.max(0, PARALLEL - running.size);
+      const res = await shar("/api/core/node/poll", { version: VERSION, host: os.hostname(), clis: { ...clis, ...(browser ? { browser: "obscura" } : {}) }, running: [...running.keys()], slots, wait: slots > 0 }, 45_000);
       failures = 0;
       // Самообновление: Шар раздаёт новую версию агента ноды. В простое выходим — systemd перезапускает службу,
       // и она перед стартом забирает свежий файл с Шара (ExecStartPre в install.sh). На машине разработчика не нужно.

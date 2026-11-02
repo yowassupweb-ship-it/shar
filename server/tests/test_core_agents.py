@@ -56,6 +56,22 @@ def test_nodes_are_admin_only_and_token_guarded(client, admin, anna):
         _cleanup()
 
 
+def test_full_node_does_not_claim_another_job(client, admin):
+    from app.modules.core_agents import store
+
+    try:
+        _, token = _node(admin)
+        user_id = admin.get("/api/auth/session").json()["user"]["id"]
+        queued = store.enqueue("check", user_id, "claude")
+        full = _poll(client, token, slots=0)
+        assert full.status_code == 200 and full.json()["jobs"] == []
+        assert db.conn.fetch_one("SELECT status FROM core_jobs WHERE id = %s", (queued["id"],))["status"] == "queued"
+        available = _poll(client, token, slots=1).json()["jobs"]
+        assert len(available) == 1 and available[0]["id"] == str(queued["id"])
+    finally:
+        _cleanup()
+
+
 def test_login_run_and_reply_through_node(client, admin):
     try:
         _, token = _node(admin)
