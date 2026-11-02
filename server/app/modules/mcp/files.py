@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.db import db
-from app.core.storage import UPLOAD_DIR, new_upload_name, s3_storage
+from app.core.storage import UPLOAD_DIR, is_upload_name, new_upload_name, s3_storage
 from app.modules.cloud import router as cloud
 
 MAX_WRITE = 10 * 1024 * 1024
@@ -34,10 +34,10 @@ MIME = {".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv", ".json
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".heic"}
 
 
-def _err(text: str) -> Exception:
+def _err(text: str, code: str = "tool_error") -> Exception:
     from app.modules.mcp.tools import ToolError
 
-    return ToolError(text)
+    return ToolError(text, code)
 
 
 def _call(fn, *args, **kwargs):
@@ -55,9 +55,11 @@ def absolute(url: str) -> str:
 
 
 def _file_view(f: dict[str, Any], me: str) -> dict[str, Any]:
-    return {"id": str(f.get("id")), "name": f.get("name") or "", "folderId": f.get("folderId") or None, "size": f.get("size") or 0,
-            "type": f.get("mimeType") or f.get("fileType") or "", "updatedAt": f.get("updatedAt") or f.get("createdAt"),
-            "mine": str(f.get("ownerId") or "") == me, "url": absolute(f.get("url") or ""), "open": f"/files?file={f.get('id')}"}
+    stamp = f.get("updatedAt") or f.get("updated_at") or f.get("createdAt") or f.get("created_at")
+    return {"id": str(f.get("id")), "name": f.get("name") or "", "folderId": f.get("folderId") or f.get("folder_id") or None, "size": f.get("size") or 0,
+            "type": f.get("mimeType") or f.get("mime_type") or f.get("fileType") or "",
+            "updatedAt": stamp.isoformat() if hasattr(stamp, "isoformat") else stamp,
+            "mine": str(f.get("ownerId") or f.get("owner_id") or "") == me, "url": absolute(f.get("url") or ""), "open": f"/files?file={f.get('id')}"}
 
 
 def _folder_view(f: dict[str, Any], me: str) -> dict[str, Any]:
@@ -187,11 +189,8 @@ def _store(name: str, content: bytes) -> tuple[str, str]:
     return key, f"/api/uploads/{unique}"
 
 
-def file_write(access, args: dict[str, Any]) -> dict[str, Any]:
-    name = Path(str(args.get("name") or "").strip()).name
-    if not name:
-        raise _err("Нужно имя файла с расширением (name)")
-    if args.get("base64"):
+def _content(args: dict[str, Any]) -> bytes:
+    if "base64" in args:
         try:
             content = base64.b64decode(str(args["base64"]), validate=True)
         except ValueError as exc:
@@ -204,12 +203,88 @@ def file_write(access, args: dict[str, Any]) -> dict[str, Any]:
         raise _err("Нужно содержимое: text, json или base64")
     if len(content) > MAX_WRITE:
         raise _err("Не больше 10 МБ за раз")
+    return content
+
+
+def _discard(key: str) -> None:
+    """Удалять только созданные нами загрузки; сбой уборки не должен отменять успешную запись в БД."""
+    prefix, _, name = str(key or "").partition("/")
+    if prefix != "uploads" or not is_upload_name(name):
+        return
+    try:
+        if s3_storage.enabled:
+            s3_storage.delete_object(key)
+        else:
+            (UPLOAD_DIR / key).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def file_write(access, args: dict[str, Any]) -> dict[str, Any]:
+    existing = _visible_file(access, args["id"]) if args.get("id") else None
+    if existing and str(existing.get("owner_id") or "") != access.me.user_id:
+        raise _err("Менять содержимое можно только у своего файла")
+    name = Path(str(args.get("name") or (existing or {}).get("name") or "").strip()).name
+    if not name:
+        raise _err("Нужно имя файла с расширением (name)")
+    if existing and name != existing["name"]:
+        raise _err("Для переименования используйте file_update; file_write с id меняет только содержимое")
+    content = _content(args)
+    if existing and not args.get("base_updated_at"):
+        raise _err("Для замены файла нужен base_updated_at из file_read — это защищает от потери чужих правок")
     key, url = _store(name, content)
     ext = Path(name).suffix.lower()
+    if existing:
+        updated = db.replace_cloud_file_content(str(existing["id"]), access.me.user_id, str(args["base_updated_at"]),
+                                                url, key, len(content), MIME.get(ext, "application/octet-stream"))
+        if not updated:
+            _discard(key)
+            raise _err("Файл изменился после чтения: прочитайте его заново и повторите правку", "stale_version")
+        # Старый upload может быть вложением чата по тому же URL: не удаляем его при замене файла.
+        cloud._cloud_changed(updated.get("folder_id"), updated)
+        return {"updated": _file_view(updated, access.me.user_id)}
     meta = cloud.CloudFileMeta(name=name, url=url, s3Key=key, size=len(content), mimeType=MIME.get(ext),
                                fileType="image" if ext in IMAGE_EXT else "file", folderId=str(args.get("folder_id") or "") or None)
-    created = _call(cloud.create_cloud_file, meta, access.me)
+    try:
+        created = _call(cloud.create_cloud_file, meta, access.me)
+    except Exception:
+        _discard(key)
+        raise
     return {"created": _file_view(created, access.me.user_id)}
+
+
+def file_edit(access, args: dict[str, Any]) -> dict[str, Any]:
+    row = _visible_file(access, args.get("id"))
+    if str(row.get("owner_id") or "") != access.me.user_id:
+        raise _err("Править можно только свой файл")
+    if Path(row.get("name") or "").suffix.lower() not in TEXT_EXT:
+        raise _err("Точечная правка доступна для текстовых файлов; для другого формата используйте file_write с id и base64")
+    if not args.get("base_updated_at"):
+        raise _err("Нужен base_updated_at из file_read — это защищает от потери чужих правок")
+    before = extract_text(row.get("name") or "", _bytes(row))
+    text = before
+    mode = str(args.get("mode") or "replace")
+    if mode == "append":
+        text += str(args.get("text") or "")
+    elif mode == "replace":
+        from app.modules.mcp.tools import _replacements
+
+        for edit in _replacements(args):
+            old, new = edit["old_text"], edit["new_text"]
+            count = text.count(old)
+            if not count:
+                raise _err(f"Фрагмент не найден: {old[:80]}")
+            if count > 1 and not edit.get("replace_all"):
+                raise _err(f"Фрагмент встречается {count} раз: уточните его или включите replace_all")
+            text = text.replace(old, new) if edit.get("replace_all") else text.replace(old, new, 1)
+    else:
+        raise _err("mode — replace или append")
+    if args.get("dry_run"):
+        import difflib
+
+        diff = "\n".join(difflib.unified_diff(before.splitlines(), text.splitlines(), fromfile="До", tofile="После", lineterm=""))
+        return {"id": str(row["id"]), "preview": True, "diff": diff[:MAX_CHARS], "changed": before != text}
+    return file_write(access, {"id": str(row["id"]), "base_updated_at": args["base_updated_at"], "text": text})
 
 
 def file_update(access, args: dict[str, Any]) -> dict[str, Any]:
@@ -257,11 +332,20 @@ TOOLS: list[dict[str, Any]] = [
                     "для картинок и прочего бинарного скачайте файл по ней.",
      "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}, "max_chars": {"type": "integer", "minimum": 1000, "maximum": 60000}}, "required": ["id"]}},
     {"name": "file_write", "app": "files", "handler": file_write, "level": "create",
-     "description": "Положить новый файл в «Файлы»: text (txt, md, csv, html…), json или base64 (любой формат), до 10 МБ. "
-                    "Отчёт, выгрузку, таблицу для Excel — сюда; документ для совместной правки — лучше create_document в «Офисе».",
+     "description": "Создать файл (name) или заменить содержимое существующего (id + base_updated_at из file_read), сохраняя id, папку и доступы. "
+                    "Передайте text, json или base64 до 10 МБ. Для точечной правки текста — file_edit.",
      "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "description": "имя с расширением: отчёт.csv"},
-                                                     "text": {"type": "string"}, "json": {}, "base64": {"type": "string"}, "folder_id": _FOLDER},
-                     "required": ["name"]}},
+                                                     "id": {"type": "string", "description": "id существующего своего файла; без id создаётся новый"},
+                                                     "base_updated_at": {"type": "string", "description": "updatedAt из file_read; обязателен при замене"},
+                                                     "text": {"type": "string"}, "json": {}, "base64": {"type": "string"}, "folder_id": _FOLDER}}},
+    {"name": "file_edit", "app": "files", "handler": file_edit, "level": "edit",
+     "description": "Править текстовый файл на месте: mode=replace с old_text/new_text или до 50 replacements (можно с переносами строк), "
+                    "mode=append с text. Нужен base_updated_at из file_read; dry_run покажет diff.",
+     "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "base_updated_at": {"type": "string"},
+                                                     "mode": {"type": "string", "enum": ["replace", "append"]}, "text": {"type": "string"},
+                                                     "old_text": {"type": "string"}, "new_text": {"type": "string"},
+                                                     "replacements": {"type": "array", "maxItems": 50, "items": {"type": "object", "properties": {"old_text": {"type": "string"}, "new_text": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["old_text", "new_text"]}},
+                                                     "dry_run": {"type": "boolean"}}, "required": ["id", "base_updated_at"]}},
     {"name": "file_update", "app": "files", "handler": file_update, "level": "edit",
      "description": "Переименовать свой файл (name) и/или переложить в другую папку (folder_id; пустой — в корень).",
      "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "folder_id": {"type": ["string", "null"]}},

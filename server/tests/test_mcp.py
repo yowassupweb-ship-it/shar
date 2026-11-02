@@ -53,6 +53,28 @@ def test_markdown_roundtrip_append_and_replace():
             pass
 
 
+def test_grouped_text_edits_are_atomic_and_keep_document_formatting(client, anna):
+    token, key = _key(anna)
+    doc = _ok(client, token, "create_document", title="План", markdown="Первая **строка**\nВторая строка\nТретья строка")
+    edits = [{"old_text": "Первая", "new_text": "Новая первая"}, {"old_text": "Вторая", "new_text": "Новая вторая"}]
+    preview = _ok(client, token, "edit_document", id=doc["id"], replacements=edits, dry_run=True)
+    assert preview["replaced"] == 2 and preview["preview"] and "Новая первая" in preview["diff"]
+    assert "Новая первая" not in _ok(client, token, "read_item", id=doc["id"], format="text")["content"]
+    result = _ok(client, token, "edit_document", id=doc["id"], replacements=edits)
+    assert result["replaced"] == 2 and result["updatedAt"]
+    assert "Новая первая **строка**" in _ok(client, token, "read_item", id=doc["id"])["content"]
+    failed = _call(client, token, "edit_document", id=doc["id"], replacements=[
+        {"old_text": "Новая первая", "new_text": "Испорчено"}, {"old_text": "нет такой строки", "new_text": "Ошибка"}])
+    assert failed["isError"]
+    assert "Испорчено" not in _ok(client, token, "read_item", id=doc["id"], format="text")["content"]
+
+    note = _ok(client, token, "create_note", title="Заметка", markdown="Один\nДва\nТри")
+    assert _ok(client, token, "edit_note", id=note["id"], replacements=[
+        {"old_text": "Один", "new_text": "Первый"}, {"old_text": "Два", "new_text": "Второй"}])["replaced"] == 2
+    assert _ok(client, token, "read_item", id=note["id"])["content"] == "Первый\nВторой\nТри"
+    assert anna.delete(f"/api/mcp/keys/{key['id']}").status_code == 200
+
+
 def test_keys_are_personal_revocable_and_expire(client, anna, boris):
     token, key = _key(anna)
     assert token.startswith("shar_mcp_")

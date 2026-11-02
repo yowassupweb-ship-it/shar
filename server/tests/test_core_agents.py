@@ -205,7 +205,23 @@ def test_calendar_tasks_memory_tools(client, admin, anna, users):
         assert _rpc(client, token, "skill_read", name="tour-summary")["structuredContent"]["uses"] == 0
         assert anna.get("/api/core/memory").status_code == 403  # «Ядро» Анне не выдано — настройки закрыты
         written = _rpc(client, token, "file_write", name="итог.csv", text="тур;цена\nКарелия;100")["structuredContent"]["created"]
-        assert "Карелия" in _rpc(client, token, "file_read", id=written["id"])["structuredContent"]["text"]
+        read = _rpc(client, token, "file_read", id=written["id"])["structuredContent"]
+        assert "Карелия" in read["text"] and read["updatedAt"]
+        preview = _rpc(client, token, "file_edit", id=written["id"], base_updated_at=read["updatedAt"],
+                       old_text="Карелия;100", new_text="Карелия;120", dry_run=True)["structuredContent"]
+        assert preview["preview"] and "Карелия;120" in preview["diff"]
+        edited = _rpc(client, token, "file_edit", id=written["id"], base_updated_at=read["updatedAt"],
+                      replacements=[{"old_text": "Карелия", "new_text": "Алтай"},
+                                    {"old_text": "100", "new_text": "120"}])["structuredContent"]["updated"]
+        assert edited["id"] == written["id"] and edited["updatedAt"] != read["updatedAt"]
+        assert "Алтай;120" in _rpc(client, token, "file_read", id=written["id"])["structuredContent"]["text"]
+        grouped = _rpc(client, token, "file_edit", id=written["id"], base_updated_at=edited["updatedAt"],
+                       old_text="тур;цена\nАлтай;120", new_text="город;цена\nСочи;150")["structuredContent"]["updated"]
+        assert "Сочи;150" in _rpc(client, token, "file_read", id=written["id"])["structuredContent"]["text"]
+        stale = _rpc(client, token, "file_write", id=written["id"], base_updated_at=read["updatedAt"], text="старый текст")
+        assert stale["isError"] and stale["error"]["code"] == "stale_version"
+        replaced = _rpc(client, token, "file_write", id=written["id"], base_updated_at=grouped["updatedAt"], text="новый файл")
+        assert replaced["structuredContent"]["updated"]["id"] == written["id"]
         assert _rpc(client, token, "file_delete", id=written["id"], confirm=True)["structuredContent"]["deleted"]
         # Общая память компании видна агенту другого сотрудника.
         other, other_id = dispatch._mcp_key(users.ids["boris"], "claude", "")

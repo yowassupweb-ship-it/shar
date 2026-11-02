@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "1.2.6";
+const VERSION = "1.2.7";
 const SHAR_URL = String(process.env.SHAR_URL || "").replace(/\/+$/, "");
 const TOKEN = String(process.env.SHAR_NODE_TOKEN || "");
 // Отпечаток этого файла — так же, как его считает Шар (переводы строк без \r): разошёлся с присланным в опросе —
@@ -248,8 +248,9 @@ function promptText(job, resumed) {
 
 // Возможности MCP меняются быстрее сессий CLI. Краткая памятка предотвращает повторение уже снятых ограничений.
 const OFFICE_GUIDE = `Актуальные возможности Шара: list_items даёт snippet; read_item читает документ по id и таблицу по sheet/range.
-Документ: update_document mode=insert с after_text вставляет в середину. Таблица: update_table operations меняет несколько листов атомарно.
+Документ: update_document mode=insert с after_text вставляет в середину; edit_document replacements заменяет до 50 строк за одну запись, сохраняя оформление. Заметка: edit_note replacements правит несколько фрагментов за одну запись. Таблица: update_table operations меняет несколько листов атомарно.
 Для изменений с прошлого визита — item_versions и diff_item; перед рискованной записью — dry_run (он показывает diff). Ответ записи содержит updatedAt.
+Файлы: files_list → file_read; file_write создаёт новый или заменяет байты по id + base_updated_at; file_edit правит текст на месте (включая группу строк); file_update меняет имя/папку, file_delete удаляет свой файл после подтверждения.
 Одобренный approval_id действует 15 минут для повторных вызовов того же инструмента в рамках согласованной работы.`;
 
 function currentRules(job) {
@@ -464,7 +465,7 @@ const HINTS = {
   create_note: "Создаёт заметку", create_table: "Создаёт таблицу", calendar_list: "Смотрит календарь", calendar_create: "Создаёт событие",
   calendar_update: "Меняет событие", calendar_delete: "Удаляет событие", tasks_list: "Смотрит задачи", task_read: "Читает задачу",
   task_create: "Ставит задачу", task_update: "Меняет задачу", task_delete: "Удаляет задачу", files_list: "Смотрит «Файлы»",
-  file_read: "Читает файл", file_write: "Кладёт файл", people_search: "Ищет сотрудника", memory_search: "Вспоминает",
+  file_read: "Читает файл", file_write: "Кладёт файл", file_edit: "Правит файл", file_update: "Меняет файл", file_delete: "Удаляет файл", people_search: "Ищет сотрудника", memory_search: "Вспоминает",
   memory_add: "Запоминает", profile_note: "Учится у вас", skill_read: "Читает навык", skill_write: "Записывает навык",
   ask_user: "Спрашивает вас", WebSearch: "Ищет в интернете", WebFetch: "Читает страницу", web_search: "Ищет в интернете",
   google_web_search: "Ищет в интернете", web_fetch: "Читает страницу",
@@ -733,6 +734,12 @@ function runCodex(job, dirs, resumeId, report, entry) {
   const toolName = (item) => (item.tool ? String(item.tool) : item.type === "web_search" ? "web_search" : item.command ? "shell" : "");
   const handle = (event) => {
     if (!event.type && event.msg?.type) event = event.msg;
+    if (event.type === "image_generation_begin") {
+      event = { type: "item.started", item: { type: "image_generation", id: event.call_id, status: "in_progress" } };
+    } else if (event.type === "image_generation_end") {
+      event = { type: "item.completed", item: { type: "image_generation", id: event.call_id, status: event.status,
+        image: event.image, saved_path: event.saved_path, failure: event.failure, revised_prompt: event.revised_prompt } };
+    }
     // Прежний формат Codex: рассуждение и ответ — отдельными событиями, а не item.* (как в MBOX).
     if (event.type === "agent_reasoning" || event.type === "agent_reasoning_raw_content") {
       event = { type: "item.completed", item: { type: "reasoning", text: event.text } };
@@ -770,15 +777,23 @@ function runCodex(job, dirs, resumeId, report, entry) {
         }
         let data = typeof item.image === "string" ? item.image : item.image?.result || item.result || "";
         if (!data && item.saved_path) {
-          const file = path.resolve(String(item.saved_path));
-          const root = path.resolve(dirs.work) + path.sep;
-          if (file.startsWith(root)) { try { data = fs.readFileSync(file).toString("base64"); } catch { /* сообщим ниже */ } }
+          // Codex может отдать image.file_id вместо inline-байтов. Тогда читаем saved_path, но только внутри
+          // каталога этого человека; realpath не даст подменить его симлинком на чужой файл ноды.
+          try {
+            const file = fs.realpathSync(String(item.saved_path));
+            const root = fs.realpathSync(dirs.base) + path.sep;
+            if (file.startsWith(root)) data = fs.readFileSync(file).toString("base64");
+          } catch { /* ниже сообщим, что готовую картинку не удалось получить */ }
         }
-        if (data && item.status !== "failed") {
+        if (typeof data === "string" && data && item.status !== "failed") {
+          data = data.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
           report.send({ type: "attachment", eventId: `${job.id}:${key}`, name: "картинка-gpt.png", data });
           report.send({ type: "progress", steps: state.steps, phase: "картинка готова" });
         } else if (item.status === "failed") {
           report.send({ type: "progress", steps: state.steps, reasoning: `GPT не создал картинку: ${stringify(item.failure || "неизвестная ошибка")}` });
+        } else {
+          state.failure = "GPT создал картинку, но нода не получила её байты. Повторите запрос или обновите Codex CLI на ноде.";
+          report.send({ type: "progress", steps: state.steps, reasoning: state.failure });
         }
         return;
       }
@@ -903,12 +918,15 @@ async function runKimi(job, dirs, resumeId, report, entry) {
       return;
     }
     if (kind === "tool_call") {
+      const id = String(u.toolCallId || u.id || "");
+      // ACP может прислать тот же tool_call повторно по мере обновления состояния. Это один вызов,
+      // а не новая задача в ленте; счётчик повторов должен видеть только разные toolCallId.
+      if (id && toolSteps.has(id)) return;
       if (answering && state.text) addStep(state, { kind: "text", text: clip(state.text, MAX_STEP_TEXT) }, report);
       answering = false;
       const name = toolLabel(u.toolName || u.name || u.title);
       const input = u.rawInput ?? u.input ?? {};
       const step = addStep(state, { kind: "tool", name, hint: hintOf(name, input), input: clip(stringify(input), MAX_STEP_INPUT), at: Date.now() }, report, entry);
-      const id = String(u.toolCallId || u.id || "");
       if (step && id) toolSteps.set(id, step);
       report.send({ type: "progress", phase: HINTS[name]?.toLowerCase() || "работает", body: "" });
       return;
@@ -917,12 +935,13 @@ async function runKimi(job, dirs, resumeId, report, entry) {
       const id = String(u.toolCallId || u.id || "");
       const step = toolSteps.get(id);
       if (!step) return;
-      toolSteps.delete(id);
       const output = u.content ?? u.rawOutput ?? u.output ?? "";
       step.output = clip(kimiText(output) || stringify(output), MAX_STEP_OUTPUT);
       step.is_error = u.status === "failed";
-      step.ms = Date.now() - step.at;
-      delete step.at;
+      if (["completed", "failed", "cancelled"].includes(u.status) && step.at) {
+        step.ms = Date.now() - step.at;
+        delete step.at;
+      }
       report.send({ type: "progress", steps: state.steps, phase: "думает" });
       return;
     }

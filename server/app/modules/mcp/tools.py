@@ -465,22 +465,39 @@ def update_note(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     return {**_write(access, item, content=text, **({"title": str(args["title"])} if args.get("title") else {})), "ok": True}
 
 
+def _replacements(args: dict[str, Any]) -> list[dict[str, Any]]:
+    """Одна или несколько точечных замен; всю пачку применяем до единственной записи материала."""
+    edits = args.get("replacements")
+    if edits is None:
+        edits = [args]
+    if not isinstance(edits, list) or not 1 <= len(edits) <= 50:
+        raise ToolError("replacements — список от 1 до 50 замен {old_text, new_text}")
+    for edit in edits:
+        if not isinstance(edit, dict) or not isinstance(edit.get("old_text"), str) or not edit["old_text"] or not isinstance(edit.get("new_text"), str):
+            raise ToolError("У каждой замены нужны непустой old_text и строка new_text")
+    return edits
+
+
 def edit_note(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     access.need("edit", "править материалы")
     item = access.load(args.get("id"))
     if item["kind"] != "note":
         raise ToolError(f"Это {KIND_NAMES[item['kind']]}, а не заметка")
-    old, new = str(args.get("old_text") or ""), str(args.get("new_text") or "")
     content = item.get("content") or ""
-    count = content.count(old) if old else 0
-    if not count:
-        raise ToolError("Такого текста в заметке нет: перечитайте её (read_item) и возьмите точный кусок", "text_not_found")
-    if count > 1 and not args.get("replace_all"):
-        raise ToolError(f"Текст встречается {count} раз: возьмите кусок длиннее или включите replace_all", "text_not_unique")
-    updated = content.replace(old, new) if args.get("replace_all") else content.replace(old, new, 1)
+    replaced = 0
+    for edit in _replacements(args):
+        old, new = edit["old_text"], edit["new_text"]
+        count = content.count(old)
+        if not count:
+            raise ToolError("Такого текста в заметке нет: перечитайте её (read_item) и возьмите точный кусок", "text_not_found")
+        if count > 1 and not edit.get("replace_all", args.get("replace_all")):
+            raise ToolError(f"Текст встречается {count} раз: возьмите кусок длиннее или включите replace_all", "text_not_unique")
+        all_matches = edit.get("replace_all", args.get("replace_all"))
+        content = content.replace(old, new) if all_matches else content.replace(old, new, 1)
+        replaced += count if all_matches else 1
     if args.get("dry_run"):
-        return {**_preview(item, updated), "replaced": count if args.get("replace_all") else 1}
-    return {**_write(access, item, content=updated), "replaced": count if args.get("replace_all") else 1}
+        return {**_preview(item, content), "replaced": replaced}
+    return {**_write(access, item, content=content), "replaced": replaced}
 
 
 def create_document(access: Access, args: dict[str, Any]) -> dict[str, Any]:
@@ -523,8 +540,9 @@ def update_document(access: Access, args: dict[str, Any]) -> dict[str, Any]:
 def edit_document(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     item, snapshot = _document(access, args)
     try:
-        count = docformat.replace_text(snapshot, str(args.get("old_text") or ""), str(args.get("new_text") or ""),
-                                       replace_all=bool(args.get("replace_all")))
+        count = sum(docformat.replace_text(snapshot, edit["old_text"], edit["new_text"],
+                                           replace_all=bool(edit.get("replace_all", args.get("replace_all"))))
+                    for edit in _replacements(args))
     except docformat.TextNotFound as exc:
         raise ToolError(str(exc), "text_not_found") from exc
     content = json.dumps(snapshot, ensure_ascii=False)
@@ -823,18 +841,20 @@ TOOLS: list[dict[str, Any]] = [
      "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "level": {"type": "string", "enum": list(LEVELS)},
                                                      "include_schema": {"type": "boolean", "default": False}}}},
     {"name": "edit_note", "handler": edit_note, "level": "edit",
-     "description": "Точечная правка заметки: заменить кусок old_text (точный текст из read_item) на new_text. Остальное не трогается.",
+     "description": "Точечная правка заметки: old_text/new_text или replacements — до 50 замен атомарно. Текст берите из read_item.",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "old_text": {"type": "string"}, "new_text": {"type": "string"},
-                                                     "replace_all": {"type": "boolean", "default": False}, **_DRY_RUN}, "required": ["id", "old_text", "new_text"]}},
+                                                     "replacements": {"type": "array", "maxItems": 50, "items": {"type": "object", "properties": {"old_text": {"type": "string"}, "new_text": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["old_text", "new_text"]}},
+                                                     "replace_all": {"type": "boolean", "default": False}, **_DRY_RUN}, "required": ["id"]}},
     {"name": "update_note", "handler": update_note, "level": "edit",
      "description": "Переписать заметку целиком (mode=replace; строки вкладок `<!-- shar-tab: … -->` сохраняйте) или дописать в конец (mode=append).",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "markdown": {"type": "string"}, "mode": {"type": "string", "enum": ["replace", "append"], "default": "replace"},
                                                      "title": {"type": "string", "description": "новое название (необязательно)"}, **_DRY_RUN}, "required": ["id", "markdown"]}},
     {"name": "edit_document", "handler": edit_document, "level": "edit",
-     "description": "Точечная правка документа с сохранением оформления: заменить old_text на new_text внутри абзаца. "
-                    "Текст — точный, без разметки Markdown (read_item с format=text), без переносов строк.",
+     "description": "Точечная правка документа с сохранением оформления: old_text/new_text или replacements — до 50 замен строк атомарно. "
+                    "Текст — точный, без разметки Markdown (read_item с format=text); каждая замена внутри одного абзаца.",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "old_text": {"type": "string"}, "new_text": {"type": "string"},
-                                                     "replace_all": {"type": "boolean", "default": False}, **_DRY_RUN}, "required": ["id", "old_text", "new_text"]}},
+                                                     "replacements": {"type": "array", "maxItems": 50, "items": {"type": "object", "properties": {"old_text": {"type": "string"}, "new_text": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["old_text", "new_text"]}},
+                                                     "replace_all": {"type": "boolean", "default": False}, **_DRY_RUN}, "required": ["id"]}},
     {"name": "update_document", "handler": update_document, "level": "edit",
      "description": "Дописать Markdown в конец (append), вставить после абзаца с after_text (insert) или пересобрать документ (replace, оформление пропадёт).",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "markdown": {"type": "string"},
