@@ -879,6 +879,9 @@ class Presence:
                 pipe.hset(hkey, user_id, "1" if editing else "0")
                 pipe.expire(key, PRESENCE_TTL * 3)
                 pipe.expire(hkey, PRESENCE_TTL * 3)
+                ukey = f"shar:wspu:{user_id}"  # обратный индекс «что открыто у человека» — для capabilities у агентов
+                pipe.zadd(ukey, {item_id: now})
+                pipe.expire(ukey, PRESENCE_TTL * 3)
                 pipe.execute()
                 return
             except Exception as exc:
@@ -890,9 +893,25 @@ class Presence:
             try:
                 self._redis.zrem(f"shar:wsp:{item_id}", user_id)
                 self._redis.hdel(f"shar:wspe:{item_id}", user_id)
+                self._redis.zrem(f"shar:wspu:{user_id}", item_id)
             except Exception:
                 pass
         self._local.get(item_id, {}).pop(user_id, None)
+
+    def open_items(self, user_id: str) -> list[tuple[str, bool]]:
+        """Какие материалы у человека открыты прямо сейчас (id, правит ли), свежие первыми."""
+        now = self._now()
+        if self._redis is not None:
+            try:
+                ukey = f"shar:wspu:{user_id}"
+                self._redis.zremrangebyscore(ukey, 0, now - PRESENCE_TTL)
+                ids = self._redis.zrevrange(ukey, 0, 19)
+                flags = [self._redis.hget(f"shar:wspe:{i}", user_id) for i in ids]
+                return [(i, f == "1") for i, f in zip(ids, flags)]
+            except Exception as exc:
+                log.debug("workspace presence: redis unavailable (%s)", exc)
+        mine = [(v[0], i, v[1]) for i, users in self._local.items() for u, v in users.items() if u == user_id and v[0] >= now - PRESENCE_TTL]
+        return [(i, editing) for _, i, editing in sorted(mine, reverse=True)]
 
     def viewers(self, item_id: str) -> list[tuple[str, bool]]:
         now = self._now()

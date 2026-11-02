@@ -285,7 +285,7 @@ def replace_text(snapshot: dict[str, Any], old: str, new: str, *, replace_all: b
     matches, _ = textmatch.spans(stream, old)
     found = [start for start, _ in matches]
     if not found:
-        raise TextNotFound("Такого текста в документе нет (ищется точный текст без разметки Markdown)")
+        raise TextNotFound(f"Такого текста в документе нет (ищется точный текст без разметки Markdown). {textmatch.explain_miss(stream, old)}")
     if len(found) > 1 and not replace_all:
         raise TextNotFound(f"Текст встречается {len(found)} раз: уточните его или включите replace_all")
 

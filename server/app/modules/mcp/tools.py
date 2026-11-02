@@ -529,7 +529,7 @@ def edit_note(access: Access, args: dict[str, Any]) -> dict[str, Any]:
         matches, _ = textmatch.spans(segment, old)
         count = len(matches)
         if not count:
-            raise ToolError("Такого текста в заметке нет: перечитайте её (read_item) и возьмите точный кусок", "text_not_found")
+            raise ToolError(f"Такого текста в заметке нет. {textmatch.explain_miss(segment, old)}", "text_not_found")
         if count > 1 and not edit.get("replace_all", args.get("replace_all")):
             raise ToolError(f"Текст встречается {count} раз: возьмите кусок длиннее или включите replace_all", "text_not_unique")
         all_matches = edit.get("replace_all", args.get("replace_all"))
@@ -854,7 +854,35 @@ def capabilities(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     if args.get("id"):
         item = access.load(args["id"], content=False)
         out["item"] = {**_brief(item, access), "canRead": True}
+    opened = []
+    for item_id, editing in store.presence.open_items(access.me.user_id):
+        try:
+            opened.append({**_brief(access.load(item_id, content=False), access), "editing": editing})
+        except ToolError:
+            continue  # открыто у человека, но этому ключу недоступно — не показываем
+    out["openNow"] = opened  # все материалы, открытые у человека сейчас (свежие первыми), а не только первый
     return out
+
+
+_RU_ENDINGS = sorted(
+    "ями ами иях ией ого его ому ему ыми ими ать ять ить еть ует уют ают ов ев ей ий ый ой ая яя ое ее ые ие ам ям ах ях ом ем "
+    "ою ею ую юю ия ть ся а я ы и е у ю о ь й".split(), key=len, reverse=True)
+
+
+def _stem(word: str) -> str:
+    """Грубая основа русского слова без словаря: «таблица/таблицы/таблицу» → «таблиц». Чужие слова не трогает."""
+    word = word.replace("ё", "е")
+    if not re.fullmatch(r"[а-я]+", word):
+        return word
+    for ending in _RU_ENDINGS:
+        if word.endswith(ending) and len(word) - len(ending) >= 3:
+            return word[:-len(ending)]
+    return word
+
+
+def _same_stem(a: str, b: str) -> bool:
+    short, long = sorted((a, b), key=len)
+    return len(short) >= 4 and long.startswith(short) or a == b
 
 
 def tool_search(access: Access, args: dict[str, Any]) -> dict[str, Any]:
@@ -862,12 +890,16 @@ def tool_search(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     words = query.split()
     aliases = {"permissions": "permission capabilities", "approval": "request_permission", "cells": "table range",
                "versions": "item_versions diff_item", "image": "image_generate"}
+    stems = [_stem(word) for word in words]
     found = []
     for tool in TOOLS:
         if not _open(access.ctx, tool) or level and tool["level"] != level:
             continue
         haystack = f"{tool['name']} {tool['description']} {tool.get('app', '')}".casefold()
+        hay_stems = {_stem(w) for w in re.findall(r"[\w]+", haystack)}
         score = sum(2 if word in tool["name"].casefold() else 1 for word in words if word in haystack)
+        # словоформы: «таблицы» из запроса находит «таблицу» в описании, если слово целиком не совпало
+        score += sum(1 for word, stem in zip(words, stems) if word not in haystack and any(_same_stem(stem, h) for h in hay_stems))
         score += sum(1 for word in words if any(alias in haystack for alias in aliases.get(word, "").split()))
         if words and not score:
             continue

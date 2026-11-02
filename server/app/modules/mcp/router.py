@@ -63,8 +63,10 @@ def _call_tool(ctx: keys.KeyContext, name: str, args: dict[str, Any]) -> dict[st
     except Exception as exc:
         log.exception("mcp tool %s failed for %s", name, ctx.me.user_id)
         keys.log_call(ctx, name, item_id, error="Внутренняя ошибка")
-        return {"isError": True, "error": {"code": "tool_error", "message": str(exc)},
-                "content": [{"type": "text", "text": f"Не получилось: {exc}"}]}
+        reason = str(exc) or type(exc).__name__
+        return {"isError": True, "error": {"code": "tool_error", "message": reason},
+                "content": [{"type": "text", "text": f"Не получилось: {reason}. Ошибка не из проверок аргументов: проверьте вызов по inputSchema "
+                                                       "(tool_search include_schema), повторите один раз, а если повторится — сообщите владельцу название инструмента."}]}
     if name not in ("list_items", "list_folders") and not name.endswith(("_list", "_read", "_search")):  # чтение в журнал не пишем: шум
         keys.log_call(ctx, name, str(data.get("id") or item_id), str(data.get("title") or ""))
     text = json.dumps(data, ensure_ascii=False, default=str)  # даты задач и событий приходят datetime

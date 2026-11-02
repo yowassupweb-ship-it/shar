@@ -31,3 +31,19 @@ def spans(text: str, needle: str) -> tuple[list[tuple[int, int]], str]:
         positions.append((start, start + len(needle)))
         start = visual_text.find(visual_needle, start + len(needle))
     return positions, "typographic" if positions else "exact"
+
+
+def explain_miss(text: str, needle: str) -> str:
+    """Почему фрагмент не нашёлся — одной фразой для агента: что именно не совпало и где ближайшее место."""
+    import difflib
+    import re
+
+    flat_text, flat_needle = re.sub(r"\s+", " ", text), re.sub(r"\s+", " ", needle).strip()
+    if flat_needle and flat_needle in flat_text:
+        return "Текст есть, но отличаются переносы строк или число пробелов: берите кусок внутри одной строки"
+    if flat_needle and flat_needle.casefold() in flat_text.casefold():
+        return "Текст есть, но отличается регистр букв"
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    first = next((line.strip() for line in needle.splitlines() if line.strip()), "")
+    near = difflib.get_close_matches(first, lines, n=1, cutoff=0.6) if first else []
+    return f"Ближайшее похожее место: «{near[0][:160]}»" if near else "Похожих мест не нашлось: перечитайте материал (read_item)"
