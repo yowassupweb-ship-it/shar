@@ -859,20 +859,27 @@ def capabilities(access: Access, args: dict[str, Any]) -> dict[str, Any]:
 
 def tool_search(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     query, level = str(args.get("query") or "").strip().casefold(), str(args.get("level") or "")
+    words = query.split()
+    aliases = {"permissions": "permission capabilities", "approval": "request_permission", "cells": "table range",
+               "versions": "item_versions diff_item", "image": "image_generate"}
     found = []
     for tool in TOOLS:
         if not _open(access.ctx, tool) or level and tool["level"] != level:
             continue
         haystack = f"{tool['name']} {tool['description']} {tool.get('app', '')}".casefold()
-        if query and not all(word in haystack for word in query.split()):
+        score = sum(2 if word in tool["name"].casefold() else 1 for word in words if word in haystack)
+        score += sum(1 for word in words if any(alias in haystack for alias in aliases.get(word, "").split()))
+        if words and not score:
             continue
         entry = {"name": tool["name"], "description": tool["description"], "level": tool["level"]}
         if tool.get("app"):
             entry["app"] = tool["app"]
         if args.get("include_schema"):
             entry["inputSchema"] = tool["inputSchema"]
-        found.append(entry)
-    return {"tools": found[:50], "total": len(found), "truncated": len(found) > 50}
+        found.append((score, entry))
+    found.sort(key=lambda pair: -pair[0])
+    limit = 15 if words else 50
+    return {"tools": [entry for _, entry in found[:limit]], "total": len(found), "truncated": len(found) > limit}
 
 
 def rename_item(access: Access, args: dict[str, Any]) -> dict[str, Any]:

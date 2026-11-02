@@ -341,3 +341,5 @@ def test_preview_insert_versions_ranges_and_links(client, anna):
     assert rights["item"]["canEdit"] and rights["serverTime"]
     found = _ok(client, token, "tool_search", query="версии", include_schema=True)
     assert any(t["name"] == "item_versions" and "inputSchema" in t for t in found["tools"])
+    assert any(t["name"] == "read_item" for t in _ok(client, token, "tool_search", query="read table cells range")["tools"])
+    assert any(t["name"] == "diff_item" for t in _ok(client, token, "tool_search", query="diff версии документа")["tools"])

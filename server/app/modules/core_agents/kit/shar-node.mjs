@@ -431,7 +431,9 @@ function stableValue(value) {
 }
 
 function addStep(state, step, report, entry = null) {
-  if (step.kind === "tool") {
+  // ACP can announce a tool before sending its arguments. An empty placeholder
+  // cannot identify a repeated call and must not trip the loop guard.
+  if (step.kind === "tool" && step.input && step.input !== "{}") {
     state.toolCalls ||= new Map();
     let signature = `${step.name}:${step.input || ""}`;
     try { signature = `${step.name}:${JSON.stringify(stableValue(JSON.parse(step.input || "{}")))}`; } catch { /* текст команды уже однозначен */ }
@@ -703,7 +705,7 @@ function reasoningText(item) {
   return parts.join("\n\n").replace(/\*\*/g, "").trim();
 }
 
-function runCodex(job, dirs, resumeId, report, entry) {
+async function runCodex(job, dirs, resumeId, report, entry) {
   // Вся настройка — флагами: личный config.toml машины (модель по умолчанию, свои MCP) ноде не указ.
   // Ключ MCP — в переменной окружения запуска, во флагах только адрес.
   const config = ["-c", "approval_policy=never", "-c", "sandbox_mode=read-only", "-c", "model_reasoning_summary=auto", "-c", "hide_agent_reasoning=false",
@@ -729,6 +731,8 @@ function runCodex(job, dirs, resumeId, report, entry) {
   const state = newState();
   state.model = job.model || "";
   const pending = new Map();
+  const startedAt = Date.now();
+  let deliveredImages = 0;
   // У Codex нет отдельного системного промпта в exec: правила — в начале первого сообщения сессии.
   const prompt = resumeId ? `${currentRules(job)}\n\n${promptText(job, true)}` : `${job.system}\n\n${OFFICE_GUIDE}\n\n---\n\n${promptText(job, false)}`;
   report.send({ type: "progress", phase: "запускается" });
@@ -789,6 +793,7 @@ function runCodex(job, dirs, resumeId, report, entry) {
         if (typeof data === "string" && data && item.status !== "failed") {
           data = data.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
           report.send({ type: "attachment", eventId: `${job.id}:${key}`, name: "картинка-gpt.png", data });
+          deliveredImages += 1;
           report.send({ type: "progress", steps: state.steps, phase: "картинка готова" });
         } else if (item.status === "failed") {
           report.send({ type: "progress", steps: state.steps, reasoning: `GPT не создал картинку: ${stringify(item.failure || "неизвестная ошибка")}` });
@@ -835,7 +840,31 @@ function runCodex(job, dirs, resumeId, report, entry) {
       state.failure = String(event.message || event.error?.message || event.error || "Codex вернул ошибку");
     }
   };
-  return streamCli(CLI.codex, args, { cwd: dirs.work, env: { ...userEnv(dirs), SHAR_MCP_TOKEN: job.mcp.token, ...codexExtra(job).env }, stdin: prompt, provider: "GPT" }, entry, handle, state);
+  await streamCli(CLI.codex, args, { cwd: dirs.work, env: { ...userEnv(dirs), SHAR_MCP_TOKEN: job.mcp.token, ...codexExtra(job).env }, stdin: prompt, provider: "GPT" }, entry, handle, state);
+  // Codex CLI may omit image_gen extension events from --json even though it saves the image.
+  // Recover only files from this run's session, created during this run, before the job is marked done.
+  if (!entry.stopped && !deliveredImages) {
+    const sessionId = state.sessionId || resumeId;
+    if (/^[a-f0-9-]{36}$/i.test(sessionId)) {
+      const folder = path.join(dirs.codexHome, "generated_images", sessionId);
+      let files = [];
+      try { files = fs.readdirSync(folder).filter((name) => /^exec-[a-f0-9-]+\.(png|jpe?g|webp)$/i.test(name)); } catch { /* no images */ }
+      for (const name of files) {
+        const file = path.join(folder, name);
+        try {
+          const stat = fs.lstatSync(file);
+          if (!stat.isFile() || stat.mtimeMs < startedAt - 1000 || stat.size > 32 * 1024 * 1024) continue;
+          await report.send({ type: "attachment", eventId: `${job.id}:${name}`, name: `картинка-gpt${path.extname(name)}`, data: fs.readFileSync(file).toString("base64") });
+          deliveredImages += 1;
+        } catch (error) { log(`задача ${job.id}: картинка ${name} не доставлена: ${error.message}`); }
+      }
+      if (deliveredImages) {
+        if (state.failure?.includes("не получила её байты")) state.failure = "";
+        report.send({ type: "progress", phase: "картинка готова", steps: state.steps });
+      }
+    }
+  }
+  return state;
 }
 
 // ── Kimi Code (подписка Kimi) ────────────────────────────────────────────────
@@ -936,6 +965,7 @@ async function runKimi(job, dirs, resumeId, report, entry) {
       const id = String(u.toolCallId || u.id || "");
       const step = toolSteps.get(id);
       if (!step) return;
+      if (step.input === "{}" && u.rawInput != null) step.input = clip(stringify(u.rawInput), MAX_STEP_INPUT);
       const output = u.content ?? u.rawOutput ?? u.output ?? "";
       step.output = clip(kimiText(output) || stringify(output), MAX_STEP_OUTPUT);
       step.is_error = u.status === "failed";
