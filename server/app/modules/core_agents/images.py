@@ -2,7 +2,7 @@
 
 GPT рисует встроенным image_gen через подписку Codex: нода присылает готовые байты событием attachment, а save_native
 проверяет их и прикрепляет к ответу. Любой другой агент (Claude, Kimi, Gemini и внешние по MCP), создав картинку сам,
-отдаёт её инструментом image_attach (base64 или вложение Шара). Gemini по ключу человека (MCP image_generate) остаётся
+отдаёт её файлом в папку outbox ноды (быстро) или инструментом image_attach (base64 или вложение Шара). Gemini по ключу человека (MCP image_generate) остаётся
 лишь запасным путём. Файлы во всех путях попадают в /api/uploads/… и «Файлы → Агенты».
 
 Модель Gemini — самая новая из доступных ключу «…-image» (список моделей ключа, кэш на час).
@@ -159,7 +159,13 @@ def _sniff(raw: bytes) -> tuple[str, str]:
         return "image/webp", ".webp"
     if raw.startswith((b"GIF87a", b"GIF89a")):
         return "image/gif", ".gif"
-    raise ImageError("Это не PNG, JPEG, WebP или GIF")
+    low = raw[:262144].lower()
+    if b"<svg" in low[:4096] and low.lstrip(b"\xef\xbb\xbf \t\r\n").startswith((b"<svg", b"<?xml", b"<!--", b"<!doctype svg")):
+        # Рисунок кодом агенту проще всего отдать SVG-файлом; скрипты и обработчики в нём не нужны и опасны.
+        if any(bad in low for bad in (b"<script", b"javascript:", b"<foreignobject", b"<iframe", b"<embed", b"<!entity")) or re.search(rb"\son[a-z]+\s*=", low):
+            raise ImageError("В SVG нельзя скрипты, обработчики событий и внешние вставки: уберите их и повторите")
+        return "image/svg+xml", ".svg"
+    raise ImageError("Это не PNG, JPEG, WebP, GIF или SVG")
 
 
 def attach_bytes(message_id: str, user_id: str, raw: bytes, *, name: str = "", event_id: str = "", default_name: str = "картинка") -> dict:

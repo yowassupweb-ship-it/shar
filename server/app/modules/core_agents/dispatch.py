@@ -173,8 +173,10 @@ def build_run(job: dict) -> dict:
         now=datetime.now(timezone(timedelta(hours=3))).strftime("%A, %d.%m.%Y %H:%M МСК"), mode=_mode_text(user_id),
         image_rule=("Картинки рисуйте своим встроенным image_gen: он работает через вашу подписку GPT; готовый файл Шар покажет человеку сам."
                     if provider == "codex" else
-                    "Картинки рисуйте сами, своим средством (встроенный генератор, код, SVG) — Gemini не нужен. Готовую картинку отдайте "
-                    "человеку через image_attach (base64). image_generate — только запасной путь, если у человека подключён Gemini."),
+                    "Картинки рисуйте сами, своим средством (встроенный генератор, код, SVG) — Gemini не нужен. Проще всего SVG-файл: пишете "
+                    "его прямо в папку для готовых картинок (путь в блоке «Готовые картинки» сообщения) — Шар сам покажет его в чате, "
+                    "рендерить и кодировать в base64 не нужно. image_attach (base64) — только если папки нет; image_generate — запасной "
+                    "путь при подключённом Gemini."),
         memory=memory.prompt_context(user_id) if _memory_ready() else "")
     reply = props.get("replyTo") or {}
     # Ответ кнопкой разрешения: человек видит «Разрешить», агенту уходит служебное — с approval_id.

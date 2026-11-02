@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "1.2.9";
+const VERSION = "1.3.0";
 const SHAR_URL = String(process.env.SHAR_URL || "").replace(/\/+$/, "");
 const TOKEN = String(process.env.SHAR_NODE_TOKEN || "");
 // Отпечаток этого файла — так же, как его считает Шар (переводы строк без \r): разошёлся с присланным в опросе —
@@ -242,6 +242,10 @@ function promptText(job, resumed) {
   if (job.attachments?.length) {
     parts.push("## Вложения (скачать по ссылке)\n" + job.attachments.map((a) => `- ${a.name} (${a.type || "файл"}, ${a.size || 0} байт): ${absolute(a.url)}`).join("\n"));
   }
+  if (job.outbox) {
+    parts.push(`## Готовые картинки\nКартинку, которую вы нарисовали или собрали сами (SVG, PNG, JPEG, WebP, GIF), сохраните файлом в папку ${job.outbox} — Шар сам покажет её человеку под ответом и положит в «Файлы → Агенты». `
+      + "Рисунок проще всего писать как SVG прямо в эту папку: рендерить не нужно. Не кодируйте файл в base64 и не вызывайте image_attach — это занимает минуты.");
+  }
   parts.push(job.prompt || "");
   return parts.filter(Boolean).join("\n\n");
 }
@@ -252,7 +256,7 @@ const OFFICE_GUIDE = `Актуальные возможности Шара: list
 Для изменений с прошлого визита — changes_list(since=время прошлого визита), затем item_versions и diff_item; перед рискованной записью — dry_run (он показывает diff). Ответ записи содержит updatedAt.
 edit_note и edit_document сначала ищут точное совпадение, затем безопасно учитывают типографские пробелы, тире и кавычки; если совпадений несколько — уточните фрагмент.
 Файлы: files_list → file_read (в ответе rights, canEdit, editable, editWith, encoding); file_write создаёт новый или заменяет байты по id + base_updated_at; file_edit правит на месте: текст и код (replace, lines по номерам строк из file_read from_line, append; кодировка и CRLF сохраняются), docx/pptx (replace внутри абзаца, оформление остаётся; docx ещё append), xlsx (cells и append_rows). Править можно свой файл и файл, где вам дано право редактирования (в том числе через папку). Каждая замена оставляет версию: file_versions, file_restore_version. file_update меняет имя/папку своего файла, file_delete удаляет свой после подтверждения.
-Картинки рисуйте сами, своим средством (Gemini не нужен); готовую отдайте через image_attach (base64). image_generate (Gemini) — запасной путь только при подключённом ключе.
+Картинки рисуйте сами, своим средством (Gemini не нужен): проще всего SVG-файл, записанный прямо в папку «Готовые картинки» из сообщения, — Шар сам покажет его в чате, без рендера и base64. image_attach (base64) — только если папки нет; image_generate (Gemini) — запасной путь при подключённом ключе.
 Одобренный approval_id действует 15 минут для повторных вызовов того же инструмента; request_permission(tools=[...], summary=конкретный план) позволяет одним согласием открыть несколько перечисленных инструментов.`;
 
 function currentRules(job) {
@@ -326,6 +330,41 @@ function dropImages(images) {
   for (const img of images || []) { try { fs.unlinkSync(img.path); } catch { /* уже нет */ } }
 }
 
+// ── готовые картинки: положил файл в папку — нода сама отправит его в чат ───────────────────────────
+// Модели без встроенного генератора рисуют кодом (SVG, Python). Через image_attach это base64 в вызове инструмента:
+// десятки тысяч символов, которые модель печатает сама, — минуты ожидания. Файл в папке нода читает с диска за миг.
+const OUTBOX_EXT = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"]);
+
+function prepareOutbox(dirs, job) {
+  // Kimi привязан к своему рабочему каталогу — папка рядом, внутри него; остальным подходит общий каталог человека.
+  const base = job.provider === "kimi" ? path.join(dirs.work, ".shar-kimi", String(job.threadId).replace(/[^A-Za-z0-9_-]/g, "_")) : dirs.work;
+  const dir = path.join(base, ".shar-outbox", String(job.id).replace(/[^A-Za-z0-9_-]/g, "_"));
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
+
+async function deliverOutbox(job, report) {
+  let names = [];
+  try { names = fs.readdirSync(job.outbox).sort(); } catch { return 0; }
+  let sent = 0;
+  for (const name of names.slice(0, IMAGE_MAX)) {
+    const file = path.join(job.outbox, name);
+    const ext = path.extname(name).toLowerCase();
+    try {
+      const stat = fs.lstatSync(file);
+      if (!stat.isFile() || !OUTBOX_EXT.has(ext) || !stat.size || stat.size > 32 * 1024 * 1024) continue;
+      await report.send({ type: "attachment", eventId: `${job.id}:outbox:${name}`, name: path.basename(name, ext), data: fs.readFileSync(file).toString("base64") });
+      sent += 1;
+    } catch (error) { log(`задача ${job.id}: картинка ${name} из outbox не доставлена: ${error.message}`); }
+  }
+  if (sent) report.send({ type: "progress", phase: "картинка готова" });
+  return sent;
+}
+
+function dropOutbox(job) {
+  try { if (job.outbox) fs.rmSync(job.outbox, { recursive: true, force: true }); } catch { /* уберётся при следующей уборке */ }
+}
+
 async function runJob(job) {
   const dirs = userDirs(job.userId);
   const report = reporter(job, () => entry.stop());
@@ -343,6 +382,7 @@ async function runJob(job) {
     }
     if (session && session.context > ROTATE_AT) session = null;
     job.images = await fetchImages(job, dirs);
+    job.outbox = prepareOutbox(dirs, job);
     let state;
     try {
       state = await runProvider(job, dirs, session?.id || "", report, entry);
@@ -352,6 +392,7 @@ async function runJob(job) {
       state = await runProvider(job, dirs, "", report, entry);
     }
     if (entry.stopped) return;
+    await deliverOutbox(job, report);
     if (state.sessionId) {
       saveSession(dirs, key, { id: state.sessionId, context: state.contextTokens || state.work.input_tokens || 0,
         ...(state.sessionUsage ? { input: state.sessionUsage.input, output: state.sessionUsage.output } : {}) });
@@ -372,6 +413,7 @@ async function runJob(job) {
     if (!entry.stopped) await report.send({ type: "failed", error: String(error.message || error).slice(0, 600) });
   } finally {
     dropImages(job.images);
+    dropOutbox(job);
     running.delete(job.id);
     await report.flush();
   }
