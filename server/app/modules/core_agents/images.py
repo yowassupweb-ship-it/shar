@@ -1,8 +1,9 @@
-"""Картинки для агентов «Ядра»: у GPT — встроенный image_gen на ноде, у остальных — Gemini по ключу человека.
+"""Картинки для агентов «Ядра»: каждый агент рисует своим средством, Gemini не обязателен.
 
-GPT рисует через свою подписку Codex; нода присылает готовые байты событием attachment, а save_native проверяет их и
-прикрепляет к ответу. Claude, Kimi и Gemini зовут MCP image_generate: Шар обращается к модели картинок Google ключом
-человека. Файлы в обоих путях попадают в /api/uploads/… и «Файлы → Агенты».
+GPT рисует встроенным image_gen через подписку Codex: нода присылает готовые байты событием attachment, а save_native
+проверяет их и прикрепляет к ответу. Любой другой агент (Claude, Kimi, Gemini и внешние по MCP), создав картинку сам,
+отдаёт её инструментом image_attach (base64 или вложение Шара). Gemini по ключу человека (MCP image_generate) остаётся
+лишь запасным путём. Файлы во всех путях попадают в /api/uploads/… и «Файлы → Агенты».
 
 Модель Gemini — самая новая из доступных ключу «…-image» (список моделей ключа, кэш на час).
 """
@@ -33,7 +34,7 @@ def _key(user_id: str) -> str:
     row = store.account(user_id, "gemini")
     key = store.unseal(row.get("secret_enc") or "") if row else ""
     if not key:
-        raise ImageError("Картинки рисует Gemini по ключу Google — подключите его: Настройки → Ядро → Gemini (ключ из AI Studio)")
+        raise ImageError("Ключа Gemini нет, и он не обязателен: нарисуйте картинку своим встроенным средством (или соберите её сами) и отдайте человеку через image_attach. Чтобы image_generate работал, подключите Gemini: Настройки → Ядро → Gemini (ключ из AI Studio)")
     return key
 
 
@@ -149,37 +150,48 @@ def _count_usage(user_id: str, usage: dict, model: str) -> None:
         pass
 
 
-def save_native(message_id: str, user_id: str, *, event_id: str, data: str, name: str = "") -> dict:
-    """PNG/JPEG/WebP из встроенного image_gen ноды: проверить байты, сохранить и прикрепить один раз."""
-    row = db.conn.fetch_one("SELECT props FROM core_messages WHERE id = %s", (message_id,))
-    if not row:
+def _sniff(raw: bytes) -> tuple[str, str]:
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png", ".png"
+    if raw.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg", ".jpg"
+    if raw.startswith(b"RIFF") and raw[8:12] == b"WEBP":
+        return "image/webp", ".webp"
+    if raw.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif", ".gif"
+    raise ImageError("Это не PNG, JPEG, WebP или GIF")
+
+
+def attach_bytes(message_id: str, user_id: str, raw: bytes, *, name: str = "", event_id: str = "", default_name: str = "картинка") -> dict:
+    """Готовая картинка от агента: проверить байты, сохранить в «Файлы → Агенты» и прикрепить к ответу один раз."""
+    row = db.conn.fetch_one("SELECT props FROM core_messages WHERE id = %s", (message_id,)) if message_id else None
+    if message_id and not row:
         raise ImageError("Ответ агента уже закрыт")
-    existing = list((row.get("props") or {}).get("attachments") or [])
+    existing = list(((row or {}).get("props") or {}).get("attachments") or [])
     duplicate = next((f for f in existing if event_id and f.get("eventId") == event_id), None)
     if duplicate:
         return duplicate
+    if not raw or len(raw) > 32 * 1024 * 1024:
+        raise ImageError("Картинка пустая или больше 32 МБ")
+    mime, ext = _sniff(raw)
+    safe = re.sub(r"[^\w\- ]+", "", name)[:50].strip() or default_name
+    from app.modules.files.uploads import save_upload_bytes
+
+    saved = save_upload_bytes(f"{safe}{ext}", raw, mime, user_id)
+    file = {"name": saved["filename"], "url": saved["url"], "size": saved["size"], "type": mime, "key": saved["key"]}
+    if event_id:
+        file["eventId"] = event_id
+    attach_to_job(message_id, file)
+    return file
+
+
+def save_native(message_id: str, user_id: str, *, event_id: str, data: str, name: str = "") -> dict:
+    """PNG/JPEG/WebP из встроенного image_gen ноды: проверить байты, сохранить и прикрепить один раз."""
     try:
         raw = base64.b64decode(data, validate=True)
     except (ValueError, TypeError) as exc:
         raise ImageError("Нода прислала повреждённую картинку") from exc
-    if not raw or len(raw) > 32 * 1024 * 1024:
-        raise ImageError("Картинка пустая или больше 32 МБ")
-    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
-        mime, ext = "image/png", ".png"
-    elif raw.startswith(b"\xff\xd8\xff"):
-        mime, ext = "image/jpeg", ".jpg"
-    elif raw.startswith(b"RIFF") and raw[8:12] == b"WEBP":
-        mime, ext = "image/webp", ".webp"
-    else:
-        raise ImageError("Встроенный генератор вернул не PNG, JPEG или WebP")
-    safe = re.sub(r"[^\w\- ]+", "", name)[:50].strip() or "картинка-gpt"
-    from app.modules.files.uploads import save_upload_bytes
-
-    saved = save_upload_bytes(f"{safe}{ext}", raw, mime, user_id)
-    file = {"name": saved["filename"], "url": saved["url"], "size": saved["size"], "type": mime, "key": saved["key"],
-            "eventId": event_id}
-    attach_to_job(message_id, file)
-    return file
+    return attach_bytes(message_id, user_id, raw, name=name, event_id=event_id, default_name="картинка-gpt")
 
 
 def attach_to_job(message_id: str, file: dict) -> None:

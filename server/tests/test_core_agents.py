@@ -391,13 +391,20 @@ def test_image_generate_attaches_to_answer_and_lands_in_agent_files(client, admi
         files = admin.get("/api/core/files", params={"threadId": thread["id"]}).json()
         assert files[0]["url"] == image["url"] and files[0]["fileType"] == "image" and files[0]["authorName"] == "Claude"
 
+        # Агент нарисовал сам (без Gemini): image_attach кладёт картинку в «Файлы → Агенты» и в ответ; не-картинку и чужой адрес не берёт.
+        own = _rpc(client, run["mcp"]["token"], "image_attach", base64=png, name="своя картинка")
+        assert not own.get("isError"), own
+        assert own["structuredContent"]["image"]["url"].startswith("/api/uploads/")
+        assert _rpc(client, run["mcp"]["token"], "image_attach", base64=base64.b64encode(b"not an image").decode())["isError"]
+        assert _rpc(client, run["mcp"]["token"], "image_attach", url="http://127.0.0.1:5432/x")["isError"]
+
         native = {"type": "attachment", "eventId": "run:image-1", "name": "картинка-gpt.png", "data": png}
         _events(client, token, run["id"], native)
         _events(client, token, run["id"], native)  # повтор доставки не создаёт вторую картинку
         reply = db.conn.fetch_one("SELECT props FROM core_messages WHERE id = %s", (sent["reply"]["id"],))
-        assert len(reply["props"]["attachments"]) == 2
-        assert reply["props"]["attachments"][1]["eventId"] == "run:image-1"
-        assert "встроенный image_gen" in run["system"] if run["provider"] == "codex" else "MCP image_generate" in run["system"]
+        assert len(reply["props"]["attachments"]) == 3
+        assert reply["props"]["attachments"][2]["eventId"] == "run:image-1"
+        assert "встроенным image_gen" in run["system"] if run["provider"] == "codex" else "Gemini не нужен" in run["system"] and "image_attach" in run["system"]
     finally:
         _cleanup()
 

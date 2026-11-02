@@ -352,14 +352,17 @@ class CloudRepo:
         result = self.conn.fetch_one(query, (new_name, file_id, owner_id))
         return dict(result) if result else None
 
-    def replace_cloud_file_content(self, file_id: str, owner_id: str, base_updated_at: str,
-                                   url: str, s3_key: str, size: int, mime_type: str) -> Optional[Dict[str, Any]]:
-        """Сменить байты файла, сохранив его id, папку и доступы; устаревшая версия не перезаписывается."""
+    def replace_cloud_file_content(self, file_id: str, base_updated_at: str, url: str, s3_key: str, size: int, mime_type: str,
+                                   meta_patch: Optional[dict] = None) -> Optional[Dict[str, Any]]:
+        """Сменить байты файла, сохранив его id, папку и доступы; устаревшая версия не перезаписывается.
+
+        Права (владелец или редактор) проверяет вызывающий. meta_patch вливается в metadata: там лежат прежние байты для отката."""
         self._ensure_cloud_storage_tables()
         result = self.conn.fetch_one(
-            "UPDATE cloud_files SET url = %s, s3_key = %s, size = %s, mime_type = %s, updated_at = NOW() "
-            "WHERE id = %s AND owner_id = %s AND updated_at = %s::timestamp RETURNING *",
-            (url, s3_key, size, mime_type, file_id, owner_id, base_updated_at))
+            "UPDATE cloud_files SET url = %s, s3_key = %s, size = %s, mime_type = %s, updated_at = NOW(), "
+            "metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb "
+            "WHERE id = %s AND updated_at = %s::timestamp RETURNING *",
+            (url, s3_key, size, mime_type, Json(meta_patch or {}), file_id, base_updated_at))
         return dict(result) if result else None
 
     def move_cloud_file(self, file_id: str, owner_id: str, new_folder_id: Optional[str]) -> Optional[Dict[str, Any]]:

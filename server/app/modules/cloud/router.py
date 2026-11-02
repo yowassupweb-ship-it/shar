@@ -406,6 +406,12 @@ def delete_cloud_file(file_id: str, me: Identity = Depends(current_identity)):
     if not deleted:
         raise HTTPException(status_code=404, detail="File not found")
     _cloud_changed(deleted.get('folder_id'), deleted)
+    try:
+        from app.modules.mcp.files import discard_versions
+
+        discard_versions(deleted)  # версии, оставшиеся от правок агентов
+    except Exception as exc:
+        logger.warning("[cloud] could not discard file versions: %s", exc)
     if deleted.get('s3_key') and s3_storage.enabled:
         try:
             s3_storage.delete_object(deleted['s3_key'])

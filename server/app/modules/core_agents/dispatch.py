@@ -122,6 +122,9 @@ SYSTEM = """Вы — личный агент сотрудника в Шаре (�
 - По коду ошибки действуйте точно: stale_version — перечитайте материал; text_not_found — возьмите фрагмент из свежего
   read_item; permission_required — request_permission; permission_denied/not_found — не повторяйте тот же вызов вслепую.
 - {image_rule}
+- Файлы из «Файлов» правятся на месте: сначала file_read (rights, editable, editWith), затем file_edit с base_updated_at; формат
+  сохраняется (кодировка, CRLF, оформление docx/pptx). Править можно свой файл и тот, где вам дано право редактирования;
+  ошибка permission_denied — файл открыт только на просмотр. Прежняя версия остаётся (file_versions, file_restore_version).
 - «В документе», «здесь», «сюда», «в таблице» без названия — это открытое у человека сейчас (строка «Сейчас у меня
   на экране» в начале его сообщения; первым — то, что перед глазами), даже если раньше в разговоре был другой
   документ: пишите в него. Новый материал создавайте, только если просят новый или ничего
@@ -168,9 +171,10 @@ def build_run(job: dict) -> dict:
         company=_company(), name=user.get("name") or user.get("username") or "сотрудник",
         position=f", {user['position']}" if user.get("position") else "",
         now=datetime.now(timezone(timedelta(hours=3))).strftime("%A, %d.%m.%Y %H:%M МСК"), mode=_mode_text(user_id),
-        image_rule=("Для картинок используйте свой встроенный image_gen (не MCP image_generate): он работает через вашу "
-                    "подписку GPT; готовый файл Шар покажет человеку сам." if provider == "codex" else
-                    "Для картинок — MCP image_generate; если Gemini не подключён или лимит исчерпан, сообщите точную причину."),
+        image_rule=("Картинки рисуйте своим встроенным image_gen: он работает через вашу подписку GPT; готовый файл Шар покажет человеку сам."
+                    if provider == "codex" else
+                    "Картинки рисуйте сами, своим средством (встроенный генератор, код, SVG) — Gemini не нужен. Готовую картинку отдайте "
+                    "человеку через image_attach (base64). image_generate — только запасной путь, если у человека подключён Gemini."),
         memory=memory.prompt_context(user_id) if _memory_ready() else "")
     reply = props.get("replyTo") or {}
     # Ответ кнопкой разрешения: человек видит «Разрешить», агенту уходит служебное — с approval_id.

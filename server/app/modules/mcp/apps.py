@@ -521,7 +521,7 @@ def connect_gemini(access, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def image_generate(access, args: dict[str, Any]) -> dict[str, Any]:
-    """Нарисовать картинку (или поправить присланную) — Gemini по ключу человека; картинка — в ответ агента и в «Файлы → Агенты»."""
+    """Запасной путь: нарисовать картинку Gemini по ключу человека. У агентов есть свои средства — см. image_attach."""
     from app.modules.core_agents import images
 
     try:
@@ -533,6 +533,28 @@ def image_generate(access, args: dict[str, Any]) -> dict[str, Any]:
     return {"image": {"name": file["name"], "url": file["url"], "model": file["model"]},
             "note": "Картинка уже показана человеку в чате под вашим ответом — не вставляйте её ссылкой ещё раз."
                     + (f" Комментарий модели: {file['note']}" if file.get("note") else "")}
+
+
+def image_attach(access, args: dict[str, Any]) -> dict[str, Any]:
+    """Отдать человеку картинку, которую агент создал сам: base64 или вложение Шара (/api/uploads/…). Gemini не нужен."""
+    import base64
+    from app.modules.core_agents import images
+
+    try:
+        if args.get("base64"):
+            try:
+                raw = base64.b64decode(str(args["base64"]), validate=True)
+            except ValueError as exc:
+                raise images.ImageError("base64 не читается") from exc
+        elif str(args.get("url") or "").startswith("/api/uploads/"):
+            raw = images._source(str(args["url"]))[1]
+        else:
+            raise images.ImageError("Нужна картинка: base64 или url вложения Шара (/api/uploads/…). Произвольные адреса из интернета не принимаются")
+        file = images.attach_bytes(str(access.ctx.scope.get("job") or ""), access.me.user_id, raw, name=str(args.get("name") or ""))
+    except images.ImageError as exc:
+        raise _err(str(exc)) from exc
+    return {"image": {"name": file["name"], "url": file["url"]},
+            "note": "Картинка сохранена в «Файлы → Агенты» и показана человеку в чате под вашим ответом — не вставляйте её ссылкой ещё раз."}
 
 
 def _tours(fn, *args, **kwargs):
@@ -852,12 +874,16 @@ TOOLS: list[dict[str, Any]] = [
      "description": "Отменить запланированный запуск по id из agent_schedules. Уже созданный ответ агента не останавливает. Нужен confirm: true.",
      "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "confirm": {"type": "boolean"}}, "required": ["id", "confirm"]}},
     {"name": "image_generate", "app": "files", "handler": image_generate, "level": "create",
-     "description": "Нарисовать картинку по описанию или поправить готовую (source_url — вложение человека или адрес картинки). "
-                    "Рисует Gemini по ключу человека — Claude и GPT тоже могут звать. Картинка сама появится в чате под ответом и "
-                    "в «Файлах → Агенты». prompt — подробно: что, стиль, свет, текст на картинке; aspect — 1:1, 16:9, 9:16, 4:3, 3:4.",
+     "description": "Запасной способ: нарисовать картинку Gemini по ключу человека (нужен подключённый Gemini). Если вы умеете рисовать сами "
+                    "(встроенный генератор, код, SVG), делайте это и отдавайте результат через image_attach — Gemini не нужен. "
+                    "source_url — вложение человека или адрес картинки; prompt — подробно: что, стиль, свет, текст; aspect — 1:1, 16:9, 9:16, 4:3, 3:4.",
      "inputSchema": {"type": "object", "properties": {"prompt": {"type": "string"}, "aspect": {"type": "string"},
                                                      "source_url": {"type": "string"}, "name": {"type": "string", "description": "имя файла"}},
                      "required": ["prompt"]}},
+    {"name": "image_attach", "app": "files", "handler": image_attach, "level": "create",
+     "description": "Отдать человеку картинку, которую вы создали сами (любым своим средством): base64 (PNG, JPEG, WebP, GIF до 15 МБ) или url вложения Шара /api/uploads/…. "
+                    "Картинка попадёт в «Файлы → Агенты» и появится в чате под вашим ответом. name — имя файла без расширения.",
+     "inputSchema": {"type": "object", "properties": {"base64": {"type": "string"}, "url": {"type": "string"}, "name": {"type": "string"}}}},
     {"name": "tours_overview", "app": "tours", "handler": tours_overview, "level": "read",
      "description": "Каталог туров «Вокруг света» с сайта: сколько туров, свои/партнёрские, по сегментам, тематики (коллекции) и праздники для фильтров. Начните с него, если не знаете ассортимент.",
      "inputSchema": {"type": "object", "properties": {}}},

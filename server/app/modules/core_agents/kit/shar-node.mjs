@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "1.2.8";
+const VERSION = "1.2.9";
 const SHAR_URL = String(process.env.SHAR_URL || "").replace(/\/+$/, "");
 const TOKEN = String(process.env.SHAR_NODE_TOKEN || "");
 // Отпечаток этого файла — так же, как его считает Шар (переводы строк без \r): разошёлся с присланным в опросе —
@@ -251,7 +251,8 @@ const OFFICE_GUIDE = `Актуальные возможности Шара: list
 Документ: update_document mode=insert с after_text вставляет в середину; edit_document replacements заменяет до 50 строк за одну запись, сохраняя оформление. Заметка: read_item показывает вкладки, tab читает одну; edit_note с tab правит только выбранную вкладку, replacements — несколько фрагментов. Таблица: update_table operations меняет несколько листов атомарно.
 Для изменений с прошлого визита — changes_list(since=время прошлого визита), затем item_versions и diff_item; перед рискованной записью — dry_run (он показывает diff). Ответ записи содержит updatedAt.
 edit_note и edit_document сначала ищут точное совпадение, затем безопасно учитывают типографские пробелы, тире и кавычки; если совпадений несколько — уточните фрагмент.
-Файлы: files_list → file_read; file_write создаёт новый или заменяет байты по id + base_updated_at; file_edit правит текст на месте (включая группу строк); file_update меняет имя/папку, file_delete удаляет свой файл после подтверждения.
+Файлы: files_list → file_read (в ответе rights, canEdit, editable, editWith, encoding); file_write создаёт новый или заменяет байты по id + base_updated_at; file_edit правит на месте: текст и код (replace, lines по номерам строк из file_read from_line, append; кодировка и CRLF сохраняются), docx/pptx (replace внутри абзаца, оформление остаётся; docx ещё append), xlsx (cells и append_rows). Править можно свой файл и файл, где вам дано право редактирования (в том числе через папку). Каждая замена оставляет версию: file_versions, file_restore_version. file_update меняет имя/папку своего файла, file_delete удаляет свой после подтверждения.
+Картинки рисуйте сами, своим средством (Gemini не нужен); готовую отдайте через image_attach (base64). image_generate (Gemini) — запасной путь только при подключённом ключе.
 Одобренный approval_id действует 15 минут для повторных вызовов того же инструмента; request_permission(tools=[...], summary=конкретный план) позволяет одним согласием открыть несколько перечисленных инструментов.`;
 
 function currentRules(job) {
@@ -468,7 +469,7 @@ const HINTS = {
   create_note: "Создаёт заметку", create_table: "Создаёт таблицу", calendar_list: "Смотрит календарь", calendar_create: "Создаёт событие",
   calendar_update: "Меняет событие", calendar_delete: "Удаляет событие", tasks_list: "Смотрит задачи", task_read: "Читает задачу",
   task_create: "Ставит задачу", task_update: "Меняет задачу", task_delete: "Удаляет задачу", files_list: "Смотрит «Файлы»",
-  file_read: "Читает файл", file_write: "Кладёт файл", file_edit: "Правит файл", file_update: "Меняет файл", file_delete: "Удаляет файл", people_search: "Ищет сотрудника", memory_search: "Вспоминает",
+  file_read: "Читает файл", file_write: "Кладёт файл", file_edit: "Правит файл", file_versions: "Смотрит версии файла", file_restore_version: "Возвращает версию файла", image_attach: "Отдаёт картинку", file_update: "Меняет файл", file_delete: "Удаляет файл", people_search: "Ищет сотрудника", memory_search: "Вспоминает",
   memory_add: "Запоминает", profile_note: "Учится у вас", skill_read: "Читает навык", skill_write: "Записывает навык",
   ask_user: "Спрашивает вас", WebSearch: "Ищет в интернете", WebFetch: "Читает страницу", web_search: "Ищет в интернете",
   google_web_search: "Ищет в интернете", web_fetch: "Читает страницу",
