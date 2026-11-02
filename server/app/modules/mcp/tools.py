@@ -739,36 +739,53 @@ def changes_list(access: Access, args: dict[str, Any]) -> dict[str, Any]:
         raise ToolError("since — время с часовым поясом, например 2026-11-02T12:00:00+03:00") from None
     limit = max(1, min(int(args.get("limit") or 50), 100))
     cursor = str(args.get("cursor") or "")
-    after = (start, "", 0)
+    after = (start, "", "")
     if cursor:
         try:
             stamp, kind, row_id = cursor.rsplit("|", 2)
-            after = (datetime.fromisoformat(stamp), kind, int(row_id))
-            if after[0].tzinfo is None or kind not in ("item", "comment") or after[0] < start:
+            after = (datetime.fromisoformat(stamp), kind, row_id)
+            if after[0].tzinfo is None or kind not in ("item", "comment", "notification") or after[0] < start or not row_id or len(row_id) > 128:
                 raise ValueError
         except ValueError:
             raise ToolError("Неверный cursor: возьмите nextCursor из предыдущего ответа") from None
     until = datetime.now(timezone.utc)
     comments_sql = (
-        "UNION ALL SELECT c.updated_at AS at, 'comment' AS kind, c.id AS event_id, c.item_id, "
-        "left(c.body, 300) AS body FROM workspace_item_comments c WHERE c.updated_at > %s AND c.updated_at <= %s"
+        " UNION ALL SELECT c.updated_at AS at, 'comment' AS kind, c.id::text AS event_id, c.item_id, "
+        "left(c.body, 300) AS body, ''::text AS notice_type, ''::text AS task_id, ''::text AS calendar_id "
+        "FROM workspace_item_comments c WHERE c.updated_at > %s AND c.updated_at <= %s"
         if store.table_ready("workspace_item_comments") else ""
+    )
+    notices_sql = (
+        " UNION ALL SELECT n.created_at AS at, 'notification' AS kind, n.id AS event_id, NULL::bigint AS item_id, "
+        "left(n.message, 300) AS body, n.type AS notice_type, COALESCE(n.todo_id, '') AS task_id, "
+        "COALESCE(n.event_id, '') AS calendar_id FROM user_notifications n "
+        "WHERE n.to_user_id = %s AND n.created_at > %s AND n.created_at <= %s"
+        if store.table_ready("user_notifications") else ""
     )
     events: list[dict[str, Any]] = []
     scanned = 0
     # Сканируем и невидимые записи, но наружу отдаём только прошедшие Access.load.
     while len(events) < limit and scanned < 1000:
-        sql = ("SELECT * FROM (SELECT i.updated_at AS at, 'item' AS kind, i.id AS event_id, i.id AS item_id, "
-               "'' AS body FROM workspace_items i WHERE i.updated_at > %s AND i.updated_at <= %s "
-               + comments_sql + ") feed WHERE (at, kind, event_id) > (%s, %s, %s) "
+        sql = ("SELECT * FROM (SELECT i.updated_at AS at, 'item' AS kind, i.id::text AS event_id, i.id AS item_id, "
+               "'' AS body, ''::text AS notice_type, ''::text AS task_id, ''::text AS calendar_id "
+               "FROM workspace_items i WHERE i.updated_at > %s AND i.updated_at <= %s "
+               + comments_sql + notices_sql + ") feed WHERE (at, kind, event_id) > (%s, %s, %s) "
                "ORDER BY at, kind, event_id LIMIT 100")
-        params = (start, until, *((start, until) if comments_sql else ()), *after)
+        params = (start, until, *((start, until) if comments_sql else ()),
+                  *((access.me.user_id, start, until) if notices_sql else ()), *after)
         rows = db.conn.fetch_all(sql, params) or []
         if not rows:
             break
         for row in rows:
             scanned += 1
-            after = (row["at"], row["kind"], int(row["event_id"]))
+            after = (row["at"], row["kind"], str(row["event_id"]))
+            if row["kind"] == "notification":
+                events.append({"type": "notification", "at": row["at"].isoformat(), "id": row["event_id"],
+                               "notificationType": row["notice_type"], "message": row["body"],
+                               "taskId": row["task_id"] or None, "calendarEventId": row["calendar_id"] or None})
+                if len(events) >= limit:
+                    break
+                continue
             try:
                 item = access.load(str(row["item_id"]), content=False)
             except ToolError:
@@ -787,7 +804,7 @@ def changes_list(access: Access, args: dict[str, Any]) -> dict[str, Any]:
             break
     next_cursor = f"{after[0].isoformat()}|{after[1]}|{after[2]}" if scanned else None
     return {"events": events, "nextCursor": next_cursor, "hasMore": len(events) >= limit or scanned >= 1000,
-            "serverTime": until.isoformat(), "note": "Лента включает текущее состояние материалов и новые/изменённые комментарии; изменения задачи смотрите через events_list."}
+            "serverTime": until.isoformat(), "note": "Лента включает материалы, комментарии и входящие уведомления человека; прочитанность не меняется."}
 
 
 def _version_content(access: Access, item_id: str, version_id: Any) -> dict[str, Any]:
@@ -941,7 +958,7 @@ TOOLS: list[dict[str, Any]] = [
      "description": "Версии материала: история сохранений, id, время, автор, метка; можно ли восстановить.",
      "inputSchema": {"type": "object", "properties": {"id": _ID}, "required": ["id"]}},
     {"name": "changes_list", "handler": changes_list, "level": "read",
-     "description": "Что изменилось в доступном «Офисе» после since: материалы и комментарии. Верните nextCursor при следующем вызове; детали материала — diff_item.",
+     "description": "Входящая лента после since: доступные материалы, комментарии, уведомления задач и календаря. Верните nextCursor при следующем вызове; детали материала — diff_item.",
      "inputSchema": {"type": "object", "properties": {"since": {"type": "string", "description": "ISO-время с часовым поясом"},
                                                      "cursor": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}},
                      "required": ["since"]}},

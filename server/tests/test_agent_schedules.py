@@ -52,10 +52,14 @@ def test_agent_schedule_dispatches_once_and_lists_events(client, admin, users):
         thread = admin.post("/api/core/threads", json={}).json()["thread"]
         permissions.set_mode(uid, "auto")
 
+        since = datetime.now(timezone.utc).isoformat()
         create_notification(uid, id=notice_id, type="task_updated", message="Срок сегодня")
         create_notification(users.ids["anna"], id=foreign_id, type="task_updated", message="Чужое")
         events = _rpc(client, token, "events_list", unread_only=True)["structuredContent"]
         assert [e["id"] for e in events["events"] if e["id"].startswith("test-")] == [notice_id]
+        activity = _rpc(client, token, "changes_list", since=since)["structuredContent"]["events"]
+        assert any(e.get("id") == notice_id and e["type"] == "notification" for e in activity)
+        assert all(e.get("id") != foreign_id for e in activity)
 
         at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
         made = _rpc(client, token, "agent_schedule", prompt="Собери утреннюю сводку", thread_id=thread["id"],

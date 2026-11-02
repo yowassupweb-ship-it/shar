@@ -120,13 +120,13 @@ def test_changes_list_paginates_items_and_comments_without_leaking_private_items
         cursor = None
         for _ in range(5):
             page = _ok(client, token, "changes_list", since=since, cursor=cursor, limit=1)
-            found.extend(e for e in page["events"] if e["item"]["id"] == note["id"])
+            found.extend(e for e in page["events"] if (e.get("item") or {}).get("id") == note["id"])
             cursor = page["nextCursor"]
             if not page["hasMore"]:
                 break
         assert {e["type"] for e in found} == {"item_changed", "comment"}
         private = _ok(client, other, "changes_list", since=since)
-        assert all(e["item"]["id"] != note["id"] for e in private["events"])
+        assert all((e.get("item") or {}).get("id") != note["id"] for e in private["events"])
     finally:
         anna.delete(f"/api/mcp/keys/{key['id']}")
         boris.delete(f"/api/mcp/keys/{other_key['id']}")
