@@ -99,8 +99,8 @@ User=$USER_NAME
 EnvironmentFile=$ENV_FILE
 WorkingDirectory=$DATA
 # Свежий агент с Шара при каждом старте: обновить ноду — перезапустить службу.
-ExecStartPre=+-/usr/bin/curl -fsSL $SHAR_URL/api/core/node/agent.mjs -o $APP/shar-node.mjs.new
-ExecStartPre=+-/bin/sh -c 'node --check $APP/shar-node.mjs.new && mv $APP/shar-node.mjs.new $APP/shar-node.mjs || rm -f $APP/shar-node.mjs.new'
+ExecStartPre=+-/usr/bin/curl -fsSL $SHAR_URL/api/core/node/agent.mjs -o $APP/shar-node.new.mjs
+ExecStartPre=+-/bin/sh -c 'node --check $APP/shar-node.new.mjs && mv $APP/shar-node.new.mjs $APP/shar-node.mjs || rm -f $APP/shar-node.new.mjs'
 ExecStart=/usr/bin/node $APP/shar-node.mjs
 Restart=always
 RestartSec=10
