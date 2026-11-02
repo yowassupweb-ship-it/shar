@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "1.2.5";
+const VERSION = "1.2.6";
 const SHAR_URL = String(process.env.SHAR_URL || "").replace(/\/+$/, "");
 const TOKEN = String(process.env.SHAR_NODE_TOKEN || "");
 // Отпечаток этого файла — так же, как его считает Шар (переводы строк без \r): разошёлся с присланным в опросе —
@@ -244,6 +244,20 @@ function promptText(job, resumed) {
   }
   parts.push(job.prompt || "");
   return parts.filter(Boolean).join("\n\n");
+}
+
+// Возможности MCP меняются быстрее сессий CLI. Краткая памятка предотвращает повторение уже снятых ограничений.
+const OFFICE_GUIDE = `Актуальные возможности Шара: list_items даёт snippet; read_item читает документ по id и таблицу по sheet/range.
+Документ: update_document mode=insert с after_text вставляет в середину. Таблица: update_table operations меняет несколько листов атомарно.
+Для изменений с прошлого визита — item_versions и diff_item; перед рискованной записью — dry_run (он показывает diff). Ответ записи содержит updatedAt.
+Одобренный approval_id действует 15 минут для повторных вызовов того же инструмента в рамках согласованной работы.`;
+
+function currentRules(job) {
+  // Codex и Gemini при --resume не получают новый системный блок: повторяем лишь изменяемые правила и памятку.
+  const system = String(job.system || "");
+  const now = system.match(/^Сейчас .+$/m)?.[0] || "";
+  const mode = system.match(/^- Режим разрешений человека: .+$/m)?.[0] || "";
+  return [now, mode, OFFICE_GUIDE].filter(Boolean).join("\n");
 }
 
 /** Состояние ответа, общее для всех провайдеров: цепочка шагов, текст, ход работы, лимит. */
@@ -526,7 +540,7 @@ function claudeFiles(job, dirs) {
       ...claudeExtra(job),
     },
   }));
-  const system = secretFile(dirs, `system-${job.id}.md`, job.system || "");
+  const system = secretFile(dirs, `system-${job.id}.md`, `${job.system || ""}\n\n${OFFICE_GUIDE}`);
   return { mcp, system };
 }
 
@@ -714,7 +728,7 @@ function runCodex(job, dirs, resumeId, report, entry) {
   state.model = job.model || "";
   const pending = new Map();
   // У Codex нет отдельного системного промпта в exec: правила — в начале первого сообщения сессии.
-  const prompt = resumeId ? promptText(job, true) : `${job.system}\n\n---\n\n${promptText(job, false)}`;
+  const prompt = resumeId ? `${currentRules(job)}\n\n${promptText(job, true)}` : `${job.system}\n\n${OFFICE_GUIDE}\n\n---\n\n${promptText(job, false)}`;
   report.send({ type: "progress", phase: "запускается" });
   const toolName = (item) => (item.tool ? String(item.tool) : item.type === "web_search" ? "web_search" : item.command ? "shell" : "");
   const handle = (event) => {
@@ -818,7 +832,7 @@ function kimiFiles(job, dirs) {
     ...extraMcp(job).map((m) => `mcp__${m.name}__*`)];
   const agent = path.join(cwd, "shar-agent.md");
   // Встроенные файлы и оболочка ноды агенту не нужны: доступ к Шару — через MCP, картинки — через ReadMediaFile.
-  fs.writeFileSync(agent, `---\nname: shar\ndescription: Агент Шара\ntools:\n${tools.map((name) => `  - ${name}`).join("\n")}\nsubagents: []\n---\n\n\${base_prompt}\n\n---\n\n${job.system || ""}`, { mode: 0o600 });
+  fs.writeFileSync(agent, `---\nname: shar\ndescription: Агент Шара\ntools:\n${tools.map((name) => `  - ${name}`).join("\n")}\nsubagents: []\n---\n\n\${base_prompt}\n\n---\n\n${job.system || ""}\n\n${OFFICE_GUIDE}`, { mode: 0o600 });
   return { cwd, agent };
 }
 
@@ -1033,7 +1047,7 @@ function geminiSettings(job, dirs) {
 
 function runGemini(job, dirs, resumeId, report, entry) {
   const settings = geminiSettings(job, dirs);
-  const system = secretFile(dirs, `gemini-system-${job.id}.md`, job.system || "");
+  const system = secretFile(dirs, `gemini-system-${job.id}.md`, `${job.system || ""}\n\n${OFFICE_GUIDE}`);
   const args = ["--output-format", "stream-json", "--approval-mode", "yolo", "--allowed-mcp-server-names", "shar", ...(browser ? ["browser"] : []), ...extraMcp(job).map((m) => m.name)];
   if (job.model) args.push("-m", job.model);
   if (resumeId) args.push("--resume", resumeId);
@@ -1091,7 +1105,7 @@ function runGemini(job, dirs, resumeId, report, entry) {
     // Рабочая папка человека на ноде — своя, её создаёт нода: доверяем (иначе Gemini CLI 0.66 молча гасит режим yolo).
     GEMINI_CLI_TRUST_WORKSPACE: "true" };
   // Правила Шара — в начале первого сообщения сессии: системный промпт Gemini CLI заменять целиком не нужно.
-  const base = resumeId ? promptText(job, true) : `${job.system}\n\n---\n\n${promptText(job, false)}`;
+  const base = resumeId ? `${currentRules(job)}\n\n${promptText(job, true)}` : `${job.system}\n\n${OFFICE_GUIDE}\n\n---\n\n${promptText(job, false)}`;
   // Картинки — ссылками @файл: Gemini CLI сам подкладывает их модели.
   const prompt = job.images?.length ? `${base}\n\nКартинки из вложений: ${job.images.map((img) => `@${img.rel}`).join(" ")}` : base;
   return streamCli(CLI.gemini, args, { cwd: dirs.work, env, stdin: prompt, provider: "Gemini" }, entry, handle, state)
