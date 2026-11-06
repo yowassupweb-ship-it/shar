@@ -112,6 +112,10 @@ function measureCursors(injector: Injector, unitId: string, host: HTMLElement, c
 /** Шрифты для раскладки в воркере: ItemView ждёт их вместе с кодом редактора (под тем же скелетоном). */
 export const layoutFontsReady = loadLayoutFonts;
 
+/** Где был прокручен документ перед пересборкой редактора (его записали мимо живой правки — агент, версия из истории):
+ *  новый экземпляр встаёт на то же место, а не прыгает в начало. По id документа внутри Univer: он не меняется. */
+const scrollMemory = new Map<string, { x: number; y: number }>();
+
 export default function DocEditor({ content, onContent, readOnly, loadKey, visible = true, cursors = [], onCursor, live, commentsBridge, onAddComment, commentQuotes = NO_QUOTES, onCommentQuote }: EditorProps) {
   const onCommentQuoteRef = useRef(onCommentQuote);
   onCommentQuoteRef.current = onCommentQuote;
@@ -252,12 +256,28 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
     let scrollSub: { unsubscribe: () => void } | null = null;
     let scrollTries = 0;
     let scrollWait = 0;
+    type MainViewport = { viewportScrollX: number; viewportScrollY: number; scrollToViewportPos: (pos: { viewportScrollX?: number; viewportScrollY?: number }) => unknown };
+    let mainViewport: MainViewport | null = null;
+    const restoreTimers: number[] = [];
     const watchScroll = () => {
       scrollWait = 0;
       try {
         const unit = injector.get<IRenderManagerService>(IRenderManagerService).getRenderUnitById(unitId) as unknown as
           { scene?: { getViewport: (key: string) => { onScrollAfter$: { subscribeEvent: (fn: () => void) => { unsubscribe: () => void } } } | undefined } } | null;
         const viewport = unit?.scene?.getViewport('viewMain');
+        if (viewport && !mainViewport) {
+          mainViewport = viewport as unknown as MainViewport;
+          // Пересборка с того же места: Univer рисует текст не сразу, поэтому возвращаем прокрутку несколько раз подряд.
+          const saved = scrollMemory.get(unitId);
+          scrollMemory.delete(unitId);
+          if (saved && (saved.x > 0 || saved.y > 0)) {
+            for (const delay of [60, 220, 480, 900]) {
+              restoreTimers.push(window.setTimeout(() => {
+                try { if (mainViewport && Math.abs(mainViewport.viewportScrollY - saved.y) > 1) mainViewport.scrollToViewportPos({ viewportScrollX: saved.x, viewportScrollY: saved.y }); } catch { /* вид уже разобран */ }
+              }, delay));
+            }
+          }
+        }
         // Только subscribeEvent: emitEvent Univer оповещает своих подписчиков, обычный subscribe из rxjs молчит.
         if (viewport) { scrollSub = viewport.onScrollAfter$.subscribeEvent(() => kickCursors.current()); return; }
       } catch { /* редактор ещё не готов */ }
@@ -345,6 +365,8 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
       subscription.dispose();
       anyCommand.dispose();
       cancelAnimationFrame(scrollWait);
+      restoreTimers.forEach((t) => window.clearTimeout(t));
+      try { if (mainViewport) scrollMemory.set(unitId, { x: mainViewport.viewportScrollX, y: mainViewport.viewportScrollY }); } catch { /* вид уже разобран */ }
       scrollSub?.unsubscribe();
       selectionSub.unsubscribe();
       if (commentsBridge) commentsBridge.current = null;
