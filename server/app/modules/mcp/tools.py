@@ -43,9 +43,9 @@ KIND_NAMES = {"note": "заметка", "document": "документ", "table":
 LEVELS = {"read": 0, "edit": 1, "create": 2}
 MAX_TABLE_ROWS = 500
 MAX_TABLE_COLS = 50
-MAX_CHARS = 60_000
+MAX_CHARS = 120_000
 # По умолчанию — кусок поменьше: каждый прочитанный символ агент тащит в контексте до конца сессии.
-DEFAULT_CHARS = 15_000
+DEFAULT_CHARS = 40_000
 HIDDEN = "Материал не найден или этому ключу он не открыт"
 _CELL = re.compile(r"^[A-Z]{1,3}[1-9][0-9]{0,6}$")
 _HYPERLINK_FORMULA = re.compile(r'^=\s*HYPERLINK\(\s*"([^"]+)"\s*(?:[,;]\s*"([^"]*)"\s*)?\)\s*$', re.IGNORECASE)
@@ -277,6 +277,42 @@ def _page(text: str, args: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _outline(markdown: str, served: str, plain: bool) -> list[dict[str, Any]]:
+    """Оглавление: заголовки Markdown с номером знака в том тексте, который отдаётся агенту (offset для read_item)."""
+    heads = [(len(m.group(1)), m.group(2).strip()) for m in re.finditer(r"(?m)^(#{1,6})[ \t]+(.*?)[ \t]*$", markdown)]
+    out: list[dict[str, Any]] = []
+    if not plain:
+        for m in re.finditer(r"(?m)^(#{1,6})[ \t]+(.*?)[ \t]*$", served):
+            out.append({"level": len(m.group(1)), "title": m.group(2).strip(), "offset": m.start()})
+        return out
+    pos = 0
+    for level, title in heads:  # в простом тексте заголовок — обычная строка: ищем по порядку
+        at = served.find(title, pos)
+        if at >= 0:
+            out.append({"level": level, "title": title, "offset": at})
+            pos = at + len(title)
+    return out
+
+
+def _read_text(out: dict[str, Any], served: str, markdown: str, plain: bool, args: dict[str, Any]) -> None:
+    """Текст материала страницей. Большие материалы не перечитывают целиком: ответ несёт оглавление (outline) с offset,
+    а section читает один раздел — от заголовка до следующего того же или более высокого уровня."""
+    outline = _outline(markdown, served, plain)
+    section = str(args.get("section") or "").strip()
+    if section:
+        wanted = section.casefold()
+        pick = next((h for h in outline if h["title"].casefold() == wanted), None) or next((h for h in outline if wanted in h["title"].casefold()), None)
+        if not pick:
+            raise ToolError(f"Раздел «{section}» не найден. Разделы: {', '.join(h['title'] for h in outline[:30]) or 'заголовков нет'}", "not_found")
+        end = next((h["offset"] for h in outline if h["offset"] > pick["offset"] and h["level"] <= pick["level"]), len(served))
+        out.update(section=pick["title"], sectionOffset=pick["offset"], **_page(served[pick["offset"]:end], args))
+        out["note"] = "offset и nextOffset считаются от начала раздела"
+        return
+    out.update(_page(served, args))
+    if outline and (out.get("truncated") or len(served) > 8000 or len(outline) >= 6):
+        out["outline"] = outline[:80]
+
+
 def _note_tabs(content: str) -> list[dict[str, Any]]:
     """Границы вкладок как в noteTabs.ts: служебные строки остаются вне редактируемого текста."""
     markers = list(re.finditer(r"(?m)^<!-- shar-tab: (.*?) -->\n?", content))
@@ -457,7 +493,8 @@ def read_item(access: Access, args: dict[str, Any]) -> dict[str, Any]:
             tab = _note_tab(content, str(args["tab"]))
             content = content[tab["start"]:tab["end"]]
             out["tab"] = tab["title"]
-        out.update(format="markdown", **_page(content, args))
+        out["format"] = "markdown"
+        _read_text(out, content, content, False, args)
     elif item["kind"] == "document":
         try:
             snapshot = json.loads(content)
@@ -465,7 +502,8 @@ def read_item(access: Access, args: dict[str, Any]) -> dict[str, Any]:
             snapshot = docformat.empty_snapshot(item["title"])
         plain = args.get("format") == "text"
         text = docformat.snapshot_text(snapshot) if plain else docformat.snapshot_to_markdown(snapshot)
-        out.update(format="text" if plain else "markdown", **_page(text, args))
+        out["format"] = "text" if plain else "markdown"
+        _read_text(out, text, docformat.snapshot_to_markdown(snapshot) if plain else text, plain, args)
     elif item["kind"] == "table":
         try:
             sheets = _table_rows(content, args)
@@ -954,7 +992,8 @@ def create_folder(access: Access, args: dict[str, Any]) -> dict[str, Any]:
 
 _ID = {"type": "string", "description": "id материала (из list_items)"}
 _FOLDER = {"type": "string", "description": "id папки (из list_folders). Если ключу открыты только выбранные папки — обязателен"}
-_PAGE = {"offset": {"type": "integer", "minimum": 0, "description": "с какого символа (для длинных материалов, см. nextOffset)"},
+_PAGE = {"section": {"type": "string", "description": "прочитать только раздел с этим заголовком (заметка и документ); список разделов — в outline"},
+         "offset": {"type": "integer", "minimum": 0, "description": "с какого символа (для длинных материалов, см. nextOffset)"},
          "max_chars": {"type": "integer", "minimum": 1000, "maximum": MAX_CHARS}}
 _DRY_RUN = {"dry_run": {"type": "boolean", "default": False, "description": "true — только diff и базовая версия, ничего не записывать"}}
 _TABLE_READ = {
@@ -986,7 +1025,8 @@ TOOLS: list[dict[str, Any]] = [
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "read_item", "handler": read_item, "level": "read",
      "description": "Содержимое материала. Заметка возвращает названия вкладок; tab читает одну вкладку. Для таблицы доступны sheet, range и пагинация; ответ содержит hasMore/nextRange и формулы ячеек. "
-                    "Для edit_document используйте format=text. Длинные текстовые материалы читайте частями по nextOffset.",
+                    "Для edit_document используйте format=text. Страница — до 40 000 знаков; у длинных материалов в ответе outline (заголовки с offset): "
+                    "нужный раздел читайте по section или offset, а не весь материал заново; дальше — по nextOffset.",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "format": {"type": "string", "enum": ["markdown", "text"]},
                                                      "tab": {"type": "string", "description": "название вкладки заметки"},
                                                      **_PAGE, **_TABLE_READ}, "required": ["id"]}},

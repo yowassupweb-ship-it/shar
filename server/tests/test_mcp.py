@@ -348,3 +348,26 @@ def test_preview_insert_versions_ranges_and_links(client, anna):
     with_hint = _call(client, token, "edit_note", id=note["id"], old_text="Бло", new_text="x")["error"]["message"]
     assert "Ближайшее похожее место: «Было»" in with_hint
     assert "openNow" in rights
+
+
+def test_long_materials_read_by_outline_and_section(client, anna):
+    """Длинное не обрезается на 15 тысячах знаков, а оглавление и section дают прочитать нужный раздел, не перечитывая всё."""
+    for old in anna.get("/api/mcp/keys").json().get("keys", []):  # у человека не больше 10 ключей — соседние тесты могли оставить свои
+        anna.delete(f"/api/mcp/keys/{old['id']}")
+    token, key = _key(anna)
+    try:
+        body = "# Цель\n" + "цель " * 400 + "\n## Подцель\nвложенная\n# Задачи\n" + "задача " * 3000 + "\n# Итоги\nвсё готово"
+        assert len(body) > 20_000
+        note = _ok(client, token, "create_note", title="Большая", markdown=body)
+        full = _ok(client, token, "read_item", id=note["id"])
+        assert not full.get("truncated"), "20 тысяч знаков помещаются в страницу"
+        assert [h["title"] for h in full["outline"]] == ["Цель", "Подцель", "Задачи", "Итоги"]
+        part = _ok(client, token, "read_item", id=note["id"], section="итоги")
+        assert part["content"].startswith("# Итоги") and "всё готово" in part["content"] and "задача" not in part["content"]
+        goal = _ok(client, token, "read_item", id=note["id"], section="Цель")
+        assert "вложенная" not in goal["content"] or "# Задачи" not in goal["content"], "раздел заканчивается на заголовке того же уровня"
+        assert _call(client, token, "read_item", id=note["id"], section="Нет такого")["isError"]
+        small = _ok(client, token, "read_item", id=note["id"], max_chars=1000)
+        assert small["truncated"] and small["nextOffset"] == 1000 and small["outline"]
+    finally:
+        anna.delete(f"/api/mcp/keys/{key['id']}")
