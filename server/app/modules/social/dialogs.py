@@ -154,6 +154,25 @@ def refresh_last(dialog_id: str, recent_hours: int = 48) -> None:
     )
 
 
+def unread_sent(dialog_id: str) -> List[dict]:
+    """Наши сообщения диалога, о прочтении которых ещё не известно (только с id на площадке)."""
+    rows = db.conn.fetch_all(
+        "SELECT id, data FROM social_items WHERE dialog_id = %s AND direction = 'out' AND (data->>'read_at') IS NULL "
+        "AND (data->>'deleted_at') IS NULL AND COALESCE(data->>'sent_id', '') ~ '^[0-9]+$' AND data->>'sent_id' <> '0' "
+        "ORDER BY created_at DESC LIMIT 200", (dialog_id,)) or []
+    return [dict(r) for r in rows]
+
+
+def mark_read(items: List[dict], read_upto: int) -> int:
+    """Отметить прочитанными сообщения с id на площадке не больше read_upto. Возвращает, сколько отмечено."""
+    ids = [r["id"] for r in items if int((r.get("data") or {}).get("sent_id") or 0) <= read_upto]
+    if not ids:
+        return 0
+    db.conn.execute_query("UPDATE social_items SET data = data || %s::jsonb WHERE id = ANY(%s)",
+                          (json.dumps({"read_at": _now()}), ids))
+    return len(ids)
+
+
 def find_changed(account_id: str, ch: Change) -> Optional[dict]:
     """Сообщение, которого касается правка или удаление на площадке: входящее — по его id, исходящее — по sent_id."""
     row = db.conn.fetch_one(

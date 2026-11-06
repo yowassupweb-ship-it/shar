@@ -513,3 +513,159 @@ def test_outdated_node_gets_no_gemini_or_gpt_and_learns_new_agent(client, admin)
         assert reply["status"] == "failed" and "устарела" in reply["body"]
     finally:
         _cleanup()
+
+
+def test_open_item_is_background_unless_request_points_at_it():
+    """Агент не должен цепляться за открытый у человека файл, когда просьба про другое."""
+    from app.modules.core_agents.dispatch import refers_to_screen
+
+    for pointed in ("исправь опечатки здесь", "добавь в таблицу строку", "что в этом документе?", "посмотри", "сыграем тут",
+                    "в документе пропущен абзац", "перепиши этот текст короче"):
+        assert refers_to_screen(pointed), pointed
+    for unrelated in ("как приготовить борщ", "напиши письмо клиенту про скидки", "создай документ про отпуск",
+                      "какая погода завтра", "объясни что такое REST", "напомни завтра в 10"):
+        assert not refers_to_screen(unrelated), unrelated
+
+
+def test_memory_recall_dedupe_and_feedback_lessons(admin):
+    """Обучение: память по теме просьбы сама попадает агенту, повторы не копятся, оценка ответа становится уроком."""
+    from app.core.db import db as _db
+    from app.modules.core_agents import memory
+
+    uid = f"learn-{uuid.uuid4().hex[:6]}"
+    try:
+        a = memory.add_note(uid, "Отчёт по продажам Байкала отправлять Ирине до 12:00", ["отчёт"], "агент")
+        b = memory.add_note(uid, "отчёт по продажам байкала отправлять ирине до 12:00", ["байкал"], "агент")
+        assert b.get("duplicate") and b["id"] == a["id"]
+        note = _db.conn.fetch_one("SELECT tags FROM core_notes WHERE id = %s", (int(a["id"]),))
+        assert set(note["tags"]) == {"отчёт", "байкал"}
+        memory.add_note(uid, "Бухгалтерия работает по вторникам", [], "агент")
+        memory.write_skill(uid, "sales-report", "Как собрать отчёт по продажам туров за неделю", "1. Выгрузка\n2. Сводная", "агент")
+
+        got = memory.recall(uid, "Собери отчёт по продажам на Байкал, пожалуйста")
+        assert "Ирине до 12:00" in got and "sales-report" in got and "Бухгалтерия" not in got
+        assert memory.recall(uid, "какая погода завтра") == ""
+
+        # Оценки: 👎 с причиной — поправка в профиле и в памяти; без причины — ничего; 👍 — «что получается хорошо».
+        memory.learn_from_feedback(uid, "Напиши письмо клиенту про скидку", -1, "слишком официально, на «ты» с клиентами")
+        memory.learn_from_feedback(uid, "Напиши письмо", -1, "")
+        memory.learn_from_feedback(uid, "Составь сводку по задачам недели", 1)
+        profile = memory.profile(uid)
+        assert "слишком официально" in profile and "Поправки" in profile and "Составь сводку по задачам недели" in profile
+        assert any("слишком официально" in n["text"] for n in memory.search_notes(uid, tag="поправка"))
+        assert "Напиши письмо»" not in profile.split("Что получается хорошо")[0].replace("Напиши письмо клиенту", "")
+
+        # Раздел не растёт бесконечно: остаются FEEDBACK_KEEP свежих пунктов.
+        for n in range(memory.FEEDBACK_KEEP + 4):
+            memory.learn_from_feedback(uid, f"Запрос номер {n} про отпуска", -1, f"причина номер {n}")
+        section = memory.profile(uid).split("## Поправки: что было не так в ответах")[1].split("\n## ")[0]
+        assert section.count("\n- ") == memory.FEEDBACK_KEEP and "причина номер 11" in section and "причина номер 0" not in section
+    finally:
+        _db.conn.execute_query("DELETE FROM core_notes WHERE user_id = %s", (uid,))
+        _db.conn.execute_query("DELETE FROM core_skills WHERE user_id = %s", (uid,))
+        _db.conn.execute_query("DELETE FROM core_profiles WHERE user_id = %s", (uid,))
+
+
+def test_reply_feedback_endpoint(client, admin):
+    """👍/👎 под ответом агента сохраняется в сообщении и учит; чужое сообщение — 404."""
+    from app.core.db import db as _db
+    from app.modules.core_agents import memory
+
+    thread = admin.post("/api/core/threads", json={}).json()["thread"]
+    user_id = _db.conn.fetch_one("SELECT user_id FROM core_threads WHERE id = %s", (thread["id"],))["user_id"]
+    ask_id, reply_id = uuid.uuid4().hex, uuid.uuid4().hex
+    _db.conn.execute_query("INSERT INTO core_messages (id, thread_id, user_id, role, actor, body, status) VALUES (%s, %s, %s, 'user', 'Я', 'Сделай рассылку для школ', 'done')",
+                           (ask_id, thread["id"], user_id))
+    _db.conn.execute_query("INSERT INTO core_messages (id, thread_id, user_id, role, actor, body, status) VALUES (%s, %s, %s, 'agent', 'Claude', 'Готово', 'done')",
+                           (reply_id, thread["id"], user_id))
+    try:
+        r = admin.post(f"/api/core/messages/{reply_id}/feedback", json={"rating": -1, "reason": "слишком длинно, нужно в три строки"})
+        assert r.status_code == 200, r.text
+        assert r.json()["message"]["props"]["feedback"]["rating"] == -1
+        assert "слишком длинно" in memory.profile(user_id)
+        assert admin.post(f"/api/core/messages/{reply_id}/feedback", json={"rating": 0}).json()["message"]["props"].get("feedback") is None
+        assert admin.post(f"/api/core/messages/{uuid.uuid4().hex}/feedback", json={"rating": 1}).status_code == 404
+    finally:
+        _db.conn.execute_query("DELETE FROM core_messages WHERE thread_id = %s", (thread["id"],))
+        _db.conn.execute_query("DELETE FROM core_notes WHERE user_id = %s AND actor = 'оценка'", (user_id,))
+
+
+def test_limits_merge_per_window_and_model_family(admin):
+    """Окна лимита сливаются по типу: ответ Sonnet не стирает недельное окно Opus (использование — по модели)."""
+    from app.core.db import db as _db
+    from app.modules.core_agents import store
+
+    uid = f"lim-{uuid.uuid4().hex[:6]}"
+    try:
+        store.save_account(uid, "claude", state="ready", account="x@y.z", models=[{"id": "claude-opus-4-5", "label": "Opus"}], model="claude-opus-4-5")
+        store.merge_limits(uid, "claude", [{"type": "five_hour", "used": 10, "resetsAt": 1, "status": "ok", "family": "opus"},
+                                           {"type": "seven_day_opus", "used": 55, "resetsAt": 2, "status": "ok", "family": "opus"}])
+        store.merge_limits(uid, "claude", [{"type": "five_hour", "used": 12, "resetsAt": 1, "status": "ok", "family": "sonnet"},
+                                           {"type": "seven_day_sonnet", "used": 7, "resetsAt": 3, "status": "ok", "family": "sonnet"}])
+        row = _db.conn.fetch_one("SELECT limits FROM core_accounts WHERE user_id = %s AND provider = 'claude'", (uid,))
+        by_type = {l["type"]: l for l in row["limits"]}
+        assert set(by_type) == {"five_hour", "seven_day_opus", "seven_day_sonnet"}
+        assert by_type["five_hour"]["used"] == 12 and by_type["seven_day_opus"]["used"] == 55 and by_type["seven_day_sonnet"]["family"] == "sonnet"
+        assert all(l["at"] > 0 for l in row["limits"])
+    finally:
+        _db.conn.execute_query("DELETE FROM core_accounts WHERE user_id = %s", (uid,))
+
+
+def test_warm_process_key_is_minted_rebound_per_message_and_revoked(client, admin, users):
+    """Тёплый процесс Claude: один ключ MCP на процесс. Нода берёт его, на каждое сообщение продлевает и привязывает к новому ответу,
+    а закрывшийся процесс отзывает. Чужая нода и чужие ключи недоступны; нода без caps получает ключ в задаче, как раньше."""
+    from app.core.db import db as _db
+    from app.modules.core_agents import store
+
+    try:
+        node, token = _node(admin)
+        _, other = _node(admin)
+        admin_id = users.ids["admin"]
+        store.save_account(admin_id, "claude", state="ready", account="me@example.com", node_id=node["id"],
+                           models=[{"id": "claude-sonnet-5-5", "label": "Sonnet"}], model="claude-sonnet-5-5")
+        thread = admin.post("/api/core/threads", json={}).json()["thread"]
+
+        def send(text, caps):
+            _poll(client, token, caps=caps, clis={"claude": "2"})
+            sent = admin.post(f"/api/core/threads/{thread['id']}/messages", json={"id": uuid.uuid4().hex, "body": text, "model": "claude"}).json()
+            return sent["reply"]["id"], _poll(client, token, caps=caps).json()["jobs"][0]
+
+        # Нода без caps — всё по-старому: токен в задаче.
+        old_reply, old_job = send("раз", [])
+        assert old_job["mcp"]["token"].startswith("shar_mcp_") and "lazy" not in old_job["mcp"]
+        _events(client, token, old_job["id"], {"type": "done", "body": "ок"})
+
+        # Нода с caps: ключа в задаче нет, есть признак lazy и ключ правил/свежее для сообщения.
+        first_reply, first = send("два", ["warm"])
+        assert first["mcp"].get("lazy") is True and "token" not in first["mcp"]
+        assert first["systemKey"] and "режим разрешений" in first["volatile"]
+        auth = {"Authorization": f"Bearer {token}"}
+        minted = client.post(f"/api/core/node/jobs/{first['id']}/mcp-key", json={}, headers=auth)
+        assert minted.status_code == 200, minted.text
+        key_id, mcp_token = minted.json()["keyId"], minted.json()["token"]
+        mcp = lambda: client.post("/api/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"}, headers={"Authorization": f"Bearer {mcp_token}"})  # noqa: E731
+        assert mcp().status_code == 200
+        scope = _db.conn.fetch_one("SELECT scope FROM mcp_keys WHERE id = %s", (key_id,))["scope"]
+        assert scope["job"] == first_reply and scope["warm"] is True
+
+        # Следующее сообщение: тот же ключ, привязан уже к новому ответу, срок продлён.
+        _events(client, token, first["id"], {"type": "done", "body": "ок"})
+        second_reply, second = send("три", ["warm"])
+        again = client.post(f"/api/core/node/jobs/{second['id']}/mcp-key", json={"keyId": key_id}, headers=auth)
+        assert again.status_code == 200 and again.json() == {"keyId": key_id}
+        assert _db.conn.fetch_one("SELECT scope FROM mcp_keys WHERE id = %s", (key_id,))["scope"]["job"] == second_reply
+        assert mcp().status_code == 200
+
+        # Чужая нода ключ не продлит и не отзовёт; неизвестный ключ — 410 («поднимай процесс заново»).
+        assert client.post(f"/api/core/node/jobs/{second['id']}/mcp-key", json={"keyId": key_id}, headers={"Authorization": f"Bearer {other}"}).status_code == 404
+        client.post(f"/api/core/node/keys/{key_id}/revoke", json={}, headers={"Authorization": f"Bearer {other}"})
+        assert mcp().status_code == 200
+        assert client.post(f"/api/core/node/jobs/{second['id']}/mcp-key", json={"keyId": 999999}, headers=auth).status_code == 410
+
+        # Процесс закрылся — нода отозвала ключ.
+        assert client.post(f"/api/core/node/keys/{key_id}/revoke", json={}, headers=auth).status_code == 200
+        assert mcp().status_code == 401
+        assert client.post(f"/api/core/node/jobs/{second['id']}/mcp-key", json={"keyId": key_id}, headers=auth).status_code == 410
+    finally:
+        _db.conn.execute_query("DELETE FROM core_accounts WHERE provider = 'claude' AND account = 'me@example.com'")
+        _cleanup()

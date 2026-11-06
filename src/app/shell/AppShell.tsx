@@ -10,6 +10,8 @@ import { isTabVisible } from '@/shared/navigation/visibility';
 import { paths } from '@/shared/navigation/routes';
 import { navigate } from '@/shared/navigation/navigate';
 import ToastContainer from '@/shared/ui/Toast';
+import { toggleChatFrame } from '@/features/chat';
+import SectionMenu from './SectionMenu';
 import { SECTIONS, type SectionId } from './sections';
 import './shell.css';
 
@@ -134,6 +136,7 @@ const Nav = memo(function Nav({ section, badges, alerts: rawAlerts, visibleTabs,
   const fullWidth = useRef(0);
   const [dropping, setDropping] = useState(false);
   const [toolMenu, setToolMenu] = useState<{ id: string; anchor: MenuAnchor } | null>(null);
+  const [sectionMenu, setSectionMenu] = useState<{ id: SectionId; anchor: MenuAnchor } | null>(null);
   const { pathname } = useLocation();
 
   useLayoutEffect(() => {
@@ -220,6 +223,13 @@ const Nav = memo(function Nav({ section, badges, alerts: rawAlerts, visibleTabs,
                 title={compact ? s.label : undefined}
                 aria-label={compact ? s.label : undefined}
                 aria-current={active ? 'page' : undefined}
+                // Правый клик — быстрые действия раздела (новая задача, письмо, быстрые чаты…), не заходя в него.
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  // «Чаты» вне самих чатов — окно быстрого чата (повторно — закрывает); у остальных — быстрые действия.
+                  if (s.id === 'chats' && section !== 'chats') { toggleChatFrame(); return; }
+                  setSectionMenu({ id: s.id, anchor: { x: e.clientX, y: e.clientY } });
+                }}
                 onClick={(e) => {
                   // Повторное нажатие — только на самой странице раздела; из вложенной
                   // (настройки внутри «Ещё») пункт ведёт обратно в раздел.
@@ -268,6 +278,7 @@ const Nav = memo(function Nav({ section, badges, alerts: rawAlerts, visibleTabs,
           );
         })}
       </ul>
+      {sectionMenu && <SectionMenu id={sectionMenu.id} current={section as SectionId | null} anchor={sectionMenu.anchor} onClose={() => setSectionMenu(null)} />}
       {toolMenu && (
         <Menu anchor={toolMenu.anchor} label="Инструмент в меню" onClose={() => setToolMenu(null)}>
           <MenuItem icon={<PinOff size={16} />} onSelect={() => { const id = toolMenu.id; setToolMenu(null); onNavToolRemove?.(id); }}>Убрать из меню</MenuItem>

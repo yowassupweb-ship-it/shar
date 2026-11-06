@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { create } from 'zustand';
 import { createPortal } from 'react-dom';
-import { Bell, CalendarDays, Check, Globe2, Lock, MapPin, Repeat, Trash2, Users, X } from 'lucide-react';
+import { Bell, Building2, CalendarDays, Check, Globe2, Lock, MapPin, Repeat, Trash2, Users, X } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
 import type { User } from '@/shared/types/chat';
 import { displayName, useChatStore } from '@/features/chat';
@@ -9,7 +9,9 @@ import { DatePicker } from '@/shared/ui/DatePicker';
 import { Avatar } from '@/shared/ui/Avatar';
 import { Menu, MenuItem, Sheet, type MenuAnchor } from '@/shared/ui/overlay';
 import { SearchField } from '@/shared/ui/SearchField';
-import { createEvent, deleteEvent, isMine, leaveEvent, myId, updateEvent, type Draft, type Scope } from './api';
+import { Switch } from '@/shared/ui/controls';
+import { useContacts } from '@/features/contacts';
+import { canEditEvent, createEvent, deleteEvent, isMine, leaveEvent, myId, updateEvent, type Draft, type Scope } from './api';
 import {
   addDays, addMinutes, COLORS, colorVar, dayIso, dayLabel, hhmm, isRecurring, parseLocal, reminderLabel, REMINDERS, repeatOf,
   REPEATS, timeRange, type CalEvent,
@@ -83,6 +85,8 @@ export function newDraft(start: Date, end?: Date, allDay = false): Draft {
     recurrenceRule: null,
     participants: [],
     sharedWithAll: false,
+    sharedDepartments: [],
+    participantsCanEdit: false,
   };
 }
 
@@ -90,10 +94,12 @@ const draftOf = (e: CalEvent): Draft => ({
   title: e.title, description: e.description, start: e.start, end: e.end, allDay: e.allDay, location: e.location,
   color: e.color, reminderMinutesBefore: e.reminderMinutesBefore ?? null, recurrenceRule: e.recurrenceRule ?? null,
   participants: e.participants, sharedWithAll: e.sharedWithAll,
+  sharedDepartments: e.sharedDepartments, participantsCanEdit: e.participantsCanEdit,
 });
 
 type ShareMode = 'me' | 'people' | 'all';
-const shareModeOf = (d: Draft): ShareMode => (d.sharedWithAll ? 'all' : d.participants.some((p) => p !== myId()) ? 'people' : 'me');
+const shareModeOf = (d: Draft): ShareMode => (d.sharedWithAll ? 'all'
+  : d.participants.some((p) => p !== myId()) || d.sharedDepartments.length > 0 ? 'people' : 'me');
 
 const positionOf = (u: User) => String((u as User & { position?: string }).position || '');
 
@@ -102,7 +108,9 @@ function withTime(iso: string, time: string) { return `${iso.slice(0, 10)}T${tim
 
 export default function EventEditor({ state, onClose }: { state: EditorState; onClose: () => void }) {
   const original = state.mode === 'edit' ? state.event : null;
-  const readOnly = Boolean(original && !isMine(original));
+  // Править можно своё и то, что автор разрешил править участникам; доступом и удалением распоряжается только автор.
+  const readOnly = Boolean(original && !canEditEvent(original));
+  const isOwner = !original || isMine(original);
   const [d, setD] = useState<Draft>(() => (state.mode === 'new' ? state.draft : draftOf(state.event)));
   // Главное — текст: первая строка — название, дальше — заметка. Человек ставит
   // себе напоминание с заметкой; настройки — мелкие чипы под ним.
@@ -116,6 +124,7 @@ export default function EventEditor({ state, onClose }: { state: EditorState; on
   const [showPlace, setShowPlace] = useState(() => Boolean(state.mode === 'edit' && state.event.location));
   const [peopleQuery, setPeopleQuery] = useState('');
   const users = useChatStore((s) => s.users);
+  const { departments } = useContacts();
   const textRef = useRef<HTMLTextAreaElement>(null);
   const me = myId();
 
@@ -139,22 +148,37 @@ export default function EventEditor({ state, onClose }: { state: EditorState; on
   const end = parseLocal(d.end);
   const endBeforeStart = end < start;
 
-  const people = useMemo(() => {
-    const q = peopleQuery.trim().toLowerCase();
-    return Object.values(users)
-      .filter((u) => String(u.id) !== me)
-      .filter((u) => !q || displayName(u).toLowerCase().includes(q) || String(positionOf(u)).toLowerCase().includes(q))
-      .sort((a, b) => Number(d.participants.includes(String(b.id))) - Number(d.participants.includes(String(a.id)))
-        || displayName(a).localeCompare(displayName(b), 'ru'));
-  }, [users, peopleQuery, me, d.participants]);
+  // Люди и отделы — одним списком: выбранные сверху, дальше по алфавиту. Раньше отделы лежали в своём окошке над людьми и
+  // отнимали у них место: на экране помещался один человек.
+  const options = useMemo(() => {
+    const norm = (text: string) => text.toLowerCase().replace(/ё/g, 'е');
+    const q = norm(peopleQuery.trim());
+    const out: Array<{ key: string; kind: 'user' | 'dept'; id: string; name: string; sub: string; on: boolean; user?: User }> = [];
+    for (const u of Object.values(users)) {
+      const id = String(u.id);
+      if (id === me) continue;
+      const name = displayName(u);
+      if (q && !norm(name).includes(q) && !norm(positionOf(u)).includes(q)) continue;
+      out.push({ key: `u-${id}`, kind: 'user', id, name, sub: positionOf(u), on: d.participants.includes(id), user: u });
+    }
+    for (const dept of departments) {
+      if (q && !norm(dept.name).includes(q)) continue;
+      out.push({ key: `d-${dept.id}`, kind: 'dept', id: dept.id, name: dept.name, sub: dept.parentId ? 'Подотдел' : 'Отдел — со всеми подотделами', on: d.sharedDepartments.includes(dept.id) });
+    }
+    return out.sort((x, y) => Number(y.on) - Number(x.on) || x.name.localeCompare(y.name, 'ru')).slice(0, 150);
+  }, [users, departments, peopleQuery, me, d.participants, d.sharedDepartments]);
 
   const togglePerson = (id: string) => set({
     participants: d.participants.includes(id) ? d.participants.filter((p) => p !== id) : [...d.participants, id],
   });
 
+  const toggleDepartment = (id: string) => set({
+    sharedDepartments: d.sharedDepartments.includes(id) ? d.sharedDepartments.filter((x) => x !== id) : [...d.sharedDepartments, id],
+  });
+
   const setShareMode = (m: ShareMode) => {
     setShare(m);
-    set({ sharedWithAll: m === 'all', ...(m === 'me' ? { participants: [] } : {}) });
+    set({ sharedWithAll: m === 'all', ...(m === 'me' ? { participants: [], sharedDepartments: [], participantsCanEdit: false } : {}) });
   };
 
   const save = async () => {
@@ -167,8 +191,18 @@ export default function EventEditor({ state, onClose }: { state: EditorState; on
       // Весь день: храним с полуночи до полуночи дня окончания.
       ...(d.allDay ? { start: `${d.start.slice(0, 10)}T00:00:00`, end: `${d.end.slice(0, 10)}T00:00:00` } : {}),
       participants: share === 'people' ? d.participants.filter((p) => p !== me) : [],
+      sharedDepartments: share === 'people' ? d.sharedDepartments : [],
       sharedWithAll: share === 'all',
+      participantsCanEdit: share === 'people' && d.participantsCanEdit,
     };
+    // Правящий участник доступ не меняет — сервер всё равно не примет, лишнего не шлём.
+    if (!isOwner) {
+      const sharing = draft as Partial<Draft>;
+      delete sharing.participants;
+      delete sharing.sharedDepartments;
+      delete sharing.sharedWithAll;
+      delete sharing.participantsCanEdit;
+    }
     setBusy(true);
     try {
       if (!original) {
@@ -212,14 +246,15 @@ export default function EventEditor({ state, onClose }: { state: EditorState; on
   const pop = (kind: NonNullable<typeof menu>['kind']) => (e: React.MouseEvent<HTMLElement>) =>
     setMenu({ kind, anchor: { element: e.currentTarget, align: 'start' } });
   const repeat = repeatOf(d.recurrenceRule);
+  const sharedCount = d.participants.length + d.sharedDepartments.length;
   const shareLabel = share === 'all' ? 'Все' : share === 'people'
-    ? (d.participants.length ? `${d.participants.length} ${d.participants.length === 1 ? 'человек' : 'чел.'}` : 'Люди')
+    ? (sharedCount ? `Доступ: ${sharedCount}` : 'Люди и отделы')
     : 'Только я';
   const ShareIcon = share === 'all' ? Globe2 : share === 'people' ? Users : Lock;
 
   const footer = (
     <>
-      {original && (
+      {original && isOwner && (
         <button type="button" className="nx-ghost ncal-delete" data-tone="danger" onClick={() => void remove()} disabled={busy}>
           <Trash2 size={15} aria-hidden="true" /> Удалить
         </button>
@@ -273,9 +308,11 @@ export default function EventEditor({ state, onClose }: { state: EditorState; on
           <button type="button" className="ncal-pill" data-on={repeat.id !== 'none' ? 'true' : undefined} onClick={pop('repeat')} aria-haspopup="menu">
             <Repeat size={14} aria-hidden="true" /> {repeat.label}
           </button>
-          <button type="button" className="ncal-pill" data-on={share !== 'me' ? 'true' : undefined} onClick={pop('share')} aria-haspopup="menu">
-            <ShareIcon size={14} aria-hidden="true" /> {shareLabel}
-          </button>
+          {isOwner && (
+            <button type="button" className="ncal-pill" data-on={share !== 'me' ? 'true' : undefined} onClick={pop('share')} aria-haspopup="menu">
+              <ShareIcon size={14} aria-hidden="true" /> {shareLabel}
+            </button>
+          )}
           <button type="button" className="ncal-pill" onClick={pop('color')} aria-haspopup="menu" aria-label="Цвет">
             <span className="ncal-dot" style={{ '--ev': colorVar(d.color) } as React.CSSProperties} /> Цвет
           </button>
@@ -291,10 +328,20 @@ export default function EventEditor({ state, onClose }: { state: EditorState; on
           </label>
         )}
 
-        {share === 'people' && (
+        {isOwner && share === 'people' && (
           <section className="ncal-share" aria-label="С кем поделиться">
-            {d.participants.length > 0 && (
+            {(d.participants.length > 0 || d.sharedDepartments.length > 0) && (
               <div className="ncal-people-chosen">
+                {d.sharedDepartments.map((id) => {
+                  const dept = departments.find((x) => x.id === id);
+                  return (
+                    <button key={`dept-${id}`} type="button" className="ncal-person-chip" onClick={() => toggleDepartment(id)} aria-label={`Убрать отдел: ${dept?.name || id}`}>
+                      <Building2 size={14} aria-hidden="true" />
+                      <span>{dept?.name || 'Отдел'}</span>
+                      <X size={12} aria-hidden="true" />
+                    </button>
+                  );
+                })}
                 {d.participants.map((id) => (
                   <button key={id} type="button" className="ncal-person-chip" onClick={() => togglePerson(id)} aria-label={`Убрать: ${displayName(users[id]) || id}`}>
                     <Avatar name={displayName(users[id]) || '?'} seed={id} src={users[id]?.avatar} person size={18} />
@@ -304,23 +351,31 @@ export default function EventEditor({ state, onClose }: { state: EditorState; on
                 ))}
               </div>
             )}
-            <SearchField value={peopleQuery} onChange={setPeopleQuery} placeholder="С кем поделиться" label="С кем поделиться" />
-            <div className="ncal-people nx-scroll-y" role="listbox" aria-multiselectable="true" aria-label="Сотрудники">
-              {people.slice(0, 60).map((u) => {
-                const id = String(u.id);
-                const on = d.participants.includes(id);
-                return (
-                  <button key={id} type="button" role="option" aria-selected={on} className="nx-pick" onClick={() => togglePerson(id)}>
-                    <Avatar name={displayName(u) || '?'} seed={id} src={u.avatar} person size={28} />
-                    <span className="nx-pick-text"><span>{displayName(u)}</span>{positionOf(u) && <span>{positionOf(u)}</span>}</span>
-                    <span className="nx-check" aria-hidden="true">{on && <Check size={12} strokeWidth={3} />}</span>
-                  </button>
-                );
-              })}
+            <SearchField value={peopleQuery} onChange={setPeopleQuery} placeholder="Люди и отделы" label="С кем поделиться" />
+            <div className="ncal-people nx-scroll-y" role="listbox" aria-multiselectable="true" aria-label="Люди и отделы">
+              {options.length === 0 && <p className="ncal-hint">Никого не нашли.</p>}
+              {options.map((o) => (
+                <button key={o.key} type="button" role="option" aria-selected={o.on} className="nx-pick" onClick={() => (o.kind === 'dept' ? toggleDepartment(o.id) : togglePerson(o.id))}>
+                  {o.kind === 'dept'
+                    ? <span className="ncal-dept-mark" aria-hidden="true"><Building2 size={15} /></span>
+                    : <Avatar name={o.name || '?'} seed={o.id} src={o.user?.avatar} person size={28} />}
+                  <span className="nx-pick-text"><span>{o.name}</span>{o.sub && <span>{o.sub}</span>}</span>
+                  <span className="nx-check" aria-hidden="true">{o.on && <Check size={12} strokeWidth={3} />}</span>
+                </button>
+              ))}
             </div>
           </section>
         )}
-        {share === 'all' && <p className="ncal-hint">Появится в календаре у всех сотрудников.</p>}
+        {isOwner && share === 'all' && <p className="ncal-hint">Появится в календаре у всех сотрудников.</p>}
+        {isOwner && share === 'people' && (
+          <div className="ncal-edit-toggle">
+            <span className="nx-row-text">
+              <span className="nx-row-label">Могут править</span>
+              <span className="nx-row-hint">Выбранные люди и отделы смогут менять событие</span>
+            </span>
+            <Switch checked={d.participantsCanEdit} label="Участники могут править" onChange={(v) => set({ participantsCanEdit: v })} />
+          </div>
+        )}
       </div>
 
       {menu?.kind === 'repeat' && (
@@ -340,7 +395,7 @@ export default function EventEditor({ state, onClose }: { state: EditorState; on
       {menu?.kind === 'share' && (
         <Menu anchor={menu.anchor} label="Кто видит" onClose={() => setMenu(null)} compact>
           <MenuItem icon={<Lock size={14} />} onSelect={() => { setShareMode('me'); setMenu(null); }}>Только я</MenuItem>
-          <MenuItem icon={<Users size={14} />} onSelect={() => { setShareMode('people'); setMenu(null); }}>Выбранные люди…</MenuItem>
+          <MenuItem icon={<Users size={14} />} onSelect={() => { setShareMode('people'); setMenu(null); }}>Люди и отделы…</MenuItem>
           <MenuItem icon={<Globe2 size={14} />} onSelect={() => { setShareMode('all'); setMenu(null); }}>Все сотрудники</MenuItem>
         </Menu>
       )}
@@ -375,7 +430,7 @@ function ReadOnly({ event, onClose, onLeave, busy, users }: {
 }) {
   const author = users[event.createdBy];
   const start = parseLocal(event.start);
-  const canLeave = !event.sharedWithAll && event.participants.includes(myId());
+  const canLeave = event.participants.includes(myId());
   return (
     <Sheet
       title="Событие"
@@ -399,7 +454,7 @@ function ReadOnly({ event, onClose, onLeave, busy, users }: {
         {event.description && <p className="ncal-read-notes">{event.description}</p>}
         <p className="ncal-read-row ncal-read-author">
           <Avatar name={displayName(author) || event.createdByName || '?'} seed={event.createdBy} src={author?.avatar} person size={20} />
-          {displayName(author) || event.createdByName || 'Сотрудник'} поделился(-ась) {event.sharedWithAll ? 'со всеми' : 'с вами'}
+          {displayName(author) || event.createdByName || 'Сотрудник'} поделился(-ась) {event.sharedWithAll ? 'со всеми' : event.participants.includes(myId()) ? 'с вами' : 'с вашим отделом'}
         </p>
       </div>
     </Sheet>

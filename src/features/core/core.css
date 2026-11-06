@@ -241,6 +241,11 @@
 .ncore-tools { display: flex; align-items: center; gap: 2px; min-height: 22px; margin-left: -4px; opacity: 0; transition: opacity var(--duration-fast); }
 .ncore-row:hover .ncore-tools, .ncore-tools:focus-within { opacity: 1; }
 @media (hover: none) { .ncore-tools { opacity: 1; } }
+.ncore-tools .ncore-rate[aria-pressed="true"] { color: var(--accent-color); }
+.ncore-tools .ncore-rate[data-bad][aria-pressed="true"] { color: var(--note-red); }
+.ncore-why { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.ncore-why .nx-field { flex: 1 1 200px; min-height: 30px; }
+.ncore-why .nx-primary, .ncore-why .nx-ghost { min-height: 30px; padding: 0 12px; font-size: var(--text-sm); }
 .ncore-tools button { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: none; color: var(--text-muted); cursor: pointer; }
 @media (hover: hover) { .ncore-tools button:hover { background: var(--ncore-soft); color: var(--text-main); } }
 .ncore-tools-meta { overflow: hidden; margin-left: 6px; color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
@@ -283,6 +288,8 @@
 @media (max-width: 640px) { .ncore { --msg-font: var(--chat-font-size-mobile, 17px); } }
 .ncore-input::placeholder { color: var(--text-muted); }
 .ncore-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-height: 32px; }
+.ncore-tool.ncore-plan { display: inline-flex; place-items: unset; align-items: center; gap: 4px; width: auto; padding: 0 8px; font-size: var(--text-xs); font-weight: var(--weight-medium); }
+.ncore-tool.ncore-plan[aria-pressed="true"] { background: var(--ncore-soft); color: var(--accent-color); }
 .ncore-tool { display: grid; place-items: center; flex: none; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--text-muted); cursor: pointer; }
 @media (hover: hover) { .ncore-tool:hover { background: var(--ncore-soft); color: var(--text-main); } }
 .ncore-send { display: grid; place-items: center; flex: none; width: 32px; height: 32px; margin-left: auto; padding: 0; border: 0; border-radius: 8px; background: var(--text-main); color: var(--surface-panel); cursor: pointer; transition: opacity var(--duration-fast); }

@@ -10,7 +10,7 @@ import { Spinner } from '@/shared/ui/Spinner';
 import { showToast } from '@/shared/ui/Toast';
 import { dayKey, formatDay, formatListTime, plural } from '@/shared/ui/format';
 import { coreApi, type CoreLimit, type CoreMessage, type CoreThread } from './api';
-import { ChatStats, LimitBadges } from './ChatStats';
+import { ChatStats, LimitBadges, limitsForModel } from './ChatStats';
 import { Composer, COMMANDS, type ComposerHandle, type SendOptions } from './Composer';
 import { MessageItem, type MessageHandlers } from './MessageItem';
 import { BrandMark } from './brands';
@@ -200,6 +200,8 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
   const [farFromBottom, setFarFromBottom] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const composer = useRef<ComposerHandle>(null);
+  /** Выбранные в поле ввода агент и модель («claude:claude-opus-4-5») — по ним шапка показывает использование. */
+  const [selected, setSelected] = useState('');
   const atBottom = useRef(true);
 
   useEffect(() => { if (threadId) void loadMessages(threadId); }, [threadId]);
@@ -281,7 +283,7 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
     setReplyTo(null);
     return sendMessage(id, {
       id: crypto.randomUUID().replace(/-/g, ''), body: text, replyTo: quoted?.id, attachments,
-      effort: options.effort || undefined, model: options.model || undefined, context: options.context,
+      effort: options.effort || undefined, plan: options.plan || undefined, model: options.model || undefined, context: options.context,
       forwarded: options.forwarded.length ? options.forwarded : undefined,
     }, {
       forwarded: options.forwarded.length ? options.forwarded : undefined,
@@ -329,7 +331,13 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
 
   const headAgent = catalog?.agents.find((a) => a.id === thread?.peer) ?? (thread ? undefined : catalog?.agents[0]);
   const headModel = [...messages].reverse().find((m) => m.role === 'agent' && m.props.model)?.props.model || headAgent?.model;
-  const limitAgent = headAgent?.limits?.length ? headAgent : catalog?.agents.find((a) => a.limits?.length);
+  // Использование — по выбранной в поле ввода модели: сменили Sonnet на Opus — в шапке окно Opus (limitsForModel).
+  const selectedAgent = catalog?.agents.find((a) => a.id === selected.split(':')[0]);
+  const selectedModel = selected.includes(':') ? selected.slice(selected.indexOf(':') + 1) : selectedAgent?.model || '';
+  const limitAgent = selectedAgent?.limits?.length ? selectedAgent
+    : headAgent?.limits?.length ? headAgent : catalog?.agents.find((a) => a.limits?.length);
+  const limitModel = limitAgent && limitAgent.id === selectedAgent?.id ? selectedModel : limitAgent?.model;
+  const shownLimits = limitsForModel(limitAgent?.limits, limitModel);
 
   let lastDay = 0;
   return (
@@ -360,7 +368,7 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
           <span className="ncore-chat-tools">
             <button type="button" className="ncore-meter" aria-pressed={showStats} onClick={() => setShowStats((v) => !v)} aria-label="Статистика чата"
               title={contextLoad ? `Статистика чата · контекст ${formatTokens(contextLoad.tokens)} токенов — столько агент перечитывает на каждом шаге${contextLoad.share >= 0.6 ? '. Для новой темы лучше начать новый чат' : ''}` : 'Статистика чата'}>
-              {limitAgent && <LimitBadges limits={limitAgent.limits} agent={limitAgent.name} />}
+              {limitAgent && <LimitBadges limits={shownLimits} agent={limitAgent.name} model={modelLabel(limitModel || '')} />}
               {contextLoad && (
                 <span className="ncore-context" data-heavy={contextLoad.share >= 0.6 || undefined}>
                   <i><i style={{ width: `${Math.max(2, Math.min(100, Math.round(contextLoad.share * 100)))}%` }} /></i>
@@ -379,7 +387,7 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
                 {catalog?.agents.some((x) => x.id === 'claude') && (
                   <MenuItem icon={<Hourglass size={15} />} onSelect={() => {
                     setHeadMenu(null);
-                    coreApi.checkLimits('claude')
+                    coreApi.checkLimits('claude', selectedAgent?.id === 'claude' ? selectedModel : '')
                       .then(() => showToast('Спрашиваю у Claude, сколько осталось, — лимиты в шапке обновятся через несколько секунд', 'info'))
                       .catch((cause) => showToast(cause instanceof Error ? cause.message : 'Не получилось', 'error'));
                   }}>Проверить лимиты</MenuItem>
@@ -394,7 +402,7 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
         )}
       </header>
 
-      {showStats && <ChatStats thread={thread} messages={messages} limits={limitAgent?.limits} agent={limitAgent?.name} />}
+      {showStats && <ChatStats thread={thread} messages={messages} limits={shownLimits} agent={limitAgent?.name} />}
       <div className="ncore-log nx-scroll-y" ref={scroller} onScroll={onScroll} role="log" aria-label="Сообщения">
         <div className="ncore-log-inner">
           {log?.loadingOlder && <div className="ncore-older"><Spinner size={16} label="Загружаю историю" /></div>}
@@ -437,7 +445,7 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
       )}
       {dropping && <div className="ncore-drop" aria-hidden="true">Отпустите, чтобы приложить файлы</div>}
       <Composer ref={composer} threadId={threadId} catalog={catalog} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
-        history={history} peer={thread?.peer || ''} onSend={send} onCommand={onCommand} />
+        history={history} peer={thread?.peer || ''} onSend={send} onCommand={onCommand} onSelect={setSelected} />
       {forwarding && <ForwardSheet text={forwarding.body} onClose={() => setForwarding(null)} />}
     </section>
   );

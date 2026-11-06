@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useShellOptions } from '@/shared/shell/ShellContext';
 import Splitter from '@/shared/ui/Splitter';
 import ChatsPanel from './ChatsPanel';
@@ -40,12 +40,35 @@ const subscribeMedia = (cb: () => void) => {
   return () => mq.removeEventListener('change', cb);
 };
 const subscribeNoop = () => () => {};
+/** Переписка не бывает уже этого: не хватает места рядом со списком — раздел переходит на один экран за раз, как на телефоне. */
+const MIN_CHAT_WIDTH = 200;
+const DEFAULT_SIDEBAR = 360;
 
 export default function ChatsScreen() {
   const mounted = useSyncExternalStore(subscribeNoop, () => true, () => false);
   const narrow = useSyncExternalStore(subscribeMedia, () => window.matchMedia(NARROW).matches, () => false);
   const activeChatId = useChatStore((s) => s.activeChatId);
   const layoutRef = useRef<HTMLDivElement>(null);
+  // Места может не хватать и на широком окне: рядом открыта панель «Ядра», окно узкое, приложение на втором мониторе.
+  // Тогда, как на телефоне, — один экран за раз: список или переписка (раскладка телефона по ширине окна сюда не доходит).
+  const [compact, setCompact] = useState(false);
+  const compactRef = useRef(false);
+  const mounted0 = mounted;
+  useLayoutEffect(() => {
+    const el = layoutRef.current;
+    if (!el) return undefined;
+    const measure = () => {
+      const side = parseInt(getComputedStyle(el).getPropertyValue('--cxn-sidebar'), 10) || DEFAULT_SIDEBAR;
+      const next = el.clientWidth > 0 && el.clientWidth < side + MIN_CHAT_WIDTH;
+      compactRef.current = next;
+      setCompact((was) => (was === next ? was : next));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [mounted0]);
+  const isNarrow = useCallback(() => window.matchMedia(NARROW).matches || compactRef.current, []);
 
   // Соединение и список чатов подняты в общем каркасе (NxRoot) и живут между
   // разделами. Здесь — только какой чат открыт: из адреса при входе, никакой —
@@ -63,7 +86,7 @@ export default function ChatsScreen() {
       if (st.panel === 'profile' && (e.state as HistState)?.nxPanel !== 'profile') setPanel(null);
       const id = readChatParam();
       if (id !== st.activeChatId) {
-        if (!id && window.matchMedia(NARROW).matches) setPanel(null);
+        if (!id && (window.matchMedia(NARROW).matches || compactRef.current)) setPanel(null);
         openChat(id);
       }
     };
@@ -86,9 +109,9 @@ export default function ChatsScreen() {
   const open = useCallback((chatId: string) => {
     if (chatId === useChatStore.getState().activeChatId) return;
     // На узком экране открытие чата — новый экран: «назад» ведёт в список.
-    writeChatParam(chatId, window.matchMedia(NARROW).matches && !useChatStore.getState().activeChatId);
+    writeChatParam(chatId, isNarrow() && !useChatStore.getState().activeChatId);
     openChat(chatId);
-  }, []);
+  }, [isNarrow]);
 
   const back = useCallback(function goBack() {
     const st = window.history.state as HistState;
@@ -99,10 +122,10 @@ export default function ChatsScreen() {
       return;
     }
     // На телефоне панель эмодзи принадлежит переписке и уходит с ней.
-    if (window.matchMedia(NARROW).matches) setPanel(null);
+    if (isNarrow()) setPanel(null);
     if (st?.nxPushed) window.history.back();
     else { writeChatParam(null, false); openChat(null); }
-  }, []);
+  }, [isNarrow]);
 
   useShellOptions({
     navHidden: narrow && Boolean(activeChatId),
@@ -112,9 +135,9 @@ export default function ChatsScreen() {
   if (!mounted) return null;
 
   return (
-    <div ref={layoutRef} className="cxn" data-pane={activeChatId ? 'chat' : 'list'}>
+    <div ref={layoutRef} className="cxn" data-pane={activeChatId ? 'chat' : 'list'} data-compact={compact ? 'true' : undefined}>
       <ChatsPanel activeChatId={activeChatId} onOpen={open} />
-      {!narrow && (
+      {!narrow && !compact && (
         <Splitter
           containerRef={layoutRef}
           cssVar="--cxn-sidebar"
@@ -126,7 +149,7 @@ export default function ChatsScreen() {
         />
       )}
       {activeChatId ? (
-        <Conversation chatId={activeChatId} onBack={back} />
+        <Conversation chatId={activeChatId} onBack={back} compact={compact} />
       ) : (
         <section className="cxn-main" aria-label="Переписка">
           <div className="nx-state cxn-empty">

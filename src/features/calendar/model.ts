@@ -38,6 +38,10 @@ export interface CalEvent {
   recurrenceRule?: string | null;
   participants: string[];
   sharedWithAll: boolean;
+  /** Отделы (с подотделами), которым открыто событие. */
+  sharedDepartments: string[];
+  /** Автор разрешил участникам править событие. */
+  participantsCanEdit: boolean;
   createdBy: string;
   createdByName?: string;
 }
@@ -125,6 +129,8 @@ export function normalize(raw: Raw): CalEvent | null {
     recurrenceRule: str(raw.recurrenceRule) || null,
     participants,
     sharedWithAll: raw.sharedWithAll === true || raw.sharedWithAll === 'true',
+    sharedDepartments: Array.isArray(raw.sharedDepartments) ? (raw.sharedDepartments as unknown[]).map(String) : [],
+    participantsCanEdit: raw.participantsCanEdit === true || raw.participantsCanEdit === 'true',
     createdBy: str(raw.createdBy || raw.userId),
     createdByName: str(raw.createdByName) || undefined,
   };

@@ -32,6 +32,7 @@ import json
 import logging
 import secrets
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -681,10 +682,49 @@ def _dialog(dialog_id: str) -> dict:
     return dict(row)
 
 
+# ─── Статус «прочитано» у наших сообщений ────────────────────────────────────
+# Только в одну сторону: менеджер видит, прочитал ли клиент отправленное. Что прочитал менеджер, площадкам не передаём.
+# ВКонтакте отдаёт это в диалоге (out_read) — спрашиваем, когда диалог открыт, не чаще раза в несколько секунд.
+# Telegram (боты, в т.ч. Business) и MAX о прочтении ботам не сообщают — там сообщение остаётся «отправлено».
+
+READ_CHECK_EVERY = 8.0
+_read_checked: Dict[str, float] = {}
+
+
+def reads_supported(account: dict, dialog: dict) -> bool:
+    """Площадка сообщает о прочтении: личные сообщения и беседы ВКонтакте (комментарии на стене — нет)."""
+    return account.get("platform") == "vk" and dialog.get("kind") != "comments" and str(dialog.get("dialog_key") or "").lstrip("-").isdigit()
+
+
+def refresh_reads(dialog: dict, account: dict) -> None:
+    if not reads_supported(account, dialog):
+        return
+    now = time.monotonic()
+    if now - _read_checked.get(dialog["id"], 0) < READ_CHECK_EVERY:
+        return
+    _read_checked[dialog["id"]] = now
+    if len(_read_checked) > 2000:
+        _read_checked.clear()
+    pending = D.unread_sent(dialog["id"])
+    if not pending:
+        return
+    account_row = db.conn.fetch_one("SELECT * FROM social_accounts WHERE id = %s", (dialog["account_id"],))
+    if not account_row:
+        return
+    try:
+        upto = vk.out_read(_decrypt(account_row["token_enc"]), int(dialog["dialog_key"]))
+    except Exception as e:  # noqa: BLE001 — статус прочтения — украшение: диалог должен открываться, что бы ни ответила площадка
+        log.debug("social: read status for %s failed: %s", dialog["id"], e)
+        return
+    if upto and D.mark_read(pending, upto):
+        D.notify(dialog["id"])
+
+
 @router.get("/api/social/dialogs/{dialog_id}")
 def get_dialog(dialog_id: str, me: Identity = Depends(require_tool)):
     row = _dialog(dialog_id)
     accounts = _accounts()
+    refresh_reads(row, accounts.get(row["account_id"], {}))
     items = db.conn.fetch_all(
         "SELECT * FROM (SELECT * FROM social_items WHERE dialog_id = %s ORDER BY created_at DESC LIMIT 300) t ORDER BY created_at",
         (dialog_id,),
@@ -737,6 +777,8 @@ def _message_view(it: dict, users: Dict[str, dict], dialog: dict, account: dict,
         "edited": bool(data.get("edited_at")), "deleted": deleted,
         # Сообщение с файлами не правим: ВКонтакте при правке без вложений снимает их.
         "canEdit": changeable and not data.get("media"), "canDelete": changeable,
+        # Наше сообщение: read — клиент прочитал; sent — ушло, а прочтение неизвестно или площадка о нём не сообщает.
+        **({"delivery": "read" if data.get("read_at") else "sent", "readReported": reads_supported(account, dialog)} if out and not deleted else {}),
     }
 
 

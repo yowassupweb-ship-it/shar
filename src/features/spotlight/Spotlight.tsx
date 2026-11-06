@@ -117,7 +117,7 @@ function toolIcon(t: Tool): ReactNode {
 
 interface Action { id: string; title: string; subtitle: string; words: string; icon: ReactNode; run: () => void }
 
-async function createOffice(kind: keyof typeof KINDS) {
+export async function createOffice(kind: keyof typeof KINDS) {
   try {
     const { initialContent } = await import('@/features/workspace/ItemView');
     const item = await workspaceApi.create({ kind, title: '', content: await initialContent(kind) });

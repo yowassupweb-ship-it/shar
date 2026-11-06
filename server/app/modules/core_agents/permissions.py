@@ -92,7 +92,7 @@ def reason(mode: str, tool: dict[str, Any], args: dict[str, Any], me: str) -> Op
         return "запись во внешний сервис"
     if name in ("task_create", "task_update") and _others(args.get("assignee_ids"), me):
         return "задача другим людям"
-    if name in ("calendar_create", "calendar_update") and (_others(args.get("participants"), me) or args.get("shared_with_all")):
+    if name in ("calendar_create", "calendar_update") and (_others(args.get("participants"), me) or args.get("shared_with_all") or args.get("shared_departments")):
         return "событие с другими людьми"
     return None
 

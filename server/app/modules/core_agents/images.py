@@ -93,16 +93,35 @@ def _source(url: str) -> tuple[str, bytes]:
     return mime, data
 
 
-def generate(user_id: str, prompt: str, *, aspect: str = "", source_url: str = "", name: str = "") -> dict:
-    """Нарисовать (или поправить source_url) и сохранить. Возвращает вложение: {name, url, size, type, key}."""
+def generate(user_id: str, prompt: str, *, aspect: str = "", source_url: str = "", name: str = "", refs: Optional[list[dict]] = None,
+             extra_text: str = "", extra_images: Optional[list[tuple[str, bytes]]] = None) -> dict:
+    """Нарисовать (или поправить source_url) и сохранить. Возвращает вложение: {name, url, size, type, key}.
+    refs — референсы человека из студии ({url, name, kind, note}): уходят к модели картинками вместе с пояснением, что это."""
     prompt = str(prompt or "").strip()
     if not prompt:
         raise ImageError("Опишите, что нарисовать")
     key = _key(user_id)
     model = _model(key)
-    parts: list[dict] = [{"text": prompt[:4000]}]
+    refs = list(refs or [])[:6]
+    text = prompt[:4000]
+    if extra_text:
+        text += "\n\n" + extra_text[:2500]
+    if refs:
+        what = {"style": "стиль", "character": "персонаж", "product": "предмет", "logo": "логотип", "scene": "место и фон"}
+        text += "\n\nПриложены референсы — следуй им: " + "; ".join(
+            f"картинка {n + 1} — {what.get(str(r.get('kind')), 'пример')} «{r.get('name') or ''}»" + (f" ({r['note']})" if r.get("note") else "")
+            for n, r in enumerate(refs)) + "."
+    parts: list[dict] = [{"text": text}]
     if source_url:
         mime, data = _source(source_url)
+        parts.append({"inline_data": {"mime_type": mime, "data": base64.b64encode(data).decode()}})
+    for mime, data in extra_images or []:  # например, схема меток правок поверх исходного фото
+        parts.append({"inline_data": {"mime_type": mime, "data": base64.b64encode(data).decode()}})
+    for ref in refs:
+        try:
+            mime, data = _source(str(ref.get("url") or ""))
+        except ImageError:
+            continue  # недоступный референс не должен срывать рисование
         parts.append({"inline_data": {"mime_type": mime, "data": base64.b64encode(data).decode()}})
     config: dict = {"responseModalities": ["IMAGE", "TEXT"]}
     if aspect in ASPECTS:
@@ -168,7 +187,7 @@ def _sniff(raw: bytes) -> tuple[str, str]:
     raise ImageError("Это не PNG, JPEG, WebP, GIF или SVG")
 
 
-def attach_bytes(message_id: str, user_id: str, raw: bytes, *, name: str = "", event_id: str = "", default_name: str = "картинка") -> dict:
+def attach_bytes(message_id: str, user_id: str, raw: bytes, *, name: str = "", event_id: str = "", default_name: str = "картинка", model: str = "") -> dict:
     """Готовая картинка от агента: проверить байты, сохранить в «Файлы → Агенты» и прикрепить к ответу один раз."""
     row = db.conn.fetch_one("SELECT props FROM core_messages WHERE id = %s", (message_id,)) if message_id else None
     if message_id and not row:
@@ -188,6 +207,13 @@ def attach_bytes(message_id: str, user_id: str, raw: bytes, *, name: str = "", e
     if event_id:
         file["eventId"] = event_id
     attach_to_job(message_id, file)
+    if mime != "image/svg+xml":
+        try:  # картинка агента из чата — тоже в галерею студии (запроса нода не присылает — имя файла)
+            from app.modules.studio.router import record_image
+
+            record_image(user_id, {**file, "model": model}, prompt=name, source="chat")
+        except Exception:  # noqa: BLE001
+            pass
     return file
 
 
@@ -197,7 +223,7 @@ def save_native(message_id: str, user_id: str, *, event_id: str, data: str, name
         raw = base64.b64decode(data, validate=True)
     except (ValueError, TypeError) as exc:
         raise ImageError("Нода прислала повреждённую картинку") from exc
-    return attach_bytes(message_id, user_id, raw, name=name, event_id=event_id, default_name="картинка-gpt")
+    return attach_bytes(message_id, user_id, raw, name=name, event_id=event_id, default_name="картинка-gpt", model="gpt")
 
 
 def attach_to_job(message_id: str, file: dict) -> None:

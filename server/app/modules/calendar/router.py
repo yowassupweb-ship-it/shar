@@ -52,6 +52,35 @@ def _event_owner(event: Optional[Dict[str, Any]]) -> str:
     return str(e.get('created_by') or e.get('createdBy') or e.get('user_id') or '').strip()
 
 
+def _event_departments(event: Optional[Dict[str, Any]]) -> List[str]:
+    """Отделы, которым открыто событие (вместе с подотделами): доступ «по разделам»."""
+    raw = (event or {}).get('sharedDepartments') or []
+    return [str(d).strip() for d in raw if d] if isinstance(raw, list) else []
+
+
+def _user_departments(user_id: str) -> set:
+    """Отделы человека и их родители — событие, выданное отделу, видно и его подотделам."""
+    try:
+        from app.modules.workspace.store import user_dept_ids
+        return set(user_dept_ids(user_id))
+    except Exception as e:
+        logger.debug(f"[calendar] user departments failed: {e}")
+        return set()
+
+
+def _department_people(event: Optional[Dict[str, Any]]) -> set:
+    """Сотрудники отделов события (с подотделами) — для уведомлений и напоминаний."""
+    depts = _event_departments(event)
+    if not depts:
+        return set()
+    try:
+        from app.modules.workspace.store import dept_members
+        return dept_members(depts)
+    except Exception as e:
+        logger.debug(f"[calendar] department members failed: {e}")
+        return set()
+
+
 def _is_new_calendar_event(event: Dict[str, Any]) -> bool:
     """Событие создано новым календарём (или повтором задачи): у них свой тип и
     явное поле «поделиться со всеми». Старые события старого календаря — нет."""
@@ -60,16 +89,31 @@ def _is_new_calendar_event(event: Dict[str, Any]) -> bool:
     return kind in ('personal', 'task') or 'sharedWithAll' in meta or bool(meta.get('taskRepeat'))
 
 
-def _event_visible_personal(event: Dict[str, Any], user_id: str) -> bool:
+def _event_visible_personal(event: Dict[str, Any], user_id: str, user_depts: Optional[set] = None) -> bool:
     """Календарь нового Шара: у каждого только личный календарь. Событие видят
-    автор, те, с кем им поделились (participants), и все — если поделились со
-    всеми (sharedWithAll). «Общего календаря» и правила «нет участников —
-    видно всем» здесь нет."""
-    return (
+    автор, те, с кем им поделились (participants), сотрудники отделов, которым
+    его открыли (sharedDepartments), и все — если поделились со всеми
+    (sharedWithAll). «Общего календаря» и правила «нет участников —
+    видно всем» здесь нет. user_depts — отделы человека, посчитанные один раз на запрос."""
+    if (
         _event_owner(event) == user_id
         or user_id in _event_participants(event)
         or _truthy(event.get('sharedWithAll'))
-    )
+    ):
+        return True
+    depts = _event_departments(event)
+    if not depts:
+        return False
+    mine = user_depts if user_depts is not None else _user_departments(user_id)
+    return bool(mine & set(depts))
+
+
+def _can_participant_edit(event: Dict[str, Any], user_id: str) -> bool:
+    """Автор разрешил участникам править (participantsCanEdit): участник — из списка людей или из отдела.
+    «Со всеми» правку не открывает: тогда править мог бы любой сотрудник."""
+    if not _truthy(event.get('participantsCanEdit')):
+        return False
+    return user_id in _event_participants(event) or bool(_user_departments(user_id) & set(_event_departments(event)))
 
 
 def _notify_calendar(*events: Optional[Dict[str, Any]]) -> None:
@@ -86,6 +130,7 @@ def _notify_calendar(*events: Optional[Dict[str, Any]]) -> None:
             for e in events:
                 if e:
                     targets.update(_event_participants(e))
+                    targets.update(_department_people(e))
                     if _event_owner(e):
                         targets.add(_event_owner(e))
         event_id = next((str(e.get('id')) for e in events if e and e.get('id')), '')
@@ -107,7 +152,11 @@ def _announce_shared(before: Optional[Dict[str, Any]], after: Optional[Dict[str,
         if _truthy(after.get('sharedWithAll')) and not was_all:
             targets = {str(u['id']) for u in (db.get_users() or []) if u and u.get('id')}
         else:
-            targets = set(_event_participants(after)) - set(_event_participants(before)) - (set() if not was_all else set(_event_participants(after)))
+            had = set(_event_participants(before)) | _department_people(before)
+            now = set(_event_participants(after)) | _department_people(after)
+            targets = now - had
+            if was_all:
+                targets = set()
         targets.discard(owner)
         if not targets:
             return
@@ -149,14 +198,45 @@ def _can_view_event(event: Optional[Dict[str, Any]], me: Identity) -> bool:
     return _event_owner(event) == me.user_id or me.user_id in participants or not participants
 
 
-def _event_for_edit(event_id: str, me: Identity, entity: str = 'event') -> Dict[str, Any]:
-    """Событие, которое можно менять: его автор или админ. Участники только видят."""
+def _event_for_edit(event_id: str, me: Identity, entity: str = 'event', participants_may: bool = False) -> Dict[str, Any]:
+    """Событие, которое можно менять: его автор или админ. Участники только видят —
+    кроме случая, когда автор разрешил им правку (participantsCanEdit) и вызывающий
+    это допускает (participants_may=True: правка да, удаление — нет)."""
     event = db.get_event(event_id, entity=entity) if entity else db.get_event(event_id)
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
+    if me.is_admin or _event_owner(event) == me.user_id:
+        return event
+    if participants_may and _can_participant_edit(event, me.user_id):
+        return event
+    raise HTTPException(status_code=403, detail="Событие меняет его автор")
+
+
+_OWNER_ONLY = ('createdBy', 'created_by', 'user_id')
+_SHARING_FIELDS = ('participants', 'sharedWithAll', 'sharedDepartments', 'participantsCanEdit')
+
+
+def _strip_owner_only(data: Dict[str, Any], event: Dict[str, Any], me: Identity) -> Dict[str, Any]:
+    """Автора менять нельзя никому; доступ (кому открыто событие) меняет только автор или админ —
+    правящий участник правит само событие, но не раздаёт его дальше."""
+    drop = set(_OWNER_ONLY)
     if not (me.is_admin or _event_owner(event) == me.user_id):
-        raise HTTPException(status_code=403, detail="Событие меняет его автор")
-    return event
+        drop |= set(_SHARING_FIELDS)
+    return {k: v for k, v in data.items() if k not in drop}
+
+
+@router.post("/api/events/{event_id}/leave")
+def leave_event(event_id: str, me: Identity = Depends(current_identity)):
+    """Убрать событие из своего календаря: участник выходит из списка людей. Событие, выданное отделу
+    или всем, так не убрать (оно придёт снова) — для него нужна правка доступа автором."""
+    event = db.get_event(event_id, entity='event')
+    if not event or not _can_view_event(event, me):
+        raise HTTPException(status_code=404, detail="Event not found")
+    if me.user_id not in _event_participants(event):
+        raise HTTPException(status_code=400, detail="Событие открыто не лично вам — его убирает автор")
+    after = db.update_event(event_id, {'participants': [p for p in _event_participants(event) if p != me.user_id]})
+    _notify_calendar(event, after)
+    return {"success": True}
 
 
 @router.get("/api/events")
@@ -187,15 +267,17 @@ def get_events(
             or (user or {}).get('role') == 'admin'
         )
 
+    my_depts = _user_departments(normalized_user_id) if normalized_user_id else set()
+
     def visible_for_user(event: Dict[str, Any]) -> bool:
         if personal and normalized_user_id:
-            return _event_visible_personal(event, normalized_user_id)
+            return _event_visible_personal(event, normalized_user_id, my_depts)
         # События нового календаря — всегда по его правилу (автор, участники,
         # «со всеми»), даже в старом запросе и для админа. По старому правилу
         # («нет участников — видно всем») личное «Только я» считалось общим, и
         # старые приложения присылали всем «Новое событие».
         if normalized_user_id and _is_new_calendar_event(event):
-            return _event_visible_personal(event, normalized_user_id)
+            return _event_visible_personal(event, normalized_user_id, my_depts)
         if not normalized_user_id or can_see_all:
             return True
         created_by = str(event.get('created_by') or event.get('createdBy') or event.get('user_id') or '').strip()
@@ -340,8 +422,8 @@ def update_event(event_data: Dict[str, Any], me: Identity = Depends(current_iden
     if not event_id:
         raise HTTPException(status_code=400, detail="Event ID is required")
 
-    before = _event_for_edit(event_id, me, entity=None)
-    event_data = {k: v for k, v in event_data.items() if k not in ('createdBy', 'created_by', 'user_id')}
+    before = _event_for_edit(event_id, me, entity=None, participants_may=True)
+    event_data = _strip_owner_only(event_data, before, me)
     updated = _apply_event_edit(event_id, event_data)
     if not updated:
         raise HTTPException(status_code=404, detail="Event not found")
@@ -374,8 +456,8 @@ def get_event_by_id(event_id: str, me: Identity = Depends(current_identity)):
 
 @router.put("/api/events/{event_id}")
 def update_event_by_id(event_id: str, updates: Dict[str, Any], me: Identity = Depends(current_identity)):
-    before = _event_for_edit(event_id, me, entity=None)
-    updates = {k: v for k, v in updates.items() if k not in ('createdBy', 'created_by', 'user_id')}
+    before = _event_for_edit(event_id, me, entity=None, participants_may=True)
+    updates = _strip_owner_only(updates, before, me)
     updated = _apply_event_edit(event_id, {**updates, 'id': event_id})
     if not updated or updated.get('entity') != 'event':
         raise HTTPException(status_code=404, detail="Event not found")

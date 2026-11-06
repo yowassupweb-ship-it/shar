@@ -44,6 +44,9 @@ export interface SessionItem {
 }
 
 const AUTOSAVE_MS = 900;
+/** Пересборка редактора после записи мимо совместной правки (см. onLiveReset): пауза без новых записей и минимум между пересборками. */
+const REOPEN_QUIET_MS = 1200;
+const REOPEN_MIN_GAP_MS = 6000;
 
 /** Перенос правок для вида материала: модули редакторов тяжёлые и грузятся отдельно — перенос тоже. */
 async function transformFor(kind: Kind): Promise<Transform | null> {
@@ -71,7 +74,9 @@ export function useItemSession(source: Source) {
   const liveRef = useRef<LiveChannel | null>(null);
   /** Последнее содержимое из живого редактора — для экспорта и копирования (сохраняет его канал). */
   const liveContent = useRef<string | null>(null);
-  const resetAt = useRef(0);
+  const reopenTimer = useRef(0);
+  const lastReopen = useRef(0);
+  const unsentAtReset = useRef(0);
   const onLiveReset = useRef<() => void>(() => undefined);
   const kindRef = useRef<Kind | null>(null);
 
@@ -169,20 +174,29 @@ export function useItemSession(source: Source) {
 
   /**
    * Журнал совместной правки больше не описывает материал (его записали мимо: версия из истории, агент, гость по
-   * ссылке): открываем заново. Не чаще раза в 3 с — если журнал всё время «устаревший», не крутимся в цикле.
+   * ссылке): открываем заново. Агент правит десятками вызовов подряд, и каждый давал полную пересборку редактора —
+   * документ «мигал», а прокрутка и выделение сбрасывались. Поэтому пересборки склеиваем: первая — после короткой
+   * паузы (REOPEN_QUIET_MS без новых записей), следующие — не чаще раза в REOPEN_MIN_GAP_MS. Серия правок даёт
+   * несколько обновлений вместо десятков, а последнее всегда догоняет итоговое состояние.
    */
   onLiveReset.current = () => {
-    const unsent = liveRef.current?.pendingCount() ?? 0;
+    unsentAtReset.current = Math.max(unsentAtReset.current, liveRef.current?.pendingCount() ?? 0);
     liveRef.current?.close();
     liveRef.current = null;
-    const wait = Math.max(0, 3000 - (Date.now() - resetAt.current));
-    resetAt.current = Date.now() + wait;
-    window.setTimeout(() => {
+    if (reopenTimer.current) return; // пересборка уже назначена: она прочитает самое свежее
+    const now = Date.now();
+    const at = Math.max(now + REOPEN_QUIET_MS, lastReopen.current + REOPEN_MIN_GAP_MS);
+    reopenTimer.current = window.setTimeout(() => {
+      reopenTimer.current = 0;
+      lastReopen.current = Date.now();
+      const unsent = unsentAtReset.current;
+      unsentAtReset.current = 0;
       // Заметку не открываем заново: её редактор сольёт новое содержимое со своим текстом на месте.
       void load(kindRef.current !== 'note');
       if (unsent) showToast('Материал изменили в обход совместной правки — он открыт заново. Последние несколько секунд правок могли не сохраниться', 'info');
-    }, wait);
+    }, at - now);
   };
+  useEffect(() => () => window.clearTimeout(reopenTimer.current), []);
 
   const save = useCallback(async () => {
     if (savingRef.current) return;

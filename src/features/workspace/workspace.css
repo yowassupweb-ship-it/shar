@@ -41,6 +41,10 @@
 .nws-rail-btn:hover, .nws-fold:hover { background: var(--surface-hover); color: var(--text-main); }
 .nws-rail-btn:focus-visible, .nws-fold:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 1px; }
 .nws-rail-btn:disabled { opacity: 0.5; cursor: default; }
+/* Кнопка «скрыть список» подписана горячей клавишей — видно без наведения. */
+.nws-fold[data-hint] { display: inline-flex; align-items: center; gap: 8px; width: auto; padding: 0 10px 0 9px; }
+.nws-kbd { padding: 1px 6px; border-radius: 5px; background: var(--surface-hover); box-shadow: inset 0 0 0 1px var(--border-color); color: var(--text-muted); font: inherit; font-size: var(--text-2xs); line-height: 1.5; white-space: nowrap; }
+@media (hover: none) { .nws-kbd { display: none; } }
 
 /* ── Список ───────────────────────────────────────────────────────────── */
 .nws-list {

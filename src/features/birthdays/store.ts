@@ -73,6 +73,8 @@ export function birthdayEvents(items: Birthday[], from: Date, to: Date): CalEven
         allDay: true,
         color: 'orange',
         participants: [],
+        sharedDepartments: [],
+        participantsCanEdit: false,
         sharedWithAll: true,
         createdBy: 'system:birthday', // не «моё»: не тянется, не удаляется
       });

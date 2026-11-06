@@ -74,6 +74,7 @@ def _event_view(e: dict[str, Any], me: str) -> dict[str, Any]:
         "title": e.get("title") or "", "start": e.get("startDateTime") or e.get("startDate"), "end": e.get("endDateTime") or e.get("endDate"),
         "allDay": bool(e.get("allDay")), "description": e.get("description") or "", "location": e.get("location") or "",
         "participants": [str(p) for p in e.get("participants") or []], "sharedWithAll": bool(e.get("sharedWithAll")),
+        "sharedDepartments": [str(d) for d in e.get("sharedDepartments") or []], "participantsCanEdit": bool(e.get("participantsCanEdit")),
         "recurrenceRule": e.get("recurrenceRule") or None, "reminderMinutesBefore": e.get("reminderMinutesBefore"),
         "mine": str(e.get("createdBy") or e.get("userId") or "") == me, "author": e.get("createdByName") or "",
     }
@@ -126,6 +127,10 @@ def _event_fields(args: dict[str, Any], *, partial: bool) -> dict[str, Any]:
         out["participants"] = [str(p) for p in args.get("participants") or [] if str(p).strip()][:100]
     if "shared_with_all" in args:
         out["sharedWithAll"] = bool(args.get("shared_with_all"))
+    if "shared_departments" in args:
+        out["sharedDepartments"] = [str(d) for d in args.get("shared_departments") or [] if str(d).strip()][:50]
+    if "participants_can_edit" in args:
+        out["participantsCanEdit"] = bool(args.get("participants_can_edit"))
     return out
 
 
@@ -521,17 +526,28 @@ def connect_gemini(access, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def image_generate(access, args: dict[str, Any]) -> dict[str, Any]:
-    """Запасной путь: нарисовать картинку Gemini по ключу человека. У агентов есть свои средства — см. image_attach."""
+    """Запасной путь: нарисовать картинку (или поправить присланную) Gemini по ключу человека; картинка — в ответ агента, в «Файлы → Агенты»
+    и в галерею студии (там человек оценивает её — это то, чему агент учится). У агентов есть свои средства — см. image_attach."""
     from app.modules.core_agents import images
+    from app.modules.studio import router as studio
 
+    ids = [str(i).strip() for i in args.get("reference_ids") or [] if str(i).strip()][:6]
+    studio_url = ""
     try:
-        file = images.generate(access.me.user_id, str(args.get("prompt") or ""), aspect=str(args.get("aspect") or ""),
-                               source_url=str(args.get("source_url") or ""), name=str(args.get("name") or ""))
-    except images.ImageError as exc:
+        if studio.ready():
+            source_url = str(args.get("source_url") or "")
+            got = studio.make(access.me.user_id, str(args.get("prompt") or ""), aspect=str(args.get("aspect") or ""), ref_ids=ids,
+                              use_style=bool(args.get("use_style")), source="chat", name=str(args.get("name") or ""), source_url=source_url)
+            file = got["file"]
+            studio_url = f"/studio?image={got['image']['id']}" if got.get("image") else ""
+        else:  # схема студии на проде ещё не догнана — рисуем как раньше, без галереи и референсов
+            file = images.generate(access.me.user_id, str(args.get("prompt") or ""), aspect=str(args.get("aspect") or ""),
+                                   source_url=str(args.get("source_url") or ""), name=str(args.get("name") or ""))
+    except (images.ImageError, studio.StudioError) as exc:
         raise _err(str(exc)) from exc
     images.attach_to_job(str(access.ctx.scope.get("job") or ""), file)
-    return {"image": {"name": file["name"], "url": file["url"], "model": file["model"]},
-            "note": "Картинка уже показана человеку в чате под вашим ответом — не вставляйте её ссылкой ещё раз."
+    return {"image": {"name": file["name"], "url": file["url"], "model": file["model"], **({"studioUrl": studio_url} if studio_url else {})},
+            "note": "Картинка уже показана человеку в чате под вашим ответом и лежит в его галерее («Студия») — не вставляйте её ссылкой ещё раз."
                     + (f" Комментарий модели: {file['note']}" if file.get("note") else "")}
 
 
@@ -555,6 +571,50 @@ def image_attach(access, args: dict[str, Any]) -> dict[str, Any]:
         raise _err(str(exc)) from exc
     return {"image": {"name": file["name"], "url": file["url"]},
             "note": "Картинка сохранена в «Файлы → Агенты» и показана человеку в чате под вашим ответом — не вставляйте её ссылкой ещё раз."}
+
+
+def studio_refs(access, args: dict[str, Any]) -> dict[str, Any]:
+    """Референсы человека в студии: id для image_generate (reference_ids), название, что это, заметка."""
+    from app.modules.studio import router as studio
+
+    if not studio.ready():
+        return {"refs": [], "note": "Студия ещё не подключена на сервере"}
+    query = str(args.get("query") or "").lower().strip()
+    refs = studio.list_refs(access.me.user_id)
+    if query:
+        refs = [r for r in refs if query in f"{r['name']} {r['note']} {' '.join(r['tags'])} {r['kindLabel']}".lower()]
+    return {"refs": [{k: r[k] for k in ("id", "name", "kindLabel", "note", "tags", "url", "uses")} for r in refs[:40]], "total": len(refs)}
+
+
+def studio_gallery(access, args: dict[str, Any]) -> dict[str, Any]:
+    """Прошлые картинки человека с его оценками: что нравилось (rating 1, избранное), что нет (rating -1, причина)."""
+    from app.modules.studio import router as studio
+
+    if not studio.ready():
+        return {"images": [], "note": "Студия ещё не подключена на сервере"}
+    items = studio.list_images(access.me.user_id, query=str(args.get("query") or ""), favorites=bool(args.get("liked_only")),
+                               limit=max(1, min(int(args.get("limit") or 12), 40)))
+    return {"images": [{**{k: i[k] for k in ("id", "prompt", "aspect", "rating", "reason", "favorite", "note", "url", "createdAt", "marks")},
+                        "marksText": studio.marks_text(i.get("marks") or []), "studioUrl": f"/studio?image={i['id']}"} for i in items],
+            "insights": studio.insights(access.me.user_id)}
+
+
+def studio_mark(access, args: dict[str, Any]) -> dict[str, Any]:
+    """Метки на картинке галереи: показать человеку места («здесь лишний предмет», «тут поправлю») или записать его замечания.
+    Координаты — доли ширины и высоты от левого верхнего угла (0…1); точка — x, y; область — ещё w, h. Метки заменяют прежние."""
+    from app.core.db import db
+    from app.core.db.connection import Json
+    from app.modules.studio import router as studio
+
+    if not studio.ready():
+        raise _err("Студия ещё не подключена на сервере")
+    image_id = str(args.get("image_id") or "")
+    row = db.conn.fetch_one("SELECT id FROM studio_images WHERE id = %s AND user_id = %s", (image_id, access.me.user_id))
+    if not row:
+        raise _err("Картинка не найдена в галерее (studio_gallery)")
+    marks = studio.clean_marks(args.get("marks"))
+    db.conn.execute_query("UPDATE studio_images SET marks = %s WHERE id = %s", (Json(marks), image_id))
+    return {"marks": marks, "marksText": studio.marks_text(marks), "studioUrl": f"/studio?image={image_id}"}
 
 
 def _tours(fn, *args, **kwargs):
@@ -720,6 +780,8 @@ _EVENT_PROPS = {
     "all_day": {"type": "boolean"}, "description": {"type": "string"}, "location": {"type": "string"},
     "participants": {"type": "array", "items": {"type": "string"}, "description": "id людей (people_search): событие появится у них в календаре"},
     "shared_with_all": {"type": "boolean", "description": "видно всем сотрудникам"},
+    "shared_departments": {"type": "array", "items": {"type": "string"}, "description": "id отделов (с подотделами): событие появится у всех их сотрудников"},
+    "participants_can_edit": {"type": "boolean", "description": "разрешить участникам (людям и отделам) править событие"},
     "reminder_minutes": {"type": ["integer", "null"], "description": "напомнить за N минут; null — без напоминания"},
     "recurrence_rule": {"type": ["string", "null"], "description": "RRULE: FREQ=WEEKLY;BYDAY=MO,WE — повторение; null — без"},
     "color": {"type": "string", "enum": ["blue", "green", "orange", "red", "purple", "cyan", "gray"]},
@@ -874,16 +936,35 @@ TOOLS: list[dict[str, Any]] = [
      "description": "Отменить запланированный запуск по id из agent_schedules. Уже созданный ответ агента не останавливает. Нужен confirm: true.",
      "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "confirm": {"type": "boolean"}}, "required": ["id", "confirm"]}},
     {"name": "image_generate", "app": "files", "handler": image_generate, "level": "create",
-     "description": "Запасной способ: нарисовать картинку Gemini по ключу человека (нужен подключённый Gemini). Если вы умеете рисовать сами "
-                    "(встроенный генератор, код, SVG), делайте это и отдавайте результат через image_attach — Gemini не нужен. "
-                    "source_url — вложение человека или адрес картинки; prompt — подробно: что, стиль, свет, текст; aspect — 1:1, 16:9, 9:16, 4:3, 3:4.",
+     "description": "Запасной способ: нарисовать картинку по описанию или поправить готовую (source_url — вложение человека или адрес картинки) — Gemini по ключу человека. "
+                    "Если вы умеете рисовать сами (встроенный генератор, код, SVG), делайте это и отдавайте результат через image_attach — Gemini не нужен. "
+                    "Картинка сама появится в чате под ответом, в «Файлах → Агенты» и в галерее «Студии» (человек оценивает её — учитывайте оценки). "
+                    "prompt — подробно: что, стиль, свет, текст на картинке; aspect — 1:1, 16:9, 9:16, 4:3, 3:4. reference_ids — референсы человека из "
+                    "studio_refs (стиль, персонаж, предмет) — к запросу приложатся сами; use_style — учесть вкус человека по его оценкам.",
      "inputSchema": {"type": "object", "properties": {"prompt": {"type": "string"}, "aspect": {"type": "string"},
-                                                     "source_url": {"type": "string"}, "name": {"type": "string", "description": "имя файла"}},
+                                                     "source_url": {"type": "string"}, "name": {"type": "string", "description": "имя файла"},
+                                                     "reference_ids": {"type": "array", "items": {"type": "string"}, "description": "id из studio_refs, до 6"},
+                                                     "use_style": {"type": "boolean", "description": "учесть вкус человека (оценки в студии)"}},
                      "required": ["prompt"]}},
     {"name": "image_attach", "app": "files", "handler": image_attach, "level": "create",
      "description": "Отдать человеку картинку, которую вы создали сами (любым своим средством): base64 (PNG, JPEG, WebP, GIF до 15 МБ) или url вложения Шара /api/uploads/…. "
                     "Картинка попадёт в «Файлы → Агенты» и появится в чате под вашим ответом. name — имя файла без расширения.",
      "inputSchema": {"type": "object", "properties": {"base64": {"type": "string"}, "url": {"type": "string"}, "name": {"type": "string"}}}},
+    {"name": "studio_refs", "app": "files", "handler": studio_refs, "level": "read",
+     "description": "Референсы человека в «Студии» картинок: стили, персонажи, предметы, логотипы. Возьмите id для image_generate (reference_ids), "
+                    "когда просьба про его бренд, героя или стиль. query — поиск по названию, заметке, меткам.",
+     "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}}},
+    {"name": "studio_mark", "app": "files", "handler": studio_mark, "level": "create",
+     "description": "Поставить метки на картинку галереи «Студии» — показать человеку места на фото (что лишнее, что поправите) или записать его замечания. "
+                    "marks: [{x, y, note}] для точки или [{x, y, w, h, note}] для области; координаты — доли 0…1 от левого верхнего угла. Метки заменяют прежние. "
+                    "Человек видит их в «Студии» (/studio?image=id), а следующая правка этой картинки получает их сама.",
+     "inputSchema": {"type": "object", "properties": {"image_id": {"type": "string"}, "marks": {"type": "array", "maxItems": 20, "items": {"type": "object",
+         "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "w": {"type": "number"}, "h": {"type": "number"}, "note": {"type": "string"}}, "required": ["x", "y"]}}},
+                     "required": ["image_id", "marks"]}},
+    {"name": "studio_gallery", "app": "files", "handler": studio_gallery, "level": "read",
+     "description": "Галерея «Студии»: прошлые картинки человека с запросами, оценками (rating 1 — понравилось, −1 — нет, reason — почему), "
+                    "метками правок на фото (marks / marksText — что человек отметил на картинке) и выводами о его вкусе (insights). Посмотрите перед новой картинкой, чтобы не повторять неудачное и продолжать удачное.",
+     "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "liked_only": {"type": "boolean"}, "limit": {"type": "integer", "maximum": 40}}}},
     {"name": "tours_overview", "app": "tours", "handler": tours_overview, "level": "read",
      "description": "Каталог туров «Вокруг света» с сайта: сколько туров, свои/партнёрские, по сегментам, тематики (коллекции) и праздники для фильтров. Начните с него, если не знаете ассортимент.",
      "inputSchema": {"type": "object", "properties": {}}},

@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { AlertCircle, ArrowLeft, ArrowUp, ArrowUpRight, Check, CheckCircle2, Circle, CornerDownRight, Mail, MessageSquare, MessagesSquare, MoreHorizontal, Paperclip, Pencil, Plus, Smile, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowUp, ArrowUpRight, Check, CheckCheck, CheckCircle2, Circle, CornerDownRight, Mail, MessageSquare, MessagesSquare, MoreHorizontal, Paperclip, Pencil, Plus, Smile, Trash2, X } from 'lucide-react';
 import RichInput, { type RichInputHandle } from '@/features/chat/RichInput';
 import { uploadFileWithProgress } from '@/shared/api/uploadFile';
 import { links, paths } from '@/shared/navigation/routes';
@@ -200,9 +200,18 @@ function Thread({ id, tick, onBack, onSent }: { id: string; tick: number; onBack
   const draftBeforeEdit = useRef('');
   const [menu, setMenu] = useState<{ m: DialogMessage; anchor: MenuAnchor } | null>(null);
 
+  const [poll, setPoll] = useState(0);
   useEffect(() => {
     loadDialog(id).then((d) => { setData(d); setError(''); }).catch((e: Error) => setError(e.message));
-  }, [id, tick]);
+  }, [id, tick, poll]);
+  // Ждём прочтения: пока есть наши непрочитанные сообщения и площадка о прочтении сообщает (ВКонтакте), перечитываем
+  // диалог раз в 15 секунд — сервер спрашивает площадку сам. Вкладка в фоне не опрашивает.
+  const waitingRead = Boolean(data?.messages.some((m) => m.direction === 'out' && m.delivery === 'sent' && m.readReported));
+  useEffect(() => {
+    if (!waitingRead) return undefined;
+    const timer = window.setInterval(() => { if (!document.hidden) setPoll((t) => t + 1); }, 15000);
+    return () => window.clearInterval(timer);
+  }, [waitingRead]);
   // Открыли диалог — туда, где остановились (нет записи — вниз). Новое сообщение — к низу, если и так были внизу:
   // дочитывающего выше не сдёргиваем.
   const placed = useRef(false);
@@ -493,6 +502,13 @@ function MessageRow({ m, showName, editing, onLoad, onMenu }: {
           <span className="nsd-msg-meta">
             {m.deleted ? <span className="nsd-msg-flag"><Trash2 size={11} aria-hidden="true" /> удалено</span> : m.edited ? <span className="nsd-msg-flag">изменено</span> : null}
             <time>{timeOf(m.at)}</time>
+            {m.direction === 'out' && m.delivery && (
+              <span className="nsd-msg-tick" data-state={m.delivery}
+                title={m.delivery === 'read' ? 'Прочитано клиентом' : m.readReported ? 'Отправлено, ещё не прочитано' : 'Отправлено. Эта площадка не сообщает о прочтении'}
+                aria-label={m.delivery === 'read' ? 'Прочитано' : 'Отправлено'}>
+                {m.delivery === 'read' ? <CheckCheck size={13} aria-hidden="true" /> : <Check size={13} aria-hidden="true" />}
+              </span>
+            )}
           </span>
         </div>
       </div>

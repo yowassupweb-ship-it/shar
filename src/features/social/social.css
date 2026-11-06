@@ -138,6 +138,8 @@
 @media (hover: none) { .nsd-msg-more { display: none; } }
 .nsd-msg-meta { justify-self: end; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; opacity: .65; font-variant-numeric: tabular-nums; }
 .nsd-msg-meta time { opacity: 1; }
+.nsd-msg-tick { display: inline-flex; align-items: center; margin-left: 2px; opacity: .7; }
+.nsd-msg-tick[data-state="read"] { opacity: 1; }
 .nsd-msg-flag { display: inline-flex; align-items: center; gap: 3px; }
 .nsd-bubble[data-deleted="true"] { opacity: .6; }
 .nsd-bubble[data-deleted="true"] .nsd-msg-text { text-decoration: line-through; }

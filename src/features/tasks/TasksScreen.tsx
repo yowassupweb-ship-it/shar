@@ -1,3 +1,4 @@
+import { listenIntent } from '@/shared/navigation/quickIntent';
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { AlertCircle, CalendarDays, CalendarX, Check, ChevronRight, CircleCheck, Copy, ExternalLink, Flag, Plus, RotateCcw, RotateCw, Search, Trash2 } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
@@ -131,6 +132,11 @@ export default function TasksScreen() {
       setCreating(false);
     }
   };
+
+  // Быстрое действие из нижней полосы («Новая задача» по правому клику) — создаём сразу после открытия раздела.
+  const createRef = useRef(create);
+  createRef.current = create;
+  useEffect(() => listenIntent(['new-task'], () => { void createRef.current(); }), []);
 
   // Ушли с только что созданной задачи, так ничего и не написав, — убираем её,
   // чтобы не копились «пустышки» (как новая заметка в MBOX).

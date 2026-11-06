@@ -342,6 +342,18 @@ def conversations(token: str, limit: int = 5000):
             yield int(peer["id"]), ((conv.get("chat_settings") or {}).get("title") or ""), people
 
 
+def out_read(token: str, peer_id: int) -> int:
+    """Id последнего нашего сообщения, которое собеседник прочитал (messages.getConversationsById → out_read).
+    Все наши сообщения с id не больше этого — прочитаны. 0 — ничего не прочитано или ВКонтакте не ответил."""
+    got = call(token, "messages.getConversationsById", peer_ids=peer_id)
+    if not isinstance(got, dict):
+        return 0
+    for it in got.get("items") or []:
+        if int((it.get("peer") or {}).get("id") or peer_id) == int(peer_id):
+            return int(it.get("out_read") or 0)
+    return 0
+
+
 def history(token: str, peer_id: int, limit: int = 3000):
     """Переписка с собеседником от старых к новым: (сообщение, профили)."""
     rows: List[tuple] = []

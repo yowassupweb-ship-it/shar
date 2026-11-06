@@ -825,16 +825,32 @@ export async function loadOlder(chatId: string) {
   }
 }
 
-/** Догружает историю, пока в ленте не появится нужное сообщение (переход из
- *  профиля или поиска к давнему сообщению). Не больше 20 страниц. */
+/**
+ * Догружает историю, пока в ленте не появится нужное сообщение (переход из профиля или поиска к давнему сообщению).
+ * Раньше: по 50 сообщений за запрос, не больше 20 запросов, и если в этот момент уже шла подгрузка от прокрутки
+ * (loadOlder молча выходит), переход «проваливался» без единого признака. Теперь: страницы по 100, подгрузку прокрутки
+ * дожидаемся, а не бросаем; предел — время (25 с) и 200 страниц, а не «тысяча сообщений». false — сообщения в истории нет.
+ */
 export async function ensureLoaded(chatId: string, messageId: string): Promise<boolean> {
-  for (let i = 0; i < 20; i++) {
+  const deadline = Date.now() + 25_000;
+  for (let page = 0; page < 200 && Date.now() < deadline;) {
     const t = get().threads[chatId];
     if (t?.byId[messageId]) return true;
-    if (!t || !t.hasMore) return false;
-    await loadOlder(chatId);
-    const after = get().threads[chatId];
-    if (after && after.ids.length === t.ids.length) return Boolean(after.byId[messageId]);
+    if (!t) return false;
+    if (t.olderLoading) { await new Promise((r) => setTimeout(r, 50)); continue; }
+    if (!t.hasMore) return false;
+    const first = t.ids.map((id) => t.byId[id]).find((m) => !m._status);
+    if (!first) return false;
+    page += 1;
+    patchThread(chatId, (x) => ({ ...x, olderLoading: true }));
+    try {
+      const { messages, hasMore } = await api.messages(chatId, { limit: 100, before: first.createdAt });
+      patchThread(chatId, (x) => ({ ...upsert(x, messages), hasMore, olderLoading: false }));
+      if (!messages.length) return Boolean(get().threads[chatId]?.byId[messageId]);
+    } catch {
+      patchThread(chatId, (x) => ({ ...x, olderLoading: false }));
+      return Boolean(get().threads[chatId]?.byId[messageId]);
+    }
   }
   return Boolean(get().threads[chatId]?.byId[messageId]);
 }

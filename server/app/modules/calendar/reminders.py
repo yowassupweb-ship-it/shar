@@ -53,6 +53,14 @@ def _event_recipients(ev: dict) -> set:
     parts = meta.get('participants') or meta.get('attendees') or []
     if isinstance(parts, (list, tuple)):
         out.update(str(p) for p in parts if p)
+    # Доступ «по разделам»: события, открытые отделам (с подотделами), напоминаем всем их сотрудникам.
+    depts = ev.get('sharedDepartments') or meta.get('sharedDepartments') or []
+    if isinstance(depts, (list, tuple)) and depts:
+        try:
+            from app.modules.workspace.store import dept_members
+            out.update(dept_members([str(d) for d in depts if d]))
+        except Exception as e:
+            logger.debug(f"[reminders] department members failed: {e}")
     return out
 
 

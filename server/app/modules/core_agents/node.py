@@ -38,6 +38,8 @@ log = logging.getLogger("shar.core.agents")
 
 KIT = Path(__file__).parent / "kit"
 POLL_SECONDS = 25
+# Шаг проверки очереди внутри долгого опроса: от этого зависит, через сколько нода подхватит новое сообщение (в среднем — полшага).
+POLL_STEP = 0.25
 MAX_STEPS = 400
 MAX_BODY = 60_000
 
@@ -161,12 +163,14 @@ class PollBody(BaseModel):
     clis: dict[str, str] = Field(default_factory=dict)
     running: list[str] = Field(default_factory=list, max_length=200)
     slots: int = Field(default=1, ge=0, le=200)  # старые ноды не передают slots и по-прежнему получают одну задачу
+    # Что умеет эта нода: warm — держать процесс агента на чат (ключ MCP она берёт и продлевает сама).
+    caps: list[str] = Field(default_factory=list, max_length=10)
     wait: bool = True
 
 
 def _seen(node: dict, body: PollBody) -> None:
     info = {"version": body.version, "host": body.host, "clis": {k: v[:60] for k, v in body.clis.items() if (k in store.PROVIDERS or k == "browser") and v},
-            "running": len(body.running)}
+            "running": len(body.running), "caps": [c[:20] for c in body.caps][:10]}
     db.conn.execute_query("UPDATE core_nodes SET last_seen = now(), info = %s WHERE id = %s", (Json(info), node["id"]))
     node["info"] = info
 
@@ -191,10 +195,11 @@ def _take(node: dict) -> Optional[dict]:
                 store.finish_job(job["id"], "cancelled")
                 return _take(node)
             update_agent_message(job["message_id"], status="working", props={"phase": "думает"})
-            return dispatch.build_run(job)
+            return dispatch.build_run(job, warm="warm" in ((node.get("info") or {}).get("caps") or []))
         out = {"id": str(job["id"]), "kind": job["kind"], "provider": job["provider"], "userId": job["user_id"]}
         if job["kind"] == "check" and (job.get("payload") or {}).get("limits"):
             out["limits"] = True  # кнопка «Проверить лимиты»: нода спросит у провайдера текущие окна
+            out["model"] = str((job.get("payload") or {}).get("model") or "")  # по выбранной в чате модели
         if job["kind"] == "login_code":
             out["code"] = (job.get("payload") or {}).get("code") or ""
             store.finish_job(job["id"], "done")  # код отдан — задача выполнена, дальше идёт вход
@@ -211,8 +216,13 @@ async def poll(body: PollBody, request: Request):
     deadline = time.monotonic() + (POLL_SECONDS if body.wait and body.slots else 0)
     # Отданное ноде, о чём она не знает (оборвался прошлый опрос), — обратно в очередь: иначе ответ висел бы вечно.
     await run_in_threadpool(store.requeue_lost, node["id"], body.running)
-    await run_in_threadpool(_seen, node, body)
+    seen_at = 0.0
     while True:
+        # «Жив» нода отмечается раз в 5 с, а не на каждом круге: круг теперь короткий (задача уходит ноде за ~0,25 с, а не за ~1 с),
+        # и запись в базу на каждом круге была бы лишней нагрузкой.
+        if time.monotonic() - seen_at >= 5:
+            await run_in_threadpool(_seen, node, body)
+            seen_at = time.monotonic()
         cancel = await run_in_threadpool(store.cancelled_among, node["id"], body.running)
         # Нода ушла, пока мы ждали (перезапуск, сеть) — задачу ей не отдаём: ответ ушёл бы в пустоту.
         if await request.is_disconnected():
@@ -220,7 +230,64 @@ async def poll(body: PollBody, request: Request):
         job = await run_in_threadpool(_take, node) if body.slots else None
         if job or cancel or time.monotonic() >= deadline or await request.is_disconnected():
             return {"jobs": [job] if job else [], "cancel": cancel, "agent": _agent_hash()}
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(POLL_STEP)
+
+
+# ── ключ MCP для тёплого процесса агента ─────────────────────────────────────
+# Обычный запуск получает ключ на один ответ и отзывает его в конце. Тёплый процесс живёт между ответами, поэтому ключ у него
+# один на процесс: нода берёт его при запуске, а на каждое следующее сообщение продлевает и привязывает к новому ответу
+# (job в области ключа — к какому ответу относятся вопросы, картинки, разрешения агента). Живёт не дольше WARM_KEY_MINUTES
+# после последнего сообщения; нода отзывает его, когда процесс закрылся.
+WARM_KEY_MINUTES = 25
+
+
+class KeyBody(BaseModel):
+    keyId: int = Field(default=0, ge=0)
+
+
+def _warm_key(node: dict, job_id: str, key_id: int) -> dict:
+    import secrets as _secrets
+
+    from app.modules.mcp import keys
+
+    job = store.job(job_id, node["id"])
+    if not job or job["kind"] != "run" or job["status"] != "taken" or job["provider"] != "claude":
+        raise HTTPException(status_code=404, detail="Задача не найдена или уже закончена")
+    scope = {**dispatch.key_scope(job["user_id"], job["provider"], job["message_id"]), "warm": True, "node": int(node["id"])}
+    if key_id:
+        row = db.conn.fetch_one(
+            "UPDATE mcp_keys SET scope = %s, expires_at = now() + make_interval(mins => %s) "
+            "WHERE id = %s AND user_id = %s AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now()) "
+            "AND scope->>'warm' = 'true' AND scope->>'node' = %s RETURNING id",
+            (Json(scope), WARM_KEY_MINUTES, key_id, job["user_id"], str(node["id"])))
+        if not row:
+            raise HTTPException(status_code=410, detail="Ключ тёплого процесса истёк — нужен новый")
+        return {"keyId": key_id}
+    token = keys.PREFIX + _secrets.token_urlsafe(32)
+    row = db.conn.fetch_one(
+        "INSERT INTO mcp_keys (user_id, name, token_hash, token_start, scope, expires_at) "
+        "VALUES (%s, %s, %s, %s, %s, now() + make_interval(mins => %s)) RETURNING id",
+        (job["user_id"], f"{keys.JOB_PREFIX}{store.PROVIDERS[job['provider']]['label']}", keys._hash(token), token[:len(keys.PREFIX) + 4],
+         Json(scope), WARM_KEY_MINUTES))
+    return {"keyId": int(row["id"]), "token": token}
+
+
+@router.post("/api/core/node/jobs/{job_id}/mcp-key")
+async def warm_key(job_id: str, body: KeyBody, request: Request):
+    """Ключ MCP тёплого процесса: без keyId — новый (токен отдаём один раз), с keyId — продлить и привязать к ответу этой задачи."""
+    node = await run_in_threadpool(_node, request)
+    return await run_in_threadpool(_warm_key, node, job_id, body.keyId)
+
+
+@router.post("/api/core/node/keys/{key_id}/revoke")
+async def warm_key_revoke(key_id: int, request: Request):
+    """Процесс закрылся — ключ отзываем сразу. Только свой: ключи, выданные этой ноде для тёплых процессов."""
+    node = await run_in_threadpool(_node, request)
+    await run_in_threadpool(
+        db.conn.execute_query,
+        "UPDATE mcp_keys SET revoked_at = now() WHERE id = %s AND revoked_at IS NULL AND scope->>'warm' = 'true' AND scope->>'node' = %s",
+        (key_id, str(node["id"])))
+    return {"ok": True}
 
 
 class EventsBody(BaseModel):
@@ -263,8 +330,7 @@ def _apply_run(job: dict, events: list[dict]) -> dict:
                 return {"stop": True}  # человек остановил ответ
         elif kind in ("done", "failed"):
             if ev.get("limits"):  # окна лимита подписки — в шапку чата (core_accounts.limits)
-                db.conn.execute_query("UPDATE core_accounts SET limits = %s WHERE user_id = %s AND provider = %s",
-                                      (Json(list(ev["limits"])[:4]), job["user_id"], job["provider"]))
+                store.merge_limits(job["user_id"], job["provider"], list(ev["limits"]))
                 accounts.push_account(job["user_id"], job["provider"])
             work = ev.get("work") or {}
             if work:
@@ -275,6 +341,11 @@ def _apply_run(job: dict, events: list[dict]) -> dict:
                 if ev.get("authExpired"):  # подписка разлогинилась — карточка в настройках покажет «Войти»
                     store.save_account(job["user_id"], job["provider"], state="none", error="Вход истёк — войдите снова")
                     accounts.push_account(job["user_id"], job["provider"])
+            if kind == "done" and ev.get("plan"):
+                # План-режим: ответ — это план; «Выполнить план» продолжает ту же сессию уже без план-режима.
+                props["ask"] = {"kind": "plan", "question": "План готов. Выполнить?"}
+                props["actions"] = [{"label": "Выполнить план", "value": "Выполняй этот план."},
+                                    {"label": "Не выполнять", "value": "Пока не выполняй — я подумаю."}]
             update_agent_message(message_id, body=body or "", status="done" if kind == "done" else "failed", props=props)
             store.finish_job(job["id"], kind, str(ev.get("error") or ""))
     return {"ok": True}
@@ -307,8 +378,7 @@ def _apply_account(job: dict, events: list[dict]) -> dict:
             else:
                 store.save_account(user_id, provider, state="none", account="")
             if isinstance(ev.get("limits"), list):
-                db.conn.execute_query("UPDATE core_accounts SET limits = %s WHERE user_id = %s AND provider = %s",
-                                      (Json(list(ev["limits"])[:4]), user_id, provider))
+                store.merge_limits(user_id, provider, list(ev["limits"]))
             store.finish_job(job["id"], "done")
         elif kind in ("done", "failed"):
             store.finish_job(job["id"], kind, str(ev.get("error") or ""))

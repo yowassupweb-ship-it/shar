@@ -1,11 +1,11 @@
 import { memo, useEffect, useState } from 'react';
-import { AlertTriangle, Brain, Copy, CornerDownRight, FileText, Forward, Hourglass, Reply, RotateCw, ShieldCheck, Square, X } from 'lucide-react';
+import { AlertTriangle, Brain, Copy, CornerDownRight, FileText, Forward, Hourglass, Reply, RotateCw, ShieldCheck, Square, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 import { CoreMini } from '@/shared/ui/CoreIcon';
 import { lazyComponent } from '@/shared/ui/lazy';
 import { formatTime } from '@/shared/ui/format';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
-import type { CoreMessage } from './api';
+import { coreApi, type CoreMessage } from './api';
 import { BrandMark } from './brands';
 import { Chain, EFFORT_LABEL, formatBytes, formatTokens, MarkdownText, modelLabel, workParts } from './parts';
 
@@ -165,6 +165,12 @@ export const MessageItem = memo(function MessageItem({ message, quote, h }: {
   const copy = () => { void navigator.clipboard?.writeText(message.body).then(() => showToast('Скопировано', 'success')); };
   const stats = workParts(p.work);
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
+  // Оценка ответа: 👍 сразу, 👎 — с вопросом «что не так» (агент запомнит причину). Ответ сервера приходит событием core_message.
+  const [why, setWhy] = useState<string | null>(null);
+  const rate = (rating: -1 | 0 | 1, reason = '') => {
+    coreApi.feedback(message.id, rating, reason).catch(() => showToast('Оценка не сохранилась — нет связи', 'error'));
+    if (rating === -1) showToast('Запомнили — учтём', 'success');
+  };
   const onContextMenu = (e: React.MouseEvent) => {
     // Выделенный текст копируют как обычно — своё меню только без выделения.
     if (message.local || working || window.getSelection()?.toString()) return;
@@ -239,6 +245,10 @@ export const MessageItem = memo(function MessageItem({ message, quote, h }: {
                 {!!message.body && <button type="button" onClick={copy} aria-label="Копировать" title="Копировать текст"><Copy size={13} aria-hidden="true" /></button>}
                 {!!message.body && <button type="button" onClick={() => h.forward(message)} aria-label="Переслать в чат" title="Переслать в чат Шара"><Forward size={13} aria-hidden="true" /></button>}
                 <button type="button" onClick={() => h.reply(message)} aria-label="Ответить" title="Ответить на это сообщение"><Reply size={13} aria-hidden="true" /></button>
+            {!failed && (<>
+              <button type="button" className="ncore-rate" aria-pressed={p.feedback?.rating === 1} onClick={() => { setWhy(null); rate(p.feedback?.rating === 1 ? 0 : 1); }} aria-label="Хороший ответ" title="Хороший ответ — агент запомнит"><ThumbsUp size={13} aria-hidden="true" /></button>
+              <button type="button" className="ncore-rate" data-bad="" aria-pressed={p.feedback?.rating === -1} onClick={() => { if (p.feedback?.rating === -1) { rate(0); setWhy(null); } else setWhy(p.feedback?.reason || ''); }} aria-label="Плохой ответ" title="Не так — расскажите, и агент не повторит"><ThumbsDown size={13} aria-hidden="true" /></button>
+            </>)}
               </span>
             )}
             {!message.local && <time>{formatTime(message.createdAt)}</time>}
@@ -260,6 +270,13 @@ export const MessageItem = memo(function MessageItem({ message, quote, h }: {
             <button type="button" onClick={() => h.reply(message)} aria-label="Ответить" title="Ответить на это сообщение"><Reply size={13} aria-hidden="true" /></button>
             {stats.length > 0 && <span className="ncore-tools-meta" title={stats.join(' · ')}>{workBrief(p.work)}</span>}
           </div>
+        )}
+        {why !== null && (
+          <form className="ncore-why" onSubmit={(e) => { e.preventDefault(); rate(-1, why.trim()); setWhy(null); }}>
+            <input className="nx-field" value={why} autoFocus maxLength={300} placeholder="Что было не так? Агент запомнит" aria-label="Что было не так" onChange={(e) => setWhy(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') setWhy(null); }} />
+            <button type="submit" className="nx-primary">Запомнить</button>
+            <button type="button" className="nx-ghost" onClick={() => { rate(-1); setWhy(null); }}>Без причины</button>
+          </form>
         )}
       </div>
     </div>

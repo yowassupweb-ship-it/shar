@@ -373,6 +373,14 @@
   color: var(--on-accent);
 }
 
+/* Тесно рядом со списком (панель «Ядра», узкое окно): переписка уже 200px не бывает — один экран за раз, как на телефоне.
+   Выставляет ChatsScreen по ширине самого раздела, а не окна. */
+.cxn[data-compact="true"] { grid-template-columns: minmax(0, 1fr); }
+.cxn[data-compact="true"][data-pane="list"] .cxn-main { display: none; }
+.cxn[data-compact="true"][data-pane="chat"] .cxl { display: none; }
+.cxn[data-compact="true"] .cxn-back { display: inline-grid; margin-left: calc(var(--space-2) * -1); }
+.cxn[data-compact="true"] .cxh-back { display: grid; }
+
 /* ── Адаптив: ≤640 — мастер-деталь в два экрана (§12) ─────────────────── */
 @media (max-width: 640px) {
   .cxn { grid-template-columns: minmax(0, 1fr); }
@@ -439,42 +447,7 @@
 
 .cxn-empty img { margin-bottom: var(--space-2); object-fit: contain; filter: var(--icon-shadow); }
 
-/* ── Плавающий чат (frame/ChatFrame.tsx): поверх любого раздела, перетаскивается ─────────────── */
-.nxcf-bubble {
-  position: fixed;
-  z-index: 60;
-  display: grid;
-  place-items: center;
-  width: 39px;
-  height: 39px;
-  border: 0;
-  border-radius: 50%;
-  background: var(--accent-fill);
-  color: var(--on-accent);
-  box-shadow: var(--glass-shadow);
-  cursor: grab;
-  touch-action: none;
-  transition: transform 0.15s var(--ease-out);
-}
-.nxcf-bubble:hover { transform: scale(1.05); }
-.nxcf-bubble:active { cursor: grabbing; }
-.nxcf-bubble:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 3px; }
-.nxcf-badge {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: var(--radius-pill);
-  background: var(--danger-fill);
-  color: #fff;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-bold);
-  line-height: 16px;
-  text-align: center;
-  box-shadow: 0 0 0 2px var(--surface-panel);
-}
+/* ── Быстрый чат (frame/ChatFrame.tsx): поверх любого раздела, перетаскивается ─────────────── */
 .nxcf-window {
   position: fixed;
   z-index: 60;

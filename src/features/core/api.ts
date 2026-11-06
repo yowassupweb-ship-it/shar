@@ -59,6 +59,8 @@ export interface CoreProps {
   actions?: CoreAction[];
   /** Что ответили на вопрос. */
   answered?: string;
+  /** Оценка ответа человеком: 👍 / 👎 с причиной — агент учится на ней. */
+  feedback?: { rating: -1 | 1; reason?: string };
   /** Кто отвечает: gemini | claude | codex. */
   provider?: string;
   replyTo?: { id: string; actor: string; text: string };
@@ -88,9 +90,10 @@ export interface CoreMessage {
 }
 
 /** Окно лимита подписки (Claude): five_hour, seven_day…; used — %, resetsAt — unix-секунды. */
-export interface CoreLimit { type: string; used: number; resetsAt: number; status: string; overage?: boolean }
+/** Окно лимита подписки. family — семейство модели, на которой замерено (opus/sonnet/haiku); at — когда получено (сек). */
+export interface CoreLimit { type: string; used: number; resetsAt: number; status: string; overage?: boolean; family?: string; at?: number }
 
-export interface CoreAgent { id: string; name: string; model: string; models: Array<{ id: string; label: string }>; online: boolean; limits?: CoreLimit[] }
+export interface CoreAgent { id: string; name: string; /** login — подписка (Claude, GPT, Kimi), key — ключ (Gemini). */ how?: string; model: string; models: Array<{ id: string; label: string }>; online: boolean; limits?: CoreLimit[] }
 
 export interface CoreCatalog {
   /** Подключённые агенты человека (Настройки → Ядро): первый — по умолчанию. */
@@ -110,6 +113,8 @@ export interface SendPayload {
   replyTo?: string;
   attachments?: Array<Pick<CoreAttachment, 'name' | 'key' | 'size' | 'type'>>;
   effort?: string;
+  /** План-режим (Kimi): агент изучает и составляет план, не выполняя его. */
+  plan?: boolean;
   /** Агент и модель: «claude» или «claude:opus». */
   model?: string;
   context?: CoreContextItem[];
@@ -211,6 +216,8 @@ export const coreApi = {
     call<{ message: CoreMessage }>(`/api/core/threads/${enc(threadId)}/messages`, { method: 'POST', json: payload }).then((r) => r.message),
   answer: (messageId: string, value: string) =>
     call<{ message: CoreMessage }>(`/api/core/messages/${enc(messageId)}/answer`, { method: 'POST', json: { value } }).then((r) => r.message),
+  feedback: (messageId: string, rating: -1 | 0 | 1, reason = '') =>
+    call<{ message: CoreMessage }>(`/api/core/messages/${enc(messageId)}/feedback`, { method: 'POST', json: { rating, reason } }).then((r) => r.message),
   cancel: (messageId: string) => call<{ message: CoreMessage }>(`/api/core/messages/${enc(messageId)}/cancel`, { method: 'POST' }).then((r) => r.message),
 
   accounts: () => call<CoreAccounts>('/api/core/accounts'),
@@ -220,7 +227,9 @@ export const coreApi = {
   loginCode: (provider: ProviderId, code: string) => call<CoreAccounts>(`/api/core/accounts/${provider}/login/code`, { method: 'POST', json: { code } }),
   cancelLogin: (provider: ProviderId) => call<CoreAccounts>(`/api/core/accounts/${provider}/login`, { method: 'DELETE' }),
   /** Спросить у провайдера текущие окна лимита подписки (пока только Claude); ответ придёт событием core_account. */
-  checkLimits: (provider: ProviderId) => call<{ queued: boolean }>(`/api/core/accounts/${provider}/limits`, { method: 'POST' }),
+  /** Спросить окна подписки; model — выбранная в чате модель (у Opus и Sonnet недельные окна разные). */
+  checkLimits: (provider: ProviderId, model = '') =>
+    call<{ queued: boolean }>(`/api/core/accounts/${provider}/limits${model ? `?model=${encodeURIComponent(model)}` : ''}`, { method: 'POST' }),
   disconnect: (provider: ProviderId) => call<CoreAccounts>(`/api/core/accounts/${provider}`, { method: 'DELETE' }),
   setMode: (mode: string) => call<CoreAccounts>('/api/core/settings', { method: 'PUT', json: { mode } }),
   usage: (days = 30, all = false) => call<{ usage: CoreUsageRow[] }>(`/api/core/usage?days=${days}${all ? '&all=1' : ''}`),

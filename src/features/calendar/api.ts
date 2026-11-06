@@ -30,6 +30,8 @@ export { myId } from '@/shared/session/session';
 import { myId } from '@/shared/session/session';
 
 export const isMine = (e: CalEvent) => !e.createdBy || e.createdBy === myId();
+/** Править можно своё и то, что автор разрешил править участникам (сервер проверяет ещё раз). */
+export const canEditEvent = (e: CalEvent) => isMine(e) || (e.participantsCanEdit && !e.sharedWithAll);
 
 // ── Кэш: последний диапазон показывается мгновенно ──────────────────────────
 
@@ -106,6 +108,8 @@ export interface Draft {
   recurrenceRule?: string | null;
   participants: string[];
   sharedWithAll: boolean;
+  sharedDepartments: string[];
+  participantsCanEdit: boolean;
 }
 
 /** Поля для сервера: те же имена, что в метаданных события. */
@@ -194,6 +198,14 @@ export async function deleteEvent(e: CalEvent, scope: Scope = 'all'): Promise<vo
 
 /** Поделились со мной, а мне не нужно, — убрать себя из участников. */
 export async function leaveEvent(e: CalEvent): Promise<void> {
-  const me = myId();
-  await updateEvent(e, { participants: e.participants.filter((p) => p !== me) }, 'all');
+  const before = useCalendar.getState().events;
+  const series = rowId(e);
+  replaceLocal((list) => list.filter((x) => rowId(x) !== series));
+  try {
+    await call(`/api/events/${encodeURIComponent(series)}/leave`, 'POST');
+  } catch (err) {
+    useCalendar.setState({ events: before });
+    throw err;
+  }
+  void reload();
 }

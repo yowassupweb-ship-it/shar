@@ -192,10 +192,13 @@ function RoutesSheet({ onClose }: { onClose: () => void }) {
                   {missing && <option value={current!}>{settings.chats[site]?.title || 'Чат, в котором вас нет'}</option>}
                   {options.map((o) => <option key={o.id} value={o.id}>{o.title}</option>)}
                 </select>
+                <span className="nld-hint">
+                  {settings.lastReceived?.[site] ? `Последняя заявка с сайта пришла ${fmt(settings.lastReceived[site]!)}` : 'С этого сайта заявок ещё не приходило'}
+                </span>
               </label>
             );
           })}
-          <p className="nld-hint">Карточка заявки появится в выбранном групповом чате, взять её в работу может любой его участник. Письмо менеджерам сайт по-прежнему отправляет.</p>
+          <p className="nld-hint">Карточка заявки появится в выбранном групповом чате, взять её в работу может любой его участник. Письмо менеджерам сайт по-прежнему отправляет. Если заявки давно не приходят, а на сайте они есть, — проверьте на сайте адрес приёма (SHAR_LEADS_URL) и ключ (SHAR_API_KEY): в админке сайта у каждой заявки виден статус отправки в Шар.</p>
         </div>
       )}
     </Sheet>

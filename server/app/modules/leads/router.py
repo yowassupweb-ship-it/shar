@@ -99,7 +99,15 @@ def get_settings(me: Identity = Depends(require_tool)):
     for site, chat_id in s["routes"].items():
         chat = _get_chat_cached(chat_id) if chat_id else None
         chats[site] = {"id": chat_id, "title": (chat or {}).get("title") or (chat or {}).get("name")} if chat_id else None
-    return {"routes": s["routes"], "chats": chats, "sites": SITES}
+    # Когда сайт последний раз что-то присылал: тишина дольше обычной — повод проверить ключ и адрес на стороне сайта.
+    last = {site: None for site in SITES}
+    try:
+        for r in db.conn.fetch_all("SELECT site, max(created_at) AS at FROM site_leads GROUP BY site") or []:
+            if r["site"] in last and r.get("at"):
+                last[r["site"]] = r["at"].isoformat()
+    except Exception as e:  # noqa: BLE001 — таблицы может не быть на прод-схеме; настройки важнее
+        log.debug("leads: last received failed: %s", e)
+    return {"routes": s["routes"], "chats": chats, "sites": SITES, "lastReceived": last}
 
 
 @router.put("/api/leads/settings")

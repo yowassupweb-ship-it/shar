@@ -1,16 +1,15 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, MessageCircle, Minus } from 'lucide-react';
+import { ChevronLeft, X } from 'lucide-react';
 import ChatsPanel from '../ChatsPanel';
 import Conversation from '../Conversation';
 import { openChat } from '../store';
-import { readFrameState, writeFrameState, type FrameState } from './prefs';
+import { readFrameState, setChatFrameOpen, writeFrameState, type FrameState } from './prefs';
 
 const W = 400;
 const H = 600;
 const MIN_W = 300;
 const MIN_H = 320;
-const BUBBLE = 39; // было 56: при крупном масштабе кнопка закрывала содержимое
 const MARGIN = 12;
 
 type Edge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
@@ -32,16 +31,17 @@ function clamp(x: number, y: number, w: number, h: number) {
 }
 
 /**
- * Плавающий чат поверх любого раздела, как в старом Шаре: круглая кнопка с числом непрочитанных; нажал — окно со
- * списком чатов и перепиской. И кнопку, и окно можно перетащить (за кнопку или заголовок окна), у окна — потянуть
- * за край или угол, чтобы задать ширину и высоту; место и размер помнятся.
+ * Быстрый чат поверх любого раздела: окно со списком чатов и перепиской. Открывается правым щелчком по «Чатам» в нижней
+ * полосе (там же и закрывается), постоянной кнопки нет. Окно можно перетащить за заголовок и потянуть за край или угол,
+ * чтобы задать ширину и высоту; место и размер помнятся.
  * Открытый здесь чат читается так же, как в разделе «Чаты» (openChat): отметки «прочитано», новые сообщения.
  */
 export default function ChatFrame({ unread }: { unread: number }) {
   const [state, setState] = useState<FrameState>(() => {
     const saved = readFrameState();
-    const start = saved ?? { x: window.innerWidth - BUBBLE - 24, y: window.innerHeight - BUBBLE - 96, open: false, chatId: null };
-    return { ...start, ...clamp(start.x, start.y, BUBBLE, BUBBLE) };
+    const { w: ww, h: wh } = sizeOf(saved ?? { x: 0, y: 0, chatId: null });
+    const start = saved ?? { x: window.innerWidth - ww - 24, y: window.innerHeight - wh - 24, chatId: null };
+    return { ...start, ...clamp(start.x, start.y, ww, wh) };
   });
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -54,8 +54,7 @@ export default function ChatFrame({ unread }: { unread: number }) {
   }, []);
 
   const size = sizeOf(state);
-  const w = state.open ? size.w : BUBBLE;
-  const h = state.open ? size.h : BUBBLE;
+  const { w, h } = size;
   const pos = clamp(state.x, state.y, w, h);
 
   useEffect(() => {
@@ -65,14 +64,14 @@ export default function ChatFrame({ unread }: { unread: number }) {
   }, []);
 
   // Чат открыт в окне — он «активный»: приходящие сообщения сразу прочитаны, лента подгружена.
-  const chatId = state.open ? state.chatId : null;
+  const chatId = state.chatId;
   useEffect(() => {
     if (!chatId) return undefined;
     openChat(chatId);
     return () => openChat(null);
   }, [chatId]);
 
-  // Перетаскивание: за кнопку (если сдвинули больше чем на 4 px — это не нажатие) или за заголовок окна.
+  // Перетаскивание за заголовок окна.
   const drag = useRef<{ dx: number; dy: number; sx: number; sy: number; moved: boolean } | null>(null);
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 || (e.target as HTMLElement).closest('[data-nodrag]')) return;
@@ -91,19 +90,6 @@ export default function ChatFrame({ unread }: { unread: number }) {
     drag.current = null;
     if (d?.moved) writeFrameState(stateRef.current);
     return Boolean(d?.moved);
-  };
-
-  // Раскрываемся от кнопки: окно встаёт так, чтобы кнопка оказалась в его углу, и не вылезает за экран.
-  const expand = () => {
-    const { w: ww, h: wh } = sizeOf(state);
-    const right = pos.x + BUBBLE / 2 > window.innerWidth / 2;
-    const bottom = pos.y + BUBBLE / 2 > window.innerHeight / 2;
-    update({ open: true, ...clamp(right ? pos.x + BUBBLE - ww : pos.x, bottom ? pos.y + BUBBLE - wh : pos.y, ww, wh) });
-  };
-  const collapse = () => {
-    const right = pos.x + w / 2 > window.innerWidth / 2;
-    const bottom = pos.y + h / 2 > window.innerHeight / 2;
-    update({ open: false, ...clamp(right ? pos.x + w - BUBBLE : pos.x, bottom ? pos.y + h - BUBBLE : pos.y, BUBBLE, BUBBLE) });
   };
 
   // Размер руками: тянем за край или угол окна. Левый и верхний края двигают и само окно — противоположная
@@ -142,25 +128,6 @@ export default function ChatFrame({ unread }: { unread: number }) {
     window.addEventListener('pointercancel', up);
   };
 
-  if (!state.open) {
-    return inShell(
-      <button
-        type="button"
-        className="nxcf-bubble"
-        style={{ left: pos.x, top: pos.y }}
-        aria-label={unread ? `Чаты: ${unread} непрочитанных` : 'Чаты'}
-        title="Чаты (перетащите, чтобы переставить)"
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={(e) => { if (!onPointerUp() && e.button === 0) expand(); }}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expand(); } }}
-      >
-        <MessageCircle size={17} aria-hidden="true" />
-        {unread > 0 && <span className="nxcf-badge">{unread > 99 ? '99+' : unread}</span>}
-      </button>,
-    );
-  }
-
   return inShell(
     <section className="nxcf-window" data-chat={state.chatId ? 'true' : undefined} style={{ left: pos.x, top: pos.y, width: w, height: h }} aria-label="Чат">
       <header className="nxcf-head" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
@@ -172,8 +139,8 @@ export default function ChatFrame({ unread }: { unread: number }) {
         {/* В переписке имя и кнопки чата — в её собственной шапке; здесь — только место, за которое тянуть. */}
         <span className="nxcf-title">{state.chatId ? '' : 'Чаты'}</span>
         {!state.chatId && unread > 0 && <span className="nxcf-count">{unread}</span>}
-        <button type="button" className="nxcf-btn" data-nodrag onClick={collapse} aria-label="Свернуть" title="Свернуть">
-          <Minus size={18} aria-hidden="true" />
+        <button type="button" className="nxcf-btn" data-nodrag onClick={() => setChatFrameOpen(false)} aria-label="Закрыть быстрый чат" title="Закрыть">
+          <X size={18} aria-hidden="true" />
         </button>
       </header>
       <div className="cxn nxcf-body">

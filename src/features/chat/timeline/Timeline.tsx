@@ -147,8 +147,8 @@ function readMap(chat: ChatRow | undefined, thread: Thread, myId: string): Recor
   return out;
 }
 
-export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest, onAvatar }: {
-  chatId: string; chat?: ChatRow; query?: string; jumpTo?: { id: string; n: number } | null; onAvatar?: (userId: string) => void;
+export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest, onAvatar, compact = false }: {
+  chatId: string; compact?: boolean; chat?: ChatRow; query?: string; jumpTo?: { id: string; n: number } | null; onAvatar?: (userId: string) => void;
 }) {
   const thread = useChatStore((s) => s.threads[chatId]) || EMPTY;
   const me = useChatStore((s) => s.me);
@@ -171,7 +171,9 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
   const freshUntil = useRef(new Map<string, number>());
   const [jump, setJump] = useState(false);
   const [missed, setMissed] = useState(0);
-  const [mobile, setMobile] = useState(false);
+  const [mobileMq, setMobile] = useState(false);
+  // Раскладка телефона: узкое окно или тесно рядом со списком (ChatsScreen → compact).
+  const mobile = mobileMq || compact;
   const [width, setWidth] = useState(0);
   const [menu, setMenu] = useState<{ msg: Msg; at: { x: number; y: number }; image: string | null } | null>(null);
   // Телефон: нажатое сообщение поверх размытой переписки (BubbleFocus). Живёт чуть дольше меню —
@@ -421,9 +423,25 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
       if (at >= 0) { pendingJump.current = messageId; setWin(span(ids, at - 30, at + 30)); }
       return;
     }
-    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    // Далеко (элемента не было в окне отрисовки) — мгновенно: плавная прокрутка через тысячи пикселей спорит со сдвигом окна
+    // ленты и подгрузкой и обрывается на полпути. Близко — плавно, как раньше.
+    const scroller = scrollRef.current;
+    const near = scroller ? Math.abs(el.getBoundingClientRect().top - scroller.getBoundingClientRect().top) < scroller.clientHeight * 3 : false;
+    const center = (behavior: ScrollBehavior) => el.scrollIntoView({ block: 'center', behavior });
+    center(near ? 'smooth' : 'auto');
     el.dataset.flash = 'true';
     window.setTimeout(() => { delete el.dataset.flash; }, 1400);
+    // Пока лента «оседает» (картинки выше достраивают высоту, окно дорисовывается), сообщение уходит из центра:
+    // подправляем, пока человек сам не начал листать.
+    const startedAt = Date.now();
+    for (const delay of [160, 450, 1000]) {
+      window.setTimeout(() => {
+        if (!el.isConnected || userScrollAt.current > startedAt) return;
+        const box = scroller?.getBoundingClientRect();
+        const rect = el.getBoundingClientRect();
+        if (box && Math.abs(rect.top + rect.height / 2 - (box.top + box.height / 2)) > 24) center('auto');
+      }, delay);
+    }
   }, [chatId]);
 
   useEffect(() => {
@@ -853,7 +871,7 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
           start={viewer.start}
           onClose={() => setViewer(null)}
           onJump={jumpTo}
-          onCopy={(u) => void copyImage(u)}
+          onCopy={(u) => copyImage(u)}
         />
       )}
 

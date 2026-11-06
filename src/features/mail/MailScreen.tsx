@@ -43,9 +43,11 @@ const BOX_ICON: Record<Box['role'], typeof Inbox> = {
 
 type Face = { seed: string; src?: string; name?: string };
 
-/** Лицо по адресу: у сотрудника Шара — его настоящее фото; у всех остальных (и у сотрудника без фото) —
- *  буквы на цвете, как у групповых чатов. Рисованных DiceBear в почте нет: чужому адресу они
- *  приписывали случайное «лицо». */
+/** Лицо по адресу: у сотрудника Шара — его настоящее фото; у остальных — то, что нашёл сервер (Gravatar, логотип
+ *  BIMI, значок сайта компании — /api/mail/avatar), а если не нашёл (204) — буквы на цвете, как у групповых
+ *  чатов. Рисованных DiceBear в почте нет: чужому адресу они приписывали случайное «лицо». */
+const faceUrl = (email: string) => `/api/mail/avatar?email=${encodeURIComponent(email.trim().toLowerCase())}`;
+
 function useFaceByEmail(): (email?: string, fallbackName?: string) => Face {
   // Сотрудники в сторе меняются на каждое «в сети / не в сети»; лица от этого не зависят —
   // пересобираем карту только при смене почты, фото или имени (иначе перерисовывался весь список).
@@ -59,7 +61,8 @@ function useFaceByEmail(): (email?: string, fallbackName?: string) => Face {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sig]);
   return useCallback((email?: string, fallbackName?: string) => (
-    (email && byEmail.get(email.toLowerCase())) || { seed: email || fallbackName || '?', name: fallbackName }
+    (email && byEmail.get(email.toLowerCase()))
+    || { seed: email || fallbackName || '?', name: fallbackName, src: email && email.includes('@') ? faceUrl(email) : undefined }
   ), [byEmail]);
 }
 

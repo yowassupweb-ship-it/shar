@@ -6,8 +6,26 @@ import { formatTokens, modelLabel } from './parts';
 const AGENT_NAME: Record<string, string> = { gemini: 'Gemini', claude: 'Claude', codex: 'GPT', kimi: 'Kimi' };
 const WINDOW_NAME: Record<string, string> = { five_hour: '5 ч', seven_day: 'неделя', seven_day_opus: 'неделя Opus', seven_day_sonnet: 'неделя Sonnet' };
 
+/** Семейство модели по её имени: у Claude недельные окна свои у Opus и Sonnet. */
+export function modelFamily(model?: string): string {
+  const m = String(model || '').toLowerCase();
+  return /opus/.test(m) ? 'opus' : /sonnet/.test(m) ? 'sonnet' : /haiku/.test(m) ? 'haiku' : '';
+}
+
+/**
+ * Использование — по выбранной модели. Общие окна подписки (5 часов, неделя) видны всегда; окно модели (seven_day_opus,
+ * seven_day_sonnet) — только когда выбрана эта модель: сменили Sonnet на Opus — в шапке окно Opus вместо окна Sonnet.
+ */
+export function limitsForModel(limits: CoreLimit[] | undefined, model?: string): CoreLimit[] {
+  const family = modelFamily(model);
+  return (limits ?? []).filter((l) => {
+    const own = l.type.match(/^seven_day_(.+)$/);
+    return !own || own[1] === family;
+  });
+}
+
 /** Лимиты подписки агента — в шапке чата: кольцо израсходованного окна и процент; когда сбросится — в подсказке. */
-export function LimitBadges({ limits, agent }: { limits?: CoreLimit[]; agent: string }) {
+export function LimitBadges({ limits, agent, model }: { limits?: CoreLimit[]; agent: string; model?: string }) {
   if (!limits?.length) return null;
   return (
     <span className="ncore-limits" aria-label={`Лимиты подписки ${agent}`}>
@@ -18,7 +36,7 @@ export function LimitBadges({ limits, agent }: { limits?: CoreLimit[]; agent: st
         const tone = /reject|block|exceed/i.test(l.status) || l.used >= 100 ? 'bad' : l.used >= 80 ? 'warn' : undefined;
         const used = Math.min(100, Math.max(0, l.used));
         return (
-          <span key={l.type} className="ncore-limit-badge" data-tone={tone} title={`${agent}: ${WINDOW_NAME[l.type] || l.type} — израсходовано ${l.used}%${reset ? `, сбросится ${reset}` : ''}${l.overage ? ', идёт перерасход' : ''}`}>
+          <span key={l.type} className="ncore-limit-badge" data-tone={tone} title={`${agent}${model ? ` · ${model}` : ''}: ${WINDOW_NAME[l.type] || l.type} — израсходовано ${l.used}%${reset ? `, сбросится ${reset}` : ''}${l.overage ? ', идёт перерасход' : ''}`}>
             <svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true">
               <circle cx="7" cy="7" r="5.5" pathLength="100" />
               <circle cx="7" cy="7" r="5.5" pathLength="100" strokeDasharray={`${used} 100`} />

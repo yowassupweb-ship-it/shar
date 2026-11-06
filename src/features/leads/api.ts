@@ -50,6 +50,8 @@ export interface LeadSettings {
   routes: Record<'corp' | 'school', string | null>;
   chats: Record<'corp' | 'school', { id: string; title?: string } | null>;
   sites: Record<'corp' | 'school', string>;
+  /** Когда сайт последний раз прислал заявку (ISO) или null. */
+  lastReceived?: Record<'corp' | 'school', string | null>;
 }
 
 export const SITE_URLS: Record<Lead['site'], string> = { corp: 'https://corp.vs-travel.ru', school: 'https://school.vs-travel.ru' };

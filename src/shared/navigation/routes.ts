@@ -19,6 +19,7 @@ export const paths = {
   leads: '/site-leads',
   social: '/social',
   core: '/core',
+  studio: '/studio',
   guide: '/how-to-shar',
   login: '/login',
 } as const;

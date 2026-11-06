@@ -261,7 +261,10 @@ export default function OfficeScreen() {
   useEffect(() => {
     if (narrow) return undefined;
     const onKey = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.code === 'Backslash') { event.preventDefault(); toggleList(); }
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      // Ctrl+Shift+D (как «скрыть боковую панель» в Slack) и прежнее Ctrl+\. По физической клавише (code): работает в любой раскладке.
+      // Голое Ctrl+Shift не берём: в русской Windows это переключение раскладки — список сворачивался бы при каждой смене языка.
+      if ((event.shiftKey && event.code === 'KeyD') || (!event.shiftKey && event.code === 'Backslash')) { event.preventDefault(); toggleList(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -781,7 +784,7 @@ export default function OfficeScreen() {
       >
         {folded && (
           <div className="nws-rail">
-            <button type="button" className="nws-rail-btn" onClick={toggleList} title="Показать список материалов (Ctrl+\)" aria-label="Показать список материалов">
+            <button type="button" className="nws-rail-btn" onClick={toggleList} title="Показать список материалов (Ctrl+Shift+D)" aria-label="Показать список материалов" aria-keyshortcuts="Control+Shift+D">
               <PanelLeftOpen size={18} aria-hidden="true" />
             </button>
             <button type="button" className="nws-rail-btn" aria-haspopup="menu" aria-expanded={Boolean(create)} disabled={Boolean(busy)} title="Создать" aria-label="Создать" onClick={(e) => setCreate({ element: e.currentTarget, align: 'start' })}>
@@ -791,8 +794,9 @@ export default function OfficeScreen() {
         )}
         <header className="nws-list-head">
           {!narrow && (
-            <button type="button" className="nws-fold" onClick={toggleList} title="Скрыть список материалов (Ctrl+\)" aria-label="Скрыть список материалов">
+            <button type="button" className="nws-fold" data-hint="" onClick={toggleList} title="Скрыть список материалов (Ctrl+Shift+D)" aria-label="Скрыть список материалов" aria-keyshortcuts="Control+Shift+D">
               <PanelLeftClose size={17} aria-hidden="true" />
+              <kbd className="nws-kbd" aria-hidden="true">Ctrl+Shift+D</kbd>
             </button>
           )}
           <button type="button" className="nx-ghost nws-import" disabled={importing} title={`${importRule.label}: ${importRule.hint}`} aria-label={importRule.label} onClick={() => fileInput.current?.click()}>

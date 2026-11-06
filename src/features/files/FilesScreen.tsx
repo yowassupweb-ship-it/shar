@@ -19,7 +19,8 @@ import { ChatFiles, ChatList } from './ChatFilesView';
 type View =
   | { kind: 'cloud'; folderId: string | null; fileId?: string | null }
   | { kind: 'chats'; chatId: string | null; chatName?: string }
-  | { kind: 'agents'; chatId: string | null; chatName?: string };
+  /** Агенты: по умолчанию — файлы по дням; byChats — список чатов; chatId — файлы одного чата. */
+  | { kind: 'agents'; chatId: string | null; chatName?: string; byChats?: boolean };
 
 /** «Агенты»: вложения чатов «Ядра» и то, что сделали агенты. «Показать в чате» открывает чат «Ядра». */
 const AGENTS: FilesSource = {
@@ -33,7 +34,10 @@ const subscribeNoop = () => () => {};
 function readView(): View {
   const p = new URLSearchParams(window.location.search);
   if (p.has('chat')) return { kind: 'chats', chatId: p.get('chat') || null, chatName: p.get('name') || undefined };
-  if (p.has('agent')) return { kind: 'agents', chatId: p.get('agent') || null, chatName: p.get('name') || undefined };
+  if (p.has('agent')) {
+    const id = p.get('agent') || null;
+    return id === '*chats' ? { kind: 'agents', chatId: null, byChats: true } : { kind: 'agents', chatId: id, chatName: p.get('name') || undefined };
+  }
   return { kind: 'cloud', folderId: p.get('folder'), fileId: p.get('file') };
 }
 
@@ -42,7 +46,7 @@ function writeView(v: View, push = true) {
   for (const k of ['folder', 'file', 'chat', 'agent', 'name']) url.searchParams.delete(k);
   if (v.kind === 'cloud' && v.folderId) url.searchParams.set('folder', v.folderId);
   if (v.kind === 'chats' || v.kind === 'agents') {
-    url.searchParams.set(v.kind === 'chats' ? 'chat' : 'agent', v.chatId || '');
+    url.searchParams.set(v.kind === 'chats' ? 'chat' : 'agent', v.kind === 'agents' && v.byChats ? '*chats' : v.chatId || '');
     if (v.chatId && v.chatName) url.searchParams.set('name', v.chatName);
   }
   if (url.href === window.location.href) return;
@@ -118,9 +122,15 @@ export default function FilesScreen() {
       {view.kind === 'chats' && view.chatId && (
         <ChatFiles lead={lead} key={view.chatId} chat={{ chatId: view.chatId, chatName: view.chatName || 'Чат' }} onBack={() => go({ kind: 'chats', chatId: null })} />
       )}
-      {view.kind === 'agents' && !view.chatId && <ChatList lead={lead} source={AGENTS} onOpen={(c) => go({ kind: 'agents', chatId: c.chatId, chatName: c.chatName })} />}
+      {/* «Агенты»: сначала файлы по дням, свежие выше (чаты — вторым видом); внутри чата — его файлы. */}
+      {view.kind === 'agents' && !view.chatId && !view.byChats && (
+        <ChatFiles lead={lead} source={AGENTS} days key="a-days" chat={{ chatId: '*', chatName: 'Файлы агентов' }} onBack={() => undefined} onSwitch={() => go({ kind: 'agents', chatId: null, byChats: true })} />
+      )}
+      {view.kind === 'agents' && !view.chatId && view.byChats && (
+        <ChatList lead={lead} source={AGENTS} onSwitch={() => go({ kind: 'agents', chatId: null })} onOpen={(c) => go({ kind: 'agents', chatId: c.chatId, chatName: c.chatName })} />
+      )}
       {view.kind === 'agents' && view.chatId && (
-        <ChatFiles lead={lead} source={AGENTS} key={`a${view.chatId}`} chat={{ chatId: view.chatId, chatName: view.chatName || 'Чат с агентом' }} onBack={() => go({ kind: 'agents', chatId: null })} />
+        <ChatFiles lead={lead} source={AGENTS} key={`a${view.chatId}`} chat={{ chatId: view.chatId, chatName: view.chatName || 'Чат с агентом' }} onBack={() => go({ kind: 'agents', chatId: null, byChats: true })} />
       )}
     </main>
   );

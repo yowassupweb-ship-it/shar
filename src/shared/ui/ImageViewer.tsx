@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, ChevronRight, Copy, Download, ExternalLink, MessageSquareText, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, MessageSquareText, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { thumbUrl } from './media';
 import { downloadOnClick } from '@/shared/platform/download';
 
@@ -25,6 +25,8 @@ export interface ViewerItem {
 
 // Меньше 100% — тоже можно: крупное фото иначе не разглядеть целиком, его закрывали панели.
 const MIN = 0.25;
+/** Начальный размер фото относительно «вписать в экран». */
+const INITIAL_FIT = 0.9;
 const MAX = 6;
 
 export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
@@ -32,7 +34,8 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
   start: number;
   onClose: () => void;
   onJump?: (messageId: string) => void;
-  onCopy?: (url: string) => void;
+  /** Копирование картинки: false или ошибка — не вышло (кнопка покажет это сама). */
+  onCopy?: (url: string) => void | boolean | Promise<void | boolean>;
 }) {
   const [index, setIndex] = useState(() => Math.max(0, Math.min(start, items.length - 1)));
   const [fullLoaded, setFullLoaded] = useState(false);
@@ -44,6 +47,30 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
   const view = useRef({ scale: 1, x: 0, y: 0 });
   const item = items[index];
 
+  // Отбивка действий: кнопка сама показывает, что произошло (копируется → скопировано / не вышло), а короткая плашка сверху
+  // говорит словами — масштаб, скачивание. Тосты Шара поверх просмотрщика не всегда видны, поэтому ответ — здесь же.
+  const [copyState, setCopyState] = useState<'idle' | 'busy' | 'ok' | 'fail'>('idle');
+  const [notice, setNotice] = useState('');
+  const noticeTimer = useRef(0);
+  const copyTimer = useRef(0);
+  const shownScale = useRef(1);
+  const say = useCallback((text: string, ms = 1500) => {
+    setNotice(text);
+    window.clearTimeout(noticeTimer.current);
+    noticeTimer.current = window.setTimeout(() => setNotice(''), ms);
+  }, []);
+  useEffect(() => () => { window.clearTimeout(noticeTimer.current); window.clearTimeout(copyTimer.current); }, []);
+  const copy = async () => {
+    if (!onCopy || copyState === 'busy') return;
+    setCopyState('busy');
+    let ok = true;
+    try { ok = (await onCopy(item.url)) !== false; } catch { ok = false; }
+    setCopyState(ok ? 'ok' : 'fail');
+    say(ok ? 'Картинка скопирована' : 'Не удалось скопировать', 1800);
+    window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setCopyState('idle'), 1800);
+  };
+
   const apply = useCallback((animate = false) => {
     const img = imgRef.current;
     if (!img) return;
@@ -51,7 +78,11 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
     img.style.transition = animate ? 'transform .22s cubic-bezier(.22,1,.36,1)' : 'none';
     img.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${scale})`;
     img.style.cursor = scale > 1 ? 'grab' : 'zoom-in';
-  }, []);
+    if (Math.abs(scale - shownScale.current) > 0.004) {
+      shownScale.current = scale;
+      say(`${Math.round(scale * INITIAL_FIT * 100)}%`, 900);
+    }
+  }, [say]);
 
   const reset = useCallback((animate = true) => {
     view.current = { scale: 1, x: 0, y: 0 };
@@ -75,7 +106,9 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
     const img = imgRef.current;
     const stage = stageRef.current;
     if (!img || !stage || !img.naturalWidth || !img.naturalHeight) return;
-    const k = Math.min(stage.clientWidth / img.naturalWidth, stage.clientHeight / img.naturalHeight);
+    // Открывается на 90% «по размеру экрана»: небольшие поля вокруг, фото не упирается в края. Это и есть масштаб 1 просмотрщика —
+    // двойной клик, «0» и сброс возвращают к нему же.
+    const k = Math.min(stage.clientWidth / img.naturalWidth, stage.clientHeight / img.naturalHeight) * INITIAL_FIT;
     img.style.width = `${Math.floor(img.naturalWidth * k)}px`;
     img.style.height = `${Math.floor(img.naturalHeight * k)}px`;
   }, []);
@@ -262,17 +295,21 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
             </button>
           )}
           {onCopy && (
-            <button type="button" className="nxv-btn" onClick={() => onCopy(item.url)} aria-label="Копировать картинку" title="Копировать">
-              <Copy size={18} />
+            <button type="button" className="nxv-btn" data-state={copyState === 'idle' ? undefined : copyState} disabled={copyState === 'busy'}
+              onClick={() => void copy()} aria-label="Копировать картинку"
+              title={copyState === 'ok' ? 'Скопировано' : copyState === 'fail' ? 'Не вышло — попробуйте ещё раз' : 'Копировать'}>
+              {copyState === 'ok' ? <Check size={18} /> : copyState === 'fail' ? <X size={18} /> : <Copy size={18} />}
             </button>
           )}
           <button type="button" className="nxv-btn" onClick={() => zoomBy(1 / 1.4)} aria-label="Уменьшить" title="Уменьшить (−)"><ZoomOut size={18} /></button>
           <button type="button" className="nxv-btn" onClick={() => zoomBy(1.4)} aria-label="Увеличить" title="Увеличить (+)"><ZoomIn size={18} /></button>
-          <a className="nxv-btn" href={item.url} download={item.name || true} onClick={downloadOnClick(item.url, item.name)} aria-label="Скачать" title="Скачать"><Download size={18} /></a>
+          <a className="nxv-btn" href={item.url} download={item.name || true} onClick={(e) => { downloadOnClick(item.url, item.name)(e); say(window.sharDesktop?.downloadFile ? 'Сохранение…' : 'Скачивание началось', 1800); }} aria-label="Скачать" title="Скачать"><Download size={18} /></a>
           <a className="nxv-btn" href={item.url} target="_blank" rel="noopener noreferrer" aria-label="Открыть оригинал" title="Открыть оригинал"><ExternalLink size={18} /></a>
           <button ref={closeRef} type="button" className="nxv-btn" onClick={onClose} aria-label="Закрыть" title="Закрыть (Esc)"><X size={20} /></button>
         </div>
       </header>
+
+      {notice && <div className="nxv-notice" role="status" aria-live="polite">{notice}</div>}
 
       <div
         ref={stageRef}

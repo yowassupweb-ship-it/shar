@@ -1,3 +1,4 @@
+import { listenIntent } from '@/shared/navigation/quickIntent';
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import {
   AlertCircle, Archive, ArchiveRestore, Bell, FileText, MessageSquare, Moon, MoreHorizontal, Pin, PinOff, Plus, RotateCw,
@@ -102,6 +103,8 @@ export default function ChatsPanel({ activeChatId, onOpen }: { activeChatId: str
   const [createAnchor, setCreateAnchor] = useState<MenuAnchor | null>(null);
   const [rowMenu, setRowMenu] = useState<{ chatId: string; anchor: MenuAnchor } | null>(null);
   const [sheet, setSheet] = useState<'chat' | 'group' | 'request' | null>(null);
+  // Быстрое действие из нижней полосы («Новый чат» / «Новая группа» по правому клику на «Чаты»).
+  useEffect(() => listenIntent(['new-chat', 'new-group'], (intent) => setSheet(intent === 'new-group' ? 'group' : 'chat')), []);
   const [notif, setNotif] = useState<NotificationState>('unsupported');
   const [bootSpin, setBootSpin] = useState(true);
   // Десктоп (Electron): бренд живёт в заголовке окна, поиск — в шапке списка.

@@ -64,8 +64,12 @@
 
 /* Excel */
 .npv-sheet { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.npv-table { border-collapse: separate; border-spacing: 0; font-size: var(--text-sm); color: var(--text-main); }
-.npv-table th, .npv-table td { padding: 3px 8px; border-right: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color); white-space: pre; max-width: 320px; overflow: hidden; text-overflow: ellipsis; background: var(--surface-panel); }
+.npv-table { table-layout: fixed; border-collapse: separate; border-spacing: 0; font-size: var(--text-sm); color: var(--text-main); }
+.npv-table th, .npv-table td { padding: 3px 8px; border-right: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color); white-space: pre; overflow: hidden; text-overflow: ellipsis; background: var(--surface-panel); }
+/* Ячейки — «бумага» Excel: заливки и цвета шрифтов из файла рассчитаны на белый лист, в тёмной теме без этого
+   чёрный текст терялся на тёмном. Своё оформление ячейки (inline) перебивает эти значения. */
+.npv-table td { background: #fff; color: #1f1f1f; border-right-color: #e2e2e2; border-bottom-color: #e2e2e2; line-height: 1.3; }
+.npv-table td a { color: #0563c1; }
 /* Закреплённые буквы столбцов и номера строк: --surface-hover полупрозрачный, под ним — сплошной фон панели,
    иначе при прокрутке сквозь заголовки просвечивали ячейки. */
 .npv-table thead th, .npv-table tbody th { background-color: var(--surface-panel); background-image: linear-gradient(var(--surface-hover), var(--surface-hover)); color: var(--text-2); font-weight: var(--weight-medium); }
@@ -85,3 +89,7 @@
 .npv-table thead th,.npv-table tbody th{background-color:var(--surface-panel);background-image:linear-gradient(var(--surface-hover),var(--surface-hover));color:var(--text-2);font-weight:var(--weight-medium)}
 .npv-table thead th{position:sticky;top:0;z-index:2}
 .npv-table tbody th{position:sticky;left:0;z-index:1;text-align:right}
+
+/* Word: страницы документа в shadow DOM; фон области — приложения, страницы белые, как в Word */
+.npv-docx-scroll { padding: 0 var(--space-3); }
+.npv-docx { min-width: min-content; }

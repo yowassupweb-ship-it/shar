@@ -412,3 +412,7 @@ button.nf-row { cursor: pointer; }
 
 /* «Агенты»: значок вместо аватара чата (у чатов «Ядра» аватара нет). */
 .nf-source-icon { display: grid; flex: none; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: var(--surface-hover); color: var(--text-2); }
+
+/* «Агенты → по дням»: день — отдельный блок; заголовок дня держится сверху, пока листают его файлы. */
+.nf-day { margin-bottom: var(--space-4); }
+.nf-day-title { position: sticky; top: 0; z-index: 2; margin: 0 0 var(--space-2); padding: var(--space-2) 0; background: var(--bg-color); }

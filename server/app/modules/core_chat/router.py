@@ -220,7 +220,7 @@ def catalog(me: Identity = Depends(current_identity)):
     from app.modules.core_agents import permissions
 
     ready = agents.ready_agents(me.user_id) if agents.ready() else []
-    return {"agents": [{"id": a["provider"], "name": a["label"], "model": a["model"], "models": a["models"], "online": a["nodeOnline"],
+    return {"agents": [{"id": a["provider"], "name": a["label"], "model": a["model"], "models": a["models"], "online": a["nodeOnline"], "how": a["how"],
                         "limits": a.get("limits") or []} for a in ready],
             "models": [], "efforts": EFFORTS, "demo": me.is_admin,
             "mode": permissions.mode_of(me.user_id) if agents.ready() else "careful", "modes": permissions.view()}
@@ -265,9 +265,13 @@ def agent_file_chats(me: Identity = Depends(current_identity)):
 
 
 @router.get("/api/core/files")
-def agent_files(threadId: str, me: Identity = Depends(current_identity)):  # noqa: N803 — имя как у /api/cloud/attachments
+def agent_files(threadId: str = "", me: Identity = Depends(current_identity)):  # noqa: N803 — имя как у /api/cloud/attachments
+    """Файлы одного чата «Ядра» или — без threadId / «*» — всех чатов сразу, свежие выше (вкладка «Агенты» → по дням)."""
     _guard(me)
-    rows = db.conn.fetch_all(f"{_FILES_SQL} AND m.thread_id = %s ORDER BY m.created_at DESC LIMIT 500", (me.user_id, threadId)) or []
+    if threadId and threadId != "*":
+        rows = db.conn.fetch_all(f"{_FILES_SQL} AND m.thread_id = %s ORDER BY m.created_at DESC LIMIT 500", (me.user_id, threadId)) or []
+    else:
+        rows = db.conn.fetch_all(f"{_FILES_SQL} ORDER BY m.created_at DESC LIMIT 800", (me.user_id,)) or []
     return [_agent_file(r, me) for r in rows if (r["att"] or {}).get("url")]
 
 
@@ -327,13 +331,21 @@ class MessageBody(BaseModel):
     replyTo: Optional[str] = Field(default=None, max_length=64)
     attachments: list[Attachment] = Field(default_factory=list, max_length=10)
     context: list[ContextItem] = Field(default_factory=list, max_length=12)
-    model: str = Field(default="", max_length=60)
+    # «агент» или «агент:модель»; имя уходит в аргументы CLI на ноде (на Windows — через cmd.exe), поэтому только безопасные знаки.
+    model: str = Field(default="", max_length=60, pattern=r"^[A-Za-z0-9._:/-]*$")
     effort: Literal["", "low", "medium", "high"] = ""
+    # План-режим (Kimi): только чтение и план; выполнение — отдельным решением человека.
+    plan: bool = False
     forwarded: list[ForwardItem] = Field(default_factory=list, max_length=50)
 
 
 class AnswerBody(BaseModel):
     value: str = Field(min_length=1, max_length=2000)
+
+
+class FeedbackBody(BaseModel):
+    rating: Literal[-1, 0, 1]
+    reason: str = Field(default="", max_length=400)
 
 
 def _clean_attachments(items: list[Attachment]) -> list[dict]:
@@ -384,6 +396,8 @@ def send_message(thread_id: str, body: MessageBody, tasks: BackgroundTasks, me: 
         props["model"] = body.model
     if body.effort:
         props["effort"] = body.effort
+    if body.plan:
+        props["plan"] = True
     if body.replyTo:
         quoted = db.conn.fetch_one("SELECT id, role, actor, body FROM core_messages WHERE id = %s AND thread_id = %s", (body.replyTo, thread_id))
         if quoted:
@@ -399,7 +413,7 @@ def send_message(thread_id: str, body: MessageBody, tasks: BackgroundTasks, me: 
         return {"message": message}
     from app.modules.core_agents.dispatch import dispatch
 
-    reply = dispatch(me.user_id, thread, message, wanted=body.model, effort=body.effort)
+    reply = dispatch(me.user_id, thread, message, wanted=body.model, effort=body.effort, plan=body.plan)
     if reply and body.model and not thread.get("peer"):  # агент, которого выбрали, становится агентом чата
         db.conn.execute_query("UPDATE core_threads SET peer = %s WHERE id = %s", (body.model.split(":")[0], thread_id))
     return {"message": message, "reply": reply}
@@ -440,6 +454,35 @@ def answer_ask(message_id: str, body: AnswerBody, me: Identity = Depends(current
     provider = (row.get("props") or {}).get("provider") or ""
     reply_agent = dispatch(me.user_id, thread, message, wanted=provider) if thread else None
     return {"message": message, "reply": reply_agent}
+
+
+@router.post("/api/core/messages/{message_id}/feedback")
+def rate_reply(message_id: str, body: FeedbackBody, me: Identity = Depends(current_identity)):
+    """Оценка ответа агента (👍 / 👎 с причиной): сохраняется в сообщении и становится уроком — профиль «Поправки»,
+    память с тегом «оценка» (memory.learn_from_feedback). Повторная оценка заменяет прежнюю."""
+    _guard(me)
+    row = db.conn.fetch_one("SELECT * FROM core_messages WHERE id = %s AND user_id = %s AND role = 'agent' AND status IN ('done', 'failed')",
+                            (message_id, me.user_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Ответ не найден")
+    from datetime import datetime, timezone
+
+    feedback = {"rating": body.rating, "reason": body.reason.strip()[:400], "at": datetime.now(timezone.utc).isoformat()} if body.rating else None
+    updated = db.conn.fetch_one("UPDATE core_messages SET props = (props - 'feedback') || %s WHERE id = %s RETURNING *",
+                                (Json({"feedback": feedback} if feedback else {}), message_id))
+    if feedback:
+        ask_row = db.conn.fetch_one(
+            "SELECT body FROM core_messages WHERE thread_id = %s AND role = 'user' AND created_at < %s ORDER BY created_at DESC LIMIT 1",
+            (row["thread_id"], row["created_at"]))
+        try:
+            from app.modules.core_agents import memory
+
+            memory.learn_from_feedback(me.user_id, (ask_row or {}).get("body") or "", body.rating, feedback["reason"], row["body"])
+        except Exception as exc:  # noqa: BLE001 — оценка сохранена; урок не должен её ронять
+            log.warning("core feedback: урок не записан: %s", exc)
+    message = present_message(updated)
+    _push(me.user_id, {"type": "core_message", "message": message})
+    return {"message": message}
 
 
 @router.post("/api/core/messages/{message_id}/cancel")

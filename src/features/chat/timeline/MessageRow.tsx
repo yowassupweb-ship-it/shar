@@ -204,6 +204,8 @@ export const MessageRow = memo(function MessageRow({
   const avail = ctx.columnWidth > 0 ? Math.max(140, ctx.columnWidth - 88) : 480;
   const mediaW = Math.min(companion ? (ctx.mobile ? 260 : 290) : (ctx.mobile ? 320 : 480), avail);
   const albumH = ctx.mobile ? 360 : 420;
+  // Альбом с подписью — шире одиночного фото: ширину пузыря теперь задаёт он (см. .cxm-bubble:has(.cxm-album)).
+  const albumW = Math.min(companion ? (ctx.mobile ? 260 : 340) : (ctx.mobile ? 320 : 480), avail);
   // Вертикальные снимки не выше этого — иначе одно фото занимало полэкрана (как в Telegram).
   const singleH = ctx.mobile ? 360 : 400;
   const hasReactions = Object.values(m.metadata?.reactions || {}).some((ids) => Array.isArray(ids) && ids.length);
@@ -306,7 +308,7 @@ export const MessageRow = memo(function MessageRow({
               ...(p.images.length === 1 ? { '--media-bg': `url("${p.images[0].url.replace(/"/g, '%22')}")` } : {}),
             } as CSSProperties}
           >
-            <Media images={p.images} videos={p.videos} maxWidth={mediaW} maxHeight={p.images.length > 1 ? albumH : singleH} onOpen={ctx.onOpenImage} />
+            <Media images={p.images} videos={p.videos} maxWidth={p.images.length > 1 ? albumW : mediaW} maxHeight={p.images.length > 1 ? albumH : singleH} onOpen={ctx.onOpenImage} />
           </div>
         )}
         {p.audios.map((a, i) => (

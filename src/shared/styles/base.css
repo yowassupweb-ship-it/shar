@@ -789,6 +789,29 @@ html.nx-locked body {
   --btn-transition: background var(--duration-fast) var(--ease-out), transform 0.08s ease;
 }
 @media (hover: hover) { .nxv-btn:hover { background: rgb(255 255 255 / .14); } }
+/* Отбивка действий: копирование — галочка (или крест) на самой кнопке, масштаб и скачивание — плашка сверху по центру. */
+.nxv-btn[data-state="busy"] { opacity: .55; cursor: progress; }
+.nxv-btn[data-state="ok"] { background: rgb(52 199 89 / .28); color: #fff; }
+.nxv-btn[data-state="fail"] { background: rgb(255 69 58 / .32); color: #fff; }
+.nxv-notice {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  z-index: 3;
+  transform: translateX(-50%);
+  padding: 5px 14px;
+  border-radius: var(--radius-pill);
+  background: rgb(0 0 0 / .62);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  color: #fff;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  animation: nxv-notice-in var(--duration-fast) var(--ease-out);
+}
+@keyframes nxv-notice-in { from { opacity: 0; transform: translate(-50%, -4px); } }
+@media (prefers-reduced-motion: reduce) { .nxv-notice { animation: none; } }
 .nxv-stage {
   position: relative;
   display: grid;

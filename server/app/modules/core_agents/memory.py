@@ -102,8 +102,9 @@ def set_profile(user_id: str, text: str, actor: str) -> None:
         (user_id, text[:PROFILE_MAX], actor))
 
 
-def profile_note(user_id: str, section: str, text: str, actor: str) -> str:
-    """Дописать наблюдение в раздел профиля (## section). Повтор того же — не дублируем."""
+def profile_note(user_id: str, section: str, text: str, actor: str, *, keep: int = 0) -> str:
+    """Дописать наблюдение в раздел профиля (## section). Повтор того же — не дублируем. keep — сколько последних пунктов
+    оставлять в разделе (0 — без ограничения): так оценки и поправки не раздувают профиль, свежее важнее давнего."""
     text = " ".join(str(text).split())[:600]
     section = " ".join(str(section).split())[:60] or "Наблюдения"
     if not text:
@@ -118,10 +119,27 @@ def profile_note(user_id: str, section: str, text: str, actor: str) -> str:
         body = f"{body[:nxt].rstrip()}\n- {text}\n{body[nxt:]}" if nxt >= 0 else f"{body.rstrip()}\n- {text}\n"
     else:
         body = f"{body.rstrip()}\n\n{heading}\n- {text}\n" if body.strip() else f"{heading}\n- {text}\n"
+    if keep:
+        body = _trim_section(body, heading, keep)
     if len(body) > PROFILE_MAX:
         raise MemoryError_("Профиль переполнен: сожмите его (profile_write) — объедините похожие пункты")
     set_profile(user_id, body, actor)
     return body
+
+
+def _trim_section(body: str, heading: str, keep: int) -> str:
+    """В разделе heading оставить последние keep пунктов («- …»); остальной профиль не трогаем."""
+    start = body.find(heading)
+    if start < 0:
+        return body
+    end = body.find("\n## ", start + len(heading))
+    end = len(body) if end < 0 else end
+    lines = body[start:end].split("\n")
+    items = [i for i, line in enumerate(lines) if line.startswith("- ")]
+    drop = set(items[:-keep]) if len(items) > keep else set()
+    if not drop:
+        return body
+    return body[:start] + "\n".join(line for i, line in enumerate(lines) if i not in drop) + body[end:]
 
 
 # ── память ───────────────────────────────────────────────────────────────────
@@ -131,6 +149,19 @@ def add_note(user_id: str, text: str, tags: list[str], actor: str, shared: bool 
     if not text:
         raise MemoryError_("Пустая запись")
     clean = [t.strip().lower()[:30] for t in tags if str(t).strip()][:8]
+    # Тот же факт второй раз не копим: агент пересказывает известное, и память зарастала повторами, из-за которых
+    # поиск отдавал одно и то же. Совпало слово в слово — освежаем запись и дополняем метки.
+    # lower() базы с локалью C не трогает кириллицу — сравниваем по полю search (оно уже в нижнем регистре, его пишем сами).
+    low = text.lower()
+    candidates = db.conn.fetch_all(
+        "SELECT id, body, tags, created_at FROM core_notes WHERE user_id = %s AND shared = %s AND left(search, %s) = %s LIMIT 20",
+        (user_id, shared, len(low), low)) or []
+    same = next((c for c in candidates if str(c["body"]).lower() == low), None)
+    if same:
+        merged = list(dict.fromkeys([*(same["tags"] or []), *clean]))[:8]
+        db.conn.execute_query("UPDATE core_notes SET tags = %s, search = %s, created_at = now() WHERE id = %s",
+                              (merged, f"{text} {' '.join(merged)}".lower(), same["id"]))
+        return {"id": str(same["id"]), "createdAt": same["created_at"].isoformat(), "shared": shared, "duplicate": True}
     row = db.conn.fetch_one(
         "INSERT INTO core_notes (user_id, body, search, tags, actor, shared) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id, created_at",
         (user_id, text, f"{text} {' '.join(clean)}".lower(), clean, actor, shared))
@@ -163,6 +194,74 @@ def search_notes(user_id: str, query: str = "", tag: str = "", limit: int = 20, 
         (*params, *stems, max(1, min(limit, 200)))) or []
     return [{"id": str(r["id"]), "text": r["body"], "tags": list(r["tags"] or []), "by": r["actor"], "shared": r["shared"],
              "mine": r["user_id"] == user_id, "at": r["created_at"].isoformat()} for r in rows]
+
+
+_STOP = {"это", "как", "что", "для", "или", "при", "еще", "ещё", "мне", "нам", "его", "ней", "над", "про", "все", "всё", "так", "там", "тут",
+         "надо", "нужно", "можно", "сделай", "сделать", "пожалуйста", "который", "которые", "когда", "если", "чтобы", "очень"}
+
+
+def _stems(text: str, limit: int = 8) -> list[str]:
+    """Основы значимых слов запроса (первые 5–6 букв): «отпуска» и «отпуск» — одна основа."""
+    out: list[str] = []
+    for word in re.findall(r"[0-9a-zа-яё]+", str(text).lower()):
+        if len(word) < 4 or word in _STOP:
+            continue
+        stem = word[:max(4, len(word) - 2)][:6]
+        if stem not in out:
+            out.append(stem)
+    return out[:limit]
+
+
+def recall(user_id: str, ask: str, *, notes: int = 4, skills_n: int = 2) -> str:
+    """Память по теме просьбы — сразу в сообщение агенту. Раньше агент вспоминал сам (memory_search) и чаще не вспоминал:
+    полезное лежало в базе, а ответ шёл без него. Подходит запись, если в ней есть основы хотя бы двух слов просьбы
+    (одного, если слов мало); выше — те, где совпало больше. Пусто — блока нет."""
+    stems = _stems(ask)
+    if not stems:
+        return ""
+    need = 2 if len(stems) >= 3 else 1
+    rows = db.conn.fetch_all(
+        "SELECT id, body, tags, shared, search FROM core_notes WHERE user_id = %s OR shared ORDER BY id DESC LIMIT 600", (user_id,)) or []
+    scored = []
+    for r in rows:
+        hay = r["search"] or ""
+        score = sum(1 for s in stems if re.search(r"(^|[^0-9a-zа-яё])" + re.escape(s), hay))
+        if score >= need:
+            scored.append((score, int(r["id"]), r))
+    scored.sort(key=lambda x: (-x[0], -x[1]))
+    lines = [f"- {r['body'][:220]}{' (общее)' if r['shared'] else ''}" for _, _, r in scored[:notes]]
+    picked = []
+    for sk in skills(user_id, enabled_only=True):
+        hay = f"{sk['name'].replace('-', ' ')} {sk['description']}".lower()
+        score = sum(1 for s in stems if re.search(r"(^|[^0-9a-zа-яё])" + re.escape(s), hay))
+        if score >= need:
+            picked.append((score, sk))
+    picked.sort(key=lambda x: -x[0])
+    if not lines and not picked:
+        return ""
+    parts = ["Из памяти по теме просьбы (может пригодиться; свежее слово человека важнее):"]
+    parts += lines
+    for _, sk in picked[:skills_n]:
+        parts.append(f"- Навык «{sk['name']}» — {sk['description'][:140]}: прочитайте skill_read, прежде чем делать.")
+    return "\n".join(parts)
+
+
+FEEDBACK_KEEP = 8
+
+
+def learn_from_feedback(user_id: str, ask: str, rating: int, reason: str = "", answer: str = "") -> None:
+    """Оценка ответа (👍/👎 с причиной) — урок на будущее. Причина — в профиль («Поправки») и в память с тегом, чтобы её
+    нашёл и recall, и memory_search; удача — в «Что получается хорошо». Без причины 👎 не пишем: «не то» без «почему»
+    научить нечему. Профиль разделов держит не больше FEEDBACK_KEEP свежих пунктов."""
+    ask = " ".join(str(ask or "").split())[:140]
+    reason = " ".join(str(reason or "").split())[:300]
+    if rating < 0 and reason:
+        text = f"{reason} (запрос: «{ask}»)" if ask else reason
+        profile_note(user_id, "Поправки: что было не так в ответах", text, "оценка", keep=FEEDBACK_KEEP)
+        add_note(user_id, f"Поправка человека: {text}", ["оценка", "поправка"], "оценка")
+    elif rating > 0 and len(ask) >= 12:
+        text = f"Ответ на «{ask}» понравился — так и продолжать"
+        profile_note(user_id, "Что получается хорошо", text, "оценка", keep=FEEDBACK_KEEP)
 
 
 def delete_note(user_id: str, note_id: str, *, admin: bool = False) -> bool:
@@ -257,6 +356,14 @@ def prompt_context(user_id: str) -> str:
     if active:
         parts.append("## Навыки (прочитать перед применением: skill_read; все — skill_list)\n"
                      + "\n".join(f"- {s['name']}{' (общий)' if s['shared'] else ''}: {s['description'][:120]}" for s in active[:25]))
+    try:
+        from app.modules.studio.router import prompt_block
+
+        block = prompt_block(user_id)
+        if block:
+            parts.append(block)
+    except Exception:  # noqa: BLE001 — студия необязательна для запуска агента
+        pass
     return "\n\n".join(parts)
 
 

@@ -24,6 +24,7 @@ const UtmScreen = lazy(() => import('@/features/utm/UtmScreen'));
 const LeadsScreen = lazy(() => import('@/features/leads/LeadsScreen'));
 const SocialScreen = lazy(() => import('@/features/social/SocialScreen'));
 const CoreScreen = lazy(() => import('@/features/core/CoreScreen'));
+const StudioScreen = lazy(() => import('@/features/studio/StudioScreen'));
 const GuideScreen = lazy(() => import('@/features/guide/GuideScreen'));
 const OfficeScreen = lazy(() => import('@/features/workspace/OfficeScreen'));
 const SharedPage = lazy(() => import('@/features/workspace/SharedPage'));
@@ -60,6 +61,7 @@ export const routes: RouteObject[] = [
           { path: paths.leads, element: <LeadsScreen /> },
           { path: paths.social, element: <SocialScreen /> },
           { path: paths.core, element: <CoreScreen /> },
+          { path: paths.studio, element: <StudioScreen /> },
           { path: paths.guide, element: <GuideScreen /> },
           { path: paths.office, element: <OfficeScreen /> },
           // Вход показывает корень, пока сессии нет; вошедшего — в чаты.

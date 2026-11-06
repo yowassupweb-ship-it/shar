@@ -453,7 +453,7 @@ export default function ProfilePanel({ chatId, onSearch, onJump, onPerson }: {
           </section>
         )}
       </div>
-      {viewer && <ImageViewer items={viewer.items} start={viewer.start} onClose={() => setViewer(null)} onJump={jump} onCopy={(u) => void copyImage(u)} />}
+      {viewer && <ImageViewer items={viewer.items} start={viewer.start} onClose={() => setViewer(null)} onJump={jump} onCopy={(u) => copyImage(u)} />}
     </aside>
   );
 }

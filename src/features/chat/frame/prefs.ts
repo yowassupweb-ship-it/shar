@@ -1,29 +1,30 @@
 /**
- * Плавающее окно чата (как в старом Шаре): переписка поверх любого раздела. Включается в Настройки → Внешний вид,
- * по умолчанию выключено. Настройка этого устройства — хранится в браузере.
+ * Быстрый чат — окно с перепиской поверх любого раздела. Открывается правым щелчком по «Чатам» в нижней полосе, пока
+ * человек в другом разделе (и по нему же закрывается). Постоянной кнопки на экране нет. Открыто ли окно — состояние
+ * сессии; где оно стоит, какого размера и какой чат в нём открыт — помнится на этом устройстве.
  */
 
-const KEY = 'nx:chat-frame';
-const EVENT = 'nx:chat-frame-changed';
+let opened = false;
+const listeners = new Set<() => void>();
+const emit = () => listeners.forEach((fn) => fn());
 
-export function chatFrameEnabled(): boolean {
-  try { return localStorage.getItem(KEY) === '1'; } catch { return false; }
+export function chatFrameOpen(): boolean { return opened; }
+
+export function setChatFrameOpen(on: boolean) {
+  if (opened === on) return;
+  opened = on;
+  emit();
 }
 
-export function setChatFrameEnabled(on: boolean) {
-  try { localStorage.setItem(KEY, on ? '1' : '0'); } catch { /* приватное окно — до перезагрузки */ }
-  window.dispatchEvent(new Event(EVENT));
-}
+export function toggleChatFrame() { setChatFrameOpen(!opened); }
 
 export function subscribeChatFrame(fn: () => void): () => void {
-  const onStorage = (e: StorageEvent) => { if (e.key === KEY) fn(); };
-  window.addEventListener(EVENT, fn);
-  window.addEventListener('storage', onStorage);
-  return () => { window.removeEventListener(EVENT, fn); window.removeEventListener('storage', onStorage); };
+  listeners.add(fn);
+  return () => { listeners.delete(fn); };
 }
 
-/** Состояние окна: где стоит, раскрыто ли, какой чат открыт. */
-export interface FrameState { x: number; y: number; open: boolean; chatId: string | null; /** Размер раскрытого окна, поставленный вручную. */ w?: number; h?: number }
+/** Состояние окна: где стоит, какого размера, какой чат открыт. */
+export interface FrameState { x: number; y: number; chatId: string | null; /** Размер окна, поставленный вручную. */ w?: number; h?: number }
 const STATE_KEY = 'nx:chat-frame-state';
 
 export function readFrameState(): FrameState | null {
@@ -31,7 +32,7 @@ export function readFrameState(): FrameState | null {
     const raw = JSON.parse(localStorage.getItem(STATE_KEY) || 'null') as Partial<FrameState> | null;
     if (!raw || typeof raw.x !== 'number' || typeof raw.y !== 'number') return null;
     const size = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined);
-    return { x: raw.x, y: raw.y, open: Boolean(raw.open), chatId: typeof raw.chatId === 'string' ? raw.chatId : null, w: size(raw.w), h: size(raw.h) };
+    return { x: raw.x, y: raw.y, chatId: typeof raw.chatId === 'string' ? raw.chatId : null, w: size(raw.w), h: size(raw.h) };
   } catch { return null; }
 }
 

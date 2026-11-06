@@ -24,7 +24,7 @@ import { checkMailAccess, useMail } from '@/features/mail/api';
 import { startMailBadge, useMailBadge } from '@/features/mail/badge';
 import { showToast } from '@/shared/ui/Toast';
 import { SpotlightHost, useVisitTracker } from '@/features/spotlight';
-import { ChatFrame, chatFrameEnabled, subscribeChatFrame } from '@/features/chat';
+import { ChatFrame, chatFrameOpen, subscribeChatFrame } from '@/features/chat';
 import CorePanel, { CORE_PANEL_ID } from '@/features/core/CorePanel';
 import { toggleCorePanel, useCorePanel } from '@/features/core/panel';
 import { setAgentAvailable } from '@/shared/core/agentBridge';
@@ -69,7 +69,7 @@ function Workspace({ me }: { me: User }) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const section = sectionFor(pathname);
-  const chatFrame = useSyncExternalStore(subscribeChatFrame, chatFrameEnabled, () => false);
+  const chatFrame = useSyncExternalStore(subscribeChatFrame, chatFrameOpen, () => false);
   const [opts, setOpts] = useState<ShellOptions>({});
   const unreadChats = useChatStore((s) => unreadChatsTotal(s.chats));
   // Невзятые заявки и диалоги «Соцсетей» без ответа — тоже непрочитанное: на логотипе вместе с чатами,
@@ -252,7 +252,7 @@ function Workspace({ me }: { me: User }) {
           </Suspense>
         </div>
       </AppShell>
-      {/* Плавающий чат (Настройки → Внешний вид): в самом разделе «Чаты» он не нужен. */}
+      {/* Быстрый чат: правый щелчок по «Чатам» в нижней полосе. В самом разделе «Чаты» он не нужен. */}
       {chatFrame && section.id !== 'chats' && <ChatFrame unread={unreadChats} />}
       <OverlayHost />
       <LinkChooserHost />

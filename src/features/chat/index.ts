@@ -25,4 +25,4 @@ export { createChat } from './actions';
 export { default as ForwardSheet, insertIntoOpenChat } from './ForwardSheet';
 export type { ChatRow } from './store';
 export { default as ChatFrame } from './frame/ChatFrame';
-export { chatFrameEnabled, setChatFrameEnabled, subscribeChatFrame } from './frame/prefs';
+export { chatFrameOpen, setChatFrameOpen, toggleChatFrame, subscribeChatFrame } from './frame/prefs';

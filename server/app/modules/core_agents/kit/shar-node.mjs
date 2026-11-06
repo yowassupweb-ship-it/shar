@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "1.3.0";
+const VERSION = "1.4.0"; // 1.4.0 — тёплые процессы Claude (caps: warm)
 const SHAR_URL = String(process.env.SHAR_URL || "").replace(/\/+$/, "");
 const TOKEN = String(process.env.SHAR_NODE_TOKEN || "");
 // Отпечаток этого файла — так же, как его считает Шар (переводы строк без \r): разошёлся с присланным в опросе —
@@ -268,6 +268,12 @@ function currentRules(job) {
 }
 
 /** Состояние ответа, общее для всех провайдеров: цепочка шагов, текст, ход работы, лимит. */
+/** Семейство модели для лимитов: у подписки Claude недельные окна свои у Opus и Sonnet, поэтому использование считается по модели. */
+function modelFamily(model) {
+  const m = String(model || "").toLowerCase();
+  return /opus/.test(m) ? "opus" : /sonnet/.test(m) ? "sonnet" : /haiku/.test(m) ? "haiku" : "";
+}
+
 function newState() {
   // limits — все окна лимита подписки, что прислал провайдер за ход (пятичасовое, недельное): Шар показывает их в шапке чата.
   return { steps: [], text: "", partial: "", work: {}, rateLimit: null, limits: {}, sessionId: "", failure: "", authExpired: false, contextTokens: 0, model: "" };
@@ -372,15 +378,16 @@ async function runJob(job) {
   running.set(job.id, entry);
   const startedAt = Date.now();
   try {
-    if (/^\/compact\b/.test(job.prompt || "")) return await compactCommand(job, dirs, report);
+    if (/^\/compact\b/.test(job.prompt || "")) { await warmDrop(job); return await compactCommand(job, dirs, report); }
     const key = `${job.provider}:${job.threadId}`;
     let session = readSessions(dirs)[key] || (job.resume ? { id: job.resume, context: 0 } : null);
     if (session && job.provider === "claude" && session.context > COMPACT_AT) {
       report.send({ type: "progress", phase: "сжимает контекст" });
+      await warmDrop(job); // сессию сжимает отдельный запуск: живой процесс её держать не должен
       const compacted = await compactClaude(dirs, session.id, "");
       session = compacted ? { id: compacted, context: 20_000 } : null;
     }
-    if (session && session.context > ROTATE_AT) session = null;
+    if (session && session.context > ROTATE_AT) { session = null; await warmDrop(job); } // слишком тяжёлая — начинаем сессию заново
     job.images = await fetchImages(job, dirs);
     job.outbox = prepareOutbox(dirs, job);
     let state;
@@ -407,7 +414,7 @@ async function runJob(job) {
       const steps = state.steps.length && state.steps[state.steps.length - 1].kind === "text" && state.text.startsWith(state.steps[state.steps.length - 1].text.replace(/…$/, ""))
         ? state.steps.slice(0, -1) : state.steps;
       await report.send({ type: "done", body: state.text || "(агент ничего не ответил)", steps, work: state.work, rateLimit: state.rateLimit, model: state.model,
-                          limits: Object.values(state.limits) });
+                          limits: Object.values(state.limits), ...(state.plan ? { plan: true } : {}) });
     }
   } catch (error) {
     if (!entry.stopped) await report.send({ type: "failed", error: String(error.message || error).slice(0, 600) });
@@ -420,7 +427,8 @@ async function runJob(job) {
 }
 
 function runProvider(job, dirs, resumeId, report, entry) {
-  if (job.provider === "claude") return runClaude(job, dirs, resumeId, report, entry);
+  // Шар присылает mcp.lazy только ноде, которая сказала, что умеет тёплые процессы (caps: warm).
+  if (job.provider === "claude") return WARM && job.mcp?.lazy ? runClaudeWarm(job, dirs, resumeId, report, entry) : runClaude(job, dirs, resumeId, report, entry);
   if (job.provider === "codex") return runCodex(job, dirs, resumeId, report, entry);
   if (job.provider === "gemini") return runGemini(job, dirs, resumeId, report, entry);
   if (job.provider === "kimi") return runKimi(job, dirs, resumeId, report, entry);
@@ -473,26 +481,36 @@ function stableValue(value) {
   return value;
 }
 
+/**
+ * Страж зацикливания: четвёртый одинаковый вызов (то же имя и те же параметры) останавливает ответ. true — остановили.
+ * Считается по параметрам, поэтому звать его можно, только когда они известны: Kimi (ACP) присылает вызов БЕЗ параметров —
+ * они стримятся следующими событиями, — и подсчёт по пустым параметрам принимал разные вызовы одного инструмента
+ * (tool_search, edit_document) за «одинаковые» и обрывал рабочий ответ.
+ */
+function trackRepeat(state, step, report, entry = null) {
+  state.toolCalls ||= new Map();
+  let signature = `${step.name}:${step.input || ""}`;
+  try { signature = `${step.name}:${JSON.stringify(stableValue(JSON.parse(step.input || "{}")))}`; } catch { /* текст команды уже однозначен */ }
+  const count = (state.toolCalls.get(signature) || 0) + 1;
+  state.toolCalls.set(signature, count);
+  if (count > 1) step.repeat = count;
+  if (count === 3) report.send({ type: "progress", reasoning: `Третий одинаковый вызов ${step.name}; ещё один остановит ответ` });
+  if (count < 4) return false;
+  state.failure = `Остановлено: агент четыре раза повторил одинаковый вызов ${step.name} с теми же параметрами`;
+  step.is_error = true;
+  step.output = state.failure;
+  report.send({ type: "progress", steps: state.steps, reasoning: state.failure });
+  try { entry?.child?.kill(); } catch { /* процесс уже завершился */ }
+  return true;
+}
+
 function addStep(state, step, report, entry = null) {
-  // ACP can announce a tool before sending its arguments. An empty placeholder
-  // cannot identify a repeated call and must not trip the loop guard.
-  if (step.kind === "tool" && step.input && step.input !== "{}") {
+  // deferRepeat — параметры вызова ещё не пришли: страж сработает позже (trackRepeat), когда они будут известны.
+  // Пустая заглушка (ACP объявляет вызов до параметров) не опознаёт повтор и не должна задеть страж зацикливания.
+  if (step.kind === "tool" && !step.deferRepeat && step.input && step.input !== "{}") {
     state.toolCalls ||= new Map();
-    let signature = `${step.name}:${step.input || ""}`;
-    try { signature = `${step.name}:${JSON.stringify(stableValue(JSON.parse(step.input || "{}")))}`; } catch { /* текст команды уже однозначен */ }
-    const count = (state.toolCalls.get(signature) || 0) + 1;
-    state.toolCalls.set(signature, count);
-    if (count > 1) step.repeat = count;
-    if (count === 3) report.send({ type: "progress", reasoning: `Третий одинаковый вызов ${step.name}; ещё один остановит ответ` });
-    if (count >= 4) {
-      state.failure = `Остановлено: агент четыре раза повторил одинаковый вызов ${step.name} с теми же параметрами`;
-      step.is_error = true;
-      step.output = state.failure;
-      state.steps.push(step);
-      report.send({ type: "progress", steps: state.steps, reasoning: state.failure });
-      try { entry?.child?.kill(); } catch { /* процесс уже завершился */ }
-      return step;
-    }
+    const stop = trackRepeat(state, step, report, entry);
+    if (stop) { state.steps.push(step); return step; }
   }
   if (state.steps.length >= 400) return null;
   state.steps.push(step);
@@ -591,23 +609,10 @@ function claudeFiles(job, dirs) {
   return { mcp, system };
 }
 
-function runClaude(job, dirs, resumeId, report, entry) {
-  const files = claudeFiles(job, dirs);
-  // Экономия контекста (замеры MBOX, claude 2.1.291): из встроенного — только веб и ToolSearch (описания полусотни
-  // инструментов Шара грузятся по требованию, а не в каждый ход), без каталога slash-команд и навыков CLI (−10 тыс.:
-  // наши навыки живут в Шаре), только MCP из --mcp-config.
-  const args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-    "--input-format", job.images?.length ? "stream-json" : "text", "--permission-mode", "bypassPermissions", "--setting-sources", "project",
-    "--tools", "WebSearch,WebFetch,ToolSearch", "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", files.mcp,
-    "--append-system-prompt-file", files.system];
-  if (job.model) args.push("--model", job.model);
-  if (["low", "medium", "high"].includes(job.effort)) args.push("--effort", job.effort);
-  if (resumeId) args.push("--resume", resumeId);
-  const state = newState();
-  state.model = job.model || "";
+/** Разбор событий Claude Code (stream-json) одного ответа: шаги, текст, ход работы, лимиты. Общий для обычного и тёплого запуска. */
+function claudeHandler(job, state, report, entry) {
   const pending = new Map();
-  report.send({ type: "progress", phase: "запускается" });
-  const handle = (event) => {
+  return (event) => {
     if (event.session_id) state.sessionId = String(event.session_id);
     if (event.type === "system" && event.subtype === "init") {
       state.model = event.model || state.model;
@@ -619,6 +624,7 @@ function runClaude(job, dirs, resumeId, report, entry) {
       state.limits[info.rateLimitType || "five_hour"] = {
         type: String(info.rateLimitType || "five_hour"), used: Math.round((Number(info.utilization) || 0) * 100),
         resetsAt: Number(info.resetsAt) || 0, status: String(info.status || ""), overage: Boolean(info.isUsingOverage),
+        family: modelFamily(state.model || job.model),
       };
       // Плашку показываем, когда окно почти выбрано или уже отказ — на половине окна это был бы шум.
       if (/reject|block|exceed/i.test(String(info.status || "")) || (Number(info.utilization) || 0) >= 0.8) {
@@ -686,6 +692,24 @@ function runClaude(job, dirs, resumeId, report, entry) {
       if (event.is_error) state.failure = state.text || String(event.subtype || "Claude вернул ошибку");
     }
   };
+}
+
+function runClaude(job, dirs, resumeId, report, entry) {
+  const files = claudeFiles(job, dirs);
+  // Экономия контекста (замеры MBOX, claude 2.1.291): из встроенного — только веб и ToolSearch (описания полусотни
+  // инструментов Шара грузятся по требованию, а не в каждый ход), без каталога slash-команд и навыков CLI (−10 тыс.:
+  // наши навыки живут в Шаре), только MCP из --mcp-config.
+  const args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+    "--input-format", job.images?.length ? "stream-json" : "text", "--permission-mode", "bypassPermissions", "--setting-sources", "project",
+    "--tools", "WebSearch,WebFetch,ToolSearch", "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", files.mcp,
+    "--append-system-prompt-file", files.system];
+  if (job.model) args.push("--model", job.model);
+  if (["low", "medium", "high"].includes(job.effort)) args.push("--effort", job.effort);
+  if (resumeId) args.push("--resume", resumeId);
+  const state = newState();
+  state.model = job.model || "";
+  report.send({ type: "progress", phase: "запускается" });
+  const handle = claudeHandler(job, state, report, entry);
   // С картинками — сообщение в формате stream-json: текст и картинки одним сообщением человека.
   const text = promptText(job, Boolean(resumeId));
   const stdin = job.images?.length
@@ -696,6 +720,165 @@ function runClaude(job, dirs, resumeId, report, entry) {
   return streamCli(CLI.claude, args, { cwd: dirs.work, env: userEnv(dirs), stdin, provider: "Claude" }, entry, handle, state)
     .finally(() => { for (const f of Object.values(files)) fs.rmSync(f, { force: true }); });
 }
+
+// ── Тёплый Claude: один долгоживущий процесс на чат ───────────────────────────
+// Холодный `claude -p` на каждое сообщение — 2–3 с до первого слова на пустом запросе, 5–6 с с инструментами Шара (запуск
+// программы, подключение MCP, чтение системного промпта). Замер: первое слово у тёплого процесса — 0,8 с против 2,1–2,9 с.
+// Поэтому на чат держим один процесс в режиме stream-json: следующие сообщения идут в него же. Закрывается после
+// WARM_IDLE_MS тишины, при смене настроек (модель, нагрузка, личные MCP, правила), по /compact и при остановке; следующее сообщение
+// поднимет новый процесс с --resume — разговор не теряется. Ключ MCP живёт, пока жив процесс, и продлевается на каждое сообщение
+// (Шар: /api/core/node/jobs/<id>/mcp-key), а закрывается вместе с ним.
+
+const WARM = process.env.SHAR_WARM !== "0";
+const WARM_IDLE_MS = Number(process.env.SHAR_WARM_IDLE_MS) || 8 * 60_000;
+const WARM_MAX_MS = 40 * 60_000;
+const warmSlots = new Map(); // «пользователь:чат» → процесс
+const warmQueues = new Map(); // «пользователь:чат» → очередь ответов: в один процесс сообщения идут по одному
+
+const warmKeyOf = (job) => `${job.userId}:${job.threadId}`;
+
+/** Что должно совпасть, чтобы продолжить в том же процессе: правила и настройки, зашитые в запуск. Время и режим разрешений — нет. */
+function warmSig(job) {
+  return JSON.stringify([job.systemKey || job.system || "", job.model || "", job.effort || "", extraMcp(job), Boolean(browser)]);
+}
+
+function mcpKey(job, keyId) {
+  return shar(`/api/core/node/jobs/${job.id}/mcp-key`, keyId ? { keyId } : {});
+}
+
+/** Закрыть тёплый процесс чата и дождаться, пока он закончится (после /compact и сброса сессии — нужна чистая сессия). */
+async function warmDrop(job) {
+  const slot = warmSlots.get(warmKeyOf(job));
+  if (!slot) return;
+  slot.closing ||= "dropped";
+  try { slot.child.kill(); } catch { /* уже закрыт */ }
+  await Promise.race([slot.closed, sleep(3000)]);
+}
+
+function spawnClaudeSlot(job, dirs, resumeId, minted, key, sig) {
+  const files = claudeFiles({ ...job, mcp: { ...job.mcp, token: minted.token } }, dirs);
+  const args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+    "--input-format", "stream-json", "--permission-mode", "bypassPermissions", "--setting-sources", "project",
+    "--tools", "WebSearch,WebFetch,ToolSearch", "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", files.mcp,
+    "--append-system-prompt-file", files.system];
+  if (job.model) args.push("--model", job.model);
+  if (["low", "medium", "high"].includes(job.effort)) args.push("--effort", job.effort);
+  if (resumeId) args.push("--resume", resumeId);
+  const child = run(CLI.claude, args, { cwd: dirs.work, env: userEnv(dirs) });
+  const slot = { key, sig, child, keyId: minted.keyId, born: Date.now(), turns: 0, turn: null, tail: "", buffer: "", closing: "", idle: null, closed: null };
+  slot.closed = new Promise((resolve) => {
+    const cleanup = (code) => {
+      clearTimeout(slot.idle);
+      if (warmSlots.get(key) === slot) warmSlots.delete(key);
+      for (const f of Object.values(files)) fs.rmSync(f, { force: true });
+      // Процесса нет — ключ больше не нужен: отзываем сразу, не дожидаясь срока.
+      shar(`/api/core/node/keys/${slot.keyId}/revoke`, {}).catch(() => undefined);
+      slot.turn?.close(code);
+      resolve();
+    };
+    child.on("error", (error) => { slot.tail = `${slot.tail}\n${error.message}`.slice(-3000); cleanup(-1); });
+    child.on("close", cleanup);
+  });
+  const feed = (line) => {
+    const text = line.trim();
+    if (!text.startsWith("{")) { if (text) slot.tail = `${slot.tail}\n${text}`.slice(-3000); return; }
+    let event;
+    try { event = JSON.parse(text); } catch { slot.tail = `${slot.tail}\n${text.slice(0, 300)}`.slice(-3000); return; }
+    slot.turn?.event(event);
+  };
+  child.stdout.on("data", (chunk) => {
+    slot.buffer += chunk;
+    const lines = slot.buffer.split(/\r?\n/);
+    slot.buffer = lines.pop() ?? "";
+    lines.forEach(feed);
+  });
+  child.stderr.on("data", (chunk) => { slot.tail = `${slot.tail}${chunk}`.slice(-3000); });
+  warmSlots.set(key, slot);
+  return slot;
+}
+
+/** Процесс чата для этого сообщения: живой с теми же настройками (ключ продлеваем) или новый. */
+async function claudeSlot(job, dirs, resumeId) {
+  const key = warmKeyOf(job);
+  const sig = warmSig(job);
+  let slot = warmSlots.get(key);
+  if (slot && !slot.closing && slot.sig === sig && Date.now() - slot.born < WARM_MAX_MS) {
+    try { await mcpKey(job, slot.keyId); return slot; } catch (error) {
+      if (error.status !== 410 && error.status !== 404) throw error; // иначе — ключ истёк: поднимаем процесс заново
+    }
+  }
+  if (slot) { slot.closing ||= "stale"; try { slot.child.kill(); } catch { /* уже закрыт */ } await Promise.race([slot.closed, sleep(3000)]); }
+  const minted = await mcpKey(job, 0);
+  return spawnClaudeSlot(job, dirs, resumeId, minted, key, sig);
+}
+
+/** Одно сообщение в тёплый процесс: события идут в обработчик, конец ответа — событие result. */
+function claudeTurn(slot, job, state, entry, handle, payload) {
+  return new Promise((resolve, reject) => {
+    clearTimeout(slot.idle);
+    let done = false;
+    const timer = setTimeout(() => { state.failure = "Агент работал дольше 30 минут — остановлен"; try { slot.child.kill(); } catch { /* уже закрыт */ } }, RUN_TIMEOUT_MS);
+    const finish = (settle, value) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      slot.turn = null;
+      slot.turns += 1;
+      if (!slot.closing && slot.child.exitCode === null) {
+        clearTimeout(slot.idle);
+        slot.idle = setTimeout(() => { slot.closing ||= "idle"; try { slot.child.kill(); } catch { /* уже закрыт */ } }, WARM_IDLE_MS);
+      }
+      settle(value);
+    };
+    slot.turn = {
+      event(ev) {
+        try { handle(ev); } catch (error) { slot.tail = `${slot.tail}\n${String(error.message || error)}`.slice(-3000); }
+        if (ev.type === "result") finish(resolve, state);
+      },
+      // Процесс закрылся посреди ответа: те же правила, что у обычного запуска (лимит, вход, потерянная сессия).
+      close(code) {
+        if (entry.stopped) return finish(resolve, state);
+        const limit = limitFromText(slot.tail) || limitFromText(state.failure);
+        if (limit && !state.rateLimit) state.rateLimit = { provider: "Claude", detail: limit, used_percent: 100 };
+        if (code !== 0 || !state.text || state.failure) {
+          const reason = humanError(state.failure) || stripAnsi(slot.tail).trim().split("\n").slice(-4).join(" ") || `выход с кодом ${code}`;
+          if (/session|conversation|thread/i.test(reason) && /not found|no such|does not exist|invalid|different directory/i.test(reason)) {
+            return finish(reject, new Error(`session not found: ${reason}`));
+          }
+          state.authExpired = authProblem(reason);
+          state.failure = limit ? `Исчерпан лимит подписки: ${limit}` : state.authExpired ? "Вход в подписку истёк — войдите заново в Настройки → Ядро" : clip(reason, 500);
+        }
+        finish(resolve, state);
+      },
+    };
+    try { slot.child.stdin.write(`${payload}\n`); } catch (error) { slot.turn.close(-1); }
+  });
+}
+
+async function runClaudeWarm(job, dirs, resumeId, report, entry) {
+  const key = warmKeyOf(job);
+  const work = async () => {
+    const state = newState();
+    state.model = job.model || "";
+    report.send({ type: "progress", phase: "запускается" });
+    const slot = await claudeSlot(job, dirs, resumeId);
+    entry.child = slot.child;
+    // Продолжаем в живом процессе — история уже в нём; новый процесс без --resume получает хвост чата.
+    const resumed = Boolean(resumeId) || slot.turns > 0;
+    // Время и режим разрешений в системном промпте — на момент запуска процесса; свежие — в самом сообщении.
+    const fresh = slot.turns > 0 && job.volatile ? `[Сейчас: ${job.volatile}]\n\n` : "";
+    const text = `${fresh}${promptText(job, resumed)}`;
+    const content = [{ type: "text", text }, ...(job.images || []).map((img) => ({ type: "image", source: { type: "base64", media_type: img.mime, data: img.data.toString("base64") } }))];
+    const payload = JSON.stringify({ type: "user", message: { role: "user", content } });
+    return claudeTurn(slot, job, state, entry, claudeHandler(job, state, report, entry), payload);
+  };
+  // Сообщения одного чата идут по очереди: в один процесс одновременно не пишут.
+  const next = (warmQueues.get(key) || Promise.resolve()).catch(() => undefined).then(work);
+  warmQueues.set(key, next);
+  try { return await next; } finally { if (warmQueues.get(key) === next) warmQueues.delete(key); }
+}
+
+process.on("exit", () => { for (const slot of warmSlots.values()) { try { slot.child.kill(); } catch { /* уже закрыт */ } } });
 
 /** /compact отдельным коротким запуском. Возвращает id сессии после сжатия или "" (тогда — новая сессия). */
 async function compactClaude(dirs, sessionId, focus) {
@@ -916,7 +1099,8 @@ function kimiFiles(job, dirs) {
   // Kimi привязывает сессию к рабочему каталогу: он должен быть стабильным для диалога и отдельным от других диалогов.
   const cwd = path.join(dirs.work, ".shar-kimi", String(job.threadId).replace(/[^A-Za-z0-9_-]/g, "_"));
   fs.mkdirSync(cwd, { recursive: true, mode: 0o700 });
-  const tools = ["WebSearch", "FetchURL", "ReadMediaFile", "mcp__shar__*", ...(browser ? ["mcp__browser__*"] : []),
+  // TodoList — живой список дел в цепочке ответа; ExitPlanMode — завершение план-режима (/plan).
+  const tools = ["WebSearch", "FetchURL", "ReadMediaFile", "TodoList", "ExitPlanMode", "mcp__shar__*", ...(browser ? ["mcp__browser__*"] : []),
     ...extraMcp(job).map((m) => `mcp__${m.name}__*`)];
   const agent = path.join(cwd, "shar-agent.md");
   // Встроенные файлы и оболочка ноды агенту не нужны: доступ к Шару — через MCP, картинки — через ReadMediaFile.
@@ -953,6 +1137,7 @@ async function runKimi(job, dirs, resumeId, report, entry) {
   entry.child = child;
   const pending = new Map();
   const toolSteps = new Map();
+  const toolArgs = new Map(); // накопленные параметры вызовов Kimi по id
   let nextId = 0;
   let buffer = "";
   let tail = "";
@@ -961,6 +1146,11 @@ async function runKimi(job, dirs, resumeId, report, entry) {
   let usageCommand = false;
   let usageText = "";
   const previous = resumeId ? readSessions(dirs)[`kimi:${job.threadId}`] : null;
+  // План-режим Kimi (/plan): только чтение и план, без выполнения; человек решает, выполнять ли («Выполнить план» в чате).
+  const planned = Boolean(job.plan);
+  let thought = "";
+  let thoughtAt = 0;
+  let todoStep = null;
   const timer = setTimeout(() => { state.failure = "Агент работал дольше 30 минут — остановлен"; child.kill(); }, RUN_TIMEOUT_MS);
   const closed = new Promise((resolve) => child.once("close", resolve));
   const write = (message) => child.stdin.write(`${JSON.stringify(message)}\n`);
@@ -979,7 +1169,15 @@ async function runKimi(job, dirs, resumeId, report, entry) {
   const update = (message) => {
     const u = message.params?.update || {};
     const kind = u.sessionUpdate;
-    if (kind === "agent_thought_chunk") { report.send({ type: "progress", phase: "думает" }); return; }
+    if (kind === "agent_thought_chunk") {
+      // Ход рассуждения показываем, как у Claude и GPT: хвост накопленного, не чаще раза в полторы секунды.
+      thought += kimiText(u.content);
+      if (Date.now() - thoughtAt > 1500) {
+        thoughtAt = Date.now();
+        report.send({ type: "progress", phase: "думает", reasoning: clip(thought.slice(-2000), 2000) });
+      } else report.send({ type: "progress", phase: "думает" });
+      return;
+    }
     if (kind === "agent_message_chunk") {
       const text = kimiText(u.content);
       if (!text) return;
@@ -999,7 +1197,10 @@ async function runKimi(job, dirs, resumeId, report, entry) {
       answering = false;
       const name = toolLabel(u.toolName || u.name || u.title);
       const input = u.rawInput ?? u.input ?? {};
-      const step = addStep(state, { kind: "tool", name, hint: hintOf(name, input), input: clip(stringify(input), MAX_STEP_INPUT), at: Date.now() }, report, entry);
+      if (/ExitPlanMode/i.test(name) && typeof input === "object" && input && typeof input.plan === "string") state.planText = input.plan;
+      // Параметры вызова Kimi присылает не сразу (tool_call приходит с пустыми): их собирают промежуточные обновления.
+      const known = input && typeof input === "object" ? Object.keys(input).length > 0 : Boolean(input);
+      const step = addStep(state, { kind: "tool", name, hint: hintOf(name, input), input: known ? clip(stringify(input), MAX_STEP_INPUT) : "", at: Date.now(), deferRepeat: !known }, report, entry);
       if (step && id) toolSteps.set(id, step);
       report.send({ type: "progress", phase: HINTS[name]?.toLowerCase() || "работает", body: "" });
       return;
@@ -1008,18 +1209,49 @@ async function runKimi(job, dirs, resumeId, report, entry) {
       const id = String(u.toolCallId || u.id || "");
       const step = toolSteps.get(id);
       if (!step) return;
-      if (step.input === "{}" && u.rawInput != null) step.input = clip(stringify(u.rawInput), MAX_STEP_INPUT);
-      const output = u.content ?? u.rawOutput ?? u.output ?? "";
-      step.output = clip(kimiText(output) || stringify(output), MAX_STEP_OUTPUT);
+      // Пока вызов идёт (pending / in_progress), content — это накопленные параметры JSON-ом, а не результат.
+      // Раньше любое обновление считалось результатом: вызов закрывался на первом же куске параметров, в «Результат» попадал
+      // обрывок JSON, а настоящий результат терялся.
+      if (u.status !== "completed" && u.status !== "failed") {
+        const args = kimiText(u.content) || (u.rawInput ? stringify(u.rawInput) : "");
+        if (args) toolArgs.set(id, args);
+        return;
+      }
+      toolSteps.delete(id);
+      const raw = toolArgs.get(id) || "";
+      toolArgs.delete(id);
+      if (!step.input && raw) {
+        let parsed = raw;
+        try { parsed = JSON.parse(raw); } catch { /* параметры не JSON — оставляем текстом */ }
+        step.input = clip(typeof parsed === "string" ? parsed : stringify(parsed), MAX_STEP_INPUT);
+        step.hint = hintOf(step.name, parsed);
+        if (/ExitPlanMode/i.test(step.name) && parsed && typeof parsed === "object" && typeof parsed.plan === "string") state.planText = parsed.plan;
+      }
+      const output = u.rawOutput ?? u.content ?? u.output ?? "";
+      step.output = clip(stringify(typeof output === "string" ? output : kimiText(output) || output), MAX_STEP_OUTPUT);
       step.is_error = u.status === "failed";
-      if (["completed", "failed", "cancelled"].includes(u.status) && step.at) {
-        step.ms = Date.now() - step.at;
-        delete step.at;
+      step.ms = Date.now() - step.at;
+      delete step.at;
+      // Теперь параметры известны — страж зацикливания считает по ним.
+      if (step.deferRepeat) {
+        delete step.deferRepeat;
+        if (trackRepeat(state, step, report, entry)) { report.send({ type: "progress", steps: state.steps, reasoning: state.failure }); return; }
       }
       report.send({ type: "progress", steps: state.steps, phase: "думает" });
       return;
     }
-    if (kind === "plan") { report.send({ type: "progress", phase: "планирует" }); return; }
+    if (kind === "plan") {
+      // Список дел агента (TodoList) — одной живой строкой цепочки: галочки обновляются по ходу работы.
+      const entries = Array.isArray(u.entries) ? u.entries : [];
+      if (entries.length) {
+        const mark = { completed: "✓", in_progress: "▶", pending: "○" };
+        const lines = entries.map((e) => `${mark[e.status] || "○"} ${kimiText(e.content)}`).join("\n");
+        if (todoStep) todoStep.output = clip(lines, MAX_STEP_OUTPUT);
+        else todoStep = addStep(state, { kind: "tool", name: "Список дел", hint: "План работы", input: "", output: clip(lines, MAX_STEP_OUTPUT), deferRepeat: true }, report, entry);
+        report.send({ type: "progress", steps: state.steps, phase: "планирует" });
+      } else report.send({ type: "progress", phase: "планирует" });
+      return;
+    }
     if (kind === "usage_update") {
       state.contextTokens = Number(u.used ?? u.tokens) || 0;
       state.work = { ...state.work, context_tokens: state.contextTokens, context_window: Number(u.size ?? u.limit) || 0 };
@@ -1037,7 +1269,15 @@ async function runKimi(job, dirs, resumeId, report, entry) {
       if (message.method && message.id !== undefined) {
         if (message.method === "session/request_permission") {
           const options = message.params?.options || [];
-          const option = options.find((o) => o.kind === "allow_once") || options.find((o) => o.kind === "allow_always") || options[0];
+          if (planned) {
+            // Конец плана: Kimi просит одобрить выполнение. В план-режиме не одобряем — план уходит человеку.
+            const call = message.params?.toolCall || {};
+            const text = typeof call.rawInput?.plan === "string" ? call.rawInput.plan : kimiText(call.content);
+            if (text && !state.planText) state.planText = text;
+          }
+          const option = planned
+            ? options.find((o) => /reject/.test(o.kind || ""))
+            : options.find((o) => o.kind === "allow_once") || options.find((o) => o.kind === "allow_always") || options[0];
           write({ jsonrpc: "2.0", id: message.id, result: { outcome: option ? { outcome: "selected", optionId: option.optionId } : { outcome: "cancelled" } } });
         } else write({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Инструмент недоступен агенту Шара" } });
         continue;
@@ -1062,14 +1302,20 @@ async function runKimi(job, dirs, resumeId, report, entry) {
     if (job.model) await request("session/set_config_option", { sessionId: state.sessionId, configId: "model", value: job.model });
     const thinking = { low: "low", medium: "high", high: "max" }[job.effort];
     if (thinking) await request("session/set_config_option", { sessionId: state.sessionId, configId: "thinking", value: thinking });
-    await request("session/set_mode", { sessionId: state.sessionId, modeId: "auto" });
+    await request("session/set_mode", { sessionId: state.sessionId, modeId: planned ? "plan" : "auto" });
     report.send({ type: "progress", phase: "думает" });
     const base = promptText(job, Boolean(resumeId));
-    const prompt = job.images?.length
-      ? `${base}\n\nПрочитай картинки из вложений через ReadMediaFile: ${job.images.map((img) => img.path).join(", ")}`
-      : base;
-    await request("session/prompt", { sessionId: state.sessionId, prompt: [{ type: "text", text: prompt }] });
+    // Kimi принимает картинки прямо в запросе (promptCapabilities.image) — модель видит их сразу, без отдельного чтения файла.
+    const blocks = [{ type: "text", text: base }, ...(job.images || []).map((img) => ({ type: "image", data: img.data.toString("base64"), mimeType: img.mime }))];
+    await request("session/prompt", { sessionId: state.sessionId, prompt: blocks });
     if (answering && state.text) addStep(state, { kind: "text", text: clip(state.text, MAX_STEP_TEXT) }, report);
+    if (planned) {
+      // План — это ответ: если он пришёл только через запрос на одобрение, кладём его в текст.
+      const plan = String(state.planText || "").trim();
+      if (plan && !state.text.includes(plan.slice(0, 40))) state.text = state.text ? `${state.text}\n\n${plan}` : plan;
+      state.plan = Boolean(state.text);
+    }
+    if (thought.trim()) report.send({ type: "progress", reasoning: clip(thought.slice(-2000), 2000) });
     // Локальная команда Kimi: контекст и суммарные токены сессии, не новый запрос к модели.
     try {
       usageCommand = true;
@@ -1327,7 +1573,7 @@ async function checkJob(job) {
   const dirs = userDirs(job.userId);
   const acc = await accountOf(job.provider, dirs);
   const models = acc.loggedIn ? await modelsOf(job.provider, dirs) : [];
-  const limits = acc.loggedIn && job.limits && job.provider === "claude" ? await claudeLimits(dirs) : null;
+  const limits = acc.loggedIn && job.limits && job.provider === "claude" ? await claudeLimits(dirs, job.model) : null;
   await reporter(job).send({ type: "account", loggedIn: acc.loggedIn, account: acc.account, models, ...(limits ? { limits } : {}) });
 }
 
@@ -1335,8 +1581,10 @@ async function checkJob(job) {
  * Лимиты подписки Claude по кнопке «Проверить». Отдельного публичного способа узнать их нет — Claude Code присылает
  * rate_limit_event в ответ на любой запрос. Поэтому — самый дешёвый запрос: Haiku, одно слово, без инструментов и MCP.
  */
-async function claudeLimits(dirs) {
-  const args = ["-p", "--output-format", "stream-json", "--verbose", "--input-format", "text", "--model", "haiku",
+async function claudeLimits(dirs, model = "") {
+  // Модель — выбранная в чате (у Opus и Sonnet недельные окна разные); не задана — самая дешёвая, Haiku.
+  const asked = /^[A-Za-z0-9._:/-]{1,58}$/.test(model) ? model : "haiku";
+  const args = ["-p", "--output-format", "stream-json", "--verbose", "--input-format", "text", "--model", asked,
     "--setting-sources", "project", "--tools", "", "--disable-slash-commands", "--strict-mcp-config", "--max-turns", "1"];
   const { out } = await exec(CLI.claude, args, { env: userEnv(dirs), cwd: dirs.work, stdin: "Ответь одним словом: ок" }, 90_000);
   const limits = {};
@@ -1348,6 +1596,7 @@ async function claudeLimits(dirs) {
       limits[info.rateLimitType || "five_hour"] = {
         type: String(info.rateLimitType || "five_hour"), used: Math.round((Number(info.utilization) || 0) * 100),
         resetsAt: Number(info.resetsAt) || 0, status: String(info.status || ""), overage: Boolean(info.isUsingOverage),
+        family: modelFamily(asked),
       };
     } catch { /* строка не JSON */ }
   }
@@ -1442,7 +1691,7 @@ async function main() {
   for (;;) {
     try {
       const slots = Math.max(0, PARALLEL - running.size);
-      const res = await shar("/api/core/node/poll", { version: VERSION, host: os.hostname(), clis: { ...clis, ...(browser ? { browser: "obscura" } : {}) }, running: [...running.keys()], slots, wait: slots > 0 }, 45_000);
+      const res = await shar("/api/core/node/poll", { version: VERSION, host: os.hostname(), clis: { ...clis, ...(browser ? { browser: "obscura" } : {}) }, running: [...running.keys()], slots, caps: WARM ? ["warm"] : [], wait: slots > 0 }, 45_000);
       failures = 0;
       // Самообновление: Шар раздаёт новую версию агента ноды. В простое выходим — systemd перезапускает службу,
       // и она перед стартом забирает свежий файл с Шара (ExecStartPre в install.sh). На машине разработчика не нужно.

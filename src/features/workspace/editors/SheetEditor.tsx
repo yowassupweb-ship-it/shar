@@ -150,6 +150,8 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
   const [book, setBook] = useState<ExcelWorkbook | null>(null);
   const [error, setError] = useState('');
   const sheetName = useRef('');
+  /** Лист и прокрутка перед пересборкой редактора. */
+  const lastView = useRef<{ sheet: string; row: number; column: number } | null>(null);
   const onContentRef = useRef(onContent);
   onContentRef.current = onContent;
   const contentRef = useRef(content);
@@ -349,8 +351,26 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
       window.clearTimeout(syncTimer);
       syncTimer = window.setTimeout(() => void flush(), 300);
     });
+    // Пересборка (агент или коллега записали мимо совместной правки, смена темы) не должна сбрасывать вид: возвращаем лист
+    // и положение прокрутки, как были (публичный API: getScrollState / scrollToCell).
+    const restoreView = window.setTimeout(() => {
+      const seen = lastView.current;
+      if (!seen) return;
+      try {
+        const target = workbook.getSheetByName(seen.sheet);
+        if (!target) return;
+        if (workbook.getActiveSheet().getSheetName() !== seen.sheet) workbook.setActiveSheet(target);
+        if (seen.row || seen.column) target.scrollToCell(seen.row, seen.column, 0);
+      } catch { /* лист ещё не готов — останется вид по умолчанию */ }
+    }, 350);
     const stopTakeOver = takeOverWhenRendered(univerAPI, el, mount);
     return () => {
+      window.clearTimeout(restoreView);
+      try {
+        const sheet = workbook.getActiveSheet();
+        const scroll = sheet.getScrollState();
+        lastView.current = { sheet: sheet.getSheetName(), row: scroll.sheetViewStartRow, column: scroll.sheetViewStartColumn };
+      } catch { /* уже разобран */ }
       window.clearTimeout(readyTimer);
       document.removeEventListener('pointerdown', onOutside, true);
       window.removeEventListener('pagehide', commitEdit);

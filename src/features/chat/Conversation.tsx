@@ -10,6 +10,7 @@ import { takeJump } from './jump';
 import { DocPanel } from '@/features/workspace';
 import { useEdgeBack } from './useEdgeBack';
 import { subscribeAttention } from '@/shared/platform/push/userAttention';
+import { showToast } from '@/shared/ui/Toast';
 import { chatTitle, ensureLoaded, isNotifications, markActiveRead, openPerson, setPanel, useChatStore, type Msg } from './store';
 
 /**
@@ -18,7 +19,7 @@ import { chatTitle, ensureLoaded, isNotifications, markActiveRead, openPerson, s
  * высоте (--header-h, --composer-h). Справа — боковая панель: профиль или
  * эмодзи со стикерами. На узком экране панель встаёт под композером.
  */
-export default function Conversation({ chatId, onBack }: { chatId: string; onBack: () => void }) {
+export default function Conversation({ chatId, onBack, compact = false }: { chatId: string; onBack: () => void; /** Тесно рядом со списком (см. ChatsScreen): раскладка телефона независимо от ширины окна. */ compact?: boolean }) {
   const chat = useChatStore((s) => s.chats[chatId]);
   const me = useChatStore((s) => s.me);
   const users = useChatStore((s) => s.users);
@@ -30,7 +31,8 @@ export default function Conversation({ chatId, onBack }: { chatId: string; onBac
   const composerRef = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState<SearchState | null>(null);
   const sectionRef = useRef<HTMLElement>(null);
-  const [narrow, setNarrow] = useState(false);
+  const [narrowMq, setNarrow] = useState(false);
+  const narrow = narrowMq || compact;
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 640px)');
     const on = () => setNarrow(mq.matches);
@@ -110,7 +112,13 @@ export default function Conversation({ chatId, onBack }: { chatId: string; onBac
   const jump = useCallback((id: string) => setJumpTo((j) => ({ id, n: (j?.n || 0) + 1 })), []);
   // Из профиля — и к давним сообщениям: сначала догружаем историю до них.
   const jumpDeep = useCallback((id: string) => {
-    void ensureLoaded(chatId, id).then((ok) => { if (ok) requestAnimationFrame(() => jump(id)); });
+    // Давнее сообщение грузится дольше секунды — говорим, что ищем (а не молчим), и честно сообщаем, если его нет.
+    const slow = window.setTimeout(() => showToast('Ищу сообщение в истории…', 'info'), 700);
+    void ensureLoaded(chatId, id).then((ok) => {
+      window.clearTimeout(slow);
+      if (ok) requestAnimationFrame(() => jump(id));
+      else showToast('Сообщение не нашлось — возможно, его удалили', 'error');
+    });
   }, [chatId, jump]);
 
   // Поиск по Шару: «открыть сообщение» — чат открывается и прокручивается к нему (просьба может прийти до или после открытия).
@@ -139,7 +147,7 @@ export default function Conversation({ chatId, onBack }: { chatId: string; onBac
               onJump={jump}
             />
           </div>
-          <Timeline key={chatId} chatId={chatId} chat={chat} query={searchState?.query || ''} jumpTo={jumpTo} onAvatar={openPerson} />
+          <Timeline key={chatId} chatId={chatId} compact={compact} chat={chat} query={searchState?.query || ''} jumpTo={jumpTo} onAvatar={openPerson} />
           <div ref={composerRef} className="cxn-composer-wrap">
             <Composer key={chatId} chatId={chatId} readOnly={Boolean(chat && isNotifications(chat))} />
           </div>

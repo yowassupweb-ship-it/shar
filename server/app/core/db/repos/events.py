@@ -19,6 +19,7 @@ class EventsRepo:
         'startDateTime', 'endDateTime', 'allDay', 'timezone', 'location',
         'reminderMinutesBefore', 'recurrenceRule', 'recurrenceExDates', 'recurrenceId',
         'recurrenceMasterId', 'sharedWithAll', 'taskId', 'taskRepeat',
+        'sharedDepartments', 'participantsCanEdit',
     ]
 
     def _hydrate_event_row(self, row: Dict[str, Any]) -> Dict[str, Any]:

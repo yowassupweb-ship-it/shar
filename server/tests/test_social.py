@@ -171,3 +171,39 @@ def test_max_channel_comments(monkeypatch, client, admin):
     assert r.status_code == 200, r.text
     m, p, b = calls[-1]
     assert (m, p) == ("POST", "/messages/post-1/comments") and b == {"text": "От 25 000 ₽", "link": {"type": "reply", "mid": cid}}
+
+
+def test_read_status_of_our_messages(monkeypatch, admin, account):
+    """Менеджер видит, прочитал ли клиент отправленное: ВКонтакте — по out_read диалога; Telegram о прочтении
+    ботам не сообщает — там «отправлено». В обратную сторону (что прочитал менеджер) площадкам ничего не уходит."""
+    from app.core.db import db
+    from app.modules.social import dialogs as D
+    from app.modules.social import router as R
+    from app.modules.social import vk
+
+    def seed(key):
+        dialog = D.ensure_private(account, key, "Клиент", "", None)
+        D.record_out(dialog, account["id"], key, "1004", "Здравствуйте", "u1", "Менеджер")
+        D.record_out(dialog, account["id"], key, "1006", "Сейчас уточню", "u1", "Менеджер")
+        return dialog
+
+    def deliveries(dialog):
+        got = admin.get(f"/api/social/dialogs/{dialog}").json()
+        return [(m["delivery"], m["readReported"]) for m in got["messages"] if m["direction"] == "out"]
+
+    # Telegram: прочтение неизвестно навсегда.
+    tg = seed("777")
+    monkeypatch.setattr(vk, "out_read", lambda *a, **k: pytest.fail("Telegram о прочтении не спрашиваем"))
+    assert deliveries(tg) == [("sent", False), ("sent", False)]
+
+    # ВКонтакте: клиент прочитал всё до 1005 включительно — первое прочитано, второе нет.
+    db.conn.execute_query("UPDATE social_accounts SET platform = 'vk' WHERE id = %s", (account["id"],))
+    R._read_checked.clear()
+    vk_dialog = seed("888")
+    monkeypatch.setattr(vk, "out_read", lambda token, peer: 1005 if peer == 888 else 0)
+    assert deliveries(vk_dialog) == [("read", True), ("sent", True)]
+    # Позже прочитал и второе — статус догоняется при следующем открытии (после паузы между проверками).
+    monkeypatch.setattr(vk, "out_read", lambda token, peer: 1006)
+    assert deliveries(vk_dialog) == [("read", True), ("sent", True)], "чаще, чем раз в несколько секунд, площадку не спрашиваем"
+    R._read_checked.clear()
+    assert deliveries(vk_dialog) == [("read", True), ("read", True)]

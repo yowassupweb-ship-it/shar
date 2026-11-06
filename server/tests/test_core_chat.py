@@ -96,3 +96,15 @@ def test_demo_reply_ask_and_cancel(admin, users, monkeypatch):
     time.sleep(0.05)
     assert sum(1 for m in admin.get(f"/api/core/threads/{thread['id']}/messages").json()["messages"] if m["role"] == "agent") == 2
 
+
+
+def test_model_name_cannot_carry_shell_syntax(admin):
+    """Имя модели уходит в аргументы CLI на ноде (на Windows — через cmd.exe): только безопасные знаки."""
+    import uuid
+
+    thread = admin.post("/api/core/threads", json={}).json()["thread"]
+    for bad in ("claude:opus & calc", "codex:$(id)", "codex:gpt 6", "codex:`x`"):
+        r = admin.post(f"/api/core/threads/{thread['id']}/messages", json={"id": uuid.uuid4().hex, "body": "привет", "model": bad})
+        assert r.status_code == 422, bad
+    ok = admin.post(f"/api/core/threads/{thread['id']}/messages", json={"id": uuid.uuid4().hex, "body": "привет", "model": "codex:gpt-6.1-sol"})
+    assert ok.status_code == 201, ok.text

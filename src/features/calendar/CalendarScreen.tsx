@@ -1,3 +1,4 @@
+import { listenIntent } from '@/shared/navigation/quickIntent';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { AlertCircle, ChevronLeft, ChevronRight, Copy, LogOut, Pencil, Plus, RotateCw, Trash2 } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
@@ -140,6 +141,11 @@ export default function CalendarScreen() {
     createAt(start, addMinutes(start, 60));
   }, [selected, createAt]);
 
+  // Быстрое действие из нижней полосы («Новое событие» по правому клику).
+  const createDefaultRef = useRef(createDefault);
+  createDefaultRef.current = createDefault;
+  useEffect(() => listenIntent(['new-event'], () => createDefaultRef.current()), []);
+
   const openEvent = useCallback((e: CalEvent) => {
     if (isBirthdayEvent(e.id)) { showToast(`${e.title}. ${e.description}`, 'info'); return; }
     setEditor({ mode: 'edit', event: e });
@@ -189,6 +195,7 @@ export default function CalendarScreen() {
       title: e.title, description: e.description, start: e.start, end: e.end, allDay: e.allDay, location: e.location,
       color: e.color, reminderMinutesBefore: e.reminderMinutesBefore ?? null, recurrenceRule: null,
       participants: mine ? e.participants : [], sharedWithAll: mine ? e.sharedWithAll : false,
+      sharedDepartments: mine ? e.sharedDepartments : [], participantsCanEdit: mine ? e.participantsCanEdit : false,
     } });
   }, []);
 

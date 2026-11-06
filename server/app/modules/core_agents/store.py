@@ -22,6 +22,7 @@ import base64
 import hashlib
 import logging
 import secrets
+import time
 from typing import Any, Optional
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -220,6 +221,25 @@ def public_account(row: dict) -> dict:
     }
 
 
+def merge_limits(user_id: str, provider: str, incoming: list) -> None:
+    """Окна лимита подписки из ответа агента или проверки — в аккаунт. Раньше список заменялся целиком: ответ Sonnet стирал
+    недельное окно Opus, и шапка чата не могла показать использование по модели. Теперь окна сливаются по типу
+    (five_hour, seven_day, seven_day_opus…), у каждого — когда получено (at) и семейство модели, на которой замерено."""
+    import time
+
+    fresh = [{k: l[k] for k in ("type", "used", "resetsAt", "status", "overage", "family") if k in l}
+             for l in incoming or [] if isinstance(l, dict) and l.get("type")]
+    if not fresh:
+        return
+    row = db.conn.fetch_one("SELECT limits FROM core_accounts WHERE user_id = %s AND provider = %s", (user_id, provider)) or {}
+    merged = {str(l["type"]): l for l in (row.get("limits") or []) if isinstance(l, dict) and l.get("type")}
+    now = int(time.time())
+    for l in fresh:
+        merged[str(l["type"])[:40]] = {**l, "type": str(l["type"])[:40], "at": now}
+    db.conn.execute_query("UPDATE core_accounts SET limits = %s WHERE user_id = %s AND provider = %s",
+                          (Json(list(merged.values())[:12]), user_id, provider))
+
+
 def ready_agents(user_id: str) -> list[dict]:
     """Кому из своих агентов человек может написать прямо сейчас (подключён и нода на связи)."""
     rows = db.conn.fetch_all("SELECT * FROM core_accounts WHERE user_id = %s AND state = 'ready'", (user_id,)) or []
@@ -238,11 +258,19 @@ def enqueue(kind: str, user_id: str, provider: str, *, node_id: Any = None, mess
         (kind, user_id, provider, int(node_id) if node_id else None, message_id, Json(payload or {})))
 
 
+_stale_swept = 0.0
+
+
 def claim(node: dict) -> Optional[dict]:
     """Взять задачу: свою (закреплённую за нодой) или общую, если на ноде есть нужный CLI. Протухшее в очереди — снимаем."""
-    db.conn.execute_query(
-        "UPDATE core_jobs SET status = 'failed', error = 'Нода не взяла задачу за 10 минут', finished_at = now() "
-        "WHERE status = 'queued' AND created_at < now() - interval '10 minutes'")
+    # Протухшее в очереди снимаем не на каждом опросе, а раз в 20 с: опрос теперь частый (см. node.POLL_STEP).
+    global _stale_swept
+    now = time.monotonic()
+    if now - _stale_swept >= 20:
+        _stale_swept = now
+        db.conn.execute_query(
+            "UPDATE core_jobs SET status = 'failed', error = 'Нода не взяла задачу за 10 минут', finished_at = now() "
+            "WHERE status = 'queued' AND created_at < now() - interval '10 minutes'")
     clis = [p for p in PROVIDERS if node_has(node, p)]
     return db.conn.fetch_one(
         """UPDATE core_jobs SET status = 'taken', node_id = %s, taken_at = now()

@@ -1,12 +1,13 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUp, CalendarDays, Check, Dumbbell, MoreHorizontal, ShieldCheck, CheckSquare, CornerDownRight, FileSpreadsheet, FileText, Folder, Forward, LayoutGrid, Mail, MessageCircle, MonitorUp,
-  Paperclip, Plug, Presentation, Slash, StickyNote, User, X } from 'lucide-react';
+  ListChecks, Paperclip, Plug, Presentation, Slash, StickyNote, User, X } from 'lucide-react';
 import { CoreMini } from '@/shared/ui/CoreIcon';
 import { clearAgentAttached, clearAgentForward, detachFromAgent, useAgentBridge, type AgentForward } from '@/shared/core/agentBridge';
 import { navigate } from '@/shared/navigation/navigate';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { paths } from '@/shared/navigation/routes';
-import { Select } from '@/shared/ui/Select';
+import { Select, type SelectGroup } from '@/shared/ui/Select';
+import { Sheet } from '@/shared/ui/overlay';
 import { coreApi, type CoreAttachment, type CoreCatalog, type CoreContextItem, type CoreMessage } from './api';
 import { formatBytes } from './parts';
 import { BrandMark } from './brands';
@@ -14,6 +15,38 @@ import { useCore } from './store';
 import { useWhere, type WhereItem } from './whereAmI';
 
 export interface ComposerCommand { cmd: string; hint: string; admin?: boolean }
+
+const CUSTOM_MODELS_KEY = 'nx:core:custom-models';
+/** Агент (и модель) по умолчанию для новых чатов: «claude» или «claude:claude-opus-4-5». Правый клик по кнопке агента. */
+const DEFAULT_AGENT_KEY = 'nx:core:default-agent';
+const CUSTOM = '__custom';
+/** Допустимое имя модели — то же правило, что у сервера (MessageBody.model). */
+const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/-]{1,58}$/;
+
+/**
+ * Модели агента для выбора. Каталог провайдера — одним списком, если он один; у GPT и Claude с несколькими поколениями —
+ * группами по поколению (новые сверху: у GPT это модели режима «Работа» вроде 6.1 Sol и 6 Astra, ниже — прежние из «Чата»).
+ * В конце — свои имена и «Другая модель…».
+ */
+function modelGroups(agent: { id: string; how?: string; models: Array<{ id: string; label: string }> }, own: string[]): SelectGroup[] {
+  const option = (id: string, label: string) => ({ value: `${agent.id}:${id}`, label });
+  const known = new Set(agent.models.map((m) => m.id));
+  const generation = (id: string) => {
+    const found = id.match(/(?:^|-)(?:gpt-)?(\d+)(?:[.-]\d+)?/i);
+    return found ? Number(found[1]) : 0;
+  };
+  const gens = Array.from(new Set(agent.models.map((m) => generation(m.id))));
+  const groups: SelectGroup[] = [];
+  if (agent.id === 'codex' && gens.length > 1 && gens.every((g) => g > 0)) {
+    for (const g of gens.sort((a, b) => b - a)) {
+      groups.push({ label: `GPT-${g}${g === gens[0] ? ' · режим «Работа»' : ' · режим «Чат»'}`, options: agent.models.filter((m) => generation(m.id) === g).map((m) => option(m.id, m.label)) });
+    }
+  } else groups.push({ options: agent.models.map((m) => option(m.id, m.label)) });
+  const mine = own.filter((id) => !known.has(id));
+  if (mine.length) groups.push({ label: 'Свои', options: mine.map((id) => option(id, id)) });
+  if (agent.how === 'login') groups.push({ options: [{ value: `${agent.id}:${CUSTOM}`, label: 'Другая модель…' }] });
+  return groups;
+}
 
 export const COMMANDS: ComposerCommand[] = [
   { cmd: '/new', hint: 'Новый чат' },
@@ -36,7 +69,7 @@ export interface ComposerHandle {
 }
 
 
-export interface SendOptions { effort: string; model: string; context: CoreContextItem[]; forwarded: AgentForward[] }
+export interface SendOptions { effort: string; plan?: boolean; model: string; context: CoreContextItem[]; forwarded: AgentForward[] }
 
 const WHERE_ICON: Record<string, typeof FileText> = {
   document: FileText, note: StickyNote, table: FileSpreadsheet, presentation: Presentation, task: CheckSquare, chat: MessageCircle,
@@ -99,11 +132,23 @@ export const Composer = forwardRef<ComposerHandle, {
   peer: string;
   onSend: (text: string, attachments: Array<Pick<CoreAttachment, 'name' | 'key' | 'size' | 'type'>>, options: SendOptions) => Promise<boolean>;
   onCommand: (cmd: string, arg: string) => boolean;
-}>(function Composer({ threadId, catalog, replyTo, onCancelReply, history, peer, onSend, onCommand }, ref) {
+  /** Выбранные агент и модель («claude:claude-opus-4-5») — шапка чата показывает использование именно этой модели. */
+  onSelect?: (value: string) => void;
+}>(function Composer({ threadId, catalog, replyTo, onCancelReply, history, peer, onSend, onCommand, onSelect }, ref) {
   const [text, setText] = useState(() => readDraft(threadId));
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [effort, setEffort] = useState('');
+  const [plan, setPlan] = useState(false);
   const [picked, setPicked] = useState('');
+  // Модели, которых нет в каталоге аккаунта (например, из режима «Работа» ChatGPT, если Codex их не отдал): имя вводит человек,
+  // список помнится на этом устройстве. Недоступную аккаунту модель провайдер отклонит — ошибка придёт в ответ.
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customName, setCustomName] = useState('');
+  const [customs, setCustoms] = useState<Record<string, string[]>>(() => {
+    try { return JSON.parse(localStorage.getItem(CUSTOM_MODELS_KEY) || '{}') as Record<string, string[]>; } catch { return {}; }
+  });
+  const [defaultAgent, setDefaultAgent] = useState(() => { try { return localStorage.getItem(DEFAULT_AGENT_KEY) || ''; } catch { return ''; } });
+  const [agentMenu, setAgentMenu] = useState<{ anchor: MenuAnchor; id: string } | null>(null);
   const where = useWhere();
   const attached = useAgentBridge((s) => s.attached);
   const [more, setMore] = useState<MenuAnchor | null>(null);
@@ -117,9 +162,22 @@ export const Composer = forwardRef<ComposerHandle, {
   const agents = catalog?.agents ?? [];
   // Выбор человека → агент чата → первый подключённый. «claude:opus» — агент и модель.
   const optionOf = (a: (typeof agents)[number]) => (a.models.length > 1 ? `${a.id}:${a.model || a.models[0].id}` : a.id);
-  const base = agents.find((a) => a.id === peer) ?? agents[0];
-  const agentValue = picked || (base ? optionOf(base) : '');
+  // Агент чата (кто отвечал) → агент по умолчанию (правый клик по кнопке агента) → первый подключённый.
+  const peerAgent = agents.find((a) => a.id === peer);
+  const def = defaultAgent && agents.some((a) => a.id === defaultAgent.split(':')[0]) ? defaultAgent : '';
+  const base = peerAgent ?? agents.find((a) => a.id === def.split(':')[0]) ?? agents[0];
+  const agentValue = picked || (peerAgent ? optionOf(peerAgent) : def || (base ? optionOf(base) : ''));
+  const toggleDefault = (id: string) => {
+    const a = agents.find((x) => x.id === id);
+    if (!a) return;
+    const isDefault = def.split(':')[0] === id;
+    // Выбрана модель этого агента — запоминаем её вместе с агентом, иначе — модель агента по умолчанию.
+    const next = isDefault ? '' : (agentValue.split(':')[0] === id ? agentValue : optionOf(a));
+    setDefaultAgent(next);
+    try { if (next) localStorage.setItem(DEFAULT_AGENT_KEY, next); else localStorage.removeItem(DEFAULT_AGENT_KEY); } catch { /* приватное окно — не запомним */ }
+  };
   const agent = agents.find((a) => a.id === agentValue.split(':')[0]);
+  useEffect(() => { onSelect?.(agentValue); }, [agentValue]); // eslint-disable-line react-hooks/exhaustive-deps
   const [historyPos, setHistoryPos] = useState(-1);
   const [highlight, setHighlight] = useState(0);
   /** Esc закрыл подсказки команд для этого текста — пока его не изменят, они не всплывают. */
@@ -192,7 +250,9 @@ export const Composer = forwardRef<ComposerHandle, {
     const sentForward = forwarded;
     clearAgentForward();
     // Не ушло — пузырь сам покажет «не отправлено — повторить».
-    await onSend(body, files, { effort, model: agentValue, context, forwarded: sentForward });
+    const planned = plan && agent?.id === 'kimi';
+    setPlan(false); // план-режим — на один ответ: после плана человек сам решает, выполнять ли
+    await onSend(body, files, { effort, plan: planned, model: agentValue, context, forwarded: sentForward });
   }
 
   function accept(cmd: string) {
@@ -305,17 +365,25 @@ export const Composer = forwardRef<ComposerHandle, {
               <span className="ncore-agents" role="radiogroup" aria-label="Кто отвечает">
                 {agents.map((a) => (
                   <button key={a.id} type="button" role="radio" aria-checked={a.id === agent?.id} className="ncore-agent" data-offline={!a.online || undefined}
+                    onContextMenu={(e) => { e.preventDefault(); setAgentMenu({ anchor: { x: e.clientX, y: e.clientY }, id: a.id }); }}
                     onClick={() => setPicked(optionOf(a))} title={a.online ? `Ответит ${a.name}` : `${a.name}: нода не на связи — ответ не придёт`}>
                     <BrandMark id={a.id} size={14} className="ncore-agent-logo" />
                     <span className="ncore-agent-name">{a.name}</span>
                   </button>
                 ))}
               </span>
-              {agent && agent.models.length > 1 && (
-                <Select className="ncore-picker" label={`Модель ${agent.name}`} value={agentValue} onChange={setPicked}
-                  groups={[{ options: agent.models.map((m) => ({ value: `${agent.id}:${m.id}`, label: m.label })) }]} />
+              {agent && (agent.models.length > 1 || agent.how === 'login') && (
+                <Select className="ncore-picker" label={`Модель ${agent.name}`} value={agentValue}
+                  onChange={(v) => { if (v === `${agent.id}:${CUSTOM}`) { setCustomName(''); setCustomOpen(true); } else setPicked(v); }}
+                  groups={modelGroups(agent, customs[agent.id] ?? [])} />
               )}
             </>
+          )}
+          {agent?.id === 'kimi' && (
+            <button type="button" className="ncore-tool ncore-plan" aria-pressed={plan} onClick={() => setPlan((v) => !v)}
+              title="План-режим: Kimi только изучит задачу и предложит план — выполнять или нет, решаете вы">
+              <ListChecks size={14} aria-hidden="true" /><span>План</span>
+            </button>
           )}
           {/* Широко — нагрузка и режим разрешений на панели; узко — в «⋯» (контейнерный запрос в core.css). */}
           {!!catalog?.efforts.length && (
@@ -357,6 +425,35 @@ export const Composer = forwardRef<ComposerHandle, {
           </button>
         </div>
       </form>
+      {agentMenu && (
+        <Menu anchor={agentMenu.anchor} label="Агент" onClose={() => setAgentMenu(null)} compact>
+          <MenuItem icon={def.split(':')[0] === agentMenu.id ? <Check size={15} /> : <span className="ncore-menu-gap" />}
+            onSelect={() => { toggleDefault(agentMenu.id); setAgentMenu(null); }}>По умолчанию</MenuItem>
+        </Menu>
+      )}
+      {customOpen && agent && (
+        <Sheet title={`Другая модель ${agent.name}`} onClose={() => setCustomOpen(false)}
+          footer={(<>
+            <button type="button" className="nx-ghost" onClick={() => setCustomOpen(false)}>Отмена</button>
+            <button type="button" className="nx-primary" disabled={!MODEL_NAME.test(customName.trim())} onClick={() => {
+              const name = customName.trim();
+              const next = { ...customs, [agent.id]: [name, ...(customs[agent.id] ?? []).filter((x) => x !== name)].slice(0, 6) };
+              setCustoms(next);
+              try { localStorage.setItem(CUSTOM_MODELS_KEY, JSON.stringify(next)); } catch { /* приватное окно — не запомним */ }
+              setPicked(`${agent.id}:${name}`);
+              setCustomOpen(false);
+            }}>Выбрать</button>
+          </>)}>
+          <form className="ncore-custom" onSubmit={(e) => { e.preventDefault(); (e.currentTarget.querySelector('.nx-primary') as HTMLButtonElement | null)?.click(); }}>
+            <p className="nx-note">
+              Если нужной модели нет в списке — например, из режима «Работа» ChatGPT (GPT-6.1 Sol, GPT-6 Astra) — впишите её имя так, как его знает
+              {agent.id === 'codex' ? ' Codex (`codex debug models`)' : ' провайдер'}. Недоступную вашему аккаунту модель провайдер отклонит, и ответ придёт с ошибкой.
+            </p>
+            <input className="nx-field" value={customName} autoFocus maxLength={58} placeholder="например, gpt-6.1-sol" aria-label="Имя модели"
+              onChange={(e) => setCustomName(e.target.value)} />
+          </form>
+        </Sheet>
+      )}
     </div>
   );
 });
