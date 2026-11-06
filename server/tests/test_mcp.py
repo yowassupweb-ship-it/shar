@@ -164,7 +164,7 @@ def test_protocol_and_tools_follow_access_level(client, anna):
     note = client.post("/api/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers={"Authorization": f"Bearer {token}"})
     assert note.status_code == 202
     names = {t["name"] for t in _rpc(client, token, "tools/list").json()["result"]["tools"]}
-    assert names == {"list_items", "list_folders", "read_item", "list_comments", "resolve_item", "item_versions", "diff_item", "changes_list", "capabilities", "tool_search"}
+    assert names == {"list_items", "list_folders", "read_item", "list_comments", "resolve_item", "item_versions", "diff_item", "changes_list", "capabilities", "tool_search", "batch"}
     denied = _call(client, token, "create_note", title="x", markdown="y")
     assert denied["isError"] and "не открыт" in denied["content"][0]["text"]
     assert _rpc(client, token, "nope").json()["error"]["code"] == -32601
@@ -369,5 +369,92 @@ def test_long_materials_read_by_outline_and_section(client, anna):
         assert _call(client, token, "read_item", id=note["id"], section="Нет такого")["isError"]
         small = _ok(client, token, "read_item", id=note["id"], max_chars=1000)
         assert small["truncated"] and small["nextOffset"] == 1000 and small["outline"]
+    finally:
+        anna.delete(f"/api/mcp/keys/{key['id']}")
+
+
+def test_document_sections_are_edited_by_heading_and_keep_the_rest(client, anna):
+    """Структурная правка без точного текста: раздел заменяется, дополняется, удаляется; остальное и оформление не трогаются."""
+    token, key = _key(anna)
+    try:
+        md = "# План\nвводная\n# Бюджет\nстарая **цифра** 100\n## Детали\nмелочи\n# Итоги\nпока пусто"
+        doc = _ok(client, token, "create_document", title="Отчёт", markdown=md)
+
+        def text():
+            return _ok(client, token, "read_item", id=doc["id"])["content"]
+
+        _ok(client, token, "update_document", id=doc["id"], mode="replace_section", heading="бюджет", markdown="Новая цифра 250\n\nи пояснение")
+        out = text()
+        assert "Новая цифра 250" in out and "и пояснение" in out
+        assert "старая" not in out and "мелочи" not in out, "подраздел заменяется вместе с содержимым"
+        assert "# Бюджет" in out and "вводная" in out and "пока пусто" in out
+
+        _ok(client, token, "update_document", id=doc["id"], mode="insert_after_heading", heading="Итоги", markdown="Первым пунктом")
+        _ok(client, token, "update_document", id=doc["id"], mode="append_to_section", heading="План", markdown="дописано в конец плана")
+        _ok(client, token, "update_document", id=doc["id"], mode="insert_before_heading", heading="Итоги", markdown="# Риски\nнет")
+        out = text()
+        assert out.index("вводная") < out.index("дописано в конец плана") < out.index("# Бюджет")
+        assert out.index("# Риски") < out.index("# Итоги") < out.index("Первым пунктом") < out.index("пока пусто")
+
+        _ok(client, token, "update_document", id=doc["id"], mode="delete_section", heading="Риски")
+        assert "Риски" not in text() and "нет" not in text().split("# Итоги")[0].split("# Бюджет")[1]
+        # правка по тексту после структурных операций работает: индексы абзацев не поехали
+        assert _ok(client, token, "edit_document", id=doc["id"], old_text="Новая цифра 250", new_text="Цифра 300")["replaced"] == 1
+        assert "# Итоги" in text() and "Цифра 300" in text()
+
+        missing = _call(client, token, "update_document", id=doc["id"], mode="replace_section", heading="Нет такого", markdown="x")
+        assert missing["isError"] and "Заголовки:" in json.dumps(missing, ensure_ascii=False)
+        preview = _ok(client, token, "update_document", id=doc["id"], mode="delete_section", heading="Итоги", dry_run=True)
+        assert "Итоги" in json.dumps(preview, ensure_ascii=False) and "# Итоги" in text(), "dry_run ничего не пишет"
+    finally:
+        anna.delete(f"/api/mcp/keys/{key['id']}")
+
+
+def test_document_tables_are_read_as_markdown_tables():
+    stream = "Начало\r\x1a\x1b\x1cИмя\r\x1d\x1cЦена\r\x1d\x0e\x1b\x1cЧай\r\x1d\x1c90\r\x1d\x0e\x0fКонец\r\n"
+    snapshot = docformat.empty_snapshot("Цены")
+    body = snapshot["body"]
+    starts = [i for i, ch in enumerate(stream) if ch == "\r"]
+    body["dataStream"] = stream
+    body["paragraphs"] = [{"startIndex": i} for i in starts]
+    markdown = docformat.snapshot_to_markdown(snapshot)
+    assert "| Имя | Цена |" in markdown and "| --- | --- |" in markdown and "| Чай | 90 |" in markdown
+    assert markdown.startswith("Начало") and markdown.endswith("Конец")
+    assert "\x1a" not in markdown and "\x1d" not in markdown
+
+
+def test_search_says_where_it_found_and_batch_edits_many_materials(client, anna):
+    token, key = _key(anna)
+    try:
+        body = "# Договоры\n" + "общие слова " * 60 + "\n# Оплата\nсрок оплаты по договору — 14 дней\n# Прочее\nконец"
+        note = _ok(client, token, "create_note", title="Условия", markdown=body)
+        other = _ok(client, token, "create_note", title="Вторая", markdown="один\nдва")
+        found = _ok(client, token, "list_items", query="договору")
+        row = next(i for i in found["items"] if i["id"] == note["id"])
+        assert row["matches"] and any(m["section"] in ("Договоры", "Оплата") for m in row["matches"])
+        spot = next(m for m in row["matches"] if m["section"] == "Оплата")
+        assert "14 дней" in spot["text"]
+        part = _ok(client, token, "read_item", id=note["id"], section=spot["section"])
+        assert "14 дней" in part["content"] and "конец" not in part["content"]
+
+        both = _ok(client, token, "batch", calls=[
+            {"tool": "edit_note", "arguments": {"id": note["id"], "old_text": "14 дней", "new_text": "30 дней"}},
+            {"tool": "edit_note", "arguments": {"id": other["id"], "old_text": "два", "new_text": "три"}},
+        ])
+        assert both["done"] == 2 and not both["stopped"]
+        assert "30 дней" in _ok(client, token, "read_item", id=note["id"])["content"]
+        assert "три" in _ok(client, token, "read_item", id=other["id"])["content"]
+
+        stopped = _ok(client, token, "batch", calls=[
+            {"tool": "edit_note", "arguments": {"id": note["id"], "old_text": "нет такого текста", "new_text": "x"}},
+            {"tool": "edit_note", "arguments": {"id": other["id"], "old_text": "три", "new_text": "четыре"}},
+        ])
+        assert stopped["done"] == 0 and stopped["stopped"] and stopped["results"][0]["error"]["code"] == "text_not_found"
+        assert "три" in _ok(client, token, "read_item", id=other["id"])["content"], "после ошибки следующие вызовы не выполняются"
+
+        dry = _ok(client, token, "batch", dry_run=True, calls=[{"tool": "edit_note", "arguments": {"id": other["id"], "old_text": "три", "new_text": "пять"}}])
+        assert dry["done"] == 1 and "три" in _ok(client, token, "read_item", id=other["id"])["content"]
+        nested = _ok(client, token, "batch", calls=[{"tool": "batch", "arguments": {"calls": []}}])
+        assert nested["results"][0]["ok"] is False
     finally:
         anna.delete(f"/api/mcp/keys/{key['id']}")

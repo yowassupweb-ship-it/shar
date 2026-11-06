@@ -223,6 +223,13 @@ def insert_markdown(snapshot: dict[str, Any], markdown: str, after_text: str) ->
     anchor = stream.find(after_text) + len(after_text)
     paragraph_end = stream.find("\r", anchor)
     at = paragraph_end + 1 if paragraph_end >= 0 else len(stream)
+    return insert_at(snapshot, at, markdown)
+
+
+def insert_at(snapshot: dict[str, Any], at: int, markdown: str) -> dict[str, Any]:
+    """Вставить абзацы Markdown в поток с позиции at (начало абзаца): всё, что стоит после, сдвигается."""
+    body = snapshot.setdefault("body", {})
+    stream = str(body.get("dataStream") or "")
     built = _build(markdown, base=at)
     added = len(built["stream"])
     body["dataStream"] = stream[:at] + built["stream"] + stream[at:]
@@ -339,7 +346,157 @@ def snapshot_to_markdown(snapshot: dict[str, Any]) -> str:
             if link and piece.strip():
                 piece = f"[{piece}]({link['properties']['url']})"
             out += piece
-        out = _CONTROL.sub("", out)
+        out = _KEEP_TABLE.sub("", out)
         lines.append(f"{'#' * heading} {out}" if heading and out.strip() else out)
         begin = end + 1
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    return re.sub(r"\n{3,}", "\n\n", _tables_to_markdown("\n".join(lines))).strip()
+
+
+# Служебные знаки таблицы в потоке Univer: начало/конец таблицы, строки и ячейки.
+_T_START, _T_END, _R_START, _R_END, _C_START, _C_END = "\x1a", "\x0f", "\x1b", "\x0e", "\x1c", "\x1d"
+_KEEP_TABLE = re.compile(r"[\u0000-\u0008\u000b\u000c\u0010-\u0019\u001e\u001f]")  # всё служебное, кроме знаков таблицы
+_TABLE = re.compile(_T_START + r"(.*?)" + _T_END, re.S)
+
+
+def _tables_to_markdown(text: str) -> str:
+    """Таблицы документа — таблицами Markdown (строка шапки, ячейки через « | »), а не россыпью строк: агент видит строки и столбцы."""
+    def one(match: re.Match[str]) -> str:
+        rows = []
+        for row in re.findall(_R_START + r"(.*?)" + _R_END, match.group(1), re.S):
+            cells = [" ".join(c.replace(_C_START, "").strip().split()).replace("|", "\\|") for c in re.findall(_C_START + r"(.*?)" + _C_END, row, re.S)]
+            rows.append(cells)
+        if not rows:
+            return ""
+        width = max(len(r) for r in rows)
+        rows = [r + [""] * (width - len(r)) for r in rows]
+        lines = ["| " + " | ".join(rows[0]) + " |", "| " + " | ".join(["---"] * width) + " |"] + ["| " + " | ".join(r) + " |" for r in rows[1:]]
+        return "\n" + "\n".join(lines) + "\n"
+
+    return _CONTROL.sub("", _TABLE.sub(one, text))
+
+
+# ── разделы: правка по заголовку, без точного текста ────────────────────────────────────────────────────────────────
+
+def _paragraph_spans(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    """Абзацы потока: начало, индекс «\\r» в конце, текст и уровень заголовка (по кеглю — как в snapshot_to_markdown)."""
+    body = snapshot.get("body") or {}
+    stream = str(body.get("dataStream") or "")
+    runs = body.get("textRuns") or []
+    out: list[dict[str, Any]] = []
+    begin = 0
+    for end in sorted(int(p.get("startIndex", 0)) for p in (body.get("paragraphs") or [])):
+        inside = [r for r in runs if r.get("ed", 0) > begin and r.get("st", 0) < end]
+        size = max([float((r.get("ts") or {}).get("fs") or 0) for r in inside] or [0])
+        heading = 1 if size >= HEADING_SIZE[1] else 2 if size >= HEADING_SIZE[2] else 3 if size >= HEADING_SIZE[3] else 0
+        text = _CONTROL.sub("", stream[begin:end]).strip()
+        out.append({"start": begin, "end": end, "text": text, "heading": heading if text else 0})
+        begin = end + 1
+    return out
+
+
+def _find_section(snapshot: dict[str, Any], title: str) -> dict[str, int]:
+    """Раздел по заголовку: heading_start — начало заголовка, body_start — после него, end — до следующего заголовка того же или
+    более высокого уровня (или до конца документа)."""
+    spans = _paragraph_spans(snapshot)
+    heads = [(i, p) for i, p in enumerate(spans) if p["heading"]]
+    wanted = " ".join(str(title or "").split()).casefold().lstrip("# ").strip()
+    if not wanted:
+        raise TextNotFound("Укажите heading — заголовок раздела (названия — в outline у read_item)")
+    exact = [h for h in heads if h[1]["text"].casefold() == wanted]
+    found = exact or [h for h in heads if wanted in h[1]["text"].casefold()]
+    if not found:
+        raise TextNotFound(f"Раздел «{title}» не найден. Заголовки: {', '.join(p['text'] for _, p in heads[:30]) or 'в документе их нет'}")
+    if len(found) > 1:
+        raise TextNotFound(f"Заголовку «{title}» отвечает {len(found)} разделов: {', '.join(p['text'] for _, p in found[:8])}. Уточните название")
+    index, head = found[0]
+    stream = str((snapshot.get("body") or {}).get("dataStream") or "")
+    end = next((p["start"] for p in spans[index + 1:] if p["heading"] and p["heading"] <= head["heading"]), len(stream) - 1 if stream.endswith("\n") else len(stream))
+    return {"heading_start": head["start"], "body_start": head["end"] + 1, "end": end}
+
+
+def delete_range(snapshot: dict[str, Any], a: int, b: int) -> None:
+    """Убрать из потока участок [a, b) (границы абзацев): абзацы, стили и ссылки внутри пропадают, всё после сдвигается назад.
+    Участок с таблицей или картинкой не трогаем — их правят точечно, иначе легко порвать структуру."""
+    body = snapshot.setdefault("body", {})
+    stream = str(body.get("dataStream") or "")
+    if a >= b:
+        return
+    if re.search(r"[\x08\x1a\x1b\x1c\x1d\x0e\x0f]", stream[a:b]) or any(a <= int(t.get("startIndex", 0)) < b for t in body.get("tables") or []):
+        raise TextNotFound("В этом разделе таблица или картинка: раздел целиком так не заменить. Правьте текст точечно (edit_document), "
+                           "а новое добавляйте после заголовка (insert_after_heading)")
+    size = b - a
+    for key in ("paragraphs", "sectionBreaks", "customBlocks"):
+        kept = []
+        for item in body.get(key) or []:
+            at = int(item.get("startIndex", 0))
+            if a <= at < b:
+                continue
+            if at >= b:
+                item["startIndex"] = at - size
+            kept.append(item)
+        body[key] = kept
+    runs = []
+    for run in body.get("textRuns") or []:
+        st, ed = int(run.get("st", 0)), int(run.get("ed", 0))
+        if ed <= a:
+            runs.append(run)
+            continue
+        if st >= b:
+            run["st"], run["ed"] = st - size, ed - size
+            runs.append(run)
+            continue
+        st2 = st if st < a else a
+        ed2 = a if ed <= b else ed - size
+        if ed2 > st2:
+            run["st"], run["ed"] = st2, ed2
+            runs.append(run)
+    body["textRuns"] = runs
+    for key in ("customRanges", "customDecorations"):
+        kept = []
+        for item in body.get(key) or []:
+            st, ed = int(item.get("startIndex", 0)), int(item.get("endIndex", 0))
+            if ed < a:
+                kept.append(item)
+            elif st >= b:
+                item["startIndex"], item["endIndex"] = st - size, ed - size
+                kept.append(item)
+            elif st >= a and ed < b:
+                continue  # целиком внутри — уходит вместе с текстом
+            # пересекает границу участка — ссылка порвана, убираем (текст остаётся без ссылки)
+        body[key] = kept
+    stream = stream[:a] + stream[b:]
+    if "\r" not in stream:  # удалили всё: документ не бывает без абзаца
+        stream = "\r\n"
+        body["paragraphs"] = [{"startIndex": 0, "paragraphId": _rid("para"), "paragraphStyle": {"lineSpacing": 1.15}}]
+        body["sectionBreaks"] = [{"sectionId": _rid("section"), "startIndex": 1}]
+    body["dataStream"] = stream
+
+
+def edit_section(snapshot: dict[str, Any], mode: str, heading: str, markdown: str = "") -> dict[str, Any]:
+    """Правка по заголовку, без точного текста:
+      replace_section — заменить содержимое раздела (сам заголовок остаётся; если Markdown начинается с «#», заменяется и он);
+      delete_section — убрать раздел вместе с заголовком;
+      append_to_section — дописать в конец раздела;
+      insert_after_heading — вставить сразу под заголовком;
+      insert_before_heading — вставить перед заголовком."""
+    if mode != "delete_section" and not str(markdown or "").strip():
+        raise TextNotFound("Передайте markdown — новый текст")
+    sec = _find_section(snapshot, heading)
+    if mode == "delete_section":
+        delete_range(snapshot, sec["heading_start"], sec["end"])
+    elif mode == "replace_section":
+        if re.match(r"^\s*#{1,6}\s", str(markdown)):
+            delete_range(snapshot, sec["heading_start"], sec["end"])
+            insert_at(snapshot, sec["heading_start"], markdown)
+        else:
+            delete_range(snapshot, sec["body_start"], sec["end"])
+            insert_at(snapshot, sec["body_start"], markdown)
+    elif mode == "append_to_section":
+        insert_at(snapshot, sec["end"], markdown)
+    elif mode == "insert_after_heading":
+        insert_at(snapshot, sec["body_start"], markdown)
+    elif mode == "insert_before_heading":
+        insert_at(snapshot, sec["heading_start"], markdown)
+    else:
+        raise TextNotFound(f"Неизвестный режим {mode}")
+    return snapshot

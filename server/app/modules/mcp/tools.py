@@ -467,7 +467,48 @@ def list_items(access: Access, args: dict[str, Any]) -> dict[str, Any]:
         items = [i for i in items if (i.get("folderId") or "") == str(args["folder_id"])]
     offset = max(0, int(args.get("offset") or 0))
     limit = max(1, min(int(args.get("limit") or 50), 200))
-    return {"items": [_brief(i, access) for i in items[offset:offset + limit]], "total": len(items)}
+    page = [_brief(i, access) for i in items[offset:offset + limit]]
+    query = str(args.get("query") or "").strip()
+    if query and args.get("matches", True):
+        # Где именно нашлось: раздел и offset — читать нужный кусок по read_item (section / offset), а не материал целиком.
+        for row in page[:MATCHED_ITEMS]:
+            found = _matches(access, row["id"], query)
+            if found:
+                row["matches"] = found
+    return {"items": page, "total": len(items)}
+
+
+MATCHED_ITEMS = 8
+
+
+def _matches(access: Access, item_id: str, query: str) -> list[dict[str, Any]]:
+    """До трёх мест в материале, где встречаются слова запроса (с учётом форм слова): фрагмент, раздел, offset для read_item."""
+    try:
+        item = access.load(item_id)
+    except ToolError:
+        return []
+    if item["kind"] not in ("note", "document"):
+        return []
+    text = _text(item)
+    lower = text.lower()
+    spots: list[tuple[int, int]] = []
+    for term in [t for t in query.lower().split() if t][:6]:
+        stem = term[:max(4, len(term) - 2)]  # «договоры» ищется и в «договору»
+        at = lower.find(stem)
+        while at >= 0 and len(spots) < 12:
+            spots.append((at, len(stem)))
+            at = lower.find(stem, at + len(stem))
+    out: list[dict[str, Any]] = []
+    outline = _outline(text, text, False)
+    for at, size in sorted(spots):
+        if any(abs(at - m["offset"]) < 160 for m in out):
+            continue
+        head = next((h["title"] for h in reversed(outline) if h["offset"] <= at), "")
+        out.append({"offset": at, "section": head,
+                    "text": ("…" if at > 60 else "") + " ".join(text[max(0, at - 60):at + size + 110].split()) + "…"})
+        if len(out) >= 3:
+            break
+    return out
 
 
 def list_folders(access: Access, args: dict[str, Any]) -> dict[str, Any]:
@@ -600,6 +641,9 @@ def _document(access: Access, args: dict[str, Any]) -> tuple[dict[str, Any], dic
         return item, docformat.empty_snapshot(item["title"])
 
 
+SECTION_MODES = ("replace_section", "delete_section", "append_to_section", "insert_after_heading", "insert_before_heading")
+
+
 def update_document(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     item, snapshot = _document(access, args)
     markdown, mode = str(args.get("markdown") or ""), str(args.get("mode") or "append")
@@ -610,8 +654,10 @@ def update_document(access: Access, args: dict[str, Any]) -> dict[str, Any]:
             snapshot = docformat.insert_markdown(snapshot, markdown, str(args.get("after_text") or ""))
         elif mode == "replace":
             snapshot = docformat.markdown_to_snapshot(item["title"], markdown)
+        elif mode in SECTION_MODES:
+            snapshot = docformat.edit_section(snapshot, mode, str(args.get("heading") or ""), markdown)
         else:
-            raise ToolError("mode — append, insert или replace")
+            raise ToolError("mode — append, insert, replace или по заголовку: " + ", ".join(SECTION_MODES))
     except docformat.TextNotFound as exc:
         raise ToolError(str(exc), "text_not_found") from exc
     content = json.dumps(snapshot, ensure_ascii=False)
@@ -952,6 +998,37 @@ def tool_search(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     return {"tools": [entry for _, entry in found[:limit]], "total": len(found), "truncated": len(found) > limit}
 
 
+MAX_BATCH = 20
+
+
+def batch(access: Access, args: dict[str, Any]) -> dict[str, Any]:
+    """Несколько вызовов инструментов за один раз — правки в разных материалах без лишних кругов. Каждый вызов проходит те же проверки
+    прав и разрешений, что и отдельный; атомарности между материалами нет (внутри одного материала она есть у самих инструментов)."""
+    calls = args.get("calls")
+    if not isinstance(calls, list) or not calls or len(calls) > MAX_BATCH:
+        raise ToolError(f"calls — от 1 до {MAX_BATCH} вызовов {{tool, arguments}}")
+    stop = args.get("stop_on_error", True)
+    dry = bool(args.get("dry_run"))
+    results: list[dict[str, Any]] = []
+    for n, call in enumerate(calls, 1):
+        name = str((call or {}).get("tool") or "")
+        tool = BY_NAME.get(name)
+        if not tool or name == "batch":
+            results.append({"n": n, "tool": name, "ok": False, "error": {"message": f"Инструмент «{name}» не найден или вложен в пакет", "code": "not_found"}})
+        else:
+            inner = dict((call or {}).get("arguments") or {})
+            if dry and "dry_run" in (tool.get("inputSchema") or {}).get("properties", {}):
+                inner["dry_run"] = True
+            try:
+                results.append({"n": n, "tool": name, "ok": True, "result": run(access.ctx, tool, inner)})
+                continue
+            except ToolError as exc:
+                results.append({"n": n, "tool": name, "ok": False, "error": {"message": str(exc), "code": getattr(exc, "code", "")}})
+        if stop:
+            break
+    return {"results": results, "done": sum(1 for r in results if r["ok"]), "stopped": len(results) < len(calls)}
+
+
 def rename_item(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     access.need("edit", "править материалы")
     item = access.load(args.get("id"), content=False)
@@ -1014,7 +1091,8 @@ _TABLE_OPERATION = {"type": "object", "properties": {
 
 TOOLS: list[dict[str, Any]] = [
     {"name": "list_items", "handler": list_items, "level": "read",
-     "description": "Материалы «Офиса», открытые этому ключу: заметки, документы, таблицы, презентации. Поиск по названию и тексту, фильтр по виду и папке.",
+     "description": "Материалы «Офиса», открытые этому ключу: заметки, документы, таблицы, презентации. Поиск по названию и тексту (слова в любых формах), фильтр по виду и папке. "
+                    "У найденных заметок и документов в matches — где нашлось: фрагмент, раздел и offset; читайте нужное место по read_item (section или offset), не весь материал.",
      "inputSchema": {"type": "object", "properties": {
          "kind": {"type": "string", "enum": list(store.KINDS)},
          "query": {"type": "string", "description": "слова из названия или текста"},
@@ -1068,11 +1146,15 @@ TOOLS: list[dict[str, Any]] = [
                                                      "replacements": {"type": "array", "maxItems": 50, "items": {"type": "object", "properties": {"old_text": {"type": "string"}, "new_text": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["old_text", "new_text"]}},
                                                      "replace_all": {"type": "boolean", "default": False}, **_DRY_RUN}, "required": ["id"]}},
     {"name": "update_document", "handler": update_document, "level": "edit",
-     "description": "Дописать Markdown в конец (append), вставить после абзаца с after_text (insert) или пересобрать документ (replace, оформление пропадёт).",
-     "inputSchema": {"type": "object", "properties": {"id": _ID, "markdown": {"type": "string"},
-                                                     "mode": {"type": "string", "enum": ["append", "insert", "replace"], "default": "append"},
+     "description": "Структурная правка документа. По заголовку, без точного текста: replace_section (заменить содержимое раздела, заголовок остаётся), "
+                    "delete_section, append_to_section (в конец раздела), insert_after_heading, insert_before_heading — раздел назван в heading (заголовки — в outline у read_item). "
+                    "Иначе: append (в конец), insert (после абзаца с after_text), replace (пересобрать документ, оформление пропадёт). "
+                    "Раздел с таблицей или картинкой целиком не заменяется — правьте текст точечно (edit_document) или вставляйте под заголовком.",
+     "inputSchema": {"type": "object", "properties": {"id": _ID, "markdown": {"type": "string", "description": "новый текст; для delete_section не нужен"},
+                                                     "mode": {"type": "string", "enum": ["append", "insert", "replace", *SECTION_MODES], "default": "append"},
+                                                     "heading": {"type": "string", "description": "заголовок раздела для режимов по заголовку (целиком или его часть, если однозначно)"},
                                                      "after_text": {"type": "string", "description": "для insert — уникальный фрагмент одного абзаца из format=text"},
-                                                     **_DRY_RUN}, "required": ["id", "markdown"]}},
+                                                     **_DRY_RUN}, "required": ["id"]}},
     {"name": "update_table", "handler": update_table, "level": "edit",
      "description": "Изменить ячейки, строки и листы. operations — несколько листов атомарно одной записью. value заменяет прежнюю ссылку; формулы передаются строками с =.",
      "inputSchema": {"type": "object", "properties": {
@@ -1097,6 +1179,13 @@ TOOLS: list[dict[str, Any]] = [
     {"name": "resolve_comment", "handler": resolve_comment, "level": "edit",
      "description": "Закрыть ветку комментариев («решено») или открыть снова (resolved=false).",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "thread_id": {"type": "string"}, "resolved": {"type": "boolean"}}, "required": ["id", "thread_id"]}},
+    {"name": "batch", "handler": batch, "level": "read",
+     "description": "Несколько вызовов инструментов одним запросом (до 20): правки в разных материалах, чтение нескольких разделов. calls: [{tool, arguments}]. "
+                    "Права и разрешения проверяются у каждого вызова отдельно; по умолчанию остановка на первой ошибке (stop_on_error). "
+                    "dry_run: true — предпросмотр у всех правок сразу.",
+     "inputSchema": {"type": "object", "properties": {"calls": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "object", "properties": {
+         "tool": {"type": "string"}, "arguments": {"type": "object"}}, "required": ["tool"]}},
+         "stop_on_error": {"type": "boolean", "default": True}, **_DRY_RUN}, "required": ["calls"]}},
     {"name": "rename_item", "handler": rename_item, "level": "edit", "description": "Переименовать материал.",
      "inputSchema": {"type": "object", "properties": {"id": _ID, "title": {"type": "string"}}, "required": ["id", "title"]}},
     {"name": "create_note", "handler": create_note, "level": "create",
