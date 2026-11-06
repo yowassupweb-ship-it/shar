@@ -272,6 +272,77 @@ def update_file_metadata(file_id: str, body: dict = Body(...), me: Identity = De
     return snake_to_camel(dict(result))
 
 
+_DIM_EXT = {'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tif', 'tiff'}
+
+
+def _image_size(row: dict):
+    """Ширина и высота картинки (с учётом поворота по EXIF) — по первым 256 КБ файла: заголовка хватает, целиком не читаем."""
+    name = str(row.get('name') or '')
+    if name.rsplit('.', 1)[-1].lower() not in _DIM_EXT:
+        return None
+    key = row.get('s3_key') or (f"uploads/{str(row.get('url') or '').rsplit('/', 1)[-1]}" if row.get('url') else '')
+    if not key:
+        return None
+    try:
+        import io
+
+        from PIL import Image
+
+        if s3_storage.enabled:
+            obj = s3_storage.get_object(key)
+            head = obj["Body"].read(262144) if obj else b''
+        else:
+            from app.core.storage import UPLOAD_DIR
+
+            path = UPLOAD_DIR / key
+            head = path.open('rb').read(262144) if path.exists() else b''
+        if not head:
+            return None
+        img = Image.open(io.BytesIO(head))
+        w, h = img.size
+        try:
+            if int(img.getexif().get(274, 1)) in (5, 6, 7, 8):  # снято боком: ширина и высота меняются местами
+                w, h = h, w
+        except Exception:  # noqa: BLE001
+            pass
+        return (int(w), int(h)) if w and h else None
+    except Exception as exc:  # noqa: BLE001 — не картинка или повреждена: размера просто нет
+        logger.debug("[cloud] image size unavailable: %s", exc)
+        return None
+
+
+@router.post("/api/cloud/files/dims")
+def cloud_files_dims(body: dict = Body(...), me: Identity = Depends(current_identity)):
+    """Разрешение картинок для подписи под плиткой: {ids: [...]} → {dims: {id: [ширина, высота]}}. Считается один раз и
+    запоминается у файла (вместе с размером файла: заменили содержимое — посчитается заново)."""
+    import json as _json
+
+    out: dict = {}
+    for fid in [str(i) for i in (body.get('ids') or [])][:60]:
+        row = db.get_cloud_file_by_id(fid)
+        if not row or not _can_view_cloud(row, me):
+            continue
+        meta = row.get('metadata') or {}
+        if isinstance(meta, str):
+            try:
+                meta = _json.loads(meta)
+            except ValueError:
+                meta = {}
+        if meta.get('width') and meta.get('height') and meta.get('dimsFor') == row.get('size'):
+            out[fid] = [meta['width'], meta['height']]
+            continue
+        size = _image_size(row)
+        if size:
+            out[fid] = list(size)
+            try:
+                db.conn.execute_query(
+                    "UPDATE cloud_files SET metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb WHERE id = %s",
+                    (Json({'width': size[0], 'height': size[1], 'dimsFor': row.get('size')}), fid))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[cloud] could not remember image size: %s", exc)
+    return {"dims": out}
+
+
 @router.get("/api/cloud/files")
 def get_cloud_files(folderId: Optional[str] = None, allFiles: bool = False, me: Identity = Depends(current_identity)):
     userId = me.user_id  # владелец — вошедший, не параметр запроса

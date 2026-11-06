@@ -199,6 +199,31 @@ class CloudRepo:
                 })
             preview_map = tmp
 
+        # Что лежит в папке по видам вместе со вложенными папками: верхний фильтр «Фото / Видео / Документы» оставляет
+        # только папки, где такое есть.
+        kinds_map: dict = {}
+        if folder_ids:
+            try:
+                kind_rows = self.conn.fetch_all(
+                    """WITH RECURSIVE d AS (
+                           SELECT id AS root, id FROM cloud_folders WHERE id = ANY(%s)
+                           UNION ALL
+                           SELECT d.root, f.id FROM cloud_folders f JOIN d ON f.parent_id = d.id
+                       )
+                       SELECT d.root AS folder_id,
+                              CASE WHEN c.file_type = 'image' OR c.mime_type LIKE 'image/%%'
+                                        OR lower(c.name) ~ '\\.(png|jpe?g|gif|webp|avif|heic|bmp|svg)$' THEN 'image'
+                                   WHEN c.file_type = 'video' OR c.mime_type LIKE 'video/%%'
+                                        OR lower(c.name) ~ '\\.(mp4|mov|webm|mkv|avi)$' THEN 'video'
+                                   ELSE 'doc' END AS kind,
+                              count(*) AS n
+                       FROM d JOIN cloud_files c ON c.folder_id = d.id GROUP BY 1, 2""",
+                    (folder_ids,)) or []
+                for kr in kind_rows:
+                    kinds_map.setdefault(kr['folder_id'], {})[kr['kind']] = int(kr['n'])
+            except Exception:  # noqa: BLE001 — без этого фильтр просто не сужает папки
+                kinds_map = {}
+
         # Also get sub-folders for each folder (show in thumbnail grid)
         subfolder_map: dict = {}
         if folder_ids:
@@ -228,6 +253,7 @@ class CloudRepo:
             combined = (folder_previews[:3] + file_previews)[:9]
             d['preview_files'] = combined
             d['file_count'] = count_map.get(fid, 0) + len(subfolder_map.get(fid, []))
+            d['kinds'] = kinds_map.get(fid, {})
             result.append(d)
         return result
 

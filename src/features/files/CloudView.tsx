@@ -15,7 +15,7 @@ import { thumbUrl } from '@/shared/ui/media';
 import { Avatar } from '@/shared/ui/Avatar';
 import { askConfirm, Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import {
-  cachedFolder, createFolder, deleteItem, fileUrl, fmtBytes, fmtDate, kindOf, loadFolder, myId, patchFolderCache,
+  cachedFolder, createFolder, deleteItem, fetchImageDims, fileUrl, fmtBytes, fmtDate, fmtDateShort, kindOf, loadFolder, myId, patchFolderCache,
   pinFolder, registerUpload, renameItem, setFolderColor, type CloudFile, type CloudFolder,
 } from './api';
 import { FileGlyph } from './FileGlyph';
@@ -140,7 +140,11 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
   }, [highlightId, data]);
 
   const q = query.trim().toLowerCase();
-  const folders = useMemo(() => (data?.folders || []).filter((f) => !q || f.name.toLowerCase().includes(q)), [data, q]);
+  // Верхний фильтр («Фото», «Видео», «Документы») сужает и папки: остаются те, где такое лежит (с вложенными).
+  const folders = useMemo(() => (data?.folders || []).filter((f) => {
+    if (q && !f.name.toLowerCase().includes(q)) return false;
+    return filter === 'all' || (f.kinds?.[filter] || 0) > 0;
+  }), [data, q, filter]);
   const [sort, setSortState] = useState<SortId>(readSort);
   const [sortMenu, setSortMenu] = useState<MenuAnchor | null>(null);
   const setSort = (next: SortId) => { setSortState(next); try { localStorage.setItem(SORT_KEY, next); } catch { /* приватный режим — не запомним */ } };
@@ -153,6 +157,20 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
     return true;
   }).sort(SORTS[sort].compare), [data, q, filter, sort]);
   const images = useMemo(() => files.filter((f) => kindOf(f.name, f.fileType, f.mimeType) === 'image'), [files]);
+
+  // Разрешение фото под плиткой: сервер читает его из заголовка файла один раз и запоминает; здесь — только то, что на экране.
+  const [dims, setDims] = useState<Record<string, [number, number]>>({});
+  const missingDims = useMemo(() => images.filter((f) => !dims[f.id]).slice(0, 60).map((f) => f.id), [images, dims]);
+  useEffect(() => {
+    if (!missingDims.length) return undefined;
+    let alive = true;
+    void fetchImageDims(missingDims).then((got) => {
+      if (!alive) return;
+      // Что сервер не смог прочесть (svg, битый файл), помечаем нулём — второй раз не спрашиваем.
+      setDims((cur) => ({ ...cur, ...Object.fromEntries(missingDims.map((id) => [id, [0, 0] as [number, number]])), ...got }));
+    });
+    return () => { alive = false; };
+  }, [missingDims]);
 
   // ── Загрузка ──────────────────────────────────────────────────────────────
   const upload = async (list: FileList | File[]) => {
@@ -403,7 +421,7 @@ ${url}` });
                     <span className="nf-text">
                       {nameOrInput(t)}
                       <span className="nf-meta">
-                        {[fmtBytes(f.size), fmtDate(f.createdAt)].filter(Boolean).join(' · ')}
+                        {[dims[f.id]?.[0] ? `${dims[f.id][0]}×${dims[f.id][1]}` : '', fmtBytes(f.size), mode === 'grid' ? fmtDateShort(f.createdAt) : fmtDate(f.createdAt)].filter(Boolean).join(' · ')}
                         {owner && <span className="nf-owner" title={`Владелец: ${displayName(owner)}`}><Avatar name={displayName(owner)} seed={String(owner.id)} src={owner.avatar} person size={14} /></span>}
                       </span>
                     </span>
@@ -528,6 +546,8 @@ ${url}` });
       {sheet?.type === 'send' && (
         <SendSheet
           onClose={() => setSheet(null)}
+          onDone={() => void refresh()}
+          access={{ kind: sheet.target.kind, ownerId: String(sheet.target.item.ownerId), sharedWith: sheet.target.item.sharedWith, editAccess: sheet.target.item.editAccess }}
           item={sheet.target.kind === 'file'
             ? { id: sheet.target.item.id, name: sheet.target.item.name, url: fileUrl(sheet.target.item.url), fileType: kindOf(sheet.target.item.name, sheet.target.item.fileType, sheet.target.item.mimeType) === 'image' ? 'image' : sheet.target.item.fileType, preview: kindOf(sheet.target.item.name, sheet.target.item.fileType) === 'image' ? fileUrl(sheet.target.item.url) : undefined }
             : { id: sheet.target.item.id, name: sheet.target.item.name, url: links.folder(sheet.target.item.id), fileType: 'folder', isFolder: true }}

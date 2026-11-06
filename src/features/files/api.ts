@@ -20,6 +20,8 @@ export interface CloudFolder {
   sortOrder?: number;
   color?: string | null;
   fileCount?: number;
+  /** Сколько файлов каждого вида в папке (с вложенными): для верхнего фильтра. */
+  kinds?: { image?: number; video?: number; doc?: number };
   previewFiles?: { url: string; fileType: string; name: string }[];
 }
 
@@ -100,6 +102,24 @@ export function fmtBytes(b?: number | null): string {
 }
 
 const dateFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' });
+const dateShortFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' });
+/** Для узкой подписи под плиткой: этого года — без года («6 нояб.»), прежних — с годом. */
+export function fmtDateShort(iso?: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return (d.getFullYear() === new Date().getFullYear() ? dateShortFmt : dateFmt).format(d);
+}
+
+/** Разрешение картинок по id файлов (считает сервер по заголовку файла и запоминает). */
+export async function fetchImageDims(ids: string[]): Promise<Record<string, [number, number]>> {
+  if (!ids.length) return {};
+  try {
+    const res = await fetch('/api/cloud/files/dims', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: ids.slice(0, 60) }) });
+    if (!res.ok) return {};
+    return ((await res.json()) as { dims?: Record<string, [number, number]> }).dims || {};
+  } catch { return {}; }
+}
 export function fmtDate(iso?: string | null): string {
   if (!iso) return '';
   const d = new Date(iso);

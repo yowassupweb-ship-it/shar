@@ -48,9 +48,9 @@ button.nf-crumb { cursor: pointer; }
 /* Компьютер: три колонки — путь, поиск, инструменты. Боковые колонки равной ширины, поэтому поиск стоит ровно
    по центру шапки, сколько бы ни занимали путь и кнопки. */
 @media (min-width: 641px) {
-  /* Правая колонка не уже кнопок: иначе при нехватке места они вылезали влево поверх поиска. Тогда поиск
-     чуть сдвигается от центра — это лучше наложения. */
-  .nf-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr); }
+  /* Правая колонка ровно по кнопкам (max-content): с minmax(max-content, 1fr) браузер делил свободное место поровну и
+     кнопки вылезали влево поверх поиска. Теперь путь сжимается первым, поиск стоит рядом с инструментами. */
+  .nf-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto max-content; align-items: center; }
   .nf-left .nf-crumbs { flex: 1 1 auto; }
   .nf-search { width: min(320px, 28vw); }
   .nf-tools { flex-wrap: nowrap; }
@@ -58,6 +58,9 @@ button.nf-crumb { cursor: pointer; }
 /* Фильтр и вид не сжимаются: раньше при нехватке места кнопки «Фото Видео Документы» наезжали друг на друга,
    а значки вида пропадали. */
 .nf-tools > .nx-segment, .nf-tools > .nf-act { flex: none; }
+/* «Новая папка» — второстепенное действие: всегда значком (подсказка — aria-label), подпись остаётся у «Загрузить». */
+.nf-tools > .nf-act[aria-label="Новая папка"] { width: var(--control-h); min-width: var(--control-h); padding: 0; justify-content: center; }
+.nf-tools > .nf-act[aria-label="Новая папка"] .nf-btn-label { display: none; }
 /* Раздел уже, чем нужно для «поиск ровно по центру» (окно ~1300px и меньше): поиск занимает всё место
    между переключателем и инструментами. Ещё уже — инструменты переходят на вторую строку. */
 @container nf-view (min-width: 641px) and (max-width: 1240px) {
@@ -184,6 +187,8 @@ button.nf-crumb { cursor: pointer; }
   font-variant-numeric: tabular-nums;
 }
 .nf-meta svg { flex: none; }
+/* Плитка узкая: разрешение, размер и дата помельче и без переноса — читаются целиком (у обрезанного края — многоточие). */
+.nf-grid .nf-file .nf-meta { font-size: var(--text-2xs); letter-spacing: -0.005em; text-overflow: ellipsis; }
 .nf-owner { display: inline-flex; margin-left: auto; }
 
 .nf-rename {
@@ -416,3 +421,11 @@ button.nf-row { cursor: pointer; }
 /* «Агенты → по дням»: день — отдельный блок; заголовок дня держится сверху, пока листают его файлы. */
 .nf-day { margin-bottom: var(--space-4); }
 .nf-day-title { position: sticky; top: 0; z-index: 2; margin: 0 0 var(--space-2); padding: var(--space-2) 0; background: var(--bg-color); }
+
+/* «Отправить в чат»: второй шаг — выдать ли доступ (как у документов). */
+.nfs-send { display: grid; gap: var(--space-4); padding: var(--space-2) 0 var(--space-1); }
+.nfs-send-note { margin: 0; color: var(--text-2); font-size: var(--text-sm); line-height: 1.45; }
+.nfs-send-error { color: var(--state-danger); }
+.nfs-send-options { display: grid; gap: var(--space-2); }
+.nfs-send-options .nx-pick small { display: block; margin-top: 2px; color: var(--text-muted); font-size: var(--text-xs); }
+.nfs-send-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }

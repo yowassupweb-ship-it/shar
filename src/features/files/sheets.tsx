@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Folder, Search } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Eye, Folder, Link2, Pencil, Search } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
-import { chatTitle, displayName, isFavorites, isNotifications, useChatStore } from '@/features/chat';
+import { chatTitle, displayName, isFavorites, isGroupChat, isNotifications, useChatStore } from '@/features/chat';
 import { Avatar } from '@/shared/ui/Avatar';
 import { Sheet } from '@/shared/ui/overlay';
 import {
@@ -164,15 +164,27 @@ export function AccessSheet({ item, kind, onClose, onDone }: {
 
 // ── Отправить в чат ─────────────────────────────────────────────────────────
 
-export function SendSheet({ item, onClose }: {
+type Choice = 'none' | 'view' | 'edit';
+
+/**
+ * «Отправить в чат» — как у документов: выбираем чат, затем — давать ли его участникам доступ к файлу или папке и какой
+ * (просмотр или правка). Доступ выдаётся каждому участнику отдельно и никогда не понижается (кто уже может править,
+ * правку не теряет). Не владелец выдавать доступ не может — ему просто уходит карточка. Если всем в чате и так можно
+ * править, вопрос про доступ не задаём. Папка открывается вместе со всем вложенным.
+ */
+export function SendSheet({ item, access, onClose, onDone }: {
   item: { id: string; name: string; url: string; fileType: string; isFolder?: boolean; preview?: string };
+  access: { kind: 'file' | 'folder'; ownerId: string; sharedWith?: string[]; editAccess?: string[] };
   onClose: () => void;
+  onDone?: () => void;
 }) {
   const chats = useChatStore((s) => s.chats);
   const users = useChatStore((s) => s.users);
   const me = useChatStore((s) => s.me);
   const [query, setQuery] = useState('');
-  const [busy, setBusy] = useState<string | null>(null);
+  const [chatId, setChatId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
 
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -184,34 +196,106 @@ export function SendSheet({ item, onClose }: {
         || String(b.c.lastMessage?.createdAt || '').localeCompare(String(a.c.lastMessage?.createdAt || '')));
   }, [chats, users, me, query]);
 
-  const send = async (chatId: string, title: string) => {
-    setBusy(chatId);
+  const chat = chatId ? chats[chatId] : undefined;
+  const chatName = chat ? chatTitle(chat, me, users) : '';
+  const others = useMemo(() => (chat?.participantIds || []).map(String).filter((id) => id !== myId()), [chat]);
+  const isOwner = String(access.ownerId) === myId();
+  const editors = new Set((access.editAccess || []).map(String));
+  /** Доступ имеет смысл спрашивать, только если его можно выдать и есть кому. */
+  const canGrant = isOwner && others.length > 0 && others.some((id) => !editors.has(id));
+  const what = item.isFolder ? 'папке' : 'файлу';
+
+  async function send(choice: Choice) {
+    if (!chatId) return;
+    setBusy(true);
+    setError('');
     try {
+      if (choice !== 'none' && canGrant) {
+        // Свежие списки доступа: пока лист был открыт, их могли поменять — не затираем чужие правки.
+        const fresh = await currentAccess(access.kind, item.id);
+        const view = new Set((fresh?.sharedWith || access.sharedWith || []).map(String));
+        const edit = new Set((fresh?.editAccess || access.editAccess || []).map(String));
+        for (const id of others) {
+          if (edit.has(id)) continue; // правка уже есть — не понижаем
+          view.add(id);
+          if (choice === 'edit') edit.add(id);
+        }
+        await saveAccess(access.kind, item.id, Array.from(view), Array.from(edit).filter((id) => view.has(id)));
+      }
       await shareToChat(chatId, item);
-      showToast(`Отправлено в «${title}»`, 'success');
+      showToast(`Отправлено в «${chatName}»${choice === 'none' || !canGrant ? '' : choice === 'edit' ? ': участники могут править' : ': участники могут смотреть'}`, 'success');
+      onDone?.();
       onClose();
     } catch {
-      showToast('Не отправилось — нет связи с сервером.', 'error');
-      setBusy(null);
+      setError('Не отправилось — нет связи с сервером. Попробуйте ещё раз.');
+      setBusy(false);
     }
-  };
+  }
 
+  // Шаг 1 — выбор чата.
+  if (!chatId) {
+    return (
+      <Sheet title={`Отправить «${item.name}»`} onClose={onClose}>
+        <label className="nx-field" data-variant="filter">
+          <Search size={14} aria-hidden="true" />
+          <span className="nx-sr">Найти чат</span>
+          <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Найти чат" autoComplete="off" autoFocus />
+        </label>
+        <div className="nfs-people">
+          {list.map(({ c, title }) => (
+            <button key={c.id} type="button" className="nx-pick" onClick={() => setChatId(String(c.id))}>
+              <Avatar name={title} seed={c.id} src={c.avatar} kind={isFavorites(c) ? 'favorites' : undefined} person={!c.isGroup} size={32} />
+              <span className="nx-pick-text"><span>{title}</span></span>
+            </button>
+          ))}
+        </div>
+      </Sheet>
+    );
+  }
+
+  // Шаг 2 — доступ.
+  const group = chat ? isGroupChat(chat) : false;
   return (
-    <Sheet title={`Отправить «${item.name}»`} onClose={onClose} busy={Boolean(busy)}>
-      <label className="nx-field" data-variant="filter">
-        <Search size={14} aria-hidden="true" />
-        <span className="nx-sr">Найти чат</span>
-        <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Найти чат" autoComplete="off" autoFocus />
-      </label>
-      <div className="nfs-people">
-        {list.map(({ c, title }) => (
-          <button key={c.id} type="button" className="nx-pick" disabled={Boolean(busy)} onClick={() => void send(c.id, title)}>
-            <Avatar name={title} seed={c.id} src={c.avatar} kind={isFavorites(c) ? 'favorites' : undefined} person={!c.isGroup} size={32} />
-            <span className="nx-pick-text"><span>{title}</span></span>
-            {busy === c.id && <Spinner size={16} />}
-          </button>
-        ))}
+    <Sheet title={`Отправить в «${chatName}»`} onClose={onClose} busy={busy}>
+      <div className="nfs-send">
+        {canGrant ? (
+          <>
+            <p className="nfs-send-note">
+              Дать {group ? 'участникам чата' : 'собеседнику'} доступ к {what} «{item.name}»? Без доступа он не откроет {item.isFolder ? 'её' : 'его'} по карточке.
+            </p>
+            <div className="nfs-send-options">
+              <button type="button" className="nx-pick" disabled={busy} onClick={() => void send('view')}>
+                <Eye size={18} aria-hidden="true" /><span className="nx-pick-text"><span>Дать просмотр</span><small>Смогут смотреть и скачивать, но не менять</small></span>
+              </button>
+              <button type="button" className="nx-pick" disabled={busy} onClick={() => void send('edit')}>
+                <Pencil size={18} aria-hidden="true" /><span className="nx-pick-text"><span>Дать редактирование</span><small>Смогут смотреть и менять</small></span>
+              </button>
+              <button type="button" className="nx-pick" disabled={busy} onClick={() => void send('none')}>
+                <Link2 size={18} aria-hidden="true" /><span className="nx-pick-text"><span>Только карточка, без доступа</span><small>Откроется у тех, у кого доступ уже есть</small></span>
+              </button>
+            </div>
+          </>
+        ) : (
+          <p className="nfs-send-note">
+            {!isOwner ? 'Доступом управляет владелец, поэтому уйдёт только карточка.'
+              : others.length === 0 ? (chat && isFavorites(chat) ? 'В «Избранное» вы пишете себе: уйдёт карточка, давать доступ некому.' : 'В этом чате нет других участников — уйдёт карточка.')
+                : 'Всем в этом чате уже можно править — уйдёт карточка.'}
+          </p>
+        )}
+        {error && <p className="nfs-send-note nfs-send-error" role="alert">{error}</p>}
+        <div className="nfs-send-actions">
+          {!canGrant && <button type="button" className="nx-primary" disabled={busy} onClick={() => void send('none')}>{busy ? 'Отправляю…' : 'Отправить'}</button>}
+          <button type="button" className="nx-ghost" disabled={busy} onClick={() => setChatId(null)}>Выбрать другой чат</button>
+        </div>
       </div>
     </Sheet>
   );
+}
+
+/** Актуальные списки доступа файла или папки с сервера (null — не получилось, берём то, что было на экране). */
+async function currentAccess(kind: 'file' | 'folder', id: string): Promise<{ sharedWith?: string[]; editAccess?: string[] } | null> {
+  try {
+    const res = await fetch(`/api/cloud/${kind === 'file' ? 'files' : 'folders'}/${encodeURIComponent(id)}`, { cache: 'no-store' });
+    return res.ok ? ((await res.json()) as { sharedWith?: string[]; editAccess?: string[] }) : null;
+  } catch { return null; }
 }

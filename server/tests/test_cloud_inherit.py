@@ -53,3 +53,38 @@ def test_folder_access_reaches_nested_folders_and_files(users):
     anna.put(f"/api/cloud/folders/{root['id']}/access", json={"sharedWith": [], "editAccess": []})
     assert boris.get("/api/cloud/folders", params={"parentId": root["id"]}).json() == []
     assert boris.get("/api/cloud/files", params={"folderId": deep["id"]}).json() == []
+
+
+def test_folder_kinds_and_image_dims(users, tmp_path, monkeypatch):
+    """Верхний фильтр «Фото / Видео / Документы»: папка знает, что в ней (с вложенными); разрешение фото считается по заголовку."""
+    import io
+
+    from PIL import Image
+
+    from app.core.storage import UPLOAD_DIR
+
+    anna = users._clients["anna"]
+    owner = users.ids["anna"]
+    root = anna.post("/api/cloud/folders", json={"name": "Смешанная"}).json()
+    sub = anna.post("/api/cloud/folders", json={"name": "Глубже", "parentId": root["id"]}).json()
+    empty = anna.post("/api/cloud/folders", json={"name": "Пустая"}).json()
+    _file(owner, sub["id"], "отчёт.pdf")
+    key = f"{uuid.uuid4().hex}.png"
+    (UPLOAD_DIR / 'uploads').mkdir(parents=True, exist_ok=True)
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 30), (1, 2, 3)).save(buf, "PNG")
+    (UPLOAD_DIR / 'uploads' / key).write_bytes(buf.getvalue())
+    photo = db.create_cloud_file({"id": str(uuid.uuid4()), "name": "фото.png", "folder_id": sub["id"], "owner_id": owner, "url": f"/api/uploads/{key}",
+                                  "s3_key": f"uploads/{key}", "size": len(buf.getvalue()), "mime_type": "image/png", "file_type": "image"})
+
+    by_name = {f["name"]: f for f in anna.get("/api/cloud/folders").json()}
+    assert by_name["Смешанная"]["kinds"] == {"image": 1, "doc": 1}, "вложенные папки считаются"
+    assert by_name["Пустая"]["kinds"] == {} and empty["id"] == by_name["Пустая"]["id"]
+
+    got = anna.post("/api/cloud/files/dims", json={"ids": [photo["id"]]}).json()["dims"]
+    assert got == {photo["id"]: [40, 30]}
+    # запомнилось у файла: второй раз файл уже не читается
+    (UPLOAD_DIR / 'uploads' / key).unlink()
+    assert anna.post("/api/cloud/files/dims", json={"ids": [photo["id"]]}).json()["dims"] == {photo["id"]: [40, 30]}
+    # чужой файл размера не отдаёт
+    assert users._clients["clara"].post("/api/cloud/files/dims", json={"ids": [photo["id"]]}).json()["dims"] == {}
