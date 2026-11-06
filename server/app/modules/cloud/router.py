@@ -63,7 +63,23 @@ def _can_view_cloud(item: dict, me: Identity) -> bool:
     if me.user_id in shared:
         return True
     dept = (db.get_user_by_id(me.user_id) or {}).get('department')
-    return bool(dept) and f"dept:{dept}" in shared
+    if dept and f"dept:{dept}" in shared:
+        return True
+    # Доступ к папке распространяется на всё внутри: смотрим папки над этим файлом или папкой.
+    folder_id = item.get('folder_id') if 'folder_id' in item else item.get('parent_id')
+    seen: set = set()
+    for _ in range(16):
+        if not folder_id or folder_id in seen:
+            break
+        seen.add(folder_id)
+        parent = db.get_cloud_folder_by_id(str(folder_id))
+        if not parent:
+            break
+        up = {str(x) for x in (parent.get('shared_with') or [])}
+        if me.user_id in up or (dept and f"dept:{dept}" in up):
+            return True
+        folder_id = parent.get('parent_id')
+    return False
 
 
 # ── живое обновление: «в облаке что-то поменялось» ─────────────────────────────

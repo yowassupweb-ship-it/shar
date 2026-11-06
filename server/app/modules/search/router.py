@@ -88,14 +88,16 @@ def _files(me: Identity, pattern: str, limit: int) -> list[dict[str, Any]]:
     shared = [me.user_id] + ([f"dept:{dept}"] if dept else [])
     # Файл виден, если он мой, выдан мне (или моему отделу) либо лежит в папке, к которой у меня доступ.
     has_access = " OR ".join(["{t}.owner_id = %s"] + ["COALESCE({t}.shared_with, '[]'::jsonb) @> jsonb_build_array(%s::text)"] * len(shared))
+    inherited = db.cloud_inherited_folder_ids(me.user_id, dept)  # открытые папки вместе со всеми вложенными
     rows = db.conn.fetch_all(
         f"""SELECT f.id, f.name, f.folder_id, f.size, f.mime_type, f.updated_at::text AS updated_at
             FROM cloud_files f
             WHERE f.name ILIKE %s {_ESC}
               AND (({has_access.format(t='f')})
-                   OR EXISTS (SELECT 1 FROM cloud_folders d WHERE d.id = f.folder_id AND ({has_access.format(t='d')})))
+                   OR EXISTS (SELECT 1 FROM cloud_folders d WHERE d.id = f.folder_id AND ({has_access.format(t='d')}))
+                   OR f.folder_id = ANY(%s))
             ORDER BY f.updated_at DESC NULLS LAST LIMIT %s""",
-        tuple([pattern, me.user_id, *shared, me.user_id, *shared, limit]),
+        tuple([pattern, me.user_id, *shared, me.user_id, *shared, inherited, limit]),
     ) or []
     return [{"id": r["id"], "name": r["name"] or "", "folderId": r["folder_id"], "size": r["size"], "mimeType": r["mime_type"] or "",
              "updatedAt": r["updated_at"]} for r in rows]

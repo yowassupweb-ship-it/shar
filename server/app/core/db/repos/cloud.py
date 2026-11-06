@@ -86,9 +86,27 @@ class CloudRepo:
             """)
         type(self)._cloud_tables_ensured = True
 
+    def cloud_inherited_folder_ids(self, user_id: str, user_dept: Optional[str] = None) -> List[str]:
+        """Чужие папки, открытые человеку (поимённо или его отделу), вместе со ВСЕМИ вложенными в них на любую глубину.
+        Доступ к папке распространяется на всё внутри: и на подпапки, и на файлы в них, и на то, что положат потом."""
+        entries = [user_id] + ([f'dept:{user_dept}'] if user_dept else [])
+        try:
+            rows = self.conn.fetch_all(
+                """WITH RECURSIVE tree AS (
+                       SELECT id FROM cloud_folders WHERE owner_id <> %s AND COALESCE(shared_with, '[]'::jsonb) ?| %s::text[]
+                       UNION
+                       SELECT f.id FROM cloud_folders f JOIN tree t ON f.parent_id = t.id
+                   ) SELECT id FROM tree""",
+                (user_id, entries),
+            ) or []
+        except Exception:  # таблицы ещё нет — наследовать нечего
+            return []
+        return [str(r['id']) for r in rows]
+
     def get_cloud_folders(self, owner_id: str, parent_id: Optional[str] = None, user_dept: Optional[str] = None) -> List[Dict[str, Any]]:
         dept_val = f'dept:{user_dept}' if user_dept else None
         uid_text = '%s::text'
+        inherited = self.cloud_inherited_folder_ids(owner_id, user_dept)
         parent_clause = "parent_id = %s" if parent_id else "parent_id IS NULL"
         parent_params: list = [parent_id] if parent_id else []
 
@@ -103,8 +121,9 @@ class CloudRepo:
                          OR COALESCE(cf.shared_with,'[]'::jsonb) @> jsonb_build_array({uid_text})
                          OR COALESCE(cf.shared_with,'[]'::jsonb) @> jsonb_build_array({uid_text}))
                 )
+                OR cloud_folders.id = ANY(%s)
             )"""
-            access_params = [owner_id, owner_id, dept_val, owner_id, owner_id, dept_val]
+            access_params = [owner_id, owner_id, dept_val, owner_id, owner_id, dept_val, inherited]
         else:
             access = f"""AND (
                 owner_id = %s
@@ -114,8 +133,9 @@ class CloudRepo:
                     AND (owner_id = %s
                          OR COALESCE(cf.shared_with,'[]'::jsonb) @> jsonb_build_array({uid_text}))
                 )
+                OR cloud_folders.id = ANY(%s)
             )"""
-            access_params = [owner_id, owner_id, owner_id, owner_id]
+            access_params = [owner_id, owner_id, owner_id, owner_id, inherited]
 
         # Check if sort columns exist before using them (fetch_all silently returns [] on errors)
         has_sort = self.conn.fetch_one("""
@@ -243,6 +263,7 @@ class CloudRepo:
         dept_val = f'dept:{user_dept}' if user_dept else None
         uid_text = '%s::text'
         cols = self._FILE_COLS
+        inherited = self.cloud_inherited_folder_ids(owner_id, user_dept)
 
         if folder_id:
             # Use pure SQL to check folder access — avoids psycopg2 JSONB deserialization issues.
@@ -267,7 +288,7 @@ class CloudRepo:
                     (folder_id, owner_id, owner_id)
                 )
 
-            if folder_access_check:
+            if folder_access_check or folder_id in inherited:
                 rows = self.conn.fetch_all(
                     f"SELECT {cols} FROM cloud_files WHERE folder_id = %s ORDER BY name",
                     (folder_id,)
@@ -293,15 +314,17 @@ class CloudRepo:
                 q = f"""SELECT {cols} FROM cloud_files WHERE {folder_clause}
                     (owner_id = %s
                      OR COALESCE(shared_with,'[]'::jsonb) @> jsonb_build_array({uid_text})
-                     OR COALESCE(shared_with,'[]'::jsonb) @> jsonb_build_array({uid_text}))
+                     OR COALESCE(shared_with,'[]'::jsonb) @> jsonb_build_array({uid_text})
+                     OR folder_id = ANY(%s))
                     ORDER BY name"""
-                rows = self.conn.fetch_all(q, (owner_id, owner_id, dept_val))
+                rows = self.conn.fetch_all(q, (owner_id, owner_id, dept_val, inherited))
             else:
                 q = f"""SELECT {cols} FROM cloud_files WHERE {folder_clause}
                     (owner_id = %s
-                     OR COALESCE(shared_with,'[]'::jsonb) @> jsonb_build_array({uid_text}))
+                     OR COALESCE(shared_with,'[]'::jsonb) @> jsonb_build_array({uid_text})
+                     OR folder_id = ANY(%s))
                     ORDER BY name"""
-                rows = self.conn.fetch_all(q, (owner_id, owner_id))
+                rows = self.conn.fetch_all(q, (owner_id, owner_id, inherited))
 
         result = []
         for r in (rows or []):
