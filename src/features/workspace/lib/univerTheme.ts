@@ -562,7 +562,28 @@ const SYMBOL_FONTS = /wingdings|webdings|symbol|dingbats/i;
 const ALIASES: Record<string, string> = { helvetica: 'Arial', courier: 'Courier New', times: 'Times New Roman', 'ms sans serif': 'Microsoft Sans Serif' };
 
 let measure: CanvasRenderingContext2D | null | undefined;
-const known = new Map<string, boolean>();
+// Ответы «есть ли шрифт» помним и между запусками: проверка сотни шрифтов — до 350 мс на слабом ПК при первом открытии
+// документа за запуск. Набор системных шрифтов меняется редко — через 3 дня проверяем заново.
+const FONT_CACHE = 'nx:fonts-installed:v1';
+const FONT_CACHE_DAYS = 3;
+let fontCacheAt = Date.now();
+const known = new Map<string, boolean>((() => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(FONT_CACHE) || 'null') as { at: number; fonts: Record<string, number> } | null;
+    if (raw && Date.now() - raw.at < FONT_CACHE_DAYS * 86_400_000) {
+      fontCacheAt = raw.at;
+      return Object.entries(raw.fonts).map(([name, flag]): [string, boolean] => [name, flag === 1]);
+    }
+  } catch { /* кэша нет — проверим сами */ }
+  return [];
+})());
+let fontCacheTimer = 0;
+function saveFontCache() {
+  window.clearTimeout(fontCacheTimer);
+  fontCacheTimer = window.setTimeout(() => {
+    try { localStorage.setItem(FONT_CACHE, JSON.stringify({ at: fontCacheAt, fonts: Object.fromEntries([...known].map(([name, found]) => [name, found ? 1 : 0])) })); } catch { /* переполнено — без кэша */ }
+  }, 1500);
+}
 
 /**
  * Есть ли шрифт на этом компьютере. Браузер прямого ответа не даёт (document.fonts.check для неизвестного
@@ -594,6 +615,7 @@ function isInstalled(name: string): boolean {
     if (width(name) === width(twin)) found = false;
   }
   known.set(name, found);
+  saveFontCache();
   return found;
 }
 

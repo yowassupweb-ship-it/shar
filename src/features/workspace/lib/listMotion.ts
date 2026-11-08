@@ -12,6 +12,8 @@ export function useFlip(container: RefObject<HTMLElement | null>, deps: unknown[
   const prev = useRef(new Map<string, number>());
   const lastKey = useRef(resetKey);
   const lastOrder = useRef('');
+  const idle = useRef(0);
+  useEffect(() => () => { if (idle.current) window.clearTimeout(idle.current); }, []);
   useLayoutEffect(() => {
     const root = container.current;
     if (!root) return;
@@ -21,10 +23,26 @@ export function useFlip(container: RefObject<HTMLElement | null>, deps: unknown[
     const order = Array.from(flips, (el) => el.dataset.flip).join('\n');
     if (order === lastOrder.current && lastKey.current === resetKey) return;
     lastOrder.current = order;
-    const base = root.getBoundingClientRect().top - root.scrollTop;
-    const next = new Map<string, number>();
     const animate = !reducedMotion() && lastKey.current === resetKey;
     lastKey.current = resetKey;
+    // Первый показ списка: переезжать нечему, а замер сотен строк разом заставляет браузер разложить всю страницу
+    // (264 мс на слабом ПК прямо в момент открытия материала). Опорные положения снимаем чуть позже, в паузе.
+    if (prev.current.size === 0 && !idle.current) {
+      idle.current = window.setTimeout(() => {
+        idle.current = 0;
+        const el = container.current;
+        if (el) measureAll(el, false);
+      }, 700);
+      return;
+    }
+    measureAll(root, animate);
+  }, deps); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Замерить [data-flip] строки и, если нужно, проиграть сдвиг тех, что сменили место. */
+  function measureAll(root: HTMLElement, animate: boolean) {
+    const flips = root.querySelectorAll<HTMLElement>('[data-flip]');
+    const base = root.getBoundingClientRect().top - root.scrollTop;
+    const next = new Map<string, number>();
     // Сначала все замеры, потом все анимации: запуск анимации между замерами сбрасывал стили, и каждый следующий
     // getBoundingClientRect пересчитывал их заново — на сотнях строк раскрытие папки подвисало на сотни миллисекунд.
     const moved: Array<[HTMLElement, number]> = [];
@@ -44,7 +62,7 @@ export function useFlip(container: RefObject<HTMLElement | null>, deps: unknown[
       if (top + shift < -200 && top < -200) continue;
       el.animate([{ transform: `translateY(${shift}px)` }, { transform: 'none' }], { duration: 280, easing: 'cubic-bezier(.2, .8, .2, 1)' });
     }
-  }, deps); // eslint-disable-line react-hooks/exhaustive-deps
+  }
 }
 
 /** Перетаскивание у верхнего или нижнего края списка прокручивает его — тем быстрее, чем ближе к краю. */
