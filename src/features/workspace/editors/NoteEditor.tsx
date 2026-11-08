@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, use
 import type { Components } from 'react-markdown';
 import { Bold, CheckSquare, Plus, Redo2, Undo2, X, Code2, Eye, Heading2, ImagePlus, Italic, Link2, List, ListOrdered, Pencil, Quote, Smile, Strikethrough, Underline } from 'lucide-react';
 import { uploadFileWithProgress } from '@/shared/api/uploadFile';
+import { actionOfMarker, formatLines } from '@/shared/markdown/lines';
 import { renderTextWithEmoji } from '@/shared/emoji/emojiText';
 import { SharEmojiPicker } from '@/shared/emoji/SharEmojiPicker';
 import { askConfirm, Menu, type MenuAnchor } from '@/shared/ui/overlay';
@@ -420,7 +421,13 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
     const { selectionStart: from, selectionEnd: to, value } = el;
     let next: string;
     let caret: [number, number];
-    if (wrap.line) {
+    const action = wrap.line ? actionOfMarker(wrap.before) : null;
+    if (action) {
+      // Все строки выделения, а не только первая; повторное нажатие снимает разметку.
+      const edit = formatLines(value, from, to, action, wrap.placeholder);
+      next = edit.next;
+      caret = [edit.from, edit.to];
+    } else if (wrap.line) {
       const start = value.lastIndexOf('\n', from - 1) + 1;
       const selected = value.slice(start, to) || wrap.placeholder || '';
       next = `${value.slice(0, start)}${wrap.before}${selected}${value.slice(to)}`;
