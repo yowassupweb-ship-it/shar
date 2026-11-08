@@ -253,9 +253,13 @@ def ready_agents(user_id: str) -> list[dict]:
 # ── задачи ноде ──────────────────────────────────────────────────────────────
 
 def enqueue(kind: str, user_id: str, provider: str, *, node_id: Any = None, message_id: str = "", payload: Optional[dict] = None) -> dict:
-    return db.conn.fetch_one(
+    row = db.conn.fetch_one(
         "INSERT INTO core_jobs (kind, user_id, provider, node_id, message_id, payload) VALUES (%s, %s, %s, %s, %s, %s) RETURNING *",
         (kind, user_id, provider, int(node_id) if node_id else None, message_id, Json(payload or {})))
+    from app.modules.core_agents import node  # поздний импорт: node тянет store
+
+    node.wake_pollers()  # нода в долгом опросе возьмёт задачу сразу
+    return row
 
 
 _stale_swept = 0.0

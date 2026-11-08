@@ -41,6 +41,20 @@ POLL_SECONDS = 25
 # Шаг проверки очереди внутри долгого опроса: от этого зависит, через сколько нода подхватит новое сообщение (в среднем — полшага).
 POLL_STEP = 0.25
 MAX_STEPS = 400
+
+# Пробуждение опроса событием: пока нода висит в долгом опросе, новую задачу или отмену она получает сразу, а не на
+# следующем шаге POLL_STEP (в среднем −0,12 с к ответу). Шаг остаётся запасным: процессов может быть несколько, и событие
+# дойдёт только до опросов в том же процессе.
+_waiters: set[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = set()
+
+
+def wake_pollers() -> None:
+    """Разбудить долгие опросы нод. Безопасно звать из любого потока (запросы выполняются в пуле потоков)."""
+    for loop, event in list(_waiters):
+        try:
+            loop.call_soon_threadsafe(event.set)
+        except RuntimeError:  # цикл уже закрыт — опрос ушёл
+            _waiters.discard((loop, event))
 MAX_BODY = 60_000
 
 
@@ -214,23 +228,33 @@ def _take(node: dict) -> Optional[dict]:
 async def poll(body: PollBody, request: Request):
     node = await run_in_threadpool(_node, request)
     deadline = time.monotonic() + (POLL_SECONDS if body.wait and body.slots else 0)
-    # Отданное ноде, о чём она не знает (оборвался прошлый опрос), — обратно в очередь: иначе ответ висел бы вечно.
-    await run_in_threadpool(store.requeue_lost, node["id"], body.running)
-    seen_at = 0.0
-    while True:
-        # «Жив» нода отмечается раз в 5 с, а не на каждом круге: круг теперь короткий (задача уходит ноде за ~0,25 с, а не за ~1 с),
-        # и запись в базу на каждом круге была бы лишней нагрузкой.
-        if time.monotonic() - seen_at >= 5:
-            await run_in_threadpool(_seen, node, body)
-            seen_at = time.monotonic()
-        cancel = await run_in_threadpool(store.cancelled_among, node["id"], body.running)
-        # Нода ушла, пока мы ждали (перезапуск, сеть) — задачу ей не отдаём: ответ ушёл бы в пустоту.
-        if await request.is_disconnected():
-            return {"jobs": [], "cancel": cancel, "agent": _agent_hash()}
-        job = await run_in_threadpool(_take, node) if body.slots else None
-        if job or cancel or time.monotonic() >= deadline or await request.is_disconnected():
-            return {"jobs": [job] if job else [], "cancel": cancel, "agent": _agent_hash()}
-        await asyncio.sleep(POLL_STEP)
+    wake = asyncio.Event()
+    entry = (asyncio.get_running_loop(), wake)
+    _waiters.add(entry)
+    try:
+        # Отданное ноде, о чём она не знает (оборвался прошлый опрос), — обратно в очередь: иначе ответ висел бы вечно.
+        await run_in_threadpool(store.requeue_lost, node["id"], body.running)
+        seen_at = 0.0
+        while True:
+            # «Жив» нода отмечается раз в 5 с, а не на каждом круге: круг теперь короткий (задача уходит ноде за ~0,25 с, а не за ~1 с),
+            # и запись в базу на каждом круге была бы лишней нагрузкой.
+            if time.monotonic() - seen_at >= 5:
+                await run_in_threadpool(_seen, node, body)
+                seen_at = time.monotonic()
+            cancel = await run_in_threadpool(store.cancelled_among, node["id"], body.running)
+            # Нода ушла, пока мы ждали (перезапуск, сеть) — задачу ей не отдаём: ответ ушёл бы в пустоту.
+            if await request.is_disconnected():
+                return {"jobs": [], "cancel": cancel, "agent": _agent_hash()}
+            job = await run_in_threadpool(_take, node) if body.slots else None
+            if job or cancel or time.monotonic() >= deadline or await request.is_disconnected():
+                return {"jobs": [job] if job else [], "cancel": cancel, "agent": _agent_hash()}
+            try:
+                await asyncio.wait_for(wake.wait(), POLL_STEP)
+            except asyncio.TimeoutError:
+                pass
+            wake.clear()
+    finally:
+        _waiters.discard(entry)
 
 
 # ── ключ MCP для тёплого процесса агента ─────────────────────────────────────

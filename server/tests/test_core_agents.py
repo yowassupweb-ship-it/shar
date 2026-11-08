@@ -669,3 +669,37 @@ def test_warm_process_key_is_minted_rebound_per_message_and_revoked(client, admi
     finally:
         _db.conn.execute_query("DELETE FROM core_accounts WHERE provider = 'claude' AND account = 'me@example.com'")
         _cleanup()
+
+
+def test_long_poll_wakes_on_new_job(client, admin, users, monkeypatch):
+    """Нода в долгом опросе получает задачу сразу по событию, а не на следующем шаге POLL_STEP."""
+    import threading
+    import time
+
+    from app.modules.core_agents import node as core_node
+    from app.modules.core_agents import store
+
+    monkeypatch.setattr(core_node, "POLL_STEP", 5.0)  # без пробуждения опрос заметил бы задачу только через 5 с
+    created = admin.post("/api/core/nodes", json={"name": "wake-test"}).json()
+    headers = {"Authorization": f"Bearer {created['token']}"}
+    body = {"version": "1.2.4", "clis": {"gemini": "1"}, "wait": True, "slots": 1}
+    result: dict = {}
+
+    def poll():
+        started = time.monotonic()
+        result["jobs"] = client.post("/api/core/node/poll", json=body, headers=headers).json()["jobs"]
+        result["took"] = time.monotonic() - started
+
+    try:
+        thread = threading.Thread(target=poll)
+        thread.start()
+        time.sleep(0.8)  # опрос уже висит
+        queued_at = time.monotonic()
+        store.enqueue("check", users.ids["admin"], "gemini", node_id=int(created["node"]["id"]))
+        thread.join(timeout=6)
+        assert result.get("jobs"), result
+        assert time.monotonic() - queued_at < 1.5, f"опрос не проснулся по событию: {result}"
+    finally:
+        from app.core.db import db
+
+        db.conn.execute_query("DELETE FROM core_jobs; DELETE FROM core_nodes;")
