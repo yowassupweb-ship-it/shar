@@ -1,0 +1,35 @@
+/* Визуальный редактор markdown (VisualEditor.tsx). Типографика — как у просмотра задачи. */
+.nve { display: flex; flex-direction: column; min-height: 0; }
+.nve-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 4px 6px; margin: 0 auto var(--space-3); width: min(100%, 720px);
+  border-radius: var(--radius-md); background: var(--surface-hover); position: sticky; top: 0; z-index: 2;
+}
+.nve-bar .nx-icon-btn { width: 30px; height: 30px; }
+.nve-bar .nx-icon-btn[aria-pressed="true"] { background: var(--surface-selected); color: var(--accent-color); }
+.nve-bar .nx-icon-btn:disabled { opacity: 0.35; }
+.nve-sep { width: 1px; height: 18px; margin: 0 4px; background: var(--border-color); }
+.nve-page { width: min(100%, 720px); margin: 0 auto; }
+.nve-content { outline: none; min-height: 180px; padding-bottom: var(--space-6, 32px); font-size: var(--text-md, 15px); line-height: 1.6; color: var(--text-main); overflow-wrap: anywhere; }
+.nve-content > :first-child { margin-top: 0; }
+.nve-content p { margin: 0 0 0.6em; }
+.nve-content h1, .nve-content h2, .nve-content h3 { margin: 1.1em 0 0.4em; line-height: 1.25; letter-spacing: -0.01em; }
+.nve-content h1 { font-size: 1.5em; }
+.nve-content h2 { font-size: 1.25em; }
+.nve-content h3 { font-size: 1.1em; }
+.nve-content ul, .nve-content ol { margin: 0 0 0.6em; padding-left: 1.5em; }
+.nve-content li > p { margin: 0; }
+.nve-content blockquote { margin: 0.6em 0; padding: 0 0 0 var(--space-3); border-left: 3px solid var(--border-color); color: var(--text-2); }
+.nve-content code { padding: 1px 5px; border-radius: 4px; background: var(--surface-hover); font-size: 0.92em; }
+.nve-content pre { padding: var(--space-3); border-radius: var(--radius-md); background: var(--surface-hover); overflow: auto; }
+.nve-content pre code { padding: 0; background: transparent; }
+.nve-content a { color: var(--accent-color); text-decoration: underline; text-underline-offset: 2px; cursor: text; }
+.nve-content img { max-width: 100%; height: auto; border-radius: var(--radius-md); }
+.nve-content hr { border: 0; border-top: 1px solid var(--border-color); margin: 1em 0; }
+.nve-content p.is-editor-empty:first-child::before { content: attr(data-placeholder); float: left; height: 0; color: var(--text-muted); pointer-events: none; }
+/* Чек-лист: «квадратик» и текст в одну строку, зачёркивание выполненного. */
+.nve-content ul[data-type="taskList"] { list-style: none; padding-left: 0; }
+.nve-content ul[data-type="taskList"] li { display: flex; align-items: flex-start; gap: 8px; }
+.nve-content ul[data-type="taskList"] li > label { flex: none; margin-top: 0.3em; user-select: none; }
+.nve-content ul[data-type="taskList"] li > div { flex: 1; min-width: 0; }
+.nve-content ul[data-type="taskList"] li[data-checked="true"] > div { color: var(--text-muted); text-decoration: line-through; }
+.nve-content ul[data-type="taskList"] input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent-color); cursor: pointer; }

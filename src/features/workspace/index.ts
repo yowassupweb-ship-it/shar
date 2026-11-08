@@ -7,3 +7,4 @@ import { lazy } from 'react';
 export const DocPanel = lazy(() => import('./viewer/DocPanel'));
 export { viewKindOf, canOpenInEditor, type FileRef, type ViewKind } from './viewer/kinds';
 export { openInEditor } from './viewer/openInEditor';
+export { diffLines, diffStats, type DiffLine } from './lib/diff';

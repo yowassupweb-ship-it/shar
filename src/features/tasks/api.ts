@@ -38,7 +38,11 @@ export interface Task {
   chatId?: string;
 }
 
-export interface TaskList { id: string; name: string; color?: string; creatorId?: string; allowedUsers?: string[] }
+export interface TaskList {
+  id: string; name: string; color?: string; creatorId?: string; allowedUsers?: string[];
+  /** Папка открыта мне другим человеком: view — только смотреть, edit — править и добавлять задачи. */
+  sharedLevel?: 'view' | 'edit';
+}
 
 /** Списки, которые касаются меня: мои, открытые мне лично или где лежат мои задачи. Плюс текущий. */
 export function relevantLists(lists: TaskList[], tasks: Record<string, Task>, currentId?: string | null): TaskList[] {
@@ -49,7 +53,7 @@ export function relevantLists(lists: TaskList[], tasks: Record<string, Task>, cu
     if (assigneesOf(t).includes(me) || [t.assignedById, t.authorId].some((id) => id && String(id) === me)) used.add(String(t.listId));
   }
   return lists
-    .filter((l) => l.id === currentId || String(l.creatorId || '') === me || (l.allowedUsers || []).map(String).includes(me) || used.has(l.id))
+    .filter((l) => l.id === currentId || l.sharedLevel || String(l.creatorId || '') === me || (l.allowedUsers || []).map(String).includes(me) || used.has(l.id))
     .sort((x, y) => x.name.localeCompare(y.name, 'ru'));
 }
 
@@ -169,7 +173,8 @@ function listen() {
     put({ ...cur, ...incoming, id });
   });
   // После переподключения — перечитать: пока сокета не было, события не приходили.
-  realtime.subscribe((e: RealtimeEvent) => { if (e.type === 'resync') void loadTasks(); });
+  // resync — после переподключения; tasks_resync — папку открыли или закрыли (набор видимых задач изменился).
+  realtime.subscribe((e: RealtimeEvent) => { if (e.type === 'resync' || e.type === 'tasks_resync') void loadTasks(); });
 }
 
 const dirty = new Set<string>();
@@ -195,7 +200,8 @@ export async function createTask(init: Partial<Task> & { md?: string }): Promise
     assignedById: me,
     assignedToId: init.assignedToId || me,
     assignedToIds: init.assignedToIds || [init.assignedToId || me],
-    listId: init.listId || useTasks.getState().lists[0]?.id || null,
+    // Без явной папки — вне папок (раньше задача молча попадала в первый список).
+    listId: init.listId ?? null,
     dueDate: init.dueDate || null,
     metadata: { md },
   });
@@ -241,3 +247,108 @@ export async function deleteTask(id: string): Promise<void> {
   }
   writeCacheSoon();
 }
+
+
+// ── Папки ───────────────────────────────────────────────────────────────────
+// Папка — «список» задач на сервере. Создатель управляет названием, цветом и доступом; открытая другому человеку
+// папка показывает ему все её задачи (todos/folders.py).
+
+export const FOLDER_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#6b7280'];
+
+/** Управляю ли я папкой: создатель или админ. Остальным — только задачи в ней. */
+export function canManageFolder(l: TaskList): boolean {
+  if (l.sharedLevel) return false;
+  const role = (() => { try { return localStorage.getItem('userRole'); } catch { return null; } })();
+  return role === 'admin' || String(l.creatorId || '') === myId();
+}
+
+/** Может ли человек добавлять задачи в папку: своя, общая на правку или открытая всем (view — нельзя). */
+export const canAddToFolder = (l: TaskList | undefined) => !l || l.sharedLevel !== 'view';
+
+async function listCall(method: 'POST' | 'PUT' | 'DELETE', body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const url = method === 'DELETE' ? `/api/todos?id=${encodeURIComponent(String(body.id))}&type=list` : '/api/todos';
+  const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: method === 'DELETE' ? undefined : JSON.stringify({ type: 'list', ...body }) });
+  if (!res.ok) throw new Error(String(res.status));
+  return (await res.json().catch(() => ({}))) as Record<string, unknown>;
+}
+
+function setLists(fn: (lists: TaskList[]) => TaskList[]) {
+  useTasks.setState((s) => ({ lists: fn(s.lists) }));
+  writeCacheSoon();
+}
+
+/** Новая папка. По умолчанию личная: в allowedUsers — только я (пустой список сервер считает «открыт всем»). */
+export async function createFolder(name: string, color: string): Promise<TaskList> {
+  const me = myId();
+  const saved = (await listCall('POST', { name, color, allowedUsers: [me] })) as unknown as TaskList;
+  const list: TaskList = { ...saved, id: String(saved.id), name: saved.name || name, color: saved.color || color, creatorId: me };
+  setLists((l) => [...l, list]);
+  return list;
+}
+
+export async function updateFolder(id: string, patch: { name?: string; color?: string }): Promise<void> {
+  const before = useTasks.getState().lists;
+  setLists((l) => l.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+  try { await listCall('PUT', { id, ...patch }); } catch (e) { setLists(() => before); throw e; }
+}
+
+/** Удалить папку. Задачи остаются у своих участников — просто без папки. */
+export async function deleteFolder(id: string): Promise<void> {
+  const before = useTasks.getState().lists;
+  setLists((l) => l.filter((x) => x.id !== id));
+  try { await listCall('DELETE', { id }); } catch (e) { setLists(() => before); throw e; }
+}
+
+export interface FolderShare { userId: string; level: 'view' | 'edit' }
+
+async function json<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    let detail = '';
+    try { detail = (await res.json()).detail || ''; } catch { /* не JSON */ }
+    throw new Error(detail || String(res.status));
+  }
+  return (await res.json()) as T;
+}
+
+export const folderShares = (id: string) => fetch(`/api/todos/lists/${encodeURIComponent(id)}/shares`).then((r) => json<{ owner: string; shares: FolderShare[] }>(r));
+export const saveFolderShares = (id: string, shares: FolderShare[]) => fetch(`/api/todos/lists/${encodeURIComponent(id)}/shares`, {
+  method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shares }),
+}).then((r) => json<{ owner: string; shares: FolderShare[] }>(r));
+export const folderTaskCount = (id: string) => fetch(`/api/todos/lists/${encodeURIComponent(id)}/summary`).then((r) => json<{ tasks: number }>(r)).then((d) => d.tasks);
+
+// ── История версий ──────────────────────────────────────────────────────────
+
+export interface TaskVersion { id: number; title: string; label: string; savedBy: string; savedByName: string; createdAt: string; size: number }
+
+export const taskVersions = (id: string) => fetch(`/api/todos/${encodeURIComponent(id)}/versions`, { cache: 'no-store' }).then((r) => json<{ versions: TaskVersion[]; ready: boolean }>(r));
+export const taskVersion = (id: string, version: number) => fetch(`/api/todos/${encodeURIComponent(id)}/versions/${version}`).then((r) => json<{ id: number; title: string; md: string; label: string; createdAt: string }>(r));
+export const saveTaskVersion = (id: string, label: string) => fetch(`/api/todos/${encodeURIComponent(id)}/versions`, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }),
+}).then((r) => json<{ id: number }>(r));
+/** Сервер кладёт текущее состояние в историю и отдаёт версию; применяет её вызывающий — обычным сохранением (saveText). */
+export const restoreTaskVersion = (id: string, version: number) => fetch(`/api/todos/${encodeURIComponent(id)}/versions/${version}/restore`, { method: 'POST' })
+  .then((r) => json<{ id: number; title: string; md: string }>(r));
+
+// ── Поручение агенту «Ядра» ─────────────────────────────────────────────────
+// Агент просыпается по сроку (и повтору) задачи, выполняет, пишет отчёт в задачу и засыпает (core_agents/task_agent.py).
+
+export interface AgentReport { id: number; runAt: string; status: 'ok' | 'failed'; text: string; threadId: string }
+export interface TaskAgent {
+  ready: boolean;
+  agents: { provider: string; label: string; model: string }[];
+  enabled: boolean;
+  provider?: string; effort?: 'low' | 'medium' | 'high'; time?: string; completeOnSuccess?: boolean;
+  threadId?: string; nextRun?: string | null; lastStatus?: string; summary?: string;
+  reports: AgentReport[];
+}
+export interface TaskAgentSave { enabled: boolean; provider?: string; effort?: string; time?: string; completeOnSuccess?: boolean; runNow?: boolean }
+
+/** Новый отчёт агента пришёл по сокету: открытая задача перечитывает свои отчёты. */
+export const useAgentReportTick = create<{ tick: number }>(() => ({ tick: 0 }));
+realtime.subscribe((e: RealtimeEvent) => { if (e.type === 'task_agent_report') useAgentReportTick.setState((s) => ({ tick: s.tick + 1 })); });
+
+export const taskAgent = (id: string) => fetch(`/api/todos/${encodeURIComponent(id)}/agent`, { cache: 'no-store' }).then((r) => json<TaskAgent>(r));
+export const saveTaskAgent = (id: string, body: TaskAgentSave) => fetch(`/api/todos/${encodeURIComponent(id)}/agent`, {
+  method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+}).then((r) => json<TaskAgent>(r));
+export const runTaskAgent = (id: string) => fetch(`/api/todos/${encodeURIComponent(id)}/agent/run`, { method: 'POST' }).then((r) => json<TaskAgent>(r));

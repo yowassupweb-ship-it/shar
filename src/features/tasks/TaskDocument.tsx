@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import {
-  AlertCircle, ArrowLeft, CalendarDays, Check, ChevronDown, Cloud, Eye, FileText, Flag, FolderClosed, Link2, MoreHorizontal, Paperclip, Pencil,
+  AlertCircle, ArrowLeft, Bot, CalendarDays, Check, Code2, ChevronDown, Cloud, Eye, FileText, Flag, FolderClosed, History, Link2, MoreHorizontal, Paperclip, Pencil,
   Repeat, Search, Trash2, UserPlus,
 } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
@@ -8,12 +8,19 @@ import { displayName, useChatStore } from '@/features/chat';
 import { Avatar } from '@/shared/ui/Avatar';
 import { askConfirm, Menu, MenuItem, Sheet, type MenuAnchor } from '@/shared/ui/overlay';
 import {
-  assigneesOf, deleteTask, relevantLists, isDone, myId, PRIORITIES, saveText, STATUSES, statusOf, taskMarkdown, updateTask, useTasks,
+  assigneesOf, canAddToFolder, deleteTask, relevantLists, isDone, myId, PRIORITIES, saveText, STATUSES, statusOf, taskMarkdown, updateTask, useTasks,
   type Priority, type Status, type Task,
 } from './api';
 import { renderMarkdown, toggleTaskLine } from './markdown';
 import { repeatIdOf, repeatLabel, syncTaskRepeat, TASK_REPEATS } from './repeat';
 import { DatePicker } from '@/shared/ui/DatePicker';
+import { parseDue } from './due';
+import { TaskVersionsSheet } from './VersionsSheet';
+// Визуальный редактор (TipTap) — отдельным куском: список задач открывается без него.
+const VisualEditor = lazy(() => import('@/shared/markdown/VisualEditor').then((m) => ({ default: m.VisualEditor })));
+import { AgentReports, AgentSheet } from './AgentTask';
+import { taskAgent, type TaskAgent } from './api';
+import { useAgentBridge } from '@/shared/core/agentBridge';
 import { continueList, MarkdownToolbar, markdownShortcut, replaceRange } from './MarkdownToolbar';
 import { Spinner } from '@/shared/ui/Spinner';
 import { AttachmentList, AttachPicker, attachmentsOf, LinkSheet, newId, type Attachment } from './attachments';
@@ -31,14 +38,16 @@ type SaveState = 'saved' | 'pending' | 'saving' | 'error';
 
 const dateFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' });
 export function dueLabel(iso?: string | null): { text: string; late: boolean } | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const day = new Date(d); day.setHours(0, 0, 0, 0);
+  const due = parseDue(iso);
+  if (!due) return null;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const day = new Date(due.day.getFullYear(), due.day.getMonth(), due.day.getDate());
   const diff = Math.round((day.getTime() - today.getTime()) / 86400000);
-  const text = diff === 0 ? 'Сегодня' : diff === 1 ? 'Завтра' : diff === -1 ? 'Вчера' : dateFmt.format(d);
-  return { text, late: diff < 0 };
+  const date = diff === 0 ? 'Сегодня' : diff === 1 ? 'Завтра' : diff === -1 ? 'Вчера' : dateFmt.format(due.day);
+  // Со временем задача просрочена, как только оно прошло; без времени — когда кончился день срока.
+  const late = diff < 0 || (diff === 0 && Boolean(due.time) && due.day.getTime() < now.getTime());
+  return { text: due.time ? `${date}, ${due.time}` : date, late };
 }
 
 export default function TaskDocument({ task, onBack, onGone }: {
@@ -53,7 +62,16 @@ export default function TaskDocument({ task, onBack, onGone }: {
   }, [task.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const [title, setTitle] = useState(initial.title);
   const [md, setMd] = useState(initial.md);
-  const [mode, setMode] = useState<'edit' | 'preview'>(() => (initial.title || initial.md.trim() ? 'preview' : 'edit'));
+  // Три режима: просмотр, «Правка» (визуальный редактор — без разметки) и «Код» (исходный markdown). Выбор правки помним.
+  const [editPref, setEditPref] = useState<'visual' | 'code'>(() => { try { return localStorage.getItem('nx:md-edit-mode') === 'code' ? 'code' : 'visual'; } catch { return 'visual'; } });
+  const [mode, setMode] = useState<'preview' | 'visual' | 'code'>(() => (initial.title || initial.md.trim() ? 'preview' : editPref));
+  const editing = mode !== 'preview';
+  const switchMode = (next: 'preview' | 'visual' | 'code') => {
+    if (next === mode) return;
+    if (editing) void save();
+    if (next !== 'preview') { setEditPref(next); try { localStorage.setItem('nx:md-edit-mode', next); } catch { /* без памяти */ } }
+    setMode(next);
+  };
   const [state, setState] = useState<SaveState>('saved');
   const saved = useRef(initial);
   const latest = useRef(initial);
@@ -64,11 +82,21 @@ export default function TaskDocument({ task, onBack, onGone }: {
   const [uploading, setUploading] = useState(0);
   const filePick = useRef<HTMLInputElement>(null);
   const [people, setPeople] = useState<'assignees' | 'customer' | null>(null);
+  const [versions, setVersions] = useState(false);
+  // Поручение агенту «Ядра»: чип показываем, если «Ядро» человеку включено.
+  const agentOn = useAgentBridge((s) => s.available);
+  const [agentSheet, setAgentSheet] = useState<TaskAgent | null>(null);
+  const [agentVersion, setAgentVersion] = useState(0);
+  const openAgent = () => { taskAgent(task.id).then(setAgentSheet).catch(() => showToast('Не удалось открыть настройки агента — нет связи с сервером.', 'error')); };
   const users = useChatStore((s) => s.users);
   const allLists = useTasks((s) => s.lists);
   const tasksById = useTasks((s) => s.tasks);
   // Только «свои» списки: созданные мной, открытые мне, или где есть мои задачи.
   const lists = useMemo(() => relevantLists(allLists, tasksById, task.listId), [allLists, tasksById, task.listId]);
+
+  // Папка открыта мне только на просмотр, а в самой задаче я не участвую — править нельзя (сервер тоже не даст).
+  const viewOnly = allLists.find((l) => l.id === task.listId)?.sharedLevel === 'view'
+    && !assigneesOf(task).includes(myId()) && ![task.authorId, task.assignedById].some((id) => id && String(id) === myId());
 
   useEffect(() => { latest.current = { title, md }; }, [title, md]);
 
@@ -118,7 +146,7 @@ export default function TaskDocument({ task, onBack, onGone }: {
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); void save(); }
-      if (e.key === 'Escape' && mode === 'edit' && !document.querySelector('.nx-scrim, .nx-menu')) { e.preventDefault(); finishEditing(); }
+      if (e.key === 'Escape' && mode !== 'preview' && !document.querySelector('.nx-scrim, .nx-menu')) { e.preventDefault(); finishEditing(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -126,8 +154,8 @@ export default function TaskDocument({ task, onBack, onGone }: {
 
   // В правке — фокус в заголовок (пустой) или в текст.
   useEffect(() => {
-    if (mode !== 'edit') return;
-    (latest.current.title ? bodyRef.current : titleRef.current)?.focus();
+    if (mode === 'preview') return;
+    (latest.current.title && mode === 'code' ? bodyRef.current : titleRef.current)?.focus();
   }, [mode, task.id]);
 
   // Высота полей по содержимому — страница прокручивается целиком, как документ.
@@ -142,6 +170,16 @@ export default function TaskDocument({ task, onBack, onGone }: {
   // Успех видно по самой задаче — всплывашки только об ошибках, иначе их сыпалось по штуке на клик.
   const patch = async (p: Partial<Task>) => {
     try { await updateTask(task.id, p); } catch { showToast('Не сохранилось — нет связи с сервером.', 'error'); }
+  };
+
+  /** Вернуть версию из истории: текст в редакторе и в базе — как в версии (сервер положил прежнее состояние в историю). */
+  const restoreVersion = async (t: string, body: string) => {
+    saved.current = { title: t, md: body };
+    latest.current = { title: t, md: body };
+    setTitle(t);
+    setMd(body);
+    await saveText(task.id, t.trim(), body);
+    setState('saved');
   };
 
   const remove = async () => {
@@ -260,17 +298,12 @@ export default function TaskDocument({ task, onBack, onGone }: {
     <section className="ntd" aria-label={title || 'Задача'}>
       <header className="ntd-bar">
         <button type="button" className="nx-icon-btn ntd-back" onClick={onBack} aria-label="К списку задач"><ArrowLeft size={20} aria-hidden="true" /></button>
-        {/* Одна кнопка режима, как «Править / Готово» в iOS: всегда видно, в каком режиме
-            документ и как из него выйти. Esc в правке — тоже «Готово». */}
-        {mode === 'preview' ? (
-          <button type="button" className="nx-ghost ntd-mode" onClick={() => setMode('edit')}>
-            <Pencil size={15} aria-hidden="true" /> Редактировать
-          </button>
-        ) : (
-          <button type="button" className="nx-primary ntd-mode" onClick={finishEditing}>
-            <Eye size={15} aria-hidden="true" /> Готово
-          </button>
-        )}
+        {/* Три режима: просмотр · правка (визуально, без разметки) · код (исходный markdown). Esc в правке — назад к просмотру. */}
+        <div className="nx-segment ntd-modes" role="group" aria-label="Режим">
+          <button type="button" aria-pressed={mode === 'preview'} onClick={() => switchMode('preview')}><Eye size={14} aria-hidden="true" /> Просмотр</button>
+          <button type="button" aria-pressed={mode === 'visual'} disabled={viewOnly} title={viewOnly ? 'Папка открыта вам только на просмотр' : 'Правка как в обычном редакторе'} onClick={() => switchMode('visual')}><Pencil size={14} aria-hidden="true" /> Правка</button>
+          <button type="button" aria-pressed={mode === 'code'} disabled={viewOnly} title={viewOnly ? 'Папка открыта вам только на просмотр' : 'Исходный текст в markdown'} onClick={() => switchMode('code')}><Code2 size={14} aria-hidden="true" /> Код</button>
+        </div>
         <span className="ntd-save" aria-live="polite">
           {state === 'error' ? <span data-tone="danger"><AlertCircle size={13} aria-hidden="true" /> Не сохранилось — Ctrl+S</span>
             : state === 'saving' || state === 'pending' ? <span><Spinner size={13} /> Сохраняю</span>
@@ -313,7 +346,12 @@ export default function TaskDocument({ task, onBack, onGone }: {
         </button>
         {lists.length > 0 && (
           <button type="button" className="ntd-chip" onClick={open('list')} aria-haspopup="menu" style={list?.color ? ({ '--tone': list.color } as CSSProperties) : undefined}>
-            <FolderClosed size={14} aria-hidden="true" />{list?.name || 'Без списка'}
+            <FolderClosed size={14} aria-hidden="true" />{list?.name || 'Без папки'}
+          </button>
+        )}
+        {agentOn && (
+          <button type="button" className="ntd-chip" onClick={openAgent} title="Поручить задачу агенту: проснётся по сроку, выполнит и отчитается здесь">
+            <Bot size={14} aria-hidden="true" />Агент
           </button>
         )}
         <button type="button" className="ntd-chip" onClick={open('attach')} aria-haspopup="menu">
@@ -322,12 +360,13 @@ export default function TaskDocument({ task, onBack, onGone }: {
       </div>
 
       <AttachmentList items={attachments} onRemove={detach} />
+      {agentOn && <AgentReports task={task} version={agentVersion} onOpen={openAgent} />}
       <input ref={filePick} type="file" multiple hidden onChange={(e) => { void uploadFiles([...(e.target.files ?? [])]); e.target.value = ''; }} />
 
-      {mode === 'edit' && <MarkdownToolbar targetRef={bodyRef} onPickImages={(f) => void insertImages(f)} extra={attachTools} />}
+      {mode === 'code' && <MarkdownToolbar targetRef={bodyRef} onPickImages={(f) => void insertImages(f)} extra={attachTools} />}
 
       <div className="ntd-scroll nx-scroll-y">
-        {mode === 'edit' ? (
+        {editing ? (
           <div className="ntd-page">
             <textarea
               ref={titleRef}
@@ -340,21 +379,34 @@ export default function TaskDocument({ task, onBack, onGone }: {
               placeholder="Что нужно сделать"
               aria-label="Заголовок задачи"
             />
-            <textarea
-              ref={bodyRef}
-              className="ntd-body"
-              value={md}
-              onChange={(e) => setMd(e.target.value)}
-              onKeyDown={onBodyKey}
-              onBlur={() => void save()}
-              onPaste={(e) => { const files = [...e.clipboardData.files]; if (files.some((f) => f.type.startsWith('image/'))) { e.preventDefault(); void insertImages(files); } }}
-              onDrop={(e) => { const files = [...e.dataTransfer.files]; if (files.some((f) => f.type.startsWith('image/'))) { e.preventDefault(); void insertImages(files); } }}
-              placeholder={'Подробности, чек-лист, ссылки. Панель сверху или Ctrl+B, Ctrl+Shift+9 — чек-лист. Картинку можно вставить из буфера. Сохраняется само.'}
-              aria-label="Текст задачи"
-            />
+            {mode === 'visual' ? (
+              <Suspense fallback={<div className="nx-state"><Spinner size={20} label="Загружаю редактор" /></div>}>
+              <VisualEditor
+                value={md}
+                onChange={setMd}
+                onBlur={() => void save()}
+                placeholder="Подробности, чек-лист, ссылки. Картинку можно вставить из буфера. Сохраняется само."
+                uploadImage={async (file) => (await (await import('@/shared/api/uploadFile')).uploadFileWithProgress(file, () => {})).url}
+                extraTools={attachTools}
+              />
+              </Suspense>
+            ) : (
+              <textarea
+                ref={bodyRef}
+                className="ntd-body"
+                value={md}
+                onChange={(e) => setMd(e.target.value)}
+                onKeyDown={onBodyKey}
+                onBlur={() => void save()}
+                onPaste={(e) => { const files = [...e.clipboardData.files]; if (files.some((f) => f.type.startsWith('image/'))) { e.preventDefault(); void insertImages(files); } }}
+                onDrop={(e) => { const files = [...e.dataTransfer.files]; if (files.some((f) => f.type.startsWith('image/'))) { e.preventDefault(); void insertImages(files); } }}
+                placeholder={'Подробности, чек-лист, ссылки. Панель сверху или Ctrl+B, Ctrl+Shift+9 — чек-лист. Картинку можно вставить из буфера. Сохраняется само.'}
+                aria-label="Текст задачи"
+              />
+            )}
           </div>
         ) : (
-          <article className="ntd-page ntd-read" onDoubleClick={() => setMode('edit')}>
+          <article className="ntd-page ntd-read" onDoubleClick={() => { if (!viewOnly) setMode(editPref); }}>
             <h1 className="ntd-title-view" data-done={done ? 'true' : undefined}>{title || 'Без названия'}</h1>
             {md.trim()
               ? <div className="ntd-md">{renderMarkdown(md, { onToggleTask: (line) => setMd((cur) => toggleTaskLine(cur, line)) })}</div>
@@ -385,7 +437,7 @@ export default function TaskDocument({ task, onBack, onGone }: {
         </Menu>
       )}
       {menu?.kind === 'date' && (
-        <DatePicker anchor={menu.anchor} value={task.dueDate ? String(task.dueDate) : null} onPick={(iso) => {
+        <DatePicker withTime anchor={menu.anchor} value={task.dueDate ? String(task.dueDate) : null} onPick={(iso) => {
           void patch({ dueDate: iso }).then(() => {
             // Повторяющаяся задача: серия в календаре идёт от нового срока.
             if (repeat !== 'none') syncTaskRepeat({ ...task, dueDate: iso }, repeat).catch(() => showToast('Календарь не обновился — нет связи с сервером.', 'error'));
@@ -393,8 +445,9 @@ export default function TaskDocument({ task, onBack, onGone }: {
         }} onClose={() => setMenu(null)} />
       )}
       {menu?.kind === 'list' && (
-        <Menu anchor={menu.anchor} label="Список" onClose={() => setMenu(null)}>
-          {lists.map((l) => (
+        <Menu anchor={menu.anchor} label="Папка" onClose={() => setMenu(null)}>
+          <MenuItem icon={!task.listId ? <Check size={16} /> : <span className="ntd-menu-gap" />} onSelect={() => { setMenu(null); void patch({ listId: null }); }}>Без папки</MenuItem>
+          {lists.filter((l) => canAddToFolder(l) || l.id === task.listId).map((l) => (
             <MenuItem key={l.id} icon={l.id === task.listId ? <Check size={16} /> : <i className="ntd-dot" style={{ '--tone': l.color || 'var(--note-gray)' } as CSSProperties} />} onSelect={() => { setMenu(null); void patch({ listId: l.id }); }}>{l.name}</MenuItem>
           ))}
         </Menu>
@@ -412,9 +465,13 @@ export default function TaskDocument({ task, onBack, onGone }: {
       {attachSheet === 'link' && <LinkSheet onClose={() => setAttachSheet(null)} onAdd={(a) => { setAttachSheet(null); attach(a); }} />}
       {menu?.kind === 'more' && (
         <Menu anchor={menu.anchor} label="Задача" onClose={() => setMenu(null)}>
+          <MenuItem icon={<History size={16} />} onSelect={() => { setMenu(null); void save(); setVersions(true); }}>История версий…</MenuItem>
+          <div className="nx-menu-sep" />
           <MenuItem icon={<Trash2 size={16} />} tone="danger" onSelect={() => { setMenu(null); void remove(); }}>Удалить задачу</MenuItem>
         </Menu>
       )}
+      {agentSheet && <AgentSheet task={task} state={agentSheet} onClose={() => setAgentSheet(null)} onChanged={() => setAgentVersion((v) => v + 1)} />}
+      {versions && <TaskVersionsSheet taskId={task.id} canRestore={!viewOnly} onClose={() => setVersions(false)} onRestore={restoreVersion} />}
       {people === 'assignees' && <PeopleSheet title="Исполнители" selected={assignees} onClose={() => setPeople(null)} onSave={(ids) => { setPeople(null); void patch({ assignedToIds: ids, assignedToId: ids[0] || null }); }} />}
       {people === 'customer' && (
         <PeopleSheet

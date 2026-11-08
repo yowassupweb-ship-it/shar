@@ -12,6 +12,12 @@
     "lint": "eslint src"
   },
   "dependencies": {
+    "@tiptap/extension-image": "^3.33.0",
+    "@tiptap/extension-list": "^3.33.0",
+    "@tiptap/extensions": "^3.33.0",
+    "@tiptap/pm": "^3.33.0",
+    "@tiptap/react": "^3.33.0",
+    "@tiptap/starter-kit": "^3.33.0",
     "@univerjs/docs-find-replace": "^1.0.4",
     "@univerjs/find-replace": "^1.0.4",
     "@univerjs/preset-docs-core": "^1.0.4",
@@ -42,6 +48,7 @@
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
+    "tiptap-markdown": "^0.9.0",
     "unified": "^11.0.5",
     "zustand": "^5.0.9"
   },

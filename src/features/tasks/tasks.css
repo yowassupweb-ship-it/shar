@@ -334,6 +334,24 @@
 .ndp-day[data-today="true"] { color: var(--accent-color); font-weight: var(--weight-bold); }
 .ndp-day[aria-pressed="true"] { background: var(--accent-fill); color: var(--on-accent); font-weight: var(--weight-semibold); }
 
+/* Время срока под сеткой месяца. */
+.ndp-time { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-color, var(--surface-hover)); display: grid; gap: 6px; }
+.ndp-time-row { display: flex; align-items: center; gap: 8px; padding: 0 4px; font-size: var(--text-sm); color: var(--text-main); }
+.ndp-time-row svg { color: var(--text-muted); }
+.ndp-time-row span { flex: 1; }
+.ndp-time-row input {
+  font: inherit; font-size: var(--text-sm); font-variant-numeric: tabular-nums; color: var(--text-main); color-scheme: light dark;
+  background: var(--surface-hover); border: 0; border-radius: var(--radius-sm, 6px); padding: 4px 8px; min-height: 28px;
+}
+.ndp-time-row input:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 1px; }
+.ndp-time-chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 2px; }
+.ndp-chip {
+  border: 0; border-radius: var(--radius-pill); padding: 3px 10px; background: transparent; color: var(--text-2);
+  font: inherit; font-size: var(--text-xs); font-variant-numeric: tabular-nums; cursor: pointer;
+}
+@media (hover: hover) { .ndp-chip:hover { background: var(--surface-hover); } }
+.ndp-chip[aria-pressed="true"] { background: var(--accent-fill); color: var(--on-accent); }
+
 /* Повтор включён — чип подсвечен, как включённые настройки в редакторе события. */
 .ntd-chip[data-on="true"] { background: color-mix(in srgb, var(--accent-fill) 15%, transparent); color: var(--text-main); }
 .ntd-chip[data-on="true"] svg { color: var(--accent-color); }
@@ -356,3 +374,86 @@
 .ntd-pick-list { display: grid; gap: 2px; margin-top: var(--space-2); }
 .ntd-pick-list .nx-pick small { display: block; overflow: hidden; color: var(--text-muted); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
 .ntd-link-form { display: grid; gap: var(--space-3); }
+
+/* ── Папки задач ─────────────────────────────────────────────────────── */
+.ntf { display: flex; align-items: center; gap: 4px; overflow-x: auto; padding: 2px var(--space-1) 4px; scrollbar-width: none; }
+.ntf::-webkit-scrollbar { display: none; }
+.ntf-wrap { position: relative; display: inline-flex; align-items: center; flex: none; }
+.ntf-chip {
+  display: inline-flex; align-items: center; gap: 6px; flex: none; height: 28px; padding: 0 10px; border: 0; border-radius: var(--radius-pill);
+  background: transparent; color: var(--text-2); font: inherit; font-size: var(--text-xs); font-weight: var(--weight-medium); white-space: nowrap; cursor: pointer;
+}
+.ntf-chip span { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.ntf-chip[aria-selected="true"] { background: var(--surface-selected); color: var(--text-main); }
+@media (hover: hover) { .ntf-chip:hover { background: var(--surface-hover); } .ntf-chip[aria-selected="true"]:hover { background: var(--surface-selected); } }
+.ntf-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tone, var(--note-gray)); flex: none; }
+.ntf-more {
+  display: none; place-items: center; width: 22px; height: 22px; margin-left: -6px; padding: 0; border: 0; border-radius: 50%;
+  background: transparent; color: var(--text-muted); cursor: pointer;
+}
+@media (hover: hover) { .ntf-wrap:hover .ntf-more, .ntf-wrap[data-selected="true"] .ntf-more { display: grid; } .ntf-more:hover { background: var(--surface-hover); color: var(--text-main); } }
+.ntf-add { display: grid; place-items: center; flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-muted); cursor: pointer; }
+@media (hover: hover) { .ntf-add:hover { background: var(--surface-hover); color: var(--text-main); } }
+.ntf-colors { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 8px 6px; }
+.ntf-colors-sheet { padding: var(--space-3) 0 0; }
+.ntf-color { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: var(--tone); color: #fff; cursor: pointer; }
+.ntf-color[aria-checked="true"] { box-shadow: 0 0 0 2px var(--surface, #fff), 0 0 0 4px var(--tone); }
+.ntf-person { cursor: default; }
+.ntf-level button { padding: 2px 10px; font-size: var(--text-xs); }
+.ntf-error { color: var(--state-danger); }
+
+/* ── История версий задачи ───────────────────────────────────────────── */
+.ntv { display: grid; gap: var(--space-4); }
+.ntv-save { display: flex; gap: var(--space-2); }
+.ntv-save input { flex: 1; min-width: 0; height: 34px; padding: 0 var(--space-3); border: 1px solid var(--border-color); border-radius: var(--radius-pill); background: var(--element-bg); color: var(--text-main); font: inherit; font-size: var(--text-sm); }
+.ntv-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.ntv-list li > button { display: grid; gap: 1px; width: 100%; padding: 8px 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-main); font: inherit; font-size: var(--text-sm); text-align: left; cursor: pointer; }
+.ntv-list li > button span { color: var(--text-muted); font-size: var(--text-xs); }
+@media (hover: hover) { .ntv-list li > button:hover { background: var(--surface-hover); } }
+.ntv-list li[aria-current="true"] > button { background: var(--surface-selected); }
+.ntv-empty { padding: 8px 10px; color: var(--text-muted); font-size: var(--text-sm); }
+.ntv-view { display: grid; gap: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border-color); }
+.ntv-view > header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+.ntv-view > header > div { display: grid; gap: 2px; min-width: 0; }
+.ntv-view > header span { color: var(--text-muted); font-size: var(--text-xs); }
+.ntv-view .nx-ghost { display: inline-flex; align-items: center; gap: 6px; }
+.ntv-view > .nx-segment { justify-self: start; }
+.ntv-stats i { font-style: normal; font-weight: var(--weight-semibold); }
+.ntv-stats i[data-kind="add"] { color: var(--state-ok); }
+.ntv-stats i[data-kind="del"] { color: var(--state-danger); }
+.ntv-prose { max-height: 320px; overflow: auto; padding: var(--space-3); border-radius: var(--radius-md); background: var(--element-bg); font-size: var(--text-sm); line-height: 1.5; }
+.ntv-diff { max-height: 420px; overflow: auto; border-radius: var(--radius-md); background: var(--element-bg); font-size: var(--text-sm); line-height: 1.5; }
+.ntv-line { display: grid; grid-template-columns: 22px minmax(0, 1fr); }
+.ntv-sign { text-align: center; color: var(--text-muted); user-select: none; }
+.ntv-text { padding-right: var(--space-3); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ntv-line[data-kind="add"] { background: color-mix(in srgb, var(--state-ok) 12%, transparent); }
+.ntv-line[data-kind="del"] { background: color-mix(in srgb, var(--state-danger) 12%, transparent); }
+.ntv-line mark { background: color-mix(in srgb, currentColor 22%, transparent); color: inherit; border-radius: 2px; }
+.ntv-gap { padding: 2px 10px; color: var(--text-muted); font-size: var(--text-xs); }
+
+/* ── Поручение агенту: окно и отчёты в задаче ────────────────────────── */
+.nta { display: grid; gap: var(--space-3); }
+.nta-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); font-size: var(--text-sm); }
+.nta-row > span { color: var(--text-2); }
+.nta-row input[type="time"] {
+  font: inherit; font-size: var(--text-sm); color: var(--text-main); color-scheme: light dark; background: var(--surface-hover);
+  border: 0; border-radius: var(--radius-sm, 6px); padding: 4px 8px; min-height: 28px;
+}
+.nta-check { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); cursor: pointer; }
+.nta-plan { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--surface-hover); font-size: var(--text-sm); }
+.nta-plan svg { flex: none; margin-top: 2px; color: var(--accent-color); }
+.nta-reports { margin: var(--space-3) auto 0; width: min(100%, 720px); padding: var(--space-3); border-radius: var(--radius-md); background: var(--element-bg); display: grid; gap: var(--space-2); }
+.nta-reports > header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.nta-reports h3 { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+.nta-sum { flex: 1; min-width: 160px; color: var(--text-muted); font-size: var(--text-xs); }
+.nta-actions { display: inline-flex; gap: 4px; }
+.nta-actions .nx-ghost { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; font-size: var(--text-xs); }
+.nta-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.nta-list summary { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-radius: var(--radius-sm); cursor: pointer; font-size: var(--text-sm); list-style: none; }
+.nta-list summary::-webkit-details-marker { display: none; }
+.nta-list summary span { color: var(--text-muted); font-size: var(--text-xs); white-space: nowrap; }
+.nta-list summary em { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: normal; color: var(--text-2); font-size: var(--text-xs); }
+@media (hover: hover) { .nta-list summary:hover { background: var(--surface-hover); } }
+.nta-list li[data-status="ok"] summary svg { color: var(--state-ok); }
+.nta-list li[data-status="failed"] summary svg, .nta-list li[data-status="failed"] summary b { color: var(--state-danger); }
+.nta-list pre { margin: 4px 0 8px 22px; padding: var(--space-3); border-radius: var(--radius-sm); background: var(--surface-hover); font: inherit; font-size: var(--text-xs); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; }

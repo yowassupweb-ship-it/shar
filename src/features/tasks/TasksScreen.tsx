@@ -12,10 +12,12 @@ import { useLongPress } from '@/shared/ui/useLongPress';
 import { askConfirm, Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import Splitter from '@/shared/ui/Splitter';
 import {
-  assigneesOf, createTask, deleteTask, isDone, loadTasks, myId, STATUSES, statusOf, type Status, taskMarkdown, updateTask, useTasks, type Task,
+  assigneesOf, canAddToFolder, createTask, deleteTask, isDone, loadTasks, myId, relevantLists, STATUSES, statusOf, type Status, taskMarkdown, updateTask, useTasks, type Task, type TaskList,
 } from './api';
+import { FolderBar, FolderMenu, FolderSheet, FolderShareSheet, type FolderFilter } from './Folders';
 import { checklistProgress, plainSnippet } from './markdown';
 import TaskDocument, { dueLabel } from './TaskDocument';
+import { parseDue } from './due';
 import { absolute, links } from '@/shared/navigation/routes';
 
 /**
@@ -99,6 +101,15 @@ export default function TasksScreen() {
   const onMenu = useCallback((task: Task, anchor: MenuAnchor) => setMenu({ task, anchor }), []);
   const layoutRef = useRef<HTMLDivElement>(null);
   const me = myId();
+  // Папки: выбранная запоминается; «Все» — без фильтра, «Без папки» — задачи вне папок.
+  const allLists = useTasks((s) => s.lists);
+  const [savedFolder, setFolderState] = useState<FolderFilter>(() => { try { return localStorage.getItem('nx:tasks-folder') || 'all'; } catch { return 'all'; } });
+  const setFolder = useCallback((id: FolderFilter) => { setFolderState(id); try { localStorage.setItem('nx:tasks-folder', id); } catch { /* без памяти */ } }, []);
+  // Выбранной папки больше нет (удалили, закрыли доступ) — показываем всё, а не пустой список.
+  const folder: FolderFilter = savedFolder === 'all' || savedFolder === 'none' || allLists.some((l) => l.id === savedFolder) ? savedFolder : 'all';
+  const [folderSheet, setFolderSheet] = useState<{ list?: TaskList } | null>(null);
+  const [shareList, setShareList] = useState<TaskList | null>(null);
+  const [folderMenu, setFolderMenu] = useState<{ list: TaskList; anchor: MenuAnchor } | null>(null);
 
   useEffect(() => { void loadTasks(); }, []);
   useEffect(() => {
@@ -123,7 +134,8 @@ export default function TasksScreen() {
     if (creating) return;
     setCreating(true);
     try {
-      const t = await createTask({});
+      const target = allLists.find((l) => l.id === folder);
+      const t = await createTask({ listId: target && canAddToFolder(target) ? target.id : null });
       setFresh(t.id);
       open(t.id);
     } catch {
@@ -155,13 +167,26 @@ export default function TasksScreen() {
     onReselect: () => { if (readTaskParam()) back(); },
   });
 
-  const visible = useMemo(() => Object.values(tasks).filter((t) => {
+  const folders = useMemo(() => relevantLists(allLists, tasks, folder), [allLists, tasks, folder]);
+  const folderIds = useMemo(() => new Set(folders.map((l) => l.id)), [folders]);
+  // Папки, открытые мне, показывают все свои задачи; остальное — только то, к чему я имею отношение.
+  const sharedIds = useMemo(() => new Set(allLists.filter((l) => l.sharedLevel).map((l) => l.id)), [allLists]);
+  const base = useMemo(() => Object.values(tasks).filter((t) => {
     const people = assigneesOf(t);
-    // Только задачи, к которым человек имеет отношение: исполнитель, автор, кто поставил или делегировал.
-    if (!people.includes(me) && ![t.assignedById, t.authorId, t.metadata?.delegatedById].some((id) => id && String(id) === me)) return false;
+    const mine = people.includes(me) || [t.assignedById, t.authorId, t.metadata?.delegatedById].some((id) => id && String(id) === me);
+    // Только задачи, к которым человек имеет отношение: исполнитель, автор, кто поставил или делегировал, или папка открыта ему.
+    if (!mine && !(t.listId && sharedIds.has(String(t.listId)))) return false;
     if (deferred && !`${t.title} ${taskMarkdown(t)}`.toLowerCase().includes(deferred)) return false;
     return true;
-  }), [tasks, me, deferred]);
+  }), [tasks, me, deferred, sharedIds]);
+  const inFolder = (t: Task, id: FolderFilter) => (id === 'all' ? true : id === 'none' ? !t.listId || !folderIds.has(String(t.listId)) : String(t.listId) === id);
+  const visible = useMemo(() => base.filter((t) => inFolder(t, folder)), [base, folder, folderIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  const counts = useMemo(() => {
+    const open = base.filter((t) => !isDone(t));
+    const out: Record<string, number> = { all: open.length, none: open.filter((t) => !t.listId || !folderIds.has(String(t.listId))).length };
+    for (const l of folders) out[l.id] = open.filter((t) => String(t.listId) === l.id).length;
+    return out;
+  }, [base, folders, folderIds]);
 
   const groups = useMemo(() => {
     const byDue = (a: Task, b: Task) => (a.dueDate ? 0 : 1) - (b.dueDate ? 0 : 1)
@@ -236,6 +261,7 @@ export default function TasksScreen() {
             </button>
           </div>
           <SearchField value={query} onChange={setQuery} placeholder="Поиск по задачам" />
+          <FolderBar lists={folders} counts={counts} selected={folder} onSelect={setFolder} onNew={() => setFolderSheet({})} onAction={(list, anchor) => setFolderMenu({ list, anchor })} />
         </header>
         <div className="ntl-list nx-scroll-y">{body}</div>
       </aside>
@@ -243,6 +269,13 @@ export default function TasksScreen() {
       {!narrow && (
         <Splitter containerRef={layoutRef} cssVar="--ntn-list" storageKey="nx:tasks-list-width" min={300} max={560} initial={380} label="Ширина списка задач" />
       )}
+
+      {folderMenu && (
+        <FolderMenu list={folderMenu.list} anchor={folderMenu.anchor} onClose={() => setFolderMenu(null)}
+          onRename={(l) => setFolderSheet({ list: l })} onShare={(l) => setShareList(l)} onDeleted={(id) => { if (folder === id) setFolder('all'); }} />
+      )}
+      {folderSheet && <FolderSheet list={folderSheet.list} onClose={() => setFolderSheet(null)} onSaved={(l) => { if (!folderSheet.list) setFolder(l.id); }} />}
+      {shareList && <FolderShareSheet list={shareList} onClose={() => setShareList(null)} />}
 
       {menu && <TaskMenu task={menu.task} anchor={menu.anchor} onClose={() => setMenu(null)} onOpen={open} onDeleted={(id) => { if (readTaskParam() === id) back(); }} />}
 
@@ -262,7 +295,10 @@ export default function TasksScreen() {
 }
 
 
-const isoDay = (plusDays: number) => { const d = new Date(); d.setDate(d.getDate() + plusDays); return d.toISOString().slice(0, 10); };
+/** Новый день срока с прежним временем (если оно было): «Завтра» не должно сбрасывать «18:00». */
+const withDueTime = (t: Task, day: string) => { const time = parseDue(t.dueDate)?.time; return time ? `${day}T${time}:00` : day; };
+// Местная дата, не UTC: toISOString ночью давал вчерашний день.
+const isoDay = (plusDays: number) => { const d = new Date(); d.setDate(d.getDate() + plusDays); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
 /** Контекстное меню задачи — как в macOS: действие, статусы, сроки, удаление в самом низу. */
 function TaskMenu({ task, anchor, onClose, onOpen, onDeleted }: {
@@ -302,9 +338,9 @@ function TaskMenu({ task, anchor, onClose, onOpen, onDeleted }: {
       ))}
       <div className="nx-menu-sep" />
       <div className="nx-menu-label">Срок</div>
-      <MenuItem icon={<CalendarDays size={16} />} onSelect={() => apply({ dueDate: isoDay(0) })}>Сегодня</MenuItem>
-      <MenuItem icon={<CalendarDays size={16} />} onSelect={() => apply({ dueDate: isoDay(1) })}>Завтра</MenuItem>
-      <MenuItem icon={<CalendarDays size={16} />} onSelect={() => apply({ dueDate: isoDay(7) })}>Через неделю</MenuItem>
+      <MenuItem icon={<CalendarDays size={16} />} onSelect={() => apply({ dueDate: withDueTime(task, isoDay(0)) })}>Сегодня</MenuItem>
+      <MenuItem icon={<CalendarDays size={16} />} onSelect={() => apply({ dueDate: withDueTime(task, isoDay(1)) })}>Завтра</MenuItem>
+      <MenuItem icon={<CalendarDays size={16} />} onSelect={() => apply({ dueDate: withDueTime(task, isoDay(7)) })}>Через неделю</MenuItem>
       {task.dueDate && <MenuItem icon={<CalendarX size={16} />} onSelect={() => apply({ dueDate: null })}>Убрать срок</MenuItem>}
       <div className="nx-menu-sep" />
       <MenuItem icon={<Flag size={16} />} onSelect={() => apply({ priority: task.priority === 'high' ? 'medium' : 'high' })}>
