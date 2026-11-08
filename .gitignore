@@ -17,3 +17,4 @@ server/app/core/.dev_sessions.json
 
 # Снимок локального Redis (dev-стенд пишет его в рабочую папку)
 dump.rdb
+tsconfig.tsbuildinfo
