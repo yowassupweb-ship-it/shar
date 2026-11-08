@@ -347,6 +347,12 @@ def _apply_run(job: dict, events: list[dict]) -> dict:
                 props["actions"] = [{"label": "Выполнить план", "value": "Выполняй этот план."},
                                     {"label": "Не выполнять", "value": "Пока не выполняй — я подумаю."}]
             update_agent_message(message_id, body=body or "", status="done" if kind == "done" else "failed", props=props)
+            try:
+                from app.modules.core_agents import task_agent
+
+                task_agent.finished(job, kind, body or "")  # запуск по задаче → отчёт в задаче
+            except Exception as exc:  # отчёт не должен ломать завершение ответа
+                log.warning("task agent report failed: %s", exc)
             store.finish_job(job["id"], kind, str(ev.get("error") or ""))
     return {"ok": True}
 

@@ -14,6 +14,7 @@ from app.core.realtime import sse_manager
 from app.core.security import Identity, current_identity
 from app.modules.calendar.router import _roll_recurring_calendar_events
 from app.modules.chats.chat_notifications import send_notification_message
+from app.modules.todos import folders
 
 router = APIRouter()
 
@@ -47,12 +48,18 @@ def _can_access_task(task: Optional[dict], me: Identity) -> bool:
         return False
     if me.is_admin or _involved(task, me.user_id):
         return True
+    if folders.task_level(task, me.user_id):  # папка с задачей открыта человеку (todos/folders.py)
+        return True
     row = db.get_user_by_id(me.user_id) or {}
     if row.get('can_see_all_tasks'):
         return True
     if row.get('is_department_head'):
         return any(str(t.get('id')) == str(task.get('id')) for t in db.get_tasks(user_id=me.user_id))
     return False
+
+
+def _require_task_write(task: dict, me: Identity) -> None:
+    folders.require_write(task, me, _involved(task, me.user_id))
 
 
 def _owned_task_or_403(task_id: str, me: Identity) -> dict:
@@ -109,6 +116,14 @@ def get_todos(userId: Optional[str] = None, taskId: Optional[str] = None, me: Id
     uid = me.user_id
     todos = db.get_tasks(user_id=uid)
     lists = db.get_todo_lists(user_id=uid)
+    # Папки, открытые человеку, — вместе со всеми задачами в них (todos/folders.py).
+    shared_tasks, shared_lists = folders.shared_for(uid)
+    if shared_tasks:
+        have = {str(t.get('id')) for t in todos}
+        todos = [*todos, *(t for t in shared_tasks if str(t.get('id')) not in have)]
+    if shared_lists:
+        have_lists = {str(l.get('id')) for l in lists}
+        lists = [*lists, *(l for l in shared_lists if str(l.get('id')) not in have_lists)]
     categories = db.get_todo_categories()
     
     logger.debug(f"[GET /api/todos] Найдено списков: {len(lists)}, задач: {len(todos)}, категорий: {len(categories)}")
@@ -138,6 +153,7 @@ def _push_task_sse(task: dict, event: str = 'task_updated') -> None:
     for uid in (task.get('assigned_to_ids') or []):
         if uid:
             recipients.add(str(uid))
+    recipients |= folders.members(task.get('list_id'))  # кому открыта папка с этой задачей
     payload = {
         'type': event,
         'taskId': task.get('id'),
@@ -314,6 +330,7 @@ def create_todo(request: Request, todo_data: dict = Body(...), me: Identity = De
                 if key in todo_data:
                     metadata[key] = todo_data.get(key)
 
+        folders.require_can_add(todo_data.get('listId') or todo_data.get('list_id'), me)  # папка «только просмотр» — задачу не добавить
         # Преобразуем camelCase в snake_case для БД
         new_todo = {
             'id': str(uuid.uuid4()),
@@ -396,7 +413,7 @@ def update_todo(request: Request, todo_data: dict = Body(...), me: Identity = De
         if not me.is_admin:
             raise HTTPException(status_code=403, detail="Категории меняет администратор")
     else:
-        _owned_task_or_403(todo_id, me)
+        _require_task_write(_owned_task_or_403(todo_id, me), me)
     logger.debug(f"[PUT /api/todos] Processing updates: {list(updates.keys())}")
     # Состояние до правки — чтобы сообщить только о настоящих изменениях.
     task_before = None
@@ -460,6 +477,18 @@ def update_todo(request: Request, todo_data: dict = Body(...), me: Identity = De
             logger.debug(f"[PUT /api/todos] 📦 metadata from DB: {result.get('metadata')}")
             if 'assigned_to_ids' in result:
                 logger.debug(f"[PUT /api/todos] 👥 DB returned assigned_to_ids: {result.get('assigned_to_ids')}")
+            if {'dueDate', 'due_date', 'metadata'} & set(updates):
+                try:
+                    from app.modules.core_agents import task_agent
+
+                    task_agent.reschedule(result)  # срок или повтор поменялись — следующий запуск агента тоже
+                except Exception as agent_error:
+                    logger.debug(f"[PUT /api/todos] agent reschedule skipped for {todo_id}: {agent_error}")
+            if {'title', 'metadata', 'description'} & set(updates):
+                try:
+                    folders.save_version(result, me.user_id)  # история версий текста задачи
+                except Exception as version_error:  # история не должна ломать сохранение
+                    logger.warning(f"[PUT /api/todos] version not saved for {todo_id}: {version_error}")
             try:
                 linked_chat = db.find_chat_by_todo(todo_id)
                 if linked_chat and linked_chat.get('id'):
@@ -508,6 +537,8 @@ def delete_todo(id: str, type: str = 'todo', me: Identity = Depends(current_iden
 
     if type == 'list':
         success = db.delete_todo_list(id)
+        if success:
+            folders.forget_folder(id)
     elif type == 'category':
         success = db.delete_todo_category(id)
     else:

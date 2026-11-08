@@ -39,6 +39,7 @@ def _collect() -> list[APIRouter]:
     from app.modules.search import router as search
     from app.modules.studio import router as studio
     from app.modules.social import router as social
+    from app.modules.todos import folders as todos_folders
     from app.modules.todos import router as todos
     from app.modules.users import router as users
     from app.modules.usage import router as usage
@@ -53,15 +54,16 @@ def _collect() -> list[APIRouter]:
     from app.modules.core_agents import memory as core_memory
     from app.modules.core_agents import node as core_node
     from app.modules.core_agents import schedules as core_schedules  # регистрация схемы до миграций
+    from app.modules.core_agents import task_agent as core_task_agent  # регистрация схемы до миграций
     from app.modules.core_agents import tours as core_tours
     from app.modules.core_chat import router as core_chat
 
     mods = [
         auth, users, departments, chats, messages, receipts, chat_notifications, inline,
         realtime, calls_rooms, calls_signaling, mail_messages, mail_avatars, mail_sync, accounts, mailboxes, email_chat_rules,
-        cloud, uploads, avatars, backgrounds, stickers, calendar_workdays, calendar, todos, notifications, push, requests_mod, admin,
+        cloud, uploads, avatars, backgrounds, stickers, calendar_workdays, calendar, todos_folders, todos, notifications, push, requests_mod, admin,
         client_errors, health, utm, og, chats_scheduled, leads, social, integrations, workspace_folders, workspace, workspace_public, search, birthdays,
-        mcp_keys, mcp, core_chat, core_accounts, core_hidden, core_integrations, core_mcp_servers, core_memory, core_node, core_tours, usage, studio,
+        mcp_keys, mcp, core_chat, core_accounts, core_hidden, core_integrations, core_mcp_servers, core_memory, core_node, core_task_agent, core_tours, usage, studio,
     ]
     return [m.router for m in mods]
 

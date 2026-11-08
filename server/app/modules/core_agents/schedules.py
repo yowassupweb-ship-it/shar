@@ -259,6 +259,9 @@ async def schedule_loop():
     while True:
         try:
             await anyio.to_thread.run_sync(deliver_due)
+            from app.modules.core_agents import task_agent
+
+            await anyio.to_thread.run_sync(task_agent.deliver_due)  # задачи, поручённые агенту
         except asyncio.CancelledError:
             break
         except Exception as exc:
