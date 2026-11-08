@@ -1,4 +1,5 @@
 import { assigneesOf, myId, type Task } from './api';
+import { parseDue } from './due';
 
 /**
  * Повтор задачи по расписанию. Задача остаётся одной, а в календаре появляется
@@ -33,16 +34,21 @@ export async function syncTaskRepeat(task: Task, repeatId: string): Promise<void
   const until = new Date();
   until.setDate(until.getDate() + 31);
   const day = ymd(start);
+  const time = parseDue(task.dueDate)?.time || '';
+  // Со временем в сроке серия — получасовые блоки в это время, без времени — на весь день.
+  const startAt = time ? `${day}T${time}:00` : `${day}T00:00:00`;
+  const endClock = time ? (() => { const [h, m] = time.split(':').map(Number); const t = h * 60 + m + 30; return t >= 1440 ? '23:59' : `${pad(Math.floor(t / 60))}:${pad(t % 60)}`; })() : '';
+  const endAt = time ? `${day}T${endClock}:00` : `${day}T00:00:00`;
   const me = myId();
   const body = {
     id: eventId,
     title: task.title || 'Задача',
     description: 'Повторяющаяся задача',
-    startDate: `${day}T00:00:00`,
-    startDateTime: `${day}T00:00:00`,
-    endDate: `${day}T00:00:00`,
-    endDateTime: `${day}T00:00:00`,
-    allDay: true,
+    startDate: startAt,
+    startDateTime: startAt,
+    endDate: endAt,
+    endDateTime: endAt,
+    allDay: !time,
     color: 'green',
     reminderMinutesBefore: null,
     recurrenceRule: `${rep.rule};UNTIL=${ymd(until).replace(/-/g, '')}T235959`,

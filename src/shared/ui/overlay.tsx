@@ -49,8 +49,10 @@ function scrimDismiss(onClose: () => void) {
 export type MenuAnchor = { x: number; y: number } | { element: HTMLElement; align?: 'start' | 'end'; side?: 'below' | 'above' };
 
 /** Меню у точки (контекстное) или у кнопки. Пункты — `.nx-menu-item`. */
-export function Menu({ anchor, onClose, label, children, compact, minWidth }: {
+export function Menu({ anchor, onClose, label, children, compact, minWidth, tall }: {
   anchor: MenuAnchor; onClose: () => void; label: string; children: ReactNode;
+  /** Высокое меню (календарь с временем): не режется на 440px, прокручивается только когда не влезает в окно. */
+  tall?: boolean;
   /** Короткое меню — по ширине содержимого. */
   compact?: boolean;
   /** Не уже этой ширины (выпадающий список — не уже своей кнопки). */
@@ -160,7 +162,7 @@ export function Menu({ anchor, onClose, label, children, compact, minWidth }: {
   const root = overlayRoot();
   if (!root) return null;
   return createPortal(
-    <div ref={ref} className="nx-menu" data-size={compact ? 'compact' : undefined} role="menu" aria-label={label} style={style} onKeyDown={onKeyDown}>
+    <div ref={ref} className="nx-menu" data-size={compact ? 'compact' : undefined} data-tall={tall ? 'true' : undefined} role="menu" aria-label={label} style={style} onKeyDown={onKeyDown}>
       {children}
     </div>,
     root,

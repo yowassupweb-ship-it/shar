@@ -1,11 +1,14 @@
 import { useMemo, useState } from 'react';
-import { CalendarDays, CalendarX, ChevronLeft, ChevronRight } from 'lucide-react';
+import { CalendarDays, CalendarX, ChevronLeft, ChevronRight, Clock } from 'lucide-react';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 
 /**
  * Выбор срока — поповер в стиле macOS вместо системного календаря браузера
  * (у того свои цвета и шрифты, в тёмной теме он белый). Сверху — быстрые
  * сроки, ниже — месяц сеткой. Неделя с понедельника, выходные приглушены.
+ *
+ * withTime — под сеткой строка «Время»: значение становится «2026-11-03T18:00:00», пока
+ * время не выбрано — просто «2026-11-03». Полночь («00:00») считается «без времени».
  */
 
 const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -17,13 +20,22 @@ const plusDays = (n: number) => { const d = new Date(); d.setDate(d.getDate() + 
 /** Ближайший понедельник после сегодняшнего дня. */
 const nextMonday = () => { const d = new Date(); d.setDate(d.getDate() + ((8 - d.getDay()) % 7 || 7)); return isoOf(d); };
 
-export function DatePicker({ anchor, value, onPick, onClose }: {
+const TIME_CHIPS = ['09:00', '12:00', '15:00', '18:00'];
+const timeOf = (value: string | null): string => {
+  const m = value?.match(/[T ](\d{2}:\d{2})/);
+  return m && m[1] !== '00:00' ? m[1] : '';
+};
+
+export function DatePicker({ anchor, value, onPick, onClose, withTime }: {
   anchor: MenuAnchor;
   value: string | null;
   onPick: (iso: string | null) => void;
   onClose: () => void;
+  withTime?: boolean;
 }) {
   const selected = value ? value.slice(0, 10) : null;
+  const [time, setTime] = useState(() => (withTime ? timeOf(value) : ''));
+  const compose = (day: string, t: string) => (withTime && t ? `${day}T${t}:00` : day);
   const [month, setMonth] = useState(() => {
     const base = selected ? new Date(`${selected}T12:00:00`) : new Date();
     return new Date(base.getFullYear(), base.getMonth(), 1);
@@ -44,11 +56,13 @@ export function DatePicker({ anchor, value, onPick, onClose }: {
   // Шестая неделя целиком из следующего месяца — не показываем.
   const rows = days.slice(35).every((d) => d.out) ? days.slice(0, 35) : days;
 
-  const pick = (iso: string | null) => { onPick(iso); onClose(); };
+  const pick = (iso: string | null) => { onPick(iso ? compose(iso, time) : null); onClose(); };
+  // Время меняется без закрытия: день остаётся выбранным (нет дня — берём сегодня), окно можно оставить открытым.
+  const changeTime = (t: string) => { setTime(t); onPick(compose(selected || today, t)); };
   const step = (n: number) => setMonth((m) => new Date(m.getFullYear(), m.getMonth() + n, 1));
 
   return (
-    <Menu anchor={anchor} label="Срок" onClose={onClose}>
+    <Menu anchor={anchor} label="Срок" onClose={onClose} tall={withTime}>
       <MenuItem icon={<CalendarDays size={16} />} onSelect={() => pick(plusDays(0))}>Сегодня</MenuItem>
       <MenuItem icon={<CalendarDays size={16} />} onSelect={() => pick(plusDays(1))}>Завтра</MenuItem>
       <MenuItem icon={<CalendarDays size={16} />} onSelect={() => pick(nextMonday())}>В понедельник</MenuItem>
@@ -78,6 +92,21 @@ export function DatePicker({ anchor, value, onPick, onClose }: {
             </button>
           ))}
         </div>
+        {withTime && (
+          <div className="ndp-time">
+            <label className="ndp-time-row">
+              <Clock size={15} aria-hidden="true" />
+              <span>Время</span>
+              <input type="time" value={time} onChange={(e) => changeTime(e.target.value)} aria-label="Время срока" />
+            </label>
+            <div className="ndp-time-chips">
+              {TIME_CHIPS.map((t) => (
+                <button key={t} type="button" className="ndp-chip" aria-pressed={t === time} onClick={() => changeTime(t)}>{t}</button>
+              ))}
+              {time && <button type="button" className="ndp-chip" onClick={() => changeTime('')}>Без времени</button>}
+            </div>
+          </div>
+        )}
       </div>
     </Menu>
   );

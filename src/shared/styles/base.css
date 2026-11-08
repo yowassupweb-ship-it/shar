@@ -360,6 +360,7 @@ html.nx-locked body {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+.nx-menu[data-tall="true"] { max-height: calc(var(--nx-vvh, 100dvh) - 2 * var(--space-4)); }
 .nx-menu-item {
   display: flex;
   align-items: center;

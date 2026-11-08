@@ -3,3 +3,4 @@
  * раздела (карточка события в чате, напоминание из сообщения).
  */
 export { EventEditorHost, openEventById, openReminderFromText } from './EditorHost';
+export type { CalEvent } from './model';

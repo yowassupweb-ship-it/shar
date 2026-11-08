@@ -4,11 +4,15 @@ import { AlertCircle, ChevronLeft, ChevronRight, Copy, LogOut, Pencil, Plus, Rot
 import { showToast } from '@/shared/ui/Toast';
 import { useShellOptions } from '@/shared/shell/ShellContext';
 import { askConfirm, Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
+import { byStart } from './model';
 import { deleteEvent, isMine, leaveEvent, loadRange, myId, reload, updateEvent, useCalendar, type Scope } from './api';
 import EventEditor, { askScope, newDraft, type EditorState } from './EventEditor';
 import { DayAgenda, MiniMonth, MonthView } from './MonthViews';
 import TimeGrid from './TimeGrid';
 import { birthdayEvents, isBirthdayEvent, loadBirthdays, useBirthdays } from '@/features/birthdays/store';
+import { isTaskEvent, loadTasks, taskEvents, taskIdOfEvent, useTasks } from '@/features/tasks';
+import { navigate } from '@/shared/navigation/navigate';
+import { links } from '@/shared/navigation/routes';
 import {
   addDays, addMinutes, COLORS, colorVar, dayIso, localIso, monthGrid, MONTHS, MONTHS_GEN, parseLocal, sameDay, startOfDay,
   startOfMonth, startOfWeek, weekdayIndex, WEEKDAYS_FULL, type CalEvent,
@@ -75,10 +79,13 @@ export default function CalendarScreen() {
   const [miniMonth, setMiniMonth] = useState(() => startOfMonth(startDay()));
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [evMenu, setEvMenu] = useState<{ event: CalEvent; anchor: MenuAnchor } | null>(null);
-  const showMenu = useCallback((event: CalEvent, at: { x: number; y: number }) => { if (!isBirthdayEvent(event.id)) setEvMenu({ event, anchor: at }); }, []);
+  const showMenu = useCallback((event: CalEvent, at: { x: number; y: number }) => { if (!isBirthdayEvent(event.id) && !isTaskEvent(event.id)) setEvMenu({ event, anchor: at }); }, []);
   const stored = useCalendar((s) => s.events);
   const birthdays = useBirthdays((s) => s.items);
   useEffect(() => { void loadBirthdays(); }, []);
+  // Задачи со сроком — на календаре: срок живёт в задаче, здесь он только показан.
+  const tasks = useTasks((s) => s.tasks);
+  useEffect(() => { void loadTasks(); }, []);
   const phase = useCalendar((s) => s.phase);
 
   // Календарь всегда открывается месяцем; день и неделя — на время просмотра.
@@ -88,7 +95,10 @@ export default function CalendarScreen() {
   const fromIso = localIso(range.from);
   const toIso = localIso(range.to);
   // Дни рождения коллег — ежегодные события на весь день поверх своих.
-  const events = useMemo(() => (birthdays.length ? [...stored, ...birthdayEvents(birthdays, range.from, range.to)] : stored), [stored, birthdays, range]);
+  const events = useMemo(() => {
+    const extra = [...(birthdays.length ? birthdayEvents(birthdays, range.from, range.to) : []), ...taskEvents(tasks, range.from, range.to)];
+    return extra.length ? [...stored, ...extra].sort(byStart) : stored;
+  }, [stored, birthdays, tasks, range]);
   useEffect(() => { void loadRange(fromIso, toIso); }, [fromIso, toIso]);
 
   const goToday = useCallback(() => {
@@ -148,6 +158,7 @@ export default function CalendarScreen() {
 
   const openEvent = useCallback((e: CalEvent) => {
     if (isBirthdayEvent(e.id)) { showToast(`${e.title}. ${e.description}`, 'info'); return; }
+    if (isTaskEvent(e.id)) { navigate(links.task(taskIdOfEvent(e.id))); return; }
     setEditor({ mode: 'edit', event: e });
   }, []);
 
