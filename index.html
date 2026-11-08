@@ -15,9 +15,11 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400;1,700&family=Roboto:ital,wght@0,400;0,500;0,700;1,400;1,700&display=swap" rel="stylesheet" />
+    <!-- Шрифты — свои копии (public/fonts): старт не ждёт fonts.googleapis.com. Inter переменный — один файл на все начертания;
+         прогреваем кириллицу и латиницу, остальные подмножества подтянутся по unicode-range. -->
+    <link rel="preload" href="/fonts/inter-cyrillic-normal-400.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/inter-latin-normal-400.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/fonts/fonts.css" />
     <title>Шар</title>
     <!-- Тема и платформа — до первой отрисовки, чтобы не мигало светлым. -->
     <script src="/boot.js"></script>

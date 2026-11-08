@@ -531,7 +531,7 @@ let fontsLoad: Promise<void> | null = null;
  *  чтобы раскладка не зависела от того, кто успел первым: иначе два окна одного документа переносили бы по-разному. */
 export function loadLayoutFonts(): Promise<void> {
   fontsLoad ??= new Promise<void>((resolve) => {
-    const href = typeof document !== 'undefined' ? document.querySelector<HTMLLinkElement>('link[rel="stylesheet"][href*="fonts.googleapis.com/css"]')?.href : undefined;
+    const href = typeof document !== 'undefined' ? document.querySelector<HTMLLinkElement>('link[rel="stylesheet"][href*="/fonts/fonts.css"], link[rel="stylesheet"][href*="fonts.googleapis.com/css"]')?.href : undefined;
     if (!href) { resolve(); return; }
     const timer = window.setTimeout(resolve, 3000);
     void fetch(href)

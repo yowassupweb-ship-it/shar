@@ -20,6 +20,7 @@ import { useSession, verifySession } from '@/shared/session/session';
 import LoginScreen from './LoginScreen';
 import ElectronTitlebar from './electron/ElectronTitlebar';
 import { startWorkspaceToasts } from '@/features/workspace/live';
+import { warmEditorsInBackground } from '@/features/workspace/editorWarmup';
 import { checkMailAccess, useMail } from '@/features/mail/api';
 import { startMailBadge, useMailBadge } from '@/features/mail/badge';
 import { showToast } from '@/shared/ui/Toast';
@@ -159,6 +160,8 @@ function Workspace({ me }: { me: User }) {
 
   // «Вам открыли документ» — тост в любом разделе; сам список «Офиса» обновляется отдельно.
   useEffect(() => startWorkspaceToasts(), []);
+  // Тяжёлые редакторы Офиса — в фоне, пока человек в другом разделе: первое открытие документа или таблицы не холодное.
+  useEffect(() => warmEditorsInBackground(), []);
   // История посещений для поиска (Ctrl+K).
   useVisitTracker();
 

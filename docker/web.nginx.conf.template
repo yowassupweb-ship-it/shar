@@ -17,6 +17,15 @@ server {
     index index.html;
     client_max_body_size 200m;
 
+    # Сжатие: JSON, JS и CSS шли как есть (список чатов 331 КБ → ~40 КБ, JS старта 2,1 МБ → ~0,5 МБ). Уровень 5 — на одном ядре
+    # сервера дороже не нужно; картинки и шрифты уже сжаты. Ответы API идут через proxy_buffering off — nginx жмёт их кусками.
+    gzip on;
+    gzip_vary on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_types application/json application/javascript text/javascript text/css text/plain application/manifest+json image/svg+xml application/xml;
+
     location = /healthz {
         access_log off;
         add_header Content-Type text/plain;
@@ -51,6 +60,13 @@ server {
         try_files $uri =404;
         expires 1y;
         add_header Cache-Control "public, immutable";
+    }
+
+    # Шрифты без хэша в имени — месяц, а не «навсегда»: при замене файла клиенты подхватят его в срок.
+    location /fonts/ {
+        try_files $uri =404;
+        expires 30d;
+        add_header Cache-Control "public";
     }
 
     location /emojis/ {
