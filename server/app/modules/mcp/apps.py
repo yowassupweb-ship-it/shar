@@ -322,7 +322,7 @@ def people_search(access, args: dict[str, Any]) -> dict[str, Any]:
     query = str(args.get("query") or "").lower().strip()
     department = str(args.get("department") or "").lower().strip()
     offset = max(0, int(args.get("offset") or 0))
-    limit = max(1, min(int(args.get("limit") or 100), 200))
+    limit = max(1, min(int(args.get("limit") or 30), 200))
     rows = db.get_users() or []
     departments = {str(d["id"]): d for d in (db.get_departments() or [])}
     selected = {did for did, d in departments.items() if department in f"{did} {d.get('name') or ''}".lower()} if department else set()

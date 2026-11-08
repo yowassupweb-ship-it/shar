@@ -466,7 +466,7 @@ def list_items(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     if args.get("folder_id"):
         items = [i for i in items if (i.get("folderId") or "") == str(args["folder_id"])]
     offset = max(0, int(args.get("offset") or 0))
-    limit = max(1, min(int(args.get("limit") or 50), 200))
+    limit = max(1, min(int(args.get("limit") or 25), 200))
     page = [_brief(i, access) for i in items[offset:offset + limit]]
     query = str(args.get("query") or "").strip()
     if query and args.get("matches", True):
@@ -1097,7 +1097,7 @@ TOOLS: list[dict[str, Any]] = [
          "kind": {"type": "string", "enum": list(store.KINDS)},
          "query": {"type": "string", "description": "слова из названия или текста"},
          "folder_id": {"type": "string", "description": "только материалы этой папки"},
-         "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}, "offset": {"type": "integer", "minimum": 0}}}},
+         "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 25}, "offset": {"type": "integer", "minimum": 0}}}},
     {"name": "list_folders", "handler": list_folders, "level": "read",
      "description": "Папки, открытые этому ключу, с путём и числом материалов каждого вида.",
      "inputSchema": {"type": "object", "properties": {}}},
