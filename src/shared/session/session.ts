@@ -79,6 +79,7 @@ interface SessionResponse {
 }
 
 let verifying: Promise<void> | null = null;
+let recheckAttempts = 0;
 
 /** Сверить кэш с сервером. Вызывается один раз при старте. */
 export function verifySession(): Promise<void> {
@@ -86,6 +87,7 @@ export function verifySession(): Promise<void> {
     try {
       const res = await fetch('/api/auth/session', { credentials: 'include', cache: 'no-store' });
       const data = (await res.json().catch(() => ({}))) as SessionResponse;
+      recheckAttempts = 0;
       if (data.authenticated && data.user) {
         const changed = !state.me || String(state.me.id) !== String(data.user.id);
         writeCached(data.user);
@@ -97,8 +99,11 @@ export function verifySession(): Promise<void> {
         set({ status: 'anonymous', me: null });
       }
     } catch {
-      // Нет сети: с кэшем работаем дальше, без кэша — показываем вход.
+      // Нет сети: с кэшем работаем дальше, без кэша — показываем вход. Но кэш не доказательство: сессии на сервере
+      // может уже не быть (сервер перезапускался, сменилось хранилище сессий) — тогда всё отвечает 401, а вход не
+      // показан. Поэтому, пока работаем «по кэшу», сверяемся снова с паузой, пока сервер не ответит.
       if (!state.me) set({ status: 'anonymous', me: null });
+      else if (recheckAttempts < 6) { recheckAttempts += 1; window.setTimeout(() => { void verifySession(); }, 3000 * recheckAttempts); }
     } finally {
       verifying = null;
     }

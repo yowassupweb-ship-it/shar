@@ -124,8 +124,12 @@ def get_session(request: Request):
     if not record:
         return {"authenticated": False}
     user = db.get_user_by_id(record["userId"])
-    if not user or user.get("isDisabled") or user.get("is_disabled"):
-        auth_sessions.revoke_session(token)  # удалён или отключён — сессия тоже
+    if not user:
+        # Пользователя не нашли — это может быть и недоступная база (обрыв туннеля, перезапуск), а не удаление.
+        # Сессию из-за этого не отзываем: иначе каждый сбой базы разлогинивал бы всех, кто в этот момент спросил.
+        return {"authenticated": False}
+    if user.get("isDisabled") or user.get("is_disabled"):
+        auth_sessions.revoke_session(token)  # отключён — сессия тоже
         return {"authenticated": False}
     return {"authenticated": True, "user": _public_user(user)}
 

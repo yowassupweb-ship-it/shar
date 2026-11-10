@@ -75,3 +75,16 @@ def test_relogin_replaces_session_and_caps_devices(users):
         s.create_session(uid, uid, user_agent=f"device-{i}")
     s.prune_user_sessions(uid)
     assert len(s.list_sessions(uid)) == s.MAX_SESSIONS_PER_USER
+
+
+def test_partial_session_hash_is_dropped_and_session_endpoint_does_not_crash(users, client):
+    """Хеш сессии без userId (остался после гонки «отозвали — продлили») не должен ронять /api/auth/session и жить вечно."""
+    from app.core import sessions
+
+    token = "x" * 64
+    redis_client = sessions._client()
+    redis_client.hset(sessions._SESSION_KEY + token, "lastSeenAt", "1")
+    redis_client.expire(sessions._SESSION_KEY + token, 3600)
+    res = client.get("/api/auth/session", headers={"cookie": f"{sessions.SESSION_COOKIE}={token}"})
+    assert res.status_code == 200 and res.json() == {"authenticated": False}
+    assert not redis_client.exists(sessions._SESSION_KEY + token)

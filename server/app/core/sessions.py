@@ -219,6 +219,14 @@ def get_session(token: Optional[str], *, touch: bool = True) -> Optional[Dict[st
         record = client.hgetall(_SESSION_KEY + token)
         if not record:
             return None
+        if not record.get("userId"):
+            # Огрызок: сессию отозвали, а параллельный запрос успел записать в неё lastSeenAt — получился хеш без
+            # пользователя. Со скользящим TTL он не истёк бы никогда, а запросы по нему падали бы на record["userId"].
+            try:
+                client.delete(_SESSION_KEY + token)
+            except Exception:  # noqa: BLE001
+                pass
+            return None
         if touch:
             # Скользящий TTL: активные устройства не разлогинивает, забытые —
             # отваливаются сами.
