@@ -55,8 +55,8 @@ export function ChatList({ lead, onOpen, onSwitch, source = CHAT_SOURCE }: { lea
     <section className="nf-view">
       <header className="nf-bar">
         <div className="nf-left">
-          {lead}
           <span className="nf-crumbs" />
+          {lead}
         </div>
         <SearchField className="nf-search" value={query} onChange={setQuery} placeholder="Найти чат" />
         <div className="nf-tools">
@@ -215,7 +215,6 @@ export function ChatFiles({ lead, chat, onBack, onSwitch, days = false, source =
     <section className="nf-view">
       <header className="nf-bar">
         <div className="nf-left">
-          {lead}
           <nav className="nf-crumbs" aria-label="Путь">
             {days ? <span className="nf-crumb" aria-current="page">{chat.chatName}</span> : (
               <>
@@ -224,6 +223,7 @@ export function ChatFiles({ lead, chat, onBack, onSwitch, days = false, source =
               </>
             )}
           </nav>
+          {lead}
         </div>
         <SearchField className="nf-search" value={query} onChange={setQuery} placeholder="Имя файла или автор" label="Поиск по файлам" />
         <div className="nf-tools">

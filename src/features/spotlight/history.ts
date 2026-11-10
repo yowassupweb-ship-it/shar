@@ -5,7 +5,7 @@ import { myId } from '@/shared/session/session';
  * («Заявки», «Соцсети»…) человек был.
  * Хранится на устройстве (по человеку), последние ~80 записей; повторные заходы поднимают запись наверх.
  */
-export type VisitKind = 'chat' | 'office' | 'task' | 'file' | 'person' | 'tool';
+export type VisitKind = 'chat' | 'office' | 'task' | 'file' | 'folder' | 'person' | 'tool';
 
 export interface Visit {
   key: string;

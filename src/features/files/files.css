@@ -45,15 +45,14 @@ button.nf-crumb { cursor: pointer; }
 .nf-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2); min-width: 0; }
 .nf-search { width: 200px; }
 .nf-left { display: flex; align-items: center; gap: var(--space-2) var(--space-3); min-width: 0; }
-/* Компьютер: три колонки — путь, поиск, инструменты. Боковые колонки равной ширины, поэтому поиск стоит ровно
-   по центру шапки, сколько бы ни занимали путь и кнопки. */
+/* Компьютер: три колонки — путь, поиск, инструменты. Боковые колонки равной ширины (1fr · auto · 1fr), поэтому поиск
+   стоит ровно по центру шапки при любой ширине и любой длине пути. Чтобы инструменты не наезжали на поиск, у них
+   по мере сужения раздела пропадают подписи (ниже, по ширине самого раздела). */
 @media (min-width: 641px) {
-  /* Правая колонка ровно по кнопкам (max-content): с minmax(max-content, 1fr) браузер делил свободное место поровну и
-     кнопки вылезали влево поверх поиска. Теперь путь сжимается первым, поиск стоит рядом с инструментами. */
-  .nf-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto max-content; align-items: center; }
-  .nf-left .nf-crumbs { flex: 1 1 auto; }
-  .nf-search { width: min(320px, 28vw); }
-  .nf-tools { flex-wrap: nowrap; }
+  .nf-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; }
+  .nf-left .nf-crumbs { flex: 0 1 auto; }
+  .nf-search { width: clamp(180px, 24cqw, 320px); justify-self: center; }
+  .nf-tools { flex-wrap: nowrap; justify-content: flex-end; }
 }
 /* Фильтр и вид не сжимаются: раньше при нехватке места кнопки «Фото Видео Документы» наезжали друг на друга,
    а значки вида пропадали. */
@@ -61,14 +60,18 @@ button.nf-crumb { cursor: pointer; }
 /* «Новая папка» — второстепенное действие: всегда значком (подсказка — aria-label), подпись остаётся у «Загрузить». */
 .nf-tools > .nf-act[aria-label="Новая папка"] { width: var(--control-h); min-width: var(--control-h); padding: 0; justify-content: center; }
 .nf-tools > .nf-act[aria-label="Новая папка"] .nf-btn-label { display: none; }
-/* Раздел уже, чем нужно для «поиск ровно по центру» (окно ~1300px и меньше): поиск занимает всё место
-   между переключателем и инструментами. Ещё уже — инструменты переходят на вторую строку. */
-@container nf-view (min-width: 641px) and (max-width: 1240px) {
-  .nf-bar { grid-template-columns: auto minmax(160px, 1fr) auto; }
-  .nf-search { width: 100%; }
+/* Раздел уже ~1500px: у фильтра и сортировки остаются значки (подсказка — aria-label), чтобы инструменты помещались
+   в свою половину и не заходили на поиск. Ещё уже (~1100px) — значком становится и «Загрузить». */
+@container nf-view (min-width: 641px) and (max-width: 1500px) {
+  .nf-tools > .nf-act:not(.nx-primary) .nf-btn-label { display: none; }
 }
-@container nf-view (min-width: 641px) and (max-width: 900px) {
+@container nf-view (min-width: 641px) and (max-width: 1100px) {
+  .nf-tools > .nx-primary .nf-btn-label { display: none; }
+}
+/* Совсем узко: инструменты переходят на вторую строку, поиск остаётся по центру первой. */
+@container nf-view (min-width: 641px) and (max-width: 860px) {
   .nf-bar { grid-template-columns: auto minmax(160px, 1fr); }
+  .nf-search { width: 100%; }
   .nf-tools { grid-column: 1 / -1; justify-content: flex-start; flex-wrap: wrap; }
 }
 /* Средняя ширина: справа не хватает места на подписи — у «Новой папки» и «Загрузить» остаются значки (подсказка — aria-label).
@@ -140,7 +143,7 @@ button.nf-crumb { cursor: pointer; }
   transition: opacity var(--duration-fast) var(--ease-out);
 }
 .nf-grid .nf-item:hover .nf-more,
-.nf-grid .nf-item:focus-within .nf-more,
+.nf-grid .nf-item:has(:focus-visible) .nf-more,
 .nf-grid .nf-more[aria-expanded="true"] { opacity: 1; }
 @media (hover: none) { .nf-grid .nf-more { display: none; } }
 
@@ -154,6 +157,30 @@ button.nf-crumb { cursor: pointer; }
   min-height: 48px;
   padding: 6px var(--space-2);
 }
+/* Построчный вид — таблица. Колонки у строк и у шапки общие: миниатюра · название · тип · размер · изменён · владелец · меню. */
+.nf-list .nf-item,
+.nf-thead { display: grid; grid-template-columns: 30px minmax(0, 1fr) 130px 96px 116px 150px 30px; align-items: center; column-gap: var(--space-3); }
+.nf-list .nf-item { min-height: 42px; padding-top: 3px; padding-bottom: 3px; }
+.nf-list .nf-thumb { width: 30px; height: 30px; }
+.nf-thead {
+  position: sticky; top: 0; z-index: 5;
+  padding: 6px var(--space-2); margin-bottom: 2px;
+  background: var(--bg-color); border-bottom: 1px solid var(--border-color);
+  color: var(--text-muted); font-size: var(--text-xs); font-weight: var(--weight-medium); user-select: none;
+}
+.nf-cell { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-xs); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.nf-c-owner { display: flex; align-items: center; gap: 6px; }
+.nf-c-owner > span { overflow: hidden; text-overflow: ellipsis; }
+.nf-badges { display: inline-flex; align-items: center; gap: 4px; flex: none; color: var(--text-muted); font-size: var(--text-xs); }
+.nf-list .nf-uploading .nf-text { grid-column: 2 / -1; display: grid; gap: 1px; }
+@media (max-width: 900px) {
+  .nf-list .nf-item, .nf-thead { grid-template-columns: 30px minmax(0, 1fr) 96px 116px 30px; }
+  .nf-c-type, .nf-c-owner, .nf-thead > :nth-child(3), .nf-thead > :nth-child(6) { display: none; }
+}
+@media (max-width: 640px) {
+  .nf-list .nf-item, .nf-thead { grid-template-columns: 30px minmax(0, 1fr) 30px; }
+  .nf-c-size, .nf-c-date, .nf-thead > :nth-child(4), .nf-thead > :nth-child(5) { display: none; }
+}
 .nf-list .nf-thumb {
   display: grid;
   place-items: center;
@@ -163,8 +190,8 @@ button.nf-crumb { cursor: pointer; }
   overflow: hidden;
   border-radius: var(--radius-sm);
 }
-.nf-list .nf-text,
 .nf-row .nf-text { display: grid; gap: 1px; flex: 1; min-width: 0; color: inherit; text-decoration: none; }
+.nf-list .nf-text { display: flex; align-items: center; gap: 8px; min-width: 0; color: inherit; text-decoration: none; }
 .nf-list .nf-more { flex: none; width: 30px; height: 30px; }
 
 .nf-name {
@@ -188,7 +215,12 @@ button.nf-crumb { cursor: pointer; }
 }
 .nf-meta svg { flex: none; }
 /* Плитка узкая: разрешение, размер и дата помельче и без переноса — читаются целиком (у обрезанного края — многоточие). */
-.nf-grid .nf-file .nf-meta { font-size: var(--text-2xs); letter-spacing: -0.005em; text-overflow: ellipsis; }
+/* Подписи в сетке мельче: имя 12 px, строка сведений 10 px — иначе «разрешение · размер · дата» не влезают в плитку. */
+.nf-grid .nf-name { font-size: var(--text-xs); }
+.nf-grid .nf-meta { font-size: 10px; letter-spacing: -0.005em; text-overflow: ellipsis; }
+.nf-grid .nf-file .nf-meta { font-size: 10px; letter-spacing: -0.005em; flex-wrap: wrap; column-gap: 3px; row-gap: 0; line-height: 1.3; }
+.nf-meta-part { white-space: nowrap; }
+.nf-list .nf-meta { font-size: 11px; }
 .nf-owner { display: inline-flex; margin-left: auto; }
 
 .nf-rename {
@@ -272,11 +304,13 @@ button.nf-row { cursor: pointer; }
   z-index: 30;
   display: grid;
   place-items: center;
-  align-content: center;
+  /* Папки под рамкой остаются видны: файл можно бросить и прямо на папку. Подпись — внизу, не поверх плиток. */
+  align-content: end;
+  padding-bottom: var(--space-5);
   gap: var(--space-2);
   border: 2px dashed var(--accent-color);
   border-radius: var(--radius-xl);
-  background: color-mix(in srgb, var(--accent-fill) 10%, var(--bg-color));
+  background: color-mix(in srgb, var(--accent-fill) 7%, transparent);
   color: var(--accent-color);
   font-weight: var(--weight-medium);
   pointer-events: none;
@@ -374,6 +408,9 @@ button.nf-row { cursor: pointer; }
 .nft-cell:has(.nf-glyph) { background: none; }
 .nft-cell .nf-glyph { width: auto !important; height: 100%; }
 .nft-cell .nf-glyph svg { width: auto; height: 100%; }
+/* Вложенная папка в превью: значок своим цветом, на светлой подложке читается и на цветной плитке. */
+.nft-cell:has(.nft-sub) { background: rgb(255 255 255 / 0.22); }
+.nft-cell .nft-sub { width: 62%; height: 62%; color: var(--text-2); }
 .nft-badge {
   position: absolute;
   display: grid;
@@ -429,3 +466,75 @@ button.nf-row { cursor: pointer; }
 .nfs-send-options { display: grid; gap: var(--space-2); }
 .nfs-send-options .nx-pick small { display: block; margin-top: 2px; color: var(--text-muted); font-size: var(--text-xs); }
 .nfs-send-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+/* Перетаскивание в папку: приёмник подсвечен, пока над ним держат файл. */
+.nf-folder[data-drop="true"] { background: color-mix(in srgb, var(--accent-fill) 16%, transparent); box-shadow: 0 0 0 2px var(--accent-color); }
+.nf-folder[data-drop="true"] .nft { transform: scale(1.04); }
+button.nf-crumb[data-drop="true"] { background: color-mix(in srgb, var(--accent-fill) 22%, transparent); color: var(--text-main); box-shadow: 0 0 0 2px var(--accent-color); }
+
+/* ── Свойства ───────────────────────────────────────────────────────────── */
+.nfs-props { display: grid; gap: var(--space-4); }
+.nfs-props-head { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.nfs-props-icon { display: grid; place-items: center; flex: none; width: 64px; height: 64px; overflow: hidden; border-radius: var(--radius-md); background: var(--element-bg); color: var(--text-2); }
+.nfs-props-icon img { width: 100%; height: 100%; object-fit: cover; }
+.nfs-props-name { min-width: 0; font-size: var(--text-md); font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
+.nfs-props-list { display: grid; margin: 0; }
+.nfs-props-list > div { display: grid; grid-template-columns: 116px minmax(0, 1fr); gap: var(--space-3); padding: 8px 0; border-top: 1px solid var(--border-color); font-size: var(--text-sm); }
+.nfs-props-list dt { color: var(--text-muted); }
+.nfs-props-list dd { margin: 0; overflow-wrap: anywhere; user-select: text; }
+.nfs-props-person { display: block; }
+.nfs-props-person small { color: var(--text-muted); margin-left: 4px; }
+
+/* Доступ от папки: строка неактивна, но не должна выглядеть «выключенной» — человек доступ имеет. */
+.nfs-people .nx-pick:disabled { opacity: 1; }
+.nfs-people .nx-pick:disabled .nx-pick-text > span { color: var(--text-main); }
+.nfs-people .nx-pick-text small { color: var(--text-muted); }
+
+/* Переключатель раздела — кнопка-выпадашка после пути; фильтр типов не квадратный, у него значок и стрелка. */
+.nf-section { flex: none; gap: 4px; height: var(--control-h, 32px); padding: 0 10px; font-weight: var(--weight-semibold); }
+.nf-tools > .nf-act[aria-label^="Тип файлов"] { width: auto; min-width: var(--control-h); padding: 0 8px; gap: 4px; }
+
+/* Пункт «Доступ» в меню: первым, справа — аватарки (внахлёст) и число людей. */
+.nf-access-item { padding-right: 10px; }
+.nf-access-who { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; padding-left: var(--space-3); }
+.nf-access-stack { display: inline-flex; }
+.nf-access-stack > * { margin-left: -6px; box-shadow: 0 0 0 2px var(--surface-menu, var(--bg-color)); border-radius: 50%; }
+.nf-access-stack > *:first-child { margin-left: 0; }
+.nf-access-count { min-width: 18px; padding: 0 6px; border-radius: var(--radius-pill); background: var(--surface-selected); color: var(--text-2); font-size: var(--text-xs); font-weight: var(--weight-semibold); line-height: 18px; text-align: center; }
+
+/* ── История версий ─────────────────────────────────────────────────────── */
+.nfs-versions { display: grid; }
+.nfs-version { display: flex; align-items: center; gap: var(--space-2); padding: 8px 0; border-top: 1px solid var(--border-color); }
+.nfs-version:first-child { border-top: 0; }
+.nfs-version-main { display: grid; flex: 1; min-width: 0; gap: 1px; }
+.nfs-version-main b { font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.nfs-version-main small { color: var(--text-muted); font-size: var(--text-xs); }
+.nfs-version[data-current="true"] .nfs-version-main b { color: var(--accent-color); }
+
+/* ── Выбор нескольких ───────────────────────────────────────────────────── */
+.nf-check {
+  position: absolute; z-index: 4; top: calc(var(--space-2) + 6px); left: calc(var(--space-2) + 6px);
+  display: grid; place-items: center; width: 20px; height: 20px; padding: 0;
+  border: 1.5px solid color-mix(in srgb, var(--text-main) 45%, transparent); border-radius: 50%;
+  background: color-mix(in srgb, var(--bg-color) 80%, transparent); color: transparent; cursor: pointer;
+  opacity: 0; transition: opacity var(--duration-fast) var(--ease-out);
+}
+/* Только наведение, клавиатурный фокус и уже начатый выбор: :focus-within держал кружок, пока на плитке оставался фокус
+   (после меню, клика или перетаскивания), — он «застревал» без наведения. */
+.nf-item:hover .nf-check, .nf-item:focus-visible .nf-check, .nf-check:focus-visible, .nf-view:has(.nf-item[data-selected="true"]) .nf-check { opacity: 1; }
+@media (hover: none) { .nf-check { opacity: 1; } }
+.nf-item[data-selected="true"] .nf-check { border-color: var(--accent-fill); background: var(--accent-fill); color: var(--on-accent); opacity: 1; }
+.nf-item[data-selected="true"] { background: color-mix(in srgb, var(--accent-fill) 14%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent-fill) 55%, transparent); }
+/* В списке галочка стоит на месте миниатюры, пока на строку не навели. */
+.nf-list .nf-check { top: 50%; left: calc(var(--space-2) + 5px); transform: translateY(-50%); }
+.nf-list .nf-item:hover .nf-thumb, .nf-list .nf-item[data-selected="true"] .nf-thumb { opacity: 0.25; }
+.nf-selbar {
+  position: absolute; z-index: 40; left: 50%; bottom: var(--space-4); transform: translateX(-50%);
+  display: flex; align-items: center; gap: var(--space-2); padding: 6px 8px 6px 14px;
+  border-radius: var(--radius-pill); background: var(--glass); box-shadow: 0 0 0 1px var(--glass-brd), var(--glass-shadow);
+  animation: nf-in var(--duration-fast) var(--ease-out);
+}
+.nf-selbar-count { font-size: var(--text-sm); font-weight: var(--weight-semibold); white-space: nowrap; }
+.nf-selbar-btn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.nf-selbar-hint { margin: 4px 10px 2px; max-width: 230px; }
+.nf-grid .nf-folder .nf-check { top: calc(var(--space-2) + 30px); }

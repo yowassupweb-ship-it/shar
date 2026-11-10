@@ -3,8 +3,8 @@ import { HiddenMark } from '@/shared/core/HiddenMark';
 import { realtime } from '@/shared/realtime/realtime';
 import { lazyComponent } from '@/shared/ui/lazy';
 import {
-  AlertCircle, ArrowUpDown, Check, ChevronRight, Copy, Download, ExternalLink, Folder, FolderInput, FolderPlus, LayoutGrid, Link2, List,
-  Mail, MoreHorizontal, Pencil, Pin, PinOff, RotateCw, Send, Trash2, Upload, Users, PenLine } from 'lucide-react';
+  AlertCircle, ArrowUpDown, Check, Archive, ChevronDown, ChevronRight, ClipboardPaste, Copy, Download, Files, ExternalLink, Folder, FolderInput, FolderPlus, LayoutGrid, Link2, List,
+  FileUp, Filter, History, Info, Mail, MoreHorizontal, Pencil, Pin, PinOff, RotateCw, Send, Trash2, Upload, Users, PenLine, X } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
 import { AgentMenuItems } from '@/shared/core/AgentMenuItems';
 import { SearchField } from '@/shared/ui/SearchField';
@@ -16,13 +16,18 @@ import { Avatar } from '@/shared/ui/Avatar';
 import { askConfirm, Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import {
   cachedFolder, createFolder, deleteItem, fetchImageDims, fileUrl, fmtBytes, fmtDate, fmtDateShort, kindOf, loadFolder, myId, patchFolderCache,
-  pinFolder, registerUpload, renameItem, setFolderColor, type CloudFile, type CloudFolder,
+  moveFile, moveFolder, pinFolder, registerUpload, renameItem, replaceFileContent, setFolderColor, type CloudFile, type CloudFolder,
 } from './api';
 import { FileGlyph } from './FileGlyph';
 import { FolderTile } from './FolderTile';
 import { AccessSheet, MoveSheet, SendSheet } from './sheets';
+import { PropertiesSheet } from './PropertiesSheet';
+import { VersionsSheet } from './VersionsSheet';
+import { useInheritedAccess } from './inherited';
+import { copyFiles, duplicateAsFile, forgetHeld, heldFiles, uniqueName } from './clipboard';
 import { absolute, links } from '@/shared/navigation/routes';
-import { downloadFile } from '@/shared/platform/download';
+import { downloadFile, downloadMany } from '@/shared/platform/download';
+import { recordVisit } from '@/features/spotlight';
 import { canOpenInEditor, openInEditor, viewKindOf, type FileRef } from '@/features/workspace';
 import { DocOverlay } from './DocOverlay';
 
@@ -37,9 +42,12 @@ const ImageViewer = lazyComponent(() => import('@/shared/ui/ImageViewer'));
 
 type Mode = 'grid' | 'list';
 type Filter = 'all' | 'image' | 'video' | 'doc';
+const FILTERS: Record<Filter, string> = { all: 'Все файлы', image: 'Фото', video: 'Видео', doc: 'Документы' };
 type Target = { kind: 'file'; item: CloudFile } | { kind: 'folder'; item: CloudFolder };
 interface Uploading { id: string; name: string; pct: number }
 
+/** Тип перетаскивания «свой файл или папка внутри раздела»; чужие файлы с рабочего стола приходят как «Files». */
+const DRAG_TYPE = 'application/x-shar-cloud-item';
 const MODE_KEY = 'nx:files-mode';
 const LONG_PRESS = 450;
 const FOLDER_COLORS = ['#ff6b6b', '#ff9f43', '#f6c945', '#52c878', '#45c6c8', '#5a9cff', '#a783ff', '#9298a3'];
@@ -88,19 +96,25 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
   const [creating, setCreating] = useState(false);
   const [uploads, setUploads] = useState<Uploading[]>([]);
   const [dragging, setDragging] = useState(false);
-  const [sheet, setSheet] = useState<{ type: 'move' | 'access' | 'send'; target: Target } | null>(null);
+  const [sheet, setSheet] = useState<{ type: 'move' | 'access' | 'send' | 'props' | 'versions'; target: Target } | null>(null);
   const [viewer, setViewer] = useState<{ items: ViewerItem[]; start: number } | null>(null);
   /** Документ во встроенном просмотре (PDF, Word, Excel, CSV, текст, HTML). */
   const [doc, setDoc] = useState<FileRef | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const users = useChatStore((s) => s.users);
 
+  // Какая папка открыта сейчас. Ответ на запрос другой папки (корня, который грузился, пока из адреса разбиралась
+  // цепочка ?file=…) приходит позже и без этой проверки затирал бы содержимое — в крошках одна папка, в окне другая.
+  const openFolderId = useRef(folderId);
+  openFolderId.current = folderId;
   const refresh = useCallback(async () => {
     try {
       const d = await loadFolder(folderId);
+      if (openFolderId.current !== folderId) return;
       setData(d);
       setPhase('ready');
     } catch {
+      if (openFolderId.current !== folderId) return;
       setPhase((p) => (p === 'ready' ? p : 'error'));
     }
   }, [folderId]);
@@ -147,6 +161,7 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
   }), [data, q, filter]);
   const [sort, setSortState] = useState<SortId>(readSort);
   const [sortMenu, setSortMenu] = useState<MenuAnchor | null>(null);
+  const [filterMenu, setFilterMenu] = useState<MenuAnchor | null>(null);
   const setSort = (next: SortId) => { setSortState(next); try { localStorage.setItem(SORT_KEY, next); } catch { /* приватный режим — не запомним */ } };
   const files = useMemo(() => (data?.files || []).filter((f) => {
     if (q && !f.name.toLowerCase().includes(q)) return false;
@@ -173,7 +188,7 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
   }, [missingDims]);
 
   // ── Загрузка ──────────────────────────────────────────────────────────────
-  const upload = async (list: FileList | File[]) => {
+  const upload = async (list: FileList | File[], into: string | null = folderId) => {
     const arr = Array.from(list).filter((f) => f.size > 0);
     if (!arr.length) return;
     const { uploadFileWithProgress } = await import('@/shared/api/uploadFile');
@@ -187,9 +202,10 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
         const { f, id } = job;
         try {
           const res = await uploadFileWithProgress(f, (pct) => setUploads((u) => u.map((x) => (x.id === id ? { ...x, pct } : x))));
-          const saved = await registerUpload(f, res, folderId);
-          setData((d) => (d ? { ...d, files: [saved, ...d.files] } : d));
-          patchFolderCache(folderId, (d) => ({ ...d, files: [saved, ...d.files] }));
+          const saved = await registerUpload(f, res, into);
+          // В открытую папку файл виден сразу; залитый в соседнюю — только в её кэше.
+          if (into === folderId) setData((d) => (d ? { ...d, files: [saved, ...d.files] } : d));
+          patchFolderCache(into, (d) => ({ ...d, files: [saved, ...d.files] }));
         } catch {
           failed++;
         } finally {
@@ -252,6 +268,8 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
 
   const openFile = (f: CloudFile) => {
     const k = kindOf(f.name, f.fileType, f.mimeType);
+    // sub: у картинки — адрес для превью, у остальных пусто (значок формата берётся из имени).
+    recordVisit({ id: f.id, kind: 'file', title: f.name, subtitle: 'Файл', sub: k === 'image' ? `img|${f.url}` : undefined, path: links.file(f.id) });
     if (k === 'image') {
       const items = images.map((x) => ({ url: fileUrl(x.url), name: x.name, date: fmtDate(x.createdAt) }));
       setViewer({ items, start: Math.max(0, images.findIndex((x) => x.id === f.id)) });
@@ -274,10 +292,287 @@ export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highligh
 ${url}` });
   };
 
+  // ── Выбор нескольких ──────────────────────────────────────────────────────
+  // Галочка на плитке, Ctrl/Cmd+клик, Shift+клик — диапазон, Ctrl+A — всё в папке, Esc — снять. Пока что-то выбрано,
+  // обычный клик не открывает, а выбирает. Скачать выбранное можно архивом или каждый файл отдельно.
+  const [selected, setSelected] = useState<Record<string, 'file' | 'folder'>>({});
+  const selectedCount = Object.keys(selected).length;
+  const anchorRef = useRef<string | null>(null);
+  const [downloadMenu, setDownloadMenu] = useState<MenuAnchor | null>(null);
+  useEffect(() => { setSelected({}); anchorRef.current = null; }, [folderId]);
+
+  const ordered = useMemo(() => [
+    ...folders.map((f) => ({ id: f.id, kind: 'folder' as const })),
+    ...files.map((f) => ({ id: f.id, kind: 'file' as const })),
+  ], [folders, files]);
+
+  const toggleSelect = (id: string, kind: 'file' | 'folder', range = false) => {
+    setSelected((cur) => {
+      const next = { ...cur };
+      const from = anchorRef.current ? ordered.findIndex((x) => x.id === anchorRef.current) : -1;
+      const to = ordered.findIndex((x) => x.id === id);
+      if (range && from >= 0 && to >= 0) {
+        for (const x of ordered.slice(Math.min(from, to), Math.max(from, to) + 1)) next[x.id] = x.kind;
+      } else if (id in next) delete next[id]; else next[id] = kind;
+      return next;
+    });
+    anchorRef.current = id;
+  };
+  /** Клик по плитке: при выборе — отметить, иначе открыть. */
+  const pick = (e: React.MouseEvent | React.KeyboardEvent, id: string, kind: 'file' | 'folder', open: () => void) => {
+    if (selectedCount > 0 || e.ctrlKey || e.metaKey || e.shiftKey) { e.preventDefault(); toggleSelect(id, kind, e.shiftKey); return; }
+    open();
+  };
+  const checkBox = (id: string, kind: 'file' | 'folder', name: string) => (
+    <button
+      type="button"
+      className="nf-check"
+      role="checkbox"
+      aria-checked={id in selected}
+      aria-label={`Выбрать: ${name}`}
+      onClick={(e) => { e.stopPropagation(); toggleSelect(id, kind, e.shiftKey); }}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      <Check size={12} strokeWidth={3} aria-hidden="true" />
+    </button>
+  );
+
+  const selectedFiles = () => files.filter((f) => selected[f.id] === 'file');
+  const selectedFolders = () => folders.filter((f) => selected[f.id] === 'folder');
+  const downloadZip = () => {
+    const fs = selectedFiles();
+    const dirs = selectedFolders();
+    const params = new URLSearchParams();
+    if (fs.length) params.set('files', fs.map((f) => f.id).join(','));
+    if (dirs.length) params.set('folders', dirs.map((f) => f.id).join(','));
+    const name = dirs.length === 1 && !fs.length ? dirs[0].name : (here?.name || 'Файлы Шара');
+    params.set('name', name);
+    downloadFile(`/api/cloud/zip?${params.toString()}`, `${name}.zip`);
+    showToast('Готовлю архив…', 'info');
+  };
+  const downloadSeparately = async () => {
+    const list = selectedFiles();
+    if (!list.length) return;
+    const res = await downloadMany(list.map((f) => ({ url: fileUrl(f.url), name: f.name })));
+    if (!res) return;
+    showToast(res.failed ? `Скачано: ${res.saved}, не удалось: ${res.failed}` : `Скачано файлов: ${res.saved}`, res.failed ? 'error' : 'success');
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (e.key === 'Escape' && Object.keys(selectedRef.current).length) { setSelected({}); return; }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.code === 'KeyA' && !live.current.busy) {
+        e.preventDefault();
+        setSelected(Object.fromEntries(orderedRef.current.map((x) => [x.id, x.kind])));
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const orderedRef = useRef(ordered);
+  orderedRef.current = ordered;
+
+  // ── Буфер обмена ──────────────────────────────────────────────────────────
+  // Копировать: файл уходит в системный буфер (в приложении — как файл) и запоминается в разделе. Вставить: Ctrl+V,
+  // «Вставить» в меню пустого места. Файлы из системного буфера (из Проводника, скриншот, скопированное здесь) грузятся
+  // в открытую папку; скопированное в разделе, но недоступное системе (браузер), — делается копией.
+  const [pasteMenu, setPasteMenu] = useState<MenuAnchor | null>(null);
+
+  const copyFile = async (f: CloudFile) => {
+    const how = await copyFiles([f]);
+    showToast(how === 'system' ? 'Файл скопирован — вставьте его в папку, чат или Проводник'
+      : how === 'image' ? 'Картинка скопирована' : 'Файл скопирован — вставьте его в нужную папку', 'success');
+  };
+
+  const pasteHeld = async () => {
+    const list = heldFiles();
+    if (!list.length) return;
+    const taken = new Set((data?.files || []).map((x) => x.name));
+    try {
+      const copies: File[] = [];
+      for (const f of list) {
+        const name = uniqueName(f.name, taken);
+        taken.add(name);
+        copies.push(await duplicateAsFile(f, name));
+      }
+      await upload(copies);
+    } catch { showToast('Не вставил — не удалось получить копию файла.', 'error'); }
+  };
+
+  /** Файлы из системного буфера: просим систему прислать их обычной вставкой (в приложении она приходит с файлами),
+   *  не вышло — смотрим картинки через Clipboard API. */
+  const readSystemClipboardFiles = async (): Promise<File[]> => {
+    const got = await new Promise<File[]>((resolve) => {
+      let timer = 0;
+      const onPaste = (e: ClipboardEvent) => {
+        window.clearTimeout(timer);
+        const files = Array.from(e.clipboardData?.files || []);
+        if (files.length) { e.preventDefault(); e.stopImmediatePropagation(); }
+        resolve(files);
+      };
+      timer = window.setTimeout(() => { document.removeEventListener('paste', onPaste, true); resolve([]); }, 250);
+      document.addEventListener('paste', onPaste, { capture: true, once: true });
+      try { document.execCommand('paste'); } catch { /* запрещено — ждём таймер */ }
+    });
+    if (got.length) return got;
+    try {
+      const images: File[] = [];
+      for (const item of await navigator.clipboard.read()) {
+        const type = item.types.find((x) => x.startsWith('image/'));
+        if (type) images.push(new File([await item.getType(type)], `Изображение.${type.split('/')[1] || 'png'}`, { type }));
+      }
+      return images;
+    } catch { return []; }
+  };
+
+  /** «Вставить» из меню: сперва скопированное в разделе, затем системный буфер. */
+  const pasteFromMenu = async () => {
+    if (heldFiles().length) { await pasteHeld(); return; }
+    const files = await readSystemClipboardFiles();
+    if (files.length) { void upload(files); return; }
+    showToast('В буфере нет файлов. Скопируйте файл (Ctrl+C) и вставьте сюда.', 'info');
+  };
+
+  // ── Замена содержимого файла ──────────────────────────────────────────────
+  // Файл остаётся тем же (id, ссылка, доступы), меняются байты; прежняя версия сохраняется в истории.
+  const replaceInput = useRef<HTMLInputElement>(null);
+  const replaceTarget = useRef<CloudFile | null>(null);
+  const extOf = (name: string) => (name.includes('.') ? (name.split('.').pop() || '').toLowerCase() : '');
+
+  const replaceWith = async (f: CloudFile, file: File) => {
+    if (!file.size) { showToast('Пустой файл — заменять нечем.', 'error'); return; }
+    const ok = await askConfirm({
+      title: `Заменить «${f.name}»?`,
+      text: `Новое содержимое: «${file.name}», ${fmtBytes(file.size)}. ${extOf(file.name) !== extOf(f.name) ? 'Расширение отличается от прежнего. ' : ''}Ссылка на файл не изменится, прежняя версия останется в истории версий.`,
+      confirm: 'Заменить',
+    });
+    if (!ok) return;
+    showToast('Заменяю файл…', 'info');
+    try {
+      const saved = await replaceFileContent(f.id, file);
+      setData((d) => (d ? { ...d, files: d.files.map((x) => (x.id === saved.id ? { ...x, ...saved } : x)) } : d));
+      patchFolderCache(folderId, (d) => ({ ...d, files: d.files.map((x) => (x.id === saved.id ? { ...x, ...saved } : x)) }));
+      setDims((cur) => { const next = { ...cur }; delete next[f.id]; return next; });
+      showToast('Файл заменён — прежняя версия в истории', 'success');
+      void refresh();
+    } catch {
+      showToast('Не заменил — нет права на файл или нет связи с сервером.', 'error');
+    }
+  };
+
+  const replaceFromClipboard = async (f: CloudFile) => {
+    let files = await readSystemClipboardFiles();
+    if (!files.length && heldFiles().length) {
+      try { files = [await duplicateAsFile(heldFiles()[0], heldFiles()[0].name)]; } catch { files = []; }
+    }
+    if (!files.length) { showToast('В буфере нет файла. Скопируйте файл (Ctrl+C) и повторите.', 'info'); return; }
+    await replaceWith(f, files[0]);
+  };
+
+  // Ctrl+V — файлы из системного буфера (или скопированное здесь). Поля ввода и открытые окна вставку не отдают.
+  const hovered = useRef<string | null>(null);
+  const live = useRef({ upload, pasteHeld, copyFile, replaceFromClipboard, files: [] as CloudFile[], busy: false });
+  live.current = { upload, pasteHeld, copyFile, replaceFromClipboard, files: data?.files || [], busy: Boolean(sheet || doc || viewer || menu || renaming || creating) };
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (live.current.busy || el?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      const files = Array.from(e.clipboardData?.files || []);
+      if (files.length) { e.preventDefault(); void live.current.upload(files); return; }
+      if (heldFiles().length) { e.preventDefault(); void live.current.pasteHeld(); }
+    };
+    // Скопировали что-то другое (текст в поле, ссылку) — прежний файл из раздела вставлять уже не надо.
+    const onCopy = () => forgetHeld();
+    // Ctrl+C — файл под фокусом, а без фокуса — тот, на который наведён курсор (выделения у раздела нет).
+    const onKey = (e: KeyboardEvent) => {
+      const replace = e.shiftKey && e.code === 'KeyV';
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || live.current.busy || (e.shiftKey ? !replace : e.code !== 'KeyC')) return;
+      const el = e.target as HTMLElement | null;
+      if (el?.closest('input, textarea, select, [contenteditable="true"]') || window.getSelection()?.toString()) return;
+      const id = el?.closest<HTMLElement>('[data-file-id]')?.dataset.fileId || hovered.current;
+      const f = id ? live.current.files.find((x) => x.id === id) : undefined;
+      if (!f) return;
+      if (replace) {
+        // Ctrl+Shift+V по файлу — заменить его содержимое файлом из буфера (только тем, кто может править).
+        if (!canEdit(f)) return;
+        e.preventDefault();
+        void live.current.replaceFromClipboard(f);
+        return;
+      }
+      e.preventDefault(); // без этого следом придёт обычное «copy» и сотрёт запомненное
+      void live.current.copyFile(f);
+    };
+    document.addEventListener('paste', onPaste);
+    document.addEventListener('copy', onCopy);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('paste', onPaste); document.removeEventListener('copy', onCopy); document.removeEventListener('keydown', onKey); };
+  }, []);
+
+  // ── Перетаскивание в папку ────────────────────────────────────────────────
+  // Файл или папку можно взять и бросить на папку (плитку или строку) или на хлебную крошку — туда он и переедет.
+  // Файлы с рабочего стола, брошенные на папку, загружаются прямо в неё.
+  const dragged = useRef<Target | null>(null);
+  const [dropKey, setDropKey] = useState<string | null>(null);
+
+  const moveInto = async (t: Target, dest: string | null, destName: string) => {
+    const from = t.kind === 'file' ? t.item.folderId : t.item.parentId;
+    if ((from || null) === dest || (t.kind === 'folder' && t.item.id === dest)) return;
+    const before = data;
+    setData((d) => (d ? { folders: d.folders.filter((f) => f.id !== t.item.id), files: d.files.filter((f) => f.id !== t.item.id) } : d));
+    try {
+      if (t.kind === 'file') await moveFile(t.item.id, dest); else await moveFolder(t.item.id, dest);
+      showToast(`«${t.item.name}» — в «${destName}»`, 'success');
+      void refresh();
+    } catch {
+      setData(before);
+      showToast('Не переместил — нет прав на папку или нет связи с сервером.', 'error');
+    }
+  };
+
+  const dragSource = (t: Target) => ({
+    draggable: canEdit(t.item) && renaming !== t.item.id,
+    onDragStart: (e: React.DragEvent) => {
+      dragged.current = t;
+      e.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ kind: t.kind, id: t.item.id }));
+      e.dataTransfer.effectAllowed = 'move';
+    },
+    onDragEnd: () => { dragged.current = null; setDropKey(null); },
+  });
+
+  /** Приёмник: папка (id) или корень (null). `key` — чем подсветить, чтобы одно место не мигало за другое. */
+  const dropTarget = (dest: string | null, destName: string, key: string) => ({
+    onDragOver: (e: React.DragEvent) => {
+      const own = dragged.current;
+      const files = e.dataTransfer.types.includes('Files');
+      if (!files && !own) return;
+      // На саму себя и в ту же папку не кладём: подсветка там только вводила бы в заблуждение.
+      if (own && ((own.kind === 'folder' && own.item.id === dest) || (own.kind === 'file' ? own.item.folderId : own.item.parentId) === dest || (!(own.kind === 'file' ? own.item.folderId : own.item.parentId) && dest === null))) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = own ? 'move' : 'copy';
+      if (dropKey !== key) setDropKey(key);
+    },
+    onDragLeave: (e: React.DragEvent) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropKey((k) => (k === key ? null : k)); },
+    onDrop: (e: React.DragEvent) => {
+      const own = dragged.current;
+      if (!own && !e.dataTransfer.files.length) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setDropKey(null);
+      setDragging(false);
+      dragged.current = null;
+      if (own) void moveInto(own, dest, destName); else void upload(e.dataTransfer.files, dest);
+    },
+  });
+
   // Меню: ⋯, правый клик, долгое нажатие.
   const press = useRef({ timer: 0, fired: false, x: 0, y: 0 });
   const itemHandlers = (t: Target) => ({
-    onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); setMenu({ target: t, anchor: { x: e.clientX, y: e.clientY } }); },
+    onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); setMenu({ target: t, anchor: { x: e.clientX, y: e.clientY } }); },
     onTouchStart: (e: React.TouchEvent) => {
       const touch = e.touches[0];
       press.current = { ...press.current, fired: false, x: touch.clientX, y: touch.clientY };
@@ -311,6 +606,25 @@ ${url}` });
     <InlineName initial={t.item.name} onCommit={(n) => void commitRename(t, n)} onCancel={() => setRenaming(null)} />
   ) : <span className="nf-name" title={t.item.name}>{t.item.name}<HiddenMark kind={t.kind === 'folder' ? 'cloud_folder' : 'file'} id={String(t.item.id)} /></span>);
 
+  // Построчный вид — таблица: название, тип, размер, дата изменения, владелец. В сетке этих ячеек нет.
+  const ownerCell = (ownerId: string) => {
+    const u = users[String(ownerId)];
+    return (
+      <span className="nf-cell nf-c-owner">
+        {String(ownerId) === myId() ? 'Вы' : u ? <><Avatar name={displayName(u)} seed={String(u.id)} src={u.avatar} person size={18} /><span>{displayName(u)}</span></> : '—'}
+      </span>
+    );
+  };
+  const listCells = (type: string, size: string, date: string, ownerId: string) => (
+    <>
+      <span className="nf-cell nf-c-type" title={type}>{type}</span>
+      <span className="nf-cell nf-c-size">{size}</span>
+      <span className="nf-cell nf-c-date">{date}</span>
+      {ownerCell(ownerId)}
+    </>
+  );
+  const plural = (n: number) => (n % 10 === 1 && n % 100 !== 11 ? 'элемент' : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 'элемента' : 'элементов');
+
   // ── Разметка ──────────────────────────────────────────────────────────────
   let body: ReactNode;
   if (!data && phase === 'loading') {
@@ -342,6 +656,11 @@ ${url}` });
   } else {
     body = (
       <>
+        {mode === 'list' && (
+          <div className="nf-thead" aria-hidden="true">
+            <span /><span>Название</span><span>Тип</span><span>Размер</span><span>Изменён</span><span>Владелец</span><span />
+          </div>
+        )}
         {(folders.length > 0 || creating) && (
           <section aria-label="Папки">
             <h3 className="nf-group">Папки</h3>
@@ -362,22 +681,33 @@ ${url}` });
                     role="button"
                     tabIndex={0}
                     className="nf-item nf-folder"
+                    data-drop={dropKey === `f:${f.id}` ? 'true' : undefined}
+                    data-selected={f.id in selected ? 'true' : undefined}
                     style={f.color ? ({ '--folder': f.color } as CSSProperties) : undefined}
-                    onClick={() => { if (renaming !== f.id) onOpenFolder(f); }}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && renaming !== f.id) onOpenFolder(f); }}
+                    onClick={(e) => { if (renaming !== f.id) pick(e, f.id, 'folder', () => onOpenFolder(f)); }}
+                    onKeyDown={(e) => { if (e.key === ' ') { e.preventDefault(); toggleSelect(f.id, 'folder'); } else if (e.key === 'Enter' && renaming !== f.id) pick(e, f.id, 'folder', () => onOpenFolder(f)); }}
                     {...itemHandlers(t)}
+                    {...dragSource(t)}
+                    {...dropTarget(f.id, f.name, `f:${f.id}`)}
                   >
+                    {checkBox(f.id, 'folder', f.name)}
                     {mode === 'grid'
                       ? <FolderTile folder={f} />
                       : <span className="nf-thumb"><Folder size={22} aria-hidden="true" /></span>}
                     <span className="nf-text">
                       {nameOrInput(t)}
-                      <span className="nf-meta">
-                        {mode === 'list' && f.isPinned && <Pin size={11} aria-hidden="true" />}
-                        {typeof f.fileCount === 'number' ? `${f.fileCount} ${f.fileCount === 1 ? 'файл' : f.fileCount < 5 && f.fileCount > 0 ? 'файла' : 'файлов'}` : fmtDate(f.updatedAt)}
-                        {mode === 'list' && (f.sharedWith?.length || 0) > 0 && <><Users size={11} aria-hidden="true" /> {f.sharedWith!.length}</>}
-                      </span>
+                      {mode === 'list' ? (
+                        <span className="nf-badges">
+                          {f.isPinned && <Pin size={11} aria-label="Закреплена" />}
+                          {(f.sharedWith?.length || 0) > 0 && <><Users size={11} aria-hidden="true" /> {f.sharedWith!.length}</>}
+                        </span>
+                      ) : (
+                        <span className="nf-meta">
+                          {typeof f.fileCount === 'number' ? `${f.fileCount} ${f.fileCount === 1 ? 'файл' : f.fileCount < 5 && f.fileCount > 0 ? 'файла' : 'файлов'}` : fmtDate(f.updatedAt)}
+                        </span>
+                      )}
                     </span>
+                    {mode === 'list' && listCells('Папка', typeof f.fileCount === 'number' ? `${f.fileCount} ${plural(f.fileCount)}` : '', fmtDate(f.updatedAt), f.ownerId)}
                     {moreBtn(t)}
                   </div>
                 );
@@ -409,10 +739,15 @@ ${url}` });
                     tabIndex={0}
                     className="nf-item nf-file"
                     data-file-id={f.id}
-                    onClick={() => { if (renaming !== f.id) openFile(f); }}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && renaming !== f.id) openFile(f); }}
+                    onMouseEnter={() => { hovered.current = f.id; }}
+                    onMouseLeave={() => { if (hovered.current === f.id) hovered.current = null; }}
+                    data-selected={f.id in selected ? 'true' : undefined}
+                    onClick={(e) => { if (renaming !== f.id) pick(e, f.id, 'file', () => openFile(f)); }}
+                    onKeyDown={(e) => { if (e.key === ' ') { e.preventDefault(); toggleSelect(f.id, 'file'); } else if (e.key === 'Enter' && renaming !== f.id) pick(e, f.id, 'file', () => openFile(f)); }}
                     {...itemHandlers(t)}
+                    {...dragSource(t)}
                   >
+                    {checkBox(f.id, 'file', f.name)}
                     <span className="nf-thumb" data-kind={k}>
                       {k === 'image'
                         ? <img src={thumbUrl(fileUrl(f.url), mode === 'grid' ? 320 : 64)} alt="" loading="lazy" decoding="async" draggable={false} />
@@ -420,11 +755,18 @@ ${url}` });
                     </span>
                     <span className="nf-text">
                       {nameOrInput(t)}
-                      <span className="nf-meta">
-                        {[dims[f.id]?.[0] ? `${dims[f.id][0]}×${dims[f.id][1]}` : '', fmtBytes(f.size), mode === 'grid' ? fmtDateShort(f.createdAt) : fmtDate(f.createdAt)].filter(Boolean).join(' · ')}
-                        {owner && <span className="nf-owner" title={`Владелец: ${displayName(owner)}`}><Avatar name={displayName(owner)} seed={String(owner.id)} src={owner.avatar} person size={14} /></span>}
-                      </span>
+                      {mode === 'grid' && (
+                        <span className="nf-meta">
+                          {[dims[f.id]?.[0] ? `${dims[f.id][0]}×${dims[f.id][1]}` : '', fmtBytes(f.size), fmtDateShort(f.createdAt)].filter(Boolean)
+                            .map((part, i, all) => <span key={i} className="nf-meta-part">{part}{i < all.length - 1 ? ' ·' : ''}</span>)}
+                          {owner && <span className="nf-owner" title={`Владелец: ${displayName(owner)}`}><Avatar name={displayName(owner)} seed={String(owner.id)} src={owner.avatar} person size={14} /></span>}
+                        </span>
+                      )}
                     </span>
+                    {mode === 'list' && listCells(
+                      [f.name.includes('.') ? (f.name.split('.').pop() || '').toUpperCase() : 'Файл', dims[f.id]?.[0] ? `${dims[f.id][0]}×${dims[f.id][1]}` : ''].filter(Boolean).join(' · '),
+                      fmtBytes(f.size), fmtDate(f.updatedAt || f.createdAt), f.ownerId,
+                    )}
                     {moreBtn(t)}
                   </div>
                 );
@@ -447,24 +789,23 @@ ${url}` });
     >
       <header className="nf-bar">
         <div className="nf-left">
-        {lead}
         <nav className="nf-crumbs" aria-label="Путь">
-          {trail.length > 0 && <button type="button" className="nf-crumb" onClick={() => onCrumb(-1)}>Мои файлы</button>}
+          {trail.length > 0 && <button type="button" className="nf-crumb" data-drop={dropKey === 'root' ? 'true' : undefined} onClick={() => onCrumb(-1)} {...dropTarget(null, 'Мои файлы', 'root')}>Мои файлы</button>}
           {trail.map((f, i) => (
             <span key={f.id} className="nf-crumb-wrap">
               <ChevronRight size={14} aria-hidden="true" />
-              <button type="button" className="nf-crumb" aria-current={i === trail.length - 1 ? 'page' : undefined} onClick={() => onCrumb(i)}>{f.name}</button>
+              <button type="button" className="nf-crumb" aria-current={i === trail.length - 1 ? 'page' : undefined} data-drop={dropKey === `f:${f.id}` ? 'true' : undefined} onClick={() => onCrumb(i)} {...dropTarget(f.id, f.name, `f:${f.id}`)}>{f.name}</button>
             </span>
           ))}
         </nav>
+        {trail.length === 0 && lead}
         </div>
         <SearchField className="nf-search" value={query} onChange={setQuery} placeholder="Поиск в папке" />
         <div className="nf-tools">
-          <div className="nx-segment" role="group" aria-label="Тип файлов">
-            {([['all', 'Все'], ['image', 'Фото'], ['video', 'Видео'], ['doc', 'Документы']] as [Filter, string][]).map(([id, label]) => (
-              <button key={id} type="button" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}</button>
-            ))}
-          </div>
+          <button type="button" className="nx-ghost nf-act" aria-haspopup="menu" aria-expanded={Boolean(filterMenu)} title={`Показать: ${FILTERS[filter]}`} aria-label={`Тип файлов: ${FILTERS[filter]}`}
+            onClick={(e) => setFilterMenu({ element: e.currentTarget, align: 'end' })}>
+            <Filter size={15} aria-hidden="true" /><span className="nf-btn-label">{FILTERS[filter]}</span><ChevronDown size={13} aria-hidden="true" />
+          </button>
           <button type="button" className="nx-ghost nf-act" aria-haspopup="menu" aria-expanded={Boolean(sortMenu)} title={`Сортировка: ${SORTS[sort].label}`} aria-label={`Сортировка: ${SORTS[sort].label}`}
             onClick={(e) => setSortMenu({ element: e.currentTarget, align: 'end' })}><ArrowUpDown size={15} aria-hidden="true" /><span className="nf-btn-label">{SORTS[sort].short}</span></button>
           <div className="nx-segment" role="group" aria-label="Вид">
@@ -477,7 +818,43 @@ ${url}` });
         <input ref={fileInput} type="file" multiple hidden onChange={(e) => { if (e.target.files) void upload(e.target.files); e.target.value = ''; }} />
       </header>
 
-      <div className="nf-scroll nx-scroll-y">{body}</div>
+      <div className="nf-scroll nx-scroll-y" onContextMenu={(e) => { e.preventDefault(); setPasteMenu({ x: e.clientX, y: e.clientY }); }}>{body}</div>
+
+      {pasteMenu && (
+        <Menu anchor={pasteMenu} label="Действия с папкой" onClose={() => setPasteMenu(null)}>
+          <MenuItem icon={<ClipboardPaste size={16} />} onSelect={() => { setPasteMenu(null); void pasteFromMenu(); }}>Вставить</MenuItem>
+          <MenuItem icon={<FolderPlus size={16} />} onSelect={() => { setPasteMenu(null); setCreating(true); }}>Новая папка</MenuItem>
+          <MenuItem icon={<Upload size={16} />} onSelect={() => { setPasteMenu(null); fileInput.current?.click(); }}>Загрузить файлы</MenuItem>
+        </Menu>
+      )}
+
+      {selectedCount > 0 && (
+        <div className="nf-selbar" role="toolbar" aria-label="Выбранное">
+          <span className="nf-selbar-count">Выбрано: {selectedCount}</span>
+          <button type="button" className="nx-primary nf-selbar-btn" aria-haspopup="menu" aria-expanded={Boolean(downloadMenu)} onClick={(e) => setDownloadMenu({ element: e.currentTarget, align: 'start', side: 'above' })}>
+            <Download size={15} aria-hidden="true" /> Скачать <ChevronDown size={13} aria-hidden="true" />
+          </button>
+          <button type="button" className="nx-ghost nf-selbar-btn" onClick={() => setSelected(Object.fromEntries(ordered.map((x) => [x.id, x.kind])))} disabled={selectedCount === ordered.length}>Выбрать все</button>
+          <button type="button" className="nx-icon-btn" aria-label="Снять выбор" title="Снять выбор (Esc)" onClick={() => setSelected({})}><X size={16} aria-hidden="true" /></button>
+        </div>
+      )}
+      {downloadMenu && (
+        <Menu anchor={downloadMenu} label="Как скачать" onClose={() => setDownloadMenu(null)}>
+          <MenuItem icon={<Archive size={16} />} onSelect={() => { setDownloadMenu(null); downloadZip(); }}>Одним архивом (.zip)</MenuItem>
+          <MenuItem icon={<Files size={16} />} disabled={!selectedFiles().length} onSelect={() => { setDownloadMenu(null); void downloadSeparately(); }}>
+            {selectedFiles().length ? `По отдельности (${selectedFiles().length})` : 'По отдельности — только файлы'}
+          </MenuItem>
+          {selectedFolders().length > 0 && selectedFiles().length > 0 && <p className="nx-hint nf-selbar-hint">Папки уходят только в архив.</p>}
+        </Menu>
+      )}
+
+      {filterMenu && (
+        <Menu anchor={filterMenu} label="Тип файлов" onClose={() => setFilterMenu(null)}>
+          {(Object.keys(FILTERS) as Filter[]).map((id) => (
+            <MenuItem key={id} icon={filter === id ? <Check size={15} /> : <span style={{ width: 15 }} />} onSelect={() => { setFilterMenu(null); setFilter(id); }}>{FILTERS[id]}</MenuItem>
+          ))}
+        </Menu>
+      )}
 
       {sortMenu && (
         <Menu anchor={sortMenu} label="Сортировка файлов" onClose={() => setSortMenu(null)}>
@@ -496,6 +873,12 @@ ${url}` });
 
       {menu && t && (
         <Menu anchor={menu.anchor} label={t.item.name} onClose={() => setMenu(null)}>
+          {canEdit(t.item) && (
+            <>
+              <AccessMenuItem target={t} onSelect={() => { setMenu(null); setSheet({ type: 'access', target: t }); }} />
+              <div className="nx-menu-sep" />
+            </>
+          )}
           {t.kind === 'folder' ? (
             <MenuItem icon={<Folder size={16} />} onSelect={() => { setMenu(null); onOpenFolder(t.item); }}>Открыть</MenuItem>
           ) : (
@@ -510,12 +893,20 @@ ${url}` });
           <MenuItem icon={<Send size={16} />} onSelect={() => { setMenu(null); setSheet({ type: 'send', target: t }); }}>Отправить в чат</MenuItem>
           {mailConnected && <MenuItem icon={<Mail size={16} />} onSelect={() => { setMenu(null); sendByMail(t); }}>Отправить по почте</MenuItem>}
           <MenuItem icon={<Link2 size={16} />} onSelect={() => { setMenu(null); void copyLink(t); }}>Копировать ссылку</MenuItem>
+          {t.kind === 'file' && <MenuItem icon={<Copy size={16} />} onSelect={() => { const f = t.item as CloudFile; setMenu(null); void copyFile(f); }}>Копировать файл</MenuItem>}
+          <MenuItem icon={<Info size={16} />} onSelect={() => { setMenu(null); setSheet({ type: 'props', target: t }); }}>Свойства</MenuItem>
+          {t.kind === 'file' && <MenuItem icon={<History size={16} />} onSelect={() => { setMenu(null); setSheet({ type: 'versions', target: t }); }}>История версий</MenuItem>}
           {canEdit(t.item) && (
             <>
               <div className="nx-menu-sep" />
               <MenuItem icon={<Pencil size={16} />} onSelect={() => { setMenu(null); setRenaming(t.item.id); }}>Переименовать</MenuItem>
               <MenuItem icon={<FolderInput size={16} />} onSelect={() => { setMenu(null); setSheet({ type: 'move', target: t }); }}>Переместить</MenuItem>
-              <MenuItem icon={<Users size={16} />} onSelect={() => { setMenu(null); setSheet({ type: 'access', target: t }); }}>Доступ</MenuItem>
+              {t.kind === 'file' && (
+                <>
+                  <MenuItem icon={<ClipboardPaste size={16} />} onSelect={() => { const f = t.item as CloudFile; setMenu(null); void replaceFromClipboard(f); }}>Заменить из буфера</MenuItem>
+                  <MenuItem icon={<FileUp size={16} />} onSelect={() => { replaceTarget.current = t.item as CloudFile; setMenu(null); replaceInput.current?.click(); }}>Заменить файлом…</MenuItem>
+                </>
+              )}
               {t.kind === 'folder' && (
                 <>
                   <MenuItem icon={t.item.isPinned ? <PinOff size={16} /> : <Pin size={16} />} onSelect={() => { setMenu(null); void togglePin(t.item as CloudFolder); }}>
@@ -542,12 +933,17 @@ ${url}` });
       )}
 
       {sheet?.type === 'move' && <MoveSheet item={sheet.target.item} kind={sheet.target.kind} onClose={() => setSheet(null)} onDone={() => { setSheet(null); void refresh(); }} />}
+      {sheet?.type === 'versions' && sheet.target.kind === 'file' && (
+        <VersionsSheet file={sheet.target.item as CloudFile} onClose={() => setSheet(null)} onChanged={() => void refresh()} />
+      )}
+      <input ref={replaceInput} type="file" hidden onChange={(e) => { const file = e.target.files?.[0]; const f = replaceTarget.current; e.target.value = ''; if (file && f) void replaceWith(f, file); }} />
+      {sheet?.type === 'props' && <PropertiesSheet item={sheet.target.item} kind={sheet.target.kind} onClose={() => setSheet(null)} />}
       {sheet?.type === 'access' && <AccessSheet item={sheet.target.item} kind={sheet.target.kind} onClose={() => setSheet(null)} onDone={() => { setSheet(null); void refresh(); }} />}
       {sheet?.type === 'send' && (
         <SendSheet
           onClose={() => setSheet(null)}
           onDone={() => void refresh()}
-          access={{ kind: sheet.target.kind, ownerId: String(sheet.target.item.ownerId), sharedWith: sheet.target.item.sharedWith, editAccess: sheet.target.item.editAccess }}
+          access={{ kind: sheet.target.kind, ownerId: String(sheet.target.item.ownerId), parentId: sheet.target.kind === 'file' ? sheet.target.item.folderId : sheet.target.item.parentId, sharedWith: sheet.target.item.sharedWith, editAccess: sheet.target.item.editAccess }}
           item={sheet.target.kind === 'file'
             ? { id: sheet.target.item.id, name: sheet.target.item.name, url: fileUrl(sheet.target.item.url), fileType: kindOf(sheet.target.item.name, sheet.target.item.fileType, sheet.target.item.mimeType) === 'image' ? 'image' : sheet.target.item.fileType, preview: kindOf(sheet.target.item.name, sheet.target.item.fileType) === 'image' ? fileUrl(sheet.target.item.url) : undefined }
             : { id: sheet.target.item.id, name: sheet.target.item.name, url: links.folder(sheet.target.item.id), fileType: 'folder', isFolder: true }}
@@ -556,6 +952,34 @@ ${url}` });
       {viewer && <ImageViewer items={viewer.items} start={viewer.start} onClose={() => setViewer(null)} />}
       {doc && <DocOverlay file={doc} onClose={() => setDoc(null)} />}
     </section>
+  );
+}
+
+/**
+ * Первый пункт меню — «Доступ»: справа аватарки тех, кому открыто (до трёх), и их число. Считается и доступ от папок
+ * выше, поэтому у файла в общей папке видно тех же людей, что у папки.
+ */
+function AccessMenuItem({ target, onSelect }: { target: Target; onSelect: () => void }) {
+  const users = useChatStore((s) => s.users);
+  const item = target.item;
+  const inherited = useInheritedAccess(target.kind === 'file' ? (item as CloudFile).folderId : (item as CloudFolder).parentId);
+  const ids = [...new Set([...(item.sharedWith || []), ...(item.editAccess || []), ...Object.keys(inherited.view)].map(String))].filter((id) => id !== String(item.ownerId));
+  // dept:… — доступ целому отделу: человека-аватарки у него нет, но в число он входит.
+  const people = ids.filter((id) => !id.startsWith('dept:'));
+  const shown = people.map((id) => users[id]).filter(Boolean).slice(0, 3);
+  return (
+    <button type="button" role="menuitem" className="nx-menu-item nf-access-item" onClick={onSelect}>
+      <Users size={16} />
+      <span>Доступ</span>
+      {ids.length > 0 && (
+        <span className="nf-access-who" title={`Доступ открыт: ${ids.length}`}>
+          <span className="nf-access-stack">
+            {shown.map((u) => <Avatar key={u.id} name={displayName(u)} seed={String(u.id)} src={u.avatar} person size={20} />)}
+          </span>
+          <span className="nf-access-count">{ids.length}</span>
+        </span>
+      )}
+    </button>
   );
 }
 

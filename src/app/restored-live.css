@@ -104,10 +104,7 @@ html[data-theme=black] .nx,html[data-theme=black] [data-u-comp=rect-popup],html[
 @media(hover:hover){.cxf-file .cxm-file:hover{background:0 0}.cxf-file:hover{background:var(--element-bg)}@supports (color:color-mix(in lab,red,red)){.cxf-file:hover{background:color-mix(in srgb,var(--element-bg),currentColor 6%)}}}
 .nf-view{flex-direction:column;flex:1;min-width:0;min-height:0;display:flex;position:relative;container:nf-view/inline-size}
 .nf-left{align-items:center;gap:var(--space-2) var(--space-3);min-width:0;display:flex}
-@media(min-width:641px){.nf-bar{grid-template-columns:minmax(0,1fr) auto max-content;align-items:center;display:grid}.nf-left .nf-crumbs{flex:auto}.nf-search{width:min(320px,28vw)}.nf-tools{flex-wrap:nowrap}}
 .nf-tools>.nx-segment,.nf-tools>.nf-act{flex:none}
-@container nf-view (min-width:641px) and (max-width:1240px){.nf-bar{grid-template-columns:auto minmax(160px,1fr) auto}.nf-search{width:100%}}
-@container nf-view (min-width:641px) and (max-width:900px){.nf-bar{grid-template-columns:auto minmax(160px,1fr)}.nf-tools{flex-wrap:wrap;grid-column:1/-1;justify-content:flex-start}}
 @media(min-width:641px)and (max-width:1599px){.nf-act{width:var(--control-h);min-width:var(--control-h);justify-content:center;padding:0}.nf-btn-label{display:none}}
 @media(max-width:640px){.nf-bar{gap:var(--space-2)}.nf-tools,.nf-left{display:contents}.nf-switch{flex:1 1 0;order:1}.nf-act{width:var(--control-h);min-width:var(--control-h);flex:none;order:2;justify-content:center;padding:0}.nf-btn-label{display:none}.nf-crumbs{order:3}.nf-crumbs:empty{display:none}.nf-search{flex:100%;order:4}.nf-tools .nx-segment:not(.nf-switch){order:5}}
 .nf-doc{inset:calc(var(--electron-titlebar-height,0px) + var(--pwa-banner-h,0px)) 0 0 0;z-index:300;background:var(--scrim,#0000005c);animation:nx-fade var(--duration-base) var(--ease-out);justify-content:flex-end;display:flex;position:fixed}

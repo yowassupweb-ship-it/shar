@@ -123,3 +123,10 @@
 .nsp-field input:focus-visible { outline: none; box-shadow: none; }
 /* «Ядро»: картинка сама — плитка, без цветной подложки. */
 .nsp-kind[data-image] { background: none; box-shadow: none; }
+
+/* Значки файлов и папок в результатах: квадрат 28 px, как у остальных значков списка. */
+.nsp-glyph { display: grid; place-items: center; flex: none; width: 28px; height: 28px; overflow: hidden; border-radius: 7px; }
+.nsp-thumb { background: var(--element-bg); }
+.nsp-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.nsp-format { display: block; width: 20px; }
+.nsp-format svg { display: block; width: 100%; height: auto; }

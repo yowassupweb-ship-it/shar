@@ -22,7 +22,8 @@ export interface CloudFolder {
   fileCount?: number;
   /** Сколько файлов каждого вида в папке (с вложенными): для верхнего фильтра. */
   kinds?: { image?: number; video?: number; doc?: number };
-  previewFiles?: { url: string; fileType: string; name: string }[];
+  /** Подпапки приходят без адреса, с fileType «folder» и своим цветом. */
+  previewFiles?: { url: string; fileType: string; name: string; color?: string | null }[];
 }
 
 export interface CloudFile {
@@ -343,3 +344,48 @@ export const AGENT_SOURCE: Omit<FilesSource, 'icon' | 'openChat'> = {
   emptyTitle: 'У агентов пока нет файлов',
   emptyText: 'Здесь соберутся вложения из чатов «Ядра» и всё, что сделали агенты, — например, картинки.',
 };
+
+// ── Замена содержимого и история версий ─────────────────────────────────────
+
+export interface FileVersion {
+  id: string;
+  url: string;
+  size: number;
+  mimeType?: string;
+  /** Когда эта версия была сохранена как текущая. */
+  at: string;
+  /** Когда её заменили следующей. */
+  replacedAt: string;
+  by?: string;
+  byName?: string;
+}
+
+export interface FileHistory {
+  id: string;
+  name: string;
+  canRestore: boolean;
+  current: { url: string; size: number; mimeType?: string; updatedAt: string };
+  versions: FileVersion[];
+}
+
+/** Заменить содержимое файла: ссылка и id те же, прежние байты уходят в историю версий. */
+export async function replaceFileContent(id: string, file: File, onProgress?: (pct: number) => void): Promise<CloudFile> {
+  const { uploadFileWithProgress } = await import('@/shared/api/uploadFile');
+  const uploaded = await uploadFileWithProgress(file, onProgress || (() => {}));
+  const k = kindOf(file.name, '', file.type);
+  return json<CloudFile>(await fetch(`/api/cloud/files/${encodeURIComponent(id)}/replace`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: uploaded.url, s3Key: uploaded.key, size: uploaded.size || file.size, mimeType: file.type || undefined, fileType: k === 'image' || k === 'video' ? k : 'file' }),
+  }));
+}
+
+export async function loadFileHistory(id: string): Promise<FileHistory> {
+  return json<FileHistory>(await fetch(`/api/cloud/files/${encodeURIComponent(id)}/versions`, { cache: 'no-store' }));
+}
+
+export async function restoreFileVersion(id: string, versionId: string): Promise<CloudFile> {
+  return json<CloudFile>(await fetch(`/api/cloud/files/${encodeURIComponent(id)}/restore`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ versionId }),
+  }));
+}

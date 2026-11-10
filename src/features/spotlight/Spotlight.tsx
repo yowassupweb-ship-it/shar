@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { create } from 'zustand';
-import { Clock, CornerDownLeft, FileText, RefreshCw, Search, Shield, Trash2, X, Zap } from 'lucide-react';
+import { closeSpotlight, openSpotlight, useSpotlight } from './store';
+import { FileIcon, defaultStyles, type FileIconProps } from 'react-file-icon';
+import { thumbUrl } from '@/shared/ui/media';
+import { attachmentUrl } from '@/shared/ui/format';
+import { Clock, CornerDownLeft, FileText, Folder, RefreshCw, Search, Shield, Trash2, X, Zap } from 'lucide-react';
 import { isImageIcon } from '@/shared/ui/CoreIcon';
 import {
   chatTitle, isFavorites, isGroupChat, isNotifications, lastActivity, otherParticipant, requestJump, useChatStore,
@@ -27,9 +30,7 @@ import './spotlight.css';
  * материалы «Офиса», задачи, файлы и сообщения из всех чатов; запрос в неверной раскладке тоже находит.
  */
 
-export const useSpotlight = create<{ open: boolean }>(() => ({ open: false }));
-export const openSpotlight = () => useSpotlight.setState({ open: true });
-export const closeSpotlight = () => useSpotlight.setState({ open: false });
+export { useSpotlight, openSpotlight, closeSpotlight };
 
 interface Result {
   key: string;
@@ -47,12 +48,13 @@ interface Result {
 interface Remote {
   messages: Array<{ id: string; chatId: string; authorName: string; createdAt: string; snippet: string }>;
   items: Array<{ id: string; kind: keyof typeof KINDS; title: string; snippet: string; updatedAt: string; ownerName: string }>;
-  files: Array<{ id: string; name: string; folderId: string | null; size: number | null; mimeType: string; updatedAt: string }>;
+  files: Array<{ id: string; name: string; folderId: string | null; size: number | null; mimeType: string; url?: string; fileType?: string; updatedAt: string }>;
+  folders: Array<{ id: string; name: string; parentId: string | null; color?: string | null; updatedAt: string }>;
   attachments: Array<{ messageId: string; chatId: string; authorName: string; createdAt: string; name: string; url: string; size: number | null }>;
   events: Array<{ id: string; title: string; snippet: string; startDate: string; endDate: string }>;
   mail: Array<{ id: string; accountId: string; folder: string; subject: string; from: string; date: string; snippet: string }>;
 }
-const EMPTY: Remote = { messages: [], items: [], files: [], attachments: [], events: [], mail: [] };
+const EMPTY: Remote = { messages: [], items: [], files: [], folders: [], attachments: [], events: [], mail: [] };
 
 const GROUP_ORDER = ['Недавние', 'Быстрые действия', 'Чаты', 'Люди', 'Офис', 'Задачи', 'События', 'Файлы', 'Письма', 'Сообщения'];
 const GROUP_LIMIT: Record<string, number> = { Недавние: 7, 'Быстрые действия': 6, Чаты: 5, Люди: 4, Офис: 6, Задачи: 5, События: 4, Файлы: 6, Письма: 5, Сообщения: 8 };
@@ -70,6 +72,7 @@ function mergeRemote(answers: Remote[]): Remote {
     messages: pick((a) => a.messages, (m) => m.id),
     items: pick((a) => a.items, (i) => i.id),
     files: pick((a) => a.files, (f) => f.id),
+    folders: pick((a) => a.folders || [], (f) => f.id),
     attachments: pick((a) => a.attachments, (x) => `${x.messageId}:${x.url}`),
     events: pick((a) => a.events, (e) => e.id),
     mail: pick((a) => a.mail, (m) => m.id),
@@ -97,11 +100,30 @@ function Highlight({ text, queries }: { text: string; queries: string[] }) {
   return <>{text}</>;
 }
 
+const IMAGE_NAME = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
+
+/** Папка — тот же значок, что в «Файлах»: контур своего цвета с лёгкой заливкой. */
+const folderGlyph = (color?: string | null): ReactNode => (
+  <span className="nsp-glyph"><Folder size={24} aria-hidden="true" style={{ color: color || 'var(--accent-color)', fill: 'color-mix(in srgb, currentColor 22%, transparent)' }} /></span>
+);
+
+/** Файл: у картинки — превью, у остального — значок формата (набор react-file-icon, как в «Файлах»). */
+function fileGlyph(name: string, url?: string | null, isImage = IMAGE_NAME.test(name)): ReactNode {
+  if (isImage && url) return <span className="nsp-glyph nsp-thumb"><img src={thumbUrl(attachmentUrl(url), 56)} alt="" loading="lazy" decoding="async" draggable={false} /></span>;
+  const own = name.includes('.') ? (name.split('.').pop() || '').toLowerCase() : '';
+  const ext = own && own.length <= 5 ? own : 'file';
+  const style = (defaultStyles as Record<string, Partial<FileIconProps>>)[ext] || {};
+  return <span className="nsp-glyph" aria-hidden="true"><span className="nsp-format"><FileIcon extension={ext.toUpperCase()} {...style} /></span></span>;
+}
+
+/** Значок недавнего захода в файл или папку (подвид sub хранит цвет папки или адрес превью картинки). */
+const visitGlyph = (v: Visit): ReactNode => (v.kind === 'folder' ? folderGlyph(v.sub) : fileGlyph(v.title, v.sub?.startsWith('img|') ? v.sub.slice(4) : undefined, Boolean(v.sub?.startsWith('img|'))));
+
 /** Значок раздела — та же объёмная картинка, что в нижнем меню, а не контурная иконка. */
 const sec = (name: SectionIconName) => <SectionIcon name={name} size={26} />;
 
 const VISIT_ICON: Record<string, ReactNode> = {
-  chat: sec('chats'), task: sec('todo'), file: sec('files'), person: sec('contacts'),
+  chat: sec('chats'), task: sec('todo'), file: sec('files'), folder: sec('files'), person: sec('contacts'),
 };
 
 function kindIcon(kind: keyof typeof KINDS): ReactNode {
@@ -255,6 +277,7 @@ function SpotlightDialog() {
           key: v.key, group: 'Недавние', title: v.title, subtitle: `${v.subtitle ? `${v.subtitle} · ` : ''}${relativeTime(v.ts)}`, score: 1000 - out.length,
           icon: v.kind === 'tool' ? (() => { const t = TOOLS.find((x) => x.id === v.sub); return t ? toolIcon(t) : VISIT_ICON.file; })()
             : v.kind === 'office' && v.sub && v.sub in KINDS ? kindIcon(v.sub as keyof typeof KINDS)
+            : v.kind === 'file' || v.kind === 'folder' ? visitGlyph(v)
             : v.kind === 'chat' ? chatIcon(v.key.slice(5)) ?? VISIT_ICON.chat
               : v.kind === 'person' ? personIcon(v.key.slice(7)) ?? VISIT_ICON.person : VISIT_ICON[v.kind],
           run: open(() => { if (v.kind === 'chat') goToChat(v.key.slice(5)); else navigate(v.path); }),
@@ -331,8 +354,22 @@ function SpotlightDialog() {
     for (const f of remote.files) {
       out.push({
         key: `file:${f.id}`, group: 'Файлы', title: f.name, subtitle: ['Файл в облаке', fileSize(f.size)].filter(Boolean).join(' · '),
-        icon: sec('files'), score: Math.max(scoreText(f.name, queries), 40) + recencyBonus(`file:${f.id}`), run: open(() => navigate(links.file(f.id))),
+        icon: fileGlyph(f.name, f.url, f.fileType === 'image' || (f.mimeType || '').startsWith('image/') || IMAGE_NAME.test(f.name)), score: Math.max(scoreText(f.name, queries), 40) + recencyBonus(`file:${f.id}`), run: open(() => navigate(links.file(f.id))),
       });
+    }
+    // Папки «Файлов»: по имени, как и файлы.
+    for (const f of remote.folders) {
+      out.push({
+        key: `folder:${f.id}`, group: 'Файлы', title: f.name, subtitle: 'Папка',
+        icon: folderGlyph(f.color), score: Math.max(scoreText(f.name, queries), 40) + recencyBonus(`folder:${f.id}`), run: open(() => navigate(links.folder(f.id))),
+      });
+    }
+    // Что открывали раньше — находится сразу, не дожидаясь ответа сервера (и когда он не ответил).
+    const foundRemote = new Set([...remote.files.map((f) => `file:${f.id}`), ...remote.folders.map((f) => `folder:${f.id}`)]);
+    for (const v of visits) {
+      if ((v.kind !== 'file' && v.kind !== 'folder') || foundRemote.has(v.key)) continue;
+      const s = scoreText(v.title, queries);
+      if (s) out.push({ key: v.key, group: 'Файлы', title: v.title, subtitle: `${v.subtitle || (v.kind === 'folder' ? 'Папка' : 'Файл')} · недавно открывали`, icon: visitGlyph(v), score: s + 3, run: open(() => navigate(v.path)) });
     }
     for (const a of remote.attachments) {
       const chat = chats[a.chatId];

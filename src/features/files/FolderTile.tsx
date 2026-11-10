@@ -1,4 +1,4 @@
-import { Pin, Users } from 'lucide-react';
+import { Folder, Pin, Users } from 'lucide-react';
 import { thumbUrl } from '@/shared/ui/media';
 import { fileUrl, kindOf, type CloudFolder } from './api';
 import { FileGlyph } from './FileGlyph';
@@ -6,19 +6,22 @@ import { FileGlyph } from './FileGlyph';
 /**
  * Папка-плитка, как в прежних «Файлах»: цветной квадрат, внутри — превью
  * содержимого. Есть фото — оно крупно справа, до трёх файлов столбиком слева;
- * только документы — сетка 3×3 значков; пусто — надпись «Пусто».
+ * только документы — сетка 3×3 значков; пусто — надпись «Пусто». Вложенные папки сервер кладёт в превью без адреса
+ * (fileType «folder») — они рисуются значком папки, иначе папка из одних папок выглядела бы пустой.
  */
 export function FolderTile({ folder }: { folder: CloudFolder }) {
-  const files = (folder.previewFiles || []).filter((p) => p.url);
+  const files = (folder.previewFiles || []).filter((p) => p.url || p.fileType === 'folder');
   const empty = (folder.fileCount ?? files.length) === 0 || !files.length;
-  const featured = files.find((p) => kindOf(p.name, p.fileType) === 'image');
+  const featured = files.find((p) => p.url && kindOf(p.name, p.fileType) === 'image');
   const others = featured ? files.filter((p) => p !== featured).slice(0, 3) : files.slice(0, 9);
 
   const cell = (p: (typeof files)[number] | undefined, i: number) => (
     <span key={i} className="nft-cell" data-empty={p ? undefined : 'true'}>
-      {p && (kindOf(p.name, p.fileType) === 'image'
-        ? <img src={thumbUrl(fileUrl(p.url), 48)} alt="" loading="lazy" decoding="async" draggable={false} />
-        : <FileGlyph name={p.name} kind={kindOf(p.name, p.fileType)} size="xs" />)}
+      {p && (p.fileType === 'folder'
+        ? <Folder className="nft-sub" size={16} fill="currentColor" fillOpacity={0.25} style={p.color ? { color: p.color } : undefined} aria-hidden="true" />
+        : kindOf(p.name, p.fileType) === 'image'
+          ? <img src={thumbUrl(fileUrl(p.url), 48)} alt="" loading="lazy" decoding="async" draggable={false} />
+          : <FileGlyph name={p.name} kind={kindOf(p.name, p.fileType)} size="xs" />)}
     </span>
   );
 

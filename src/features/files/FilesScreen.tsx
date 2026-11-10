@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { showToast } from '@/shared/ui/Toast';
 import { useShellOptions } from '@/shared/shell/ShellContext';
-import { Bot } from 'lucide-react';
+import { Bot, Check, ChevronDown } from 'lucide-react';
+import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { useAgentBridge } from '@/shared/core/agentBridge';
 import { navigate } from '@/shared/navigation/navigate';
-import { paths } from '@/shared/navigation/routes';
+import { recordVisit } from '@/features/spotlight';
+import { links, paths } from '@/shared/navigation/routes';
 import { AGENT_SOURCE, folderChain, getFile, type CloudFolder, type FilesSource } from './api';
 import CloudView from './CloudView';
 import { ChatFiles, ChatList } from './ChatFilesView';
@@ -58,6 +60,7 @@ export default function FilesScreen() {
   const [view, setView] = useState<View>(() => (typeof window === 'undefined' ? { kind: 'cloud', folderId: null } : readView()));
   const [trail, setTrail] = useState<CloudFolder[]>([]);
   const [highlight, setHighlight] = useState<string | null>(null);
+  const [sectionMenu, setSectionMenu] = useState<MenuAnchor | null>(null);
   const agentOn = useAgentBridge((s) => s.available);
   const cachedTrail = useRef<CloudFolder[]>([]);
   useEffect(() => { cachedTrail.current = trail; }, [trail]);
@@ -70,6 +73,7 @@ export default function FilesScreen() {
       if (!f) { showToast('Файл не найден или к нему нет доступа', 'error'); setTrail([]); return; }
       setTrail(f.folderId ? await folderChain(f.folderId) : []);
       setHighlight(f.id);
+      recordVisit({ id: f.id, kind: 'file', title: f.name, subtitle: 'Файл', sub: /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i.test(f.name) ? `img|${f.url}` : undefined, path: links.file(f.id) });
       return;
     }
     if (!v.folderId) { setTrail([]); return; }
@@ -88,6 +92,12 @@ export default function FilesScreen() {
     return () => window.removeEventListener('popstate', onPop);
   }, [resolve]);
 
+  // Папка, в которой человек оказался (кликом, по крошке, по ссылке), попадает в историю посещений Spotlight.
+  const here = trail[trail.length - 1];
+  useEffect(() => {
+    if (view.kind === 'cloud' && here) recordVisit({ id: here.id, kind: 'folder', title: here.name, subtitle: 'Папка', sub: here.color || undefined, path: links.folder(here.id) });
+  }, [here, view.kind]);
+
   const go = useCallback((v: View) => { writeView(v); setView(v); setHighlight(null); }, []);
 
   const openFolder = (f: CloudFolder) => {
@@ -105,14 +115,34 @@ export default function FilesScreen() {
 
   if (!mounted) return null;
 
-  // Переключатель «Мои файлы / Из чатов» — прямо в шапке раздела: ради двух
-  // пунктов сайдбар не нужен, место отдаём файлам.
+  // Переключатель раздела — выпадающий список после пути: «Мои файлы / Из чатов / Агенты». Одна кнопка вместо
+  // трёх вкладок, место в шапке достаётся поиску и инструментам.
+  const sections: Array<{ id: View['kind']; label: string; open: () => void }> = [
+    { id: 'cloud', label: 'Мои файлы', open: () => crumb(-1) },
+    { id: 'chats', label: 'Из чатов', open: () => go({ kind: 'chats', chatId: null }) },
+    ...(agentOn ? [{ id: 'agents' as const, label: 'Агенты', open: () => go({ kind: 'agents', chatId: null }) }] : []),
+  ];
+  const current = sections.find((x) => x.id === view.kind) || sections[0];
   const lead = (
-    <div className="nx-segment nf-switch" role="group" aria-label="Раздел">
-      <button type="button" aria-pressed={view.kind === 'cloud'} onClick={() => crumb(-1)}>Мои файлы</button>
-      <button type="button" aria-pressed={view.kind === 'chats'} onClick={() => go({ kind: 'chats', chatId: null })}>Из чатов</button>
-      {agentOn && <button type="button" aria-pressed={view.kind === 'agents'} onClick={() => go({ kind: 'agents', chatId: null })}>Агенты</button>}
-    </div>
+    <>
+      <button
+        type="button"
+        className="nx-ghost nf-section"
+        aria-haspopup="menu"
+        aria-expanded={Boolean(sectionMenu)}
+        aria-label={`Раздел: ${current.label}`}
+        onClick={(e) => setSectionMenu({ element: e.currentTarget, align: 'start' })}
+      >
+        <span>{current.label}</span><ChevronDown size={14} aria-hidden="true" />
+      </button>
+      {sectionMenu && (
+        <Menu anchor={sectionMenu} label="Раздел файлов" onClose={() => setSectionMenu(null)}>
+          {sections.map((x) => (
+            <MenuItem key={x.id} icon={x.id === current.id ? <Check size={15} /> : <span style={{ width: 15 }} />} onSelect={() => { setSectionMenu(null); x.open(); }}>{x.label}</MenuItem>
+          ))}
+        </Menu>
+      )}
+    </>
   );
 
   return (

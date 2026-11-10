@@ -8,6 +8,7 @@ import {
   loadFolder, moveFile, moveFolder, myId, saveAccess, shareToChat, type CloudFile, type CloudFolder,
 } from './api';
 import { Spinner } from '@/shared/ui/Spinner';
+import { useInheritedAccess } from './inherited';
 
 /**
  * Листы раздела «Файлы»: переместить, доступ, отправить в чат. Люди и чаты —
@@ -91,6 +92,7 @@ export function AccessSheet({ item, kind, onClose, onDone }: {
 }) {
   const users = useChatStore((s) => s.users);
   const me = myId();
+  const inherited = useInheritedAccess(kind === 'file' ? (item as CloudFile).folderId : (item as CloudFolder).parentId);
   const [view, setView] = useState<Set<string>>(() => new Set((item.sharedWith || []).map(String)));
   const [edit, setEdit] = useState<Set<string>>(() => new Set((item.editAccess || []).map(String)));
   const [query, setQuery] = useState('');
@@ -101,11 +103,14 @@ export function AccessSheet({ item, kind, onClose, onDone }: {
     return Object.values(users)
       .filter((u) => String(u.id) !== me && String(u.id) !== String(item.ownerId))
       .filter((u) => !q || displayName(u).toLowerCase().includes(q))
-      .sort((a, b) => Number(view.has(String(b.id))) - Number(view.has(String(a.id))) || displayName(a).localeCompare(displayName(b), 'ru'));
-  }, [users, query, me, item.ownerId, view]);
+      // Сверху все, у кого доступ есть — свой или от папки, — потом остальные; внутри групп по алфавиту.
+      .sort((a, b) => Number(view.has(String(b.id)) || String(b.id) in inherited.view) - Number(view.has(String(a.id)) || String(a.id) in inherited.view)
+        || displayName(a).localeCompare(displayName(b), 'ru'));
+  }, [users, query, me, item.ownerId, view, inherited]);
 
   // Три шага по нажатию: нет доступа → просмотр → редактирование → нет.
   const cycle = (id: string) => {
+    if (id in inherited.view) return; // доступ от папки снимается в самой папке
     const v = new Set(view);
     const e = new Set(edit);
     if (!v.has(id)) v.add(id);
@@ -148,11 +153,12 @@ export function AccessSheet({ item, kind, onClose, onDone }: {
       <div className="nfs-people">
         {people.map((u) => {
           const id = String(u.id);
-          const level = edit.has(id) && view.has(id) ? 'edit' : view.has(id) ? 'view' : null;
+          const via = inherited.view[id];
+          const level = id in inherited.edit || (edit.has(id) && view.has(id)) ? 'edit' : via || view.has(id) ? 'view' : null;
           return (
-            <button key={id} type="button" className="nx-pick" aria-pressed={Boolean(level)} onClick={() => cycle(id)}>
+            <button key={id} type="button" className="nx-pick" aria-pressed={Boolean(level)} disabled={Boolean(via)} title={via ? `Доступ от папки «${inherited.edit[id] || via}» — меняется в ней` : undefined} onClick={() => cycle(id)}>
               <Avatar name={displayName(u)} seed={id} src={u.avatar} person size={32} />
-              <span className="nx-pick-text"><span>{displayName(u)}</span></span>
+              <span className="nx-pick-text"><span>{displayName(u)}</span>{via && <small>от папки «{inherited.edit[id] || via}»</small>}</span>
               {level && <span className="nfs-level" data-level={level}>{level === 'edit' ? 'Редактирование' : 'Просмотр'}</span>}
             </button>
           );
@@ -174,7 +180,8 @@ type Choice = 'none' | 'view' | 'edit';
  */
 export function SendSheet({ item, access, onClose, onDone }: {
   item: { id: string; name: string; url: string; fileType: string; isFolder?: boolean; preview?: string };
-  access: { kind: 'file' | 'folder'; ownerId: string; sharedWith?: string[]; editAccess?: string[] };
+  /** parentId — папка, где лежит элемент: её доступ действует и на него. */
+  access: { kind: 'file' | 'folder'; ownerId: string; parentId?: string | null; sharedWith?: string[]; editAccess?: string[] };
   onClose: () => void;
   onDone?: () => void;
 }) {
@@ -200,10 +207,26 @@ export function SendSheet({ item, access, onClose, onDone }: {
   const chatName = chat ? chatTitle(chat, me, users) : '';
   const others = useMemo(() => (chat?.participantIds || []).map(String).filter((id) => id !== myId()), [chat]);
   const isOwner = String(access.ownerId) === myId();
-  const editors = new Set((access.editAccess || []).map(String));
-  /** Доступ имеет смысл спрашивать, только если его можно выдать и есть кому. */
-  const canGrant = isOwner && others.length > 0 && others.some((id) => !editors.has(id));
   const what = item.isFolder ? 'папке' : 'файлу';
+
+  // Кто из участников чата уже имеет доступ: берём свежие списки с сервера (пока лист был открыт, их могли поменять),
+  // до ответа — то, что было на экране. Спрашиваем только про тех, кому доступа ещё не хватает.
+  const [fresh, setFresh] = useState<{ sharedWith?: string[]; editAccess?: string[] } | null>(null);
+  useEffect(() => {
+    if (!chatId) return undefined;
+    let alive = true;
+    void currentAccess(access.kind, item.id).then((a) => { if (alive) setFresh(a); });
+    return () => { alive = false; };
+  }, [chatId, access.kind, item.id]);
+  const inherited = useInheritedAccess(access.parentId ?? null);
+  const editors = new Set([...(fresh?.editAccess || access.editAccess || []).map(String), ...Object.keys(inherited.edit)]);
+  const viewers = new Set([...(fresh?.sharedWith || access.sharedWith || []).map(String), ...editors, ...Object.keys(inherited.view)]);
+  const noView = others.filter((id) => !viewers.has(id));
+  const noEdit = others.filter((id) => !editors.has(id));
+  /** Доступ имеет смысл спрашивать, только если его можно выдать и кому-то его не хватает. */
+  const canGrant = isOwner && noEdit.length > 0;
+  /** Просмотр уже есть у всех — предлагать его выдать незачем, остаётся только повысить до правки. */
+  const viewDone = noView.length === 0;
 
   async function send(choice: Choice) {
     if (!chatId) return;
@@ -261,17 +284,22 @@ export function SendSheet({ item, access, onClose, onDone }: {
         {canGrant ? (
           <>
             <p className="nfs-send-note">
-              Дать {group ? 'участникам чата' : 'собеседнику'} доступ к {what} «{item.name}»? Без доступа он не откроет {item.isFolder ? 'её' : 'его'} по карточке.
+              {viewDone
+                ? <>{group ? 'У всех участников чата' : 'У собеседника'} уже есть просмотр {what} «{item.name}». Можно дать и редактирование.</>
+                : <>Дать {group ? 'участникам чата' : 'собеседнику'} доступ к {what} «{item.name}»? Без доступа он не откроет {item.isFolder ? 'её' : 'его'} по карточке.
+                  {group && noView.length < others.length && <> Доступ уже есть у {others.length - noView.length} из {others.length}.</>}</>}
             </p>
             <div className="nfs-send-options">
-              <button type="button" className="nx-pick" disabled={busy} onClick={() => void send('view')}>
-                <Eye size={18} aria-hidden="true" /><span className="nx-pick-text"><span>Дать просмотр</span><small>Смогут смотреть и скачивать, но не менять</small></span>
-              </button>
+              {!viewDone && (
+                <button type="button" className="nx-pick" disabled={busy} onClick={() => void send('view')}>
+                  <Eye size={18} aria-hidden="true" /><span className="nx-pick-text"><span>Дать просмотр</span><small>Смогут смотреть и скачивать, но не менять</small></span>
+                </button>
+              )}
               <button type="button" className="nx-pick" disabled={busy} onClick={() => void send('edit')}>
                 <Pencil size={18} aria-hidden="true" /><span className="nx-pick-text"><span>Дать редактирование</span><small>Смогут смотреть и менять</small></span>
               </button>
               <button type="button" className="nx-pick" disabled={busy} onClick={() => void send('none')}>
-                <Link2 size={18} aria-hidden="true" /><span className="nx-pick-text"><span>Только карточка, без доступа</span><small>Откроется у тех, у кого доступ уже есть</small></span>
+                <Link2 size={18} aria-hidden="true" /><span className="nx-pick-text"><span>{viewDone ? 'Оставить как есть' : 'Только карточка, без доступа'}</span><small>{viewDone ? 'Уйдёт карточка, права не меняются' : 'Откроется у тех, у кого доступ уже есть'}</small></span>
               </button>
             </div>
           </>
@@ -279,7 +307,7 @@ export function SendSheet({ item, access, onClose, onDone }: {
           <p className="nfs-send-note">
             {!isOwner ? 'Доступом управляет владелец, поэтому уйдёт только карточка.'
               : others.length === 0 ? (chat && isFavorites(chat) ? 'В «Избранное» вы пишете себе: уйдёт карточка, давать доступ некому.' : 'В этом чате нет других участников — уйдёт карточка.')
-                : 'Всем в этом чате уже можно править — уйдёт карточка.'}
+                : 'У всех в этом чате уже есть право править — доступ не меняем, уйдёт карточка.'}
           </p>
         )}
         {error && <p className="nfs-send-note nfs-send-error" role="alert">{error}</p>}
