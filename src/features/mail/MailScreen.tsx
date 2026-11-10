@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type FormEvent } from 'react';
 import {
-  AlertCircle, Archive, ArrowLeft, Download, File as FileIcon, FileEdit, Folder, Forward, Inbox, KeyRound, Mail, MailOpen, Paperclip,
+  AlertCircle, Archive, ArrowLeft, ChevronDown, FileEdit, Folder, Forward, Inbox, KeyRound, Mail, MailOpen, Paperclip,
   PenSquare, Reply, ReplyAll, RotateCw, Send, ShieldAlert, Star, Trash2, Settings2,
 } from 'lucide-react';
 import { EmailHtmlView } from '@/features/mail/html/EmailHtmlView';
@@ -13,13 +13,13 @@ import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { SearchField } from '@/shared/ui/SearchField';
 import {
   loadAccounts, loadBoxes, moveMessage, onNewMail, openFolder, openMessage, prefetchMessages, relogin, searchMail, selectAccount, setFlags, syncFolder,
-  useMail, type Account, type Box, type MailFull, type MailRow,
+  useMail, type Account, type Box, type MailAttachment as MailAttachmentData, type MailFull, type MailRow,
 } from './api';
 import AccountSheet from './AccountSheet';
 import Compose, { type ComposeMode } from './Compose';
 import { fileSize, fmtFullDate, fmtListDate } from './format';
 import { Spinner } from '@/shared/ui/Spinner';
-import { downloadOnClick } from '@/shared/platform/download';
+import { FileGlyph, kindOf, useAttachmentMenu } from '@/features/files';
 
 /**
  * Раздел «Почта» нового Шара — как Mail.app: слева ящики, в середине список,
@@ -140,18 +140,8 @@ function Reader({ msg, onCompose, onBack, dark, face }: {
 
         {(images.length > 0 || files.length > 0) && (
           <section className="nmr-atts" aria-label="Вложения">
-            {images.map((a) => (
-              <a key={a.url} className="nmr-att-img" href={a.url} download={a.filename} onClick={downloadOnClick(a.url || '', a.filename)} title={`${a.filename} · ${fileSize(a.size)}`}>
-                <img src={a.url} alt={a.filename} loading="lazy" />
-              </a>
-            ))}
-            {files.map((a) => (
-              <a key={a.url} className="nmr-att" href={a.url} download={a.filename} onClick={downloadOnClick(a.url || '', a.filename)} title="Скачать">
-                <span className="nmr-att-ico"><FileIcon size={18} aria-hidden="true" /></span>
-                <span className="nmr-att-text"><b>{a.filename}</b><span>{fileSize(a.size)}</span></span>
-                <Download size={15} aria-hidden="true" />
-              </a>
-            ))}
+            {images.map((a) => <MailAttachment key={a.url} att={a} image />)}
+            {files.map((a) => <MailAttachment key={a.url} att={a} />)}
           </section>
         )}
 
@@ -160,6 +150,33 @@ function Reader({ msg, onCompose, onBack, dark, face }: {
         </div>
       </div>
     </article>
+  );
+}
+
+/**
+ * Вложение письма: значок формата из «Файлов» (react-file-icon), имя, размер. Нажатие — выбор: посмотреть, открыть копию в
+ * редакторе, сохранить в «Файлы» или на устройство. Картинки — превью, действия те же.
+ */
+function MailAttachment({ att, image }: { att: MailAttachmentData; image?: boolean }) {
+  const name = att.filename || 'Файл';
+  const menu = useAttachmentMenu({ url: att.url || '', name, size: att.size, mimeType: att.contentType || att.content_type });
+  const open = (e: React.MouseEvent<HTMLElement>) => { e.preventDefault(); menu.open({ element: e.currentTarget, align: 'start' }); };
+  const context = (e: React.MouseEvent) => { e.preventDefault(); menu.open({ x: e.clientX, y: e.clientY }); };
+  return (
+    <>
+      {image ? (
+        <button type="button" className="nmr-att-img" onClick={open} onContextMenu={context} aria-haspopup="menu" title={`${name} · ${fileSize(att.size)}`}>
+          <img src={att.url} alt={name} loading="lazy" />
+        </button>
+      ) : (
+        <button type="button" className="nmr-att" onClick={open} onContextMenu={context} aria-haspopup="menu" title="Действия с вложением">
+          <span className="nmr-att-ico"><FileGlyph name={name} kind={kindOf(name, '', att.contentType || att.content_type)} size="sm" /></span>
+          <span className="nmr-att-text"><b>{name}</b><span>{fileSize(att.size)}</span></span>
+          <ChevronDown size={15} aria-hidden="true" />
+        </button>
+      )}
+      {menu.node}
+    </>
   );
 }
 

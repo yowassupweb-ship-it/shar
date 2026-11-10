@@ -16,17 +16,37 @@ type Edge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 const EDGES: Edge[] = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
 const CURSOR: Record<Edge, string> = { n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', ne: 'nesw-resize', sw: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize' };
 
-/** Размер раскрытого окна: заданный вручную или обычный, но не больше экрана. */
-const sizeOf = (state: FrameState) => ({
-  w: Math.max(Math.min(MIN_W, window.innerWidth - 2 * MARGIN), Math.min(state.w ?? W, window.innerWidth - 2 * MARGIN)),
-  h: Math.max(Math.min(MIN_H, window.innerHeight - 2 * MARGIN), Math.min(state.h ?? H, window.innerHeight - 2 * MARGIN)),
-});
+/**
+ * Где окну можно стоять: область раздела — между шапкой Electron (и баннером PWA) сверху и нижним меню снизу.
+ * Окно fixed и без этого уезжало под них. Меню на телефоне парит над разделом — тогда нижняя граница у его верха.
+ */
+function area() {
+  const main = document.querySelector<HTMLElement>('.nx-app-main')?.getBoundingClientRect();
+  const nav = document.querySelector<HTMLElement>('.nx-nav')?.getBoundingClientRect();
+  const top = main && main.height > 0 ? main.top : 0;
+  const left = main && main.width > 0 ? main.left : 0;
+  const right = main && main.width > 0 ? main.right : window.innerWidth;
+  let bottom = main && main.height > 0 ? main.bottom : window.innerHeight;
+  // Меню спрятано (клавиатура, скрытая панель) — его верх ниже области и ничего не ограничивает.
+  if (nav && nav.height > 0 && nav.top > top && nav.top < bottom) bottom = nav.top;
+  return { top, left, right, bottom, width: right - left, height: bottom - top };
+}
 
-/** Не дать окну уехать за край экрана (после смены размера окна — тоже). */
-function clamp(x: number, y: number, w: number, h: number) {
+/** Размер раскрытого окна: заданный вручную или обычный, но не больше области раздела. */
+const sizeOf = (state: FrameState) => {
+  const a = area();
   return {
-    x: Math.min(Math.max(MARGIN, x), Math.max(MARGIN, window.innerWidth - w - MARGIN)),
-    y: Math.min(Math.max(MARGIN, y), Math.max(MARGIN, window.innerHeight - h - MARGIN)),
+    w: Math.max(Math.min(MIN_W, a.width - 2 * MARGIN), Math.min(state.w ?? W, a.width - 2 * MARGIN)),
+    h: Math.max(Math.min(MIN_H, a.height - 2 * MARGIN), Math.min(state.h ?? H, a.height - 2 * MARGIN)),
+  };
+};
+
+/** Не дать окну уехать за край области (после смены размера окна — тоже). */
+function clamp(x: number, y: number, w: number, h: number) {
+  const a = area();
+  return {
+    x: Math.min(Math.max(a.left + MARGIN, x), Math.max(a.left + MARGIN, a.right - w - MARGIN)),
+    y: Math.min(Math.max(a.top + MARGIN, y), Math.max(a.top + MARGIN, a.bottom - h - MARGIN)),
   };
 }
 
@@ -40,7 +60,8 @@ export default function ChatFrame({ unread }: { unread: number }) {
   const [state, setState] = useState<FrameState>(() => {
     const saved = readFrameState();
     const { w: ww, h: wh } = sizeOf(saved ?? { x: 0, y: 0, chatId: null });
-    const start = saved ?? { x: window.innerWidth - ww - 24, y: window.innerHeight - wh - 24, chatId: null };
+    const a = area();
+    const start = saved ?? { x: a.right - ww - 24, y: a.bottom - wh - 24, chatId: null };
     return { ...start, ...clamp(start.x, start.y, ww, wh) };
   });
   const stateRef = useRef(state);
@@ -104,8 +125,9 @@ export default function ChatFrame({ unread }: { unread: number }) {
     const move = (ev: PointerEvent) => {
       const dx = ev.clientX - start.sx;
       const dy = ev.clientY - start.sy;
-      const maxW = window.innerWidth - 2 * MARGIN;
-      const maxH = window.innerHeight - 2 * MARGIN;
+      const a = area();
+      const maxW = a.width - 2 * MARGIN;
+      const maxH = a.height - 2 * MARGIN;
       let { x, y } = start;
       let nw = start.w + (edge.includes('e') ? dx : edge.includes('w') ? -dx : 0);
       let nh = start.h + (edge.includes('s') ? dy : edge.includes('n') ? -dy : 0);

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Eye, Link2, Pencil, Search } from 'lucide-react';
 import {
   chatTitle, isFavorites, isGroupChat, isNotifications, lastActivity, otherParticipant, sendText, useChatStore,
@@ -10,7 +10,7 @@ import { Sheet } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
 import { workspaceApi } from './api';
 import { KINDS } from './kinds';
-import type { AccessLevel, AccessMode, Item } from './types';
+import type { AccessLevel, AccessMode, Item, SharesState } from './types';
 
 type Choice = 'none' | 'view' | 'edit';
 
@@ -46,8 +46,28 @@ export function SendToChatSheet({ item, onClose }: {
   const chat = chatId ? chats[chatId] : undefined;
   const others = useMemo(() => (chat?.participantIds || []).map(String).filter((id) => id !== myId()), [chat]);
   const chatName = chat ? chatTitle(chat, me, users) : '';
-  /** Доступ имеет смысл спрашивать, только если его можно выдать и есть кому. */
-  const canGrant = item.isOwner && !everyoneEdits && others.length > 0;
+  // Кто из участников чата уже имеет доступ: выдача доступа в кого-то, у кого он есть, — лишний вопрос.
+  // Список читаем сразу при выборе чата; пока он грузится, считаем, что доступа нет (спросим, как раньше).
+  const [current, setCurrent] = useState<SharesState | null>(null);
+  useEffect(() => {
+    if (!chatId || !item.isOwner) return undefined;
+    let alive = true;
+    setCurrent(null);
+    void workspaceApi.shares(item.id).then((c) => { if (alive) setCurrent(c); }).catch(() => {});
+    return () => { alive = false; };
+  }, [chatId, item.id, item.isOwner]);
+  // Доступ бывает и от папки выше (inherited) — он тоже считается; «move» у папки включает правку.
+  const roleOf = (id: string) => {
+    const roles = [current?.shares.find((s) => s.userId === id)?.role, ...(current?.inherited || []).filter((i) => i.kind === 'user' && i.id === id).map((i) => i.role)];
+    return roles.some((r) => r === 'edit' || r === 'move') ? 'edit' : roles.some(Boolean) ? 'view' : undefined;
+  };
+  /** «Все в Шаре» на просмотр — просмотр есть у каждого. */
+  const hasView = (id: string) => item.accessLevel === 'all' || Boolean(roleOf(id));
+  const noView = others.filter((id) => !hasView(id));
+  const noEdit = others.filter((id) => roleOf(id) !== 'edit');
+  const viewDone = noView.length === 0;
+  /** Доступ имеет смысл спрашивать, только если его можно выдать и кому-то его не хватает. */
+  const canGrant = item.isOwner && !everyoneEdits && others.length > 0 && (current ? noEdit.length > 0 : true);
 
   async function send(choice: Choice) {
     if (!chatId) return;
@@ -113,23 +133,29 @@ export function SendToChatSheet({ item, onClose }: {
         {canGrant ? (
           <>
             <p className="nws-send-note">
-              Дать {group ? 'участникам чата' : 'собеседнику'} доступ к «{title}»? Без доступа материал по ссылке не откроется.
+              {viewDone
+                ? <>{group ? 'У всех участников чата' : 'У собеседника'} уже есть просмотр «{title}». Можно дать и редактирование.</>
+                : <>Дать {group ? 'участникам чата' : 'собеседнику'} доступ к «{title}»? Без доступа материал по ссылке не откроется.
+                  {group && noView.length < others.length && <> Доступ уже есть у {others.length - noView.length} из {others.length}.</>}</>}
             </p>
             <div className="nws-send-options">
-              <button type="button" className="nx-pick" disabled={busy} onClick={() => void send('view')}>
-                <Eye size={18} aria-hidden="true" /><span className="nx-pick-text"><span>Дать просмотр</span><small>Смогут читать, но не менять</small></span>
-              </button>
+              {!viewDone && (
+                <button type="button" className="nx-pick" disabled={busy} onClick={() => void send('view')}>
+                  <Eye size={18} aria-hidden="true" /><span className="nx-pick-text"><span>Дать просмотр</span><small>Смогут читать, но не менять</small></span>
+                </button>
+              )}
               <button type="button" className="nx-pick" disabled={busy} onClick={() => void send('edit')}>
                 <Pencil size={18} aria-hidden="true" /><span className="nx-pick-text"><span>Дать редактирование</span><small>Смогут читать и менять</small></span>
               </button>
               <button type="button" className="nx-pick" disabled={busy} onClick={() => void send('none')}>
-                <Link2 size={18} aria-hidden="true" /><span className="nx-pick-text"><span>Только ссылка, без доступа</span><small>Откроется у тех, у кого доступ уже есть</small></span>
+                <Link2 size={18} aria-hidden="true" /><span className="nx-pick-text"><span>{viewDone ? 'Оставить как есть' : 'Только ссылка, без доступа'}</span><small>{viewDone ? 'Уйдёт ссылка, права не меняются' : 'Откроется у тех, у кого доступ уже есть'}</small></span>
               </button>
             </div>
           </>
         ) : (
           <p className="nws-send-note">
             {!item.isOwner ? 'Доступом управляет владелец, поэтому уйдёт только ссылка.' : everyoneEdits ? 'Материал уже открыт всем в Шаре на редактирование — уйдёт ссылка.'
+              : others.length > 0 ? 'У всех в этом чате уже есть право править — доступ не меняем, уйдёт ссылка.'
               : chat && isFavorites(chat) ? 'В «Избранное» вы пишете себе: уйдёт ссылка, давать доступ некому.' : 'В этом чате нет других участников — уйдёт ссылка.'}
             {item.isOwner && !everyoneEdits && <> Сейчас {item.accessLevel === 'all' ? 'материал открыт всем в Шаре (только просмотр)' : 'его видите только вы и те, кому выдан доступ'}; доступ можно изменить кнопкой «Поделиться».</>}
           </p>

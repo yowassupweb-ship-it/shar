@@ -5,11 +5,10 @@ import { lazyComponent } from '@/shared/ui/lazy';
 import {
   BellPlus,
   AlertCircle, ArrowDown, CheckCheck, Copy, CornerUpLeft, Forward, ImageDown, Pencil,
-  Pin, PinOff, RotateCw, Trash2,
+  Pin, PinOff, Plus, RotateCw, Trash2,
 } from 'lucide-react';
 import { CoreMini } from '@/shared/ui/CoreIcon';
 import type { Message, User } from '@/shared/types/chat';
-import { QUICK_REACTIONS } from '@/shared/emoji/emojiData';
 import { getAppleEmojiUrl } from '@/shared/emoji/appleEmoji';
 import { Avatar } from '@/shared/ui/Avatar';
 import { attachmentUrl, formatDay, formatTime, dayKey } from '@/shared/ui/format';
@@ -28,6 +27,8 @@ import ForwardSheet from '../ForwardSheet';
 import { readerName } from './content';
 import { MessageRow, type RowCtx } from './MessageRow';
 import { Spinner } from '@/shared/ui/Spinner';
+import { ReactionPicker } from './ReactionPicker';
+import { usePinnedReactions } from '../reactionPrefs';
 import { BubbleFocus, focusAnchor, focusShot, type FocusShot } from './BubbleFocus';
 import { SectionIcon } from '@/shared/ui/SectionIcon';
 
@@ -178,6 +179,8 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
   const [menu, setMenu] = useState<{ msg: Msg; at: { x: number; y: number }; image: string | null } | null>(null);
   // Телефон: нажатое сообщение поверх размытой переписки (BubbleFocus). Живёт чуть дольше меню —
   // пока сообщение возвращается на место.
+  // Полный выбор эмодзи для реакции: открывается кнопкой «+» в ряду быстрых, у той же точки.
+  const [moreReact, setMoreReact] = useState<{ id: string; at: { x: number; y: number } } | null>(null);
   const [focus, setFocus] = useState<{ shot: FocusShot; closing: boolean } | null>(null);
   useEffect(() => {
     if (!menu && focus && !focus.closing) setFocus({ ...focus, closing: true });
@@ -744,6 +747,7 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
     );
   }
 
+  const pinnedReactions = usePinnedReactions();
   const menuMsg = menu?.msg;
   const menuMine = menuMsg && String(menuMsg.authorId) === myId && !notificationsChat;
   const menuPoll = menuMsg?.metadata?.poll as { question?: string; options?: { text: string; voters?: string[] }[]; multipleChoice?: boolean; isAnonymous?: boolean; allowRevote?: boolean } | undefined;
@@ -791,7 +795,7 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
         <Menu anchor={menu.at} label="Действия с сообщением" onClose={() => setMenu(null)}>
           {!notificationsChat && (
             <div className="cxm-quick" role="group" aria-label="Реакции">
-              {QUICK_REACTIONS.map((emoji) => (
+              {pinnedReactions.map((emoji) => (
                 <button
                   key={emoji}
                   type="button"
@@ -803,6 +807,15 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
                   <img src={getAppleEmojiUrl(emoji)} alt="" draggable={false} />
                 </button>
               ))}
+              <button
+                type="button"
+                className="cxm-quick-btn cxm-quick-more"
+                aria-label="Все эмодзи"
+                title="Все эмодзи"
+                onClick={() => { setMoreReact({ id: String(menuMsg.id), at: menu.at }); setMenu(null); }}
+              >
+                <Plus size={18} aria-hidden="true" />
+              </button>
             </div>
           )}
           {!notificationsChat && (
@@ -862,6 +875,12 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
               </MenuItem>
             </>
           )}
+        </Menu>
+      )}
+
+      {moreReact && (
+        <Menu anchor={moreReact.at} label="Выбор реакции" onClose={() => setMoreReact(null)}>
+          <ReactionPicker onReact={(emoji) => { void toggleReaction(chatId, moreReact.id, emoji); setMoreReact(null); }} />
         </Menu>
       )}
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Check, FolderPlus, Lock, MoreHorizontal, Palette, Pencil, Search, Share2, Trash2, Users } from 'lucide-react';
 import { displayName, useChatStore } from '@/features/chat';
 import { Avatar } from '@/shared/ui/Avatar';
@@ -25,8 +25,29 @@ export function FolderBar({ lists, counts, selected, onSelect, onNew, onAction }
   onNew: () => void;
   onAction: (list: TaskList, anchor: MenuAnchor) => void;
 }) {
+  const bar = useRef<HTMLDivElement>(null);
+
+  // Полоса шире списка, а полосы прокрутки нет: колесом мыши (вертикальным) листаем её вбок,
+  // тачпад и Shift+колесо дают deltaX сами. Слушатель не пассивный — иначе не отменить прокрутку страницы.
+  useEffect(() => {
+    const el = bar.current;
+    if (!el) return undefined;
+    const onWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaX) >= Math.abs(e.deltaY) || el.scrollWidth <= el.clientWidth) return;
+      e.preventDefault();
+      el.scrollLeft += e.deltaY;
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  // Выбранная папка не должна оставаться за краем: показываем её, как только выбор сменился.
+  useEffect(() => {
+    bar.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [selected]);
+
   return (
-    <div className="ntf" role="tablist" aria-label="Папки задач">
+    <div className="ntf" role="tablist" aria-label="Папки задач" ref={bar}>
       <button type="button" role="tab" className="ntf-chip" aria-selected={selected === 'all'} onClick={() => onSelect('all')}>Все<span>{counts.all || 0}</span></button>
       {lists.map((l) => <FolderChip key={l.id} list={l} count={counts[l.id] || 0} selected={selected === l.id} onSelect={onSelect} onAction={onAction} />)}
       {(counts.none || 0) > 0 && lists.length > 0 && (

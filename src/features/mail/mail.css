@@ -158,15 +158,18 @@
   border-radius: var(--radius-md);
   background: var(--surface-hover);
   color: var(--text-main);
+  font: inherit;
+  text-align: left;
   text-decoration: none;
+  cursor: pointer;
 }
 @media (hover: hover) { .nmr-att:hover { border-color: var(--border-strong); } }
 .nmr-att > svg { flex: none; color: var(--text-muted); }
-.nmr-att-ico { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border-radius: var(--radius-sm); background: var(--surface-selected); color: var(--accent-color); }
+.nmr-att-ico { display: grid; place-items: center; flex: none; width: 30px; height: 34px; }
 .nmr-att-text { display: grid; min-width: 0; }
 .nmr-att-text b { font-size: var(--text-sm); font-weight: var(--weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nmr-att-text span { font-size: var(--text-xs); color: var(--text-muted); }
-.nmr-att-img { display: block; overflow: hidden; width: 120px; height: 90px; border-radius: var(--radius-md); border: 1px solid var(--border-color); background: var(--surface-hover); }
+.nmr-att-img { display: block; overflow: hidden; padding: 0; cursor: pointer; width: 120px; height: 90px; border-radius: var(--radius-md); border: 1px solid var(--border-color); background: var(--surface-hover); }
 .nmr-att-img img { width: 100%; height: 100%; object-fit: cover; }
 .nmr-body { padding-top: var(--space-4); }
 /* HTML-письмо — белый лист со своими цветами; в тёмной теме у него скруглённый край, а не голый прямоугольник. */

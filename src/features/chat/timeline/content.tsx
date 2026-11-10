@@ -6,9 +6,10 @@ import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import {
   ArrowRight, Bell, Calendar, CheckSquare, Eye, File as FileIcon, FileText, Folder, FolderOpen, Image as ImageIcon, MessageSquare, Mic,
-  PenLine, PhoneMissed, PhoneOff, Video,
+  PhoneMissed, PhoneOff, Video,
 } from 'lucide-react';
-import { canOpenInEditor, openInEditor, viewKindOf } from '@/features/workspace';
+import { viewKindOf } from '@/features/workspace';
+import { FileGlyph, kindOf, useAttachmentMenu } from '@/features/files';
 import type { Message, User } from '@/shared/types/chat';
 import { renderTextWithEmoji } from '@/shared/emoji/emojiText';
 import { Avatar } from '@/shared/ui/Avatar';
@@ -18,8 +19,6 @@ import { computeAlbumLayout } from './album';
 import { openDocument, releasePreview } from '../store';
 import { navigate } from '@/shared/navigation/navigate';
 import { internalPath, links } from '@/shared/navigation/routes';
-import { Spinner } from '@/shared/ui/Spinner';
-import { downloadOnClick } from '@/shared/platform/download';
 
 /**
  * Содержимое сообщения: разбор вложений и отрисовка каждого вида. Правила
@@ -482,56 +481,42 @@ function fmtSize(b?: number): string {
 }
 
 /**
- * Файл в переписке. Скачать — по карточке. Справа кнопки-иконки: просмотр (в боковой панели) — у файлов, которые она
- * умеет показать, и «Открыть в Шаре» — у всего, что умеет импорт «Офиса» (Word, Excel, CSV, Markdown, текст,
- * PowerPoint, PDF).
+ * Файл в переписке: значок формата (тот же набор, что в «Файлах»), имя, размер. Нажатие на карточку — выбор: просмотр,
+ * открыть копию в редакторе Шара, сохранить в «Файлы» или на устройство (то же меню, что у вложений в почте).
+ * Справа — быстрая кнопка просмотра в боковой панели у файлов, которые она умеет показать.
  */
 export function FileCard({ att }: { att: Att }) {
   const name = att.name || decodeURIComponent(att.url.split('/').pop() || 'Файл');
-  const ext = (name.match(/\.([a-z0-9]{1,5})$/i)?.[1] || 'файл').toUpperCase();
   const viewable = viewKindOf(name) !== null;
-  const editable = canOpenInEditor(name);
-  const [opening, setOpening] = useState(false);
+  const view = () => openDocument({ url: att.url, name, size: att.size });
+  const menu = useAttachmentMenu({ url: att.url, name, size: att.size }, { onView: view });
   const card = (
-    <a className="cxm-file" href={att.url} target="_blank" rel="noopener noreferrer" download={name} onClick={downloadOnClick(att.url, name)}>
-      <span className="cxm-file-ext" style={{ '--tint': tintForExt(ext) } as React.CSSProperties}>{ext.slice(0, 4)}</span>
+    <button
+      type="button"
+      className="cxm-file"
+      aria-haspopup="menu"
+      title="Действия с файлом"
+      onClick={(e) => menu.open({ element: e.currentTarget, align: 'start' })}
+      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); menu.open({ x: e.clientX, y: e.clientY }); }}
+    >
+      <span className="cxm-file-ext"><FileGlyph name={name} kind={kindOf(name)} size="sm" /></span>
       <span className="cxm-file-text">
         <b>{name}</b>
-        <span>{[fmtSize(att.size), 'Скачать'].filter(Boolean).join(' · ')}</span>
+        <span>{fmtSize(att.size)}</span>
       </span>
-    </a>
+    </button>
   );
-  if (!viewable && !editable) return card;
+  if (!viewable) return <>{card}{menu.node}</>;
   return (
-    <div className="cxm-file-wrap" style={{ '--file-actions': (viewable ? 1 : 0) + (editable ? 1 : 0) } as React.CSSProperties}>
+    <div className="cxm-file-wrap" style={{ '--file-actions': 1 } as React.CSSProperties}>
       {card}
       <div className="cxm-file-actions">
-        {viewable && (
-          <button type="button" title="Просмотр" aria-label={`Просмотр: ${name}`} onClick={(e) => { e.stopPropagation(); openDocument({ url: att.url, name, size: att.size }); }}>
-            <Eye size={17} aria-hidden="true" />
-          </button>
-        )}
-        {editable && (
-          <button
-            type="button"
-            title="Открыть в Шаре — копия, исходный файл не изменится"
-            aria-label={`Открыть в Шаре: ${name}`}
-            disabled={opening}
-            onClick={(e) => { e.stopPropagation(); setOpening(true); void openInEditor({ url: att.url, name, size: att.size }).finally(() => setOpening(false)); }}
-          >
-            {opening ? <Spinner size={16} label="Открываю" /> : <PenLine size={16} aria-hidden="true" />}
-          </button>
-        )}
+        <button type="button" title="Просмотр" aria-label={`Просмотр: ${name}`} onClick={(e) => { e.stopPropagation(); view(); }}>
+          <Eye size={17} aria-hidden="true" />
+        </button>
       </div>
+      {menu.node}
     </div>
   );
 }
 
-function tintForExt(ext: string): string {
-  if (/PDF/.test(ext)) return 'var(--note-red)';
-  if (/DOCX?|RTF|ODT/.test(ext)) return 'var(--note-blue)';
-  if (/XLSX?|CSV|ODS/.test(ext)) return 'var(--note-green)';
-  if (/PPTX?|KEY/.test(ext)) return 'var(--note-orange)';
-  if (/ZIP|RAR|7Z|TAR|GZ/.test(ext)) return 'var(--note-purple)';
-  return 'var(--note-gray)';
-}
