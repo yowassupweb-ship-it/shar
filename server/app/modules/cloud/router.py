@@ -50,6 +50,19 @@ class CloudFileUpdate(BaseModel):
     moveToRoot: bool = False  # True = explicitly move to root (folderId=null)
 
 
+class CloudFileReplace(BaseModel):
+    """Новое содержимое файла: байты уже загружены обычной загрузкой (/api/upload), здесь — их адрес."""
+    url: str
+    s3Key: str
+    size: Optional[int] = 0
+    mimeType: Optional[str] = None
+    fileType: Optional[str] = None
+
+
+class CloudFileRestore(BaseModel):
+    versionId: str
+
+
 class CloudAccessUpdate(BaseModel):
     sharedWith: List[str] = []
     editAccess: List[str] = []  # subset of sharedWith who can edit
@@ -484,6 +497,259 @@ def update_cloud_file_access(file_id: str, body: CloudAccessUpdate, me: Identity
         _notify_access_granted(userId, result.get('name', ''), 'file', newly_added, item_id=file_id)
     _cloud_changed(result.get('folder_id'), result, old)
     return snake_to_camel(result)
+
+
+# ── Скачать выбранное архивом ───────────────────────────────────────────────────
+# GET, а не POST: в приложении скачивание идёт через окно «Сохранить как» (downloadURL), а оно умеет только GET.
+# Папки кладутся целиком, с вложенными; доступ проверяется на каждый файл и папку, чужое молча пропускается.
+
+ZIP_MAX_FILES = 3000
+ZIP_MAX_BYTES = 2 * 1024 ** 3
+_ZIP_STORED_EXT = {"zip", "rar", "7z", "gz", "png", "jpg", "jpeg", "gif", "webp", "heic", "mp4", "mov", "mkv", "webm", "mp3", "m4a", "pdf",
+                   "docx", "xlsx", "pptx"}  # уже сжаты — второй раз жать только тратить время
+
+
+def _zip_name(name: str, taken: set) -> str:
+    """Имя внутри архива: без путей и запрещённых знаков, одинаковые различаются номером."""
+    clean = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', ' ', str(name or '')).strip().strip('.') or 'file'
+    if clean not in taken:
+        taken.add(clean)
+        return clean
+    stem, dot, ext = clean.rpartition('.')
+    base, suffix = (stem, f".{ext}") if dot and stem else (clean, '')
+    n = 2
+    while f"{base} ({n}){suffix}" in taken:
+        n += 1
+    out = f"{base} ({n}){suffix}"
+    taken.add(out)
+    return out
+
+
+def _file_stream(row: dict):
+    """Содержимое файла как поток (S3 или диск сервера) либо None, если байтов нет."""
+    from app.core.storage import UPLOAD_DIR
+
+    key = row.get('s3_key') or (f"uploads/{str(row.get('url') or '').rsplit('/', 1)[-1]}" if row.get('url') else '')
+    if not key:
+        return None
+    if s3_storage.enabled:
+        obj = s3_storage.get_object(key)
+        return obj["Body"] if obj else None
+    path = UPLOAD_DIR / key
+    return path.open('rb') if path.exists() else None
+
+
+@router.get("/api/cloud/zip")
+def download_cloud_zip(files: str = "", folders: str = "", name: str = "", me: Identity = Depends(current_identity)):
+    """Архив из выбранных файлов и папок. files / folders — id через запятую."""
+    import shutil
+    import tempfile
+    import zipfile
+    from urllib.parse import quote
+
+    from fastapi.responses import StreamingResponse
+
+    file_ids = [i for i in (x.strip() for x in files.split(',')) if i][:500]
+    folder_ids = [i for i in (x.strip() for x in folders.split(',')) if i][:200]
+    if not file_ids and not folder_ids:
+        raise HTTPException(status_code=400, detail="Nothing selected")
+
+    # Что кладём: (путь внутри архива, строка файла)
+    entries: list = []
+    top_taken: set = set()
+    skipped: list = []
+
+    def walk(folder: dict, prefix: str, depth: int = 0):
+        if depth > 12 or len(entries) >= ZIP_MAX_FILES:
+            return
+        taken: set = set()
+        for f in db.conn.fetch_all("SELECT * FROM cloud_files WHERE folder_id = %s ORDER BY name", (folder['id'],)) or []:
+            entries.append((prefix + _zip_name(f.get('name'), taken), dict(f)))
+        for d in db.conn.fetch_all("SELECT * FROM cloud_folders WHERE parent_id = %s ORDER BY name", (folder['id'],)) or []:
+            walk(dict(d), prefix + _zip_name(d.get('name'), taken) + '/', depth + 1)
+
+    for fid in file_ids:
+        row = db.get_cloud_file_by_id(fid)
+        if not row or not _can_view_cloud(row, me):
+            skipped.append(fid)
+            continue
+        entries.append((_zip_name(row.get('name'), top_taken), row))
+    first_folder = None
+    for did in folder_ids:
+        folder = db.get_cloud_folder_by_id(did)
+        if not folder or not _can_view_cloud(folder, me):
+            skipped.append(did)
+            continue
+        first_folder = first_folder or folder
+        walk(folder, _zip_name(folder.get('name'), top_taken) + '/')
+    if not entries:
+        raise HTTPException(status_code=404, detail="Nothing to download")
+    if len(entries) > ZIP_MAX_FILES:
+        raise HTTPException(status_code=413, detail="Слишком много файлов для одного архива")
+    if sum(int(r.get('size') or 0) for _, r in entries) > ZIP_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Архив получился бы больше 2 ГБ")
+
+    tmp = tempfile.SpooledTemporaryFile(max_size=32 * 1024 * 1024)
+    missing: list = []
+    try:
+        with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+            for arc, row in entries:
+                try:
+                    src = _file_stream(row)
+                except Exception:  # noqa: BLE001 — хранилище не ответило на один файл: остальные кладём
+                    src = None
+                if src is None:
+                    missing.append(arc)
+                    continue
+                ext = arc.rsplit('.', 1)[-1].lower() if '.' in arc else ''
+                info = zipfile.ZipInfo(arc)
+                ts = row.get('updated_at') or row.get('created_at')
+                if hasattr(ts, 'timetuple'):
+                    info.date_time = tuple(ts.timetuple()[:6]) if ts.year >= 1980 else (1980, 1, 1, 0, 0, 0)
+                info.compress_type = zipfile.ZIP_STORED if ext in _ZIP_STORED_EXT else zipfile.ZIP_DEFLATED
+                with src, zf.open(info, 'w', force_zip64=True) as dst:
+                    shutil.copyfileobj(src, dst, 1024 * 256)
+            if missing:
+                zf.writestr('НЕ ВОШЛИ В АРХИВ.txt', "Этих файлов не оказалось в хранилище:\n" + "\n".join(missing))
+    except Exception:
+        tmp.close()
+        raise
+    size = tmp.tell()
+    tmp.seek(0)
+
+    base = (name or '').strip() or (first_folder.get('name') if first_folder and len(folder_ids) == 1 and not file_ids else 'Файлы Шара')
+    filename = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', ' ', base).strip() or 'Файлы'
+    if not filename.lower().endswith('.zip'):
+        filename += '.zip'
+
+    def chunks():
+        try:
+            while True:
+                block = tmp.read(1024 * 256)
+                if not block:
+                    break
+                yield block
+        finally:
+            tmp.close()
+
+    return StreamingResponse(chunks(), media_type="application/zip", headers={
+        "Content-Length": str(size),
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+    })
+
+
+# ── Замена содержимого файла с историей версий ──────────────────────────────────
+# Файл остаётся тем же (id, ссылка, папка, доступы) — меняются только байты. Прежние байты уходят в metadata.versions
+# (так же, как при правках агентов, см. mcp/files.py): оттуда их можно скачать или вернуть. Новая таблица не нужна.
+
+KEEP_VERSIONS = 20  # сколько прежних версий файла помним
+
+
+def _editable_file(file_id: str, me: Identity) -> dict:
+    """Файл, который этот человек может менять: свой или с правом редактирования (в т.ч. от папки выше)."""
+    from types import SimpleNamespace
+
+    from app.modules.mcp import files as mcp_files  # поздний импорт: mcp/files сам импортирует этот модуль
+
+    row = db.get_cloud_file_by_id(file_id)
+    level = mcp_files.rights(SimpleNamespace(me=me), row) if row else None
+    if not level:
+        raise HTTPException(status_code=404, detail="File not found")
+    if level not in ("owner", "edit"):
+        raise HTTPException(status_code=403, detail="Файл открыт только на просмотр")
+    return row
+
+
+def _stamp(value) -> str:
+    return value.isoformat() if hasattr(value, "isoformat") else str(value or "")
+
+
+def _version_of(row: dict, me: Identity) -> dict:
+    """Текущее содержимое файла как запись истории."""
+    from pathlib import Path
+
+    meta = row.get("metadata") or {}
+    key = row.get("s3_key") or (f"uploads/{Path(str(row.get('url') or '')).name}" if row.get("url") else "")
+    user = db.get_user_by_id(me.user_id) or {}
+    return {"id": Path(key).name or uuid.uuid4().hex, "url": row.get("url") or "", "s3Key": key, "size": row.get("size") or 0,
+            "mimeType": row.get("mime_type") or "", "at": _stamp(row.get("updated_at")),
+            "replacedAt": datetime.now().astimezone().isoformat(timespec="seconds"), "by": me.user_id,
+            "byName": user.get("name") or "", "own": bool(key) and meta.get("ownKey") == key}
+
+
+def _swap_content(row: dict, me: Identity, versions: list, url: str, key: str, size: int, mime: str, own: bool) -> dict:
+    """Записать новое содержимое и историю одной проверенной операцией (не затираем чужую правку, сделанную между чтением и записью)."""
+    from app.modules.mcp import files as mcp_files
+
+    updated = db.replace_cloud_file_content(str(row["id"]), _stamp(row.get("updated_at")), url, key, size, mime,
+                                            {"versions": versions[:KEEP_VERSIONS], "ownKey": key if own else None,
+                                             "width": None, "height": None, "dimsFor": None})  # разрешение картинки посчитается заново
+    if not updated:
+        raise HTTPException(status_code=409, detail="Файл изменился: откройте его заново и повторите")
+    for dropped in versions[KEEP_VERSIONS:]:  # вытесненные из памяти отката — после успешной записи
+        if dropped.get("own"):
+            mcp_files._discard(dropped.get("s3Key") or "")
+    return updated
+
+
+@router.post("/api/cloud/files/{file_id}/replace")
+def replace_cloud_file(file_id: str, body: CloudFileReplace, me: Identity = Depends(current_identity)):
+    """Заменить содержимое файла новым (из буфера обмена или с диска). Ссылка на файл не меняется, прежнее — в истории."""
+    from app.modules.mcp import files as mcp_files
+
+    row = _editable_file(file_id, me)
+    prefix, _, name = body.s3Key.partition("/")
+    if prefix != "uploads" or not is_upload_name(name):
+        raise HTTPException(status_code=400, detail="Invalid s3Key")
+    versions = list((row.get("metadata") or {}).get("versions") or [])
+    if row.get("url") or row.get("s3_key"):
+        versions.insert(0, _version_of(row, me))
+    try:
+        updated = _swap_content(row, me, versions, body.url, body.s3Key, int(body.size or 0),
+                                body.mimeType or row.get("mime_type") or "application/octet-stream", own=True)
+    except HTTPException:
+        mcp_files._discard(body.s3Key)  # загрузка осталась без файла — убираем
+        raise
+    if body.fileType and body.fileType != row.get("file_type"):
+        db.conn.execute_query("UPDATE cloud_files SET file_type = %s WHERE id = %s", (body.fileType, file_id))
+        updated["file_type"] = body.fileType
+    _cloud_changed(updated.get("folder_id"), updated)
+    return snake_to_camel(updated)
+
+
+@router.get("/api/cloud/files/{file_id}/versions")
+def get_cloud_file_versions(file_id: str, me: Identity = Depends(current_identity)):
+    """Текущая версия и прежние: когда заменены, кем, размер, адрес (для скачивания)."""
+    row = db.get_cloud_file_by_id(file_id)
+    if not row or not _can_view_cloud(row, me):
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        _editable_file(file_id, me)
+        can_restore = True
+    except HTTPException:
+        can_restore = False
+    versions = [{"id": v.get("id"), "url": v.get("url"), "size": v.get("size"), "mimeType": v.get("mimeType"), "at": v.get("at"),
+                 "replacedAt": v.get("replacedAt"), "by": v.get("by"), "byName": v.get("byName")}
+                for v in (row.get("metadata") or {}).get("versions") or []]
+    return {"id": str(row["id"]), "name": row.get("name"), "canRestore": can_restore,
+            "current": {"url": row.get("url"), "size": row.get("size"), "mimeType": row.get("mime_type"), "updatedAt": _stamp(row.get("updated_at"))},
+            "versions": versions}
+
+
+@router.post("/api/cloud/files/{file_id}/restore")
+def restore_cloud_file_version(file_id: str, body: CloudFileRestore, me: Identity = Depends(current_identity)):
+    """Вернуть прежнюю версию: она становится текущей, а текущая сама уходит в историю — ничего не пропадает."""
+    row = _editable_file(file_id, me)
+    versions = list((row.get("metadata") or {}).get("versions") or [])
+    target = next((v for v in versions if v.get("id") == body.versionId), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Version not found")
+    rest = [v for v in versions if v is not target]
+    rest.insert(0, _version_of(row, me))
+    updated = _swap_content(row, me, rest, target.get("url") or "", target.get("s3Key") or "", int(target.get("size") or 0),
+                            target.get("mimeType") or row.get("mime_type") or "application/octet-stream", own=bool(target.get("own")))
+    _cloud_changed(updated.get("folder_id"), updated)
+    return snake_to_camel(updated)
 
 
 @router.delete("/api/cloud/files/{file_id}")

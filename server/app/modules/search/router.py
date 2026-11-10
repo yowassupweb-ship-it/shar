@@ -90,7 +90,7 @@ def _files(me: Identity, pattern: str, limit: int) -> list[dict[str, Any]]:
     has_access = " OR ".join(["{t}.owner_id = %s"] + ["COALESCE({t}.shared_with, '[]'::jsonb) @> jsonb_build_array(%s::text)"] * len(shared))
     inherited = db.cloud_inherited_folder_ids(me.user_id, dept)  # открытые папки вместе со всеми вложенными
     rows = db.conn.fetch_all(
-        f"""SELECT f.id, f.name, f.folder_id, f.size, f.mime_type, f.updated_at::text AS updated_at
+        f"""SELECT f.id, f.name, f.folder_id, f.size, f.mime_type, f.url, f.file_type, f.updated_at::text AS updated_at
             FROM cloud_files f
             WHERE f.name ILIKE %s {_ESC}
               AND (({has_access.format(t='f')})
@@ -100,7 +100,23 @@ def _files(me: Identity, pattern: str, limit: int) -> list[dict[str, Any]]:
         tuple([pattern, me.user_id, *shared, me.user_id, *shared, inherited, limit]),
     ) or []
     return [{"id": r["id"], "name": r["name"] or "", "folderId": r["folder_id"], "size": r["size"], "mimeType": r["mime_type"] or "",
-             "updatedAt": r["updated_at"]} for r in rows]
+             "url": r["url"] or "", "fileType": r["file_type"] or "", "updatedAt": r["updated_at"]} for r in rows]
+
+
+def _folders(me: Identity, pattern: str, limit: int) -> list[dict[str, Any]]:
+    """Папки «Файлов» по имени: свои, открытые мне (или моему отделу) и вложенные в открытые."""
+    dept = (db.get_user_by_id(me.user_id) or {}).get("department")
+    shared = [me.user_id] + ([f"dept:{dept}"] if dept else [])
+    has_access = " OR ".join(["d.owner_id = %s"] + ["COALESCE(d.shared_with, '[]'::jsonb) @> jsonb_build_array(%s::text)"] * len(shared))
+    inherited = db.cloud_inherited_folder_ids(me.user_id, dept)
+    rows = db.conn.fetch_all(
+        f"""SELECT d.id, d.name, d.parent_id, d.color, d.updated_at::text AS updated_at
+            FROM cloud_folders d
+            WHERE d.name ILIKE %s {_ESC} AND (({has_access}) OR d.id = ANY(%s))
+            ORDER BY d.updated_at DESC NULLS LAST LIMIT %s""",
+        tuple([pattern, me.user_id, *shared, inherited, limit]),
+    ) or []
+    return [{"id": r["id"], "name": r["name"] or "", "parentId": r["parent_id"], "color": r["color"] or None, "updatedAt": r["updated_at"]} for r in rows]
 
 
 def _attachments(me: Identity, pattern: str, limit: int) -> list[dict[str, Any]]:
@@ -154,7 +170,7 @@ def _mail(me: Identity, pattern: str, query: str, limit: int) -> list[dict[str, 
 @router.get("/api/search")
 def search(q: str = "", limit: int = 20, me: Identity = Depends(current_identity)):
     query = q.strip()[:120]
-    empty: dict[str, list] = {"messages": [], "items": [], "files": [], "attachments": [], "events": [], "mail": []}
+    empty: dict[str, list] = {"messages": [], "items": [], "files": [], "folders": [], "attachments": [], "events": [], "mail": []}
     if len(query) < 2:
         return empty
     limit = max(1, min(limit, 50))
@@ -163,6 +179,7 @@ def search(q: str = "", limit: int = 20, me: Identity = Depends(current_identity
         "messages": _section("messages", lambda: _messages(me, pattern, query, limit)),
         "items": _section("items", lambda: _items(me, pattern, query, limit)),
         "files": _section("files", lambda: _files(me, pattern, limit)),
+        "folders": _section("folders", lambda: _folders(me, pattern, limit)),
         "attachments": _section("attachments", lambda: _attachments(me, pattern, limit)),
         "events": _section("events", lambda: _events(me, query, limit)),
         "mail": _section("mail", lambda: _mail(me, pattern, query, limit)),

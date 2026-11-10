@@ -89,3 +89,18 @@ def test_search_mail_only_my_accounts(users, anna, boris):
     assert len(got) == 1 and got[0]["accountId"] == account and got[0]["folder"] == "INBOX"
     assert boris.get("/api/search", params={"q": tag}).json()["mail"] == []
     assert len(anna.get("/api/search", params={"q": "оплатите до"}).json()["mail"]) >= 1
+
+
+def test_search_finds_folders_by_access(users, anna, boris, clara):
+    tag = f"папка{uuid.uuid4().hex[:8]}"
+    root = anna.post("/api/cloud/folders", json={"name": f"{tag}-корень"}).json()
+    child = anna.post("/api/cloud/folders", json={"name": f"{tag}-вложенная", "parentId": root["id"]}).json()
+
+    found = {f["id"] for f in anna.get("/api/search", params={"q": tag}).json()["folders"]}
+    assert found == {root["id"], child["id"]}
+    assert boris.get("/api/search", params={"q": tag}).json()["folders"] == []
+
+    # открыли корень — Борис видит и его, и вложенную, Клара — по-прежнему нет
+    anna.put(f"/api/cloud/folders/{root['id']}/access", json={"sharedWith": [users.ids["boris"]], "editAccess": []})
+    assert {f["id"] for f in boris.get("/api/search", params={"q": tag}).json()["folders"]} == {root["id"], child["id"]}
+    assert clara.get("/api/search", params={"q": tag}).json()["folders"] == []
