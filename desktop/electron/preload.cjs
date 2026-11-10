@@ -79,6 +79,10 @@ contextBridge.exposeInMainWorld('sharDesktop', {
   openExternal: (url) => ipcRenderer.invoke('window:open-external', url),
   // Скачать файл силами приложения: окно «Сохранить как» с человеческим именем, без внешнего браузера.
   downloadFile: (url, name) => ipcRenderer.invoke('file:download', String(url || ''), String(name || '')),
+  // Скачать несколько файлов в одну выбранную папку: [{ url, name }] → { saved, failed, dir?, canceled? }.
+  downloadFilesToFolder: (items) => ipcRenderer.invoke('file:download-many', (Array.isArray(items) ? items : []).map((i) => ({ url: String(i?.url || ''), name: String(i?.name || '') }))),
+  // Положить файлы в системный буфер обмена (Windows): [{ url, name }] → сколько скопировано.
+  copyFilesToClipboard: (items) => ipcRenderer.invoke('clipboard:copy-files', (Array.isArray(items) ? items : []).map((i) => ({ url: String(i?.url || ''), name: String(i?.name || '') }))),
   windowControls,
   startup: {
     get: () => ipcRenderer.invoke('startup:get'),

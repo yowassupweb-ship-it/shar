@@ -30,3 +30,21 @@ export function downloadOnClick(url: string, name?: string) {
     downloadFile(url, name);
   };
 }
+
+/**
+ * Скачать несколько файлов по отдельности. В приложении — в одну выбранную папку (спрашивают один раз); в браузере —
+ * по очереди обычными ссылками (браузер может спросить разрешение на несколько загрузок).
+ * Возвращает, сколько файлов ушло; null — человек отказался выбирать папку.
+ */
+export async function downloadMany(items: Array<{ url: string; name: string }>): Promise<{ saved: number; failed: number } | null> {
+  const desktop = window.sharDesktop?.downloadFilesToFolder;
+  if (desktop) {
+    const res = await desktop(items.map((i) => ({ url: new URL(i.url, window.location.href).href, name: i.name })));
+    return res.canceled ? null : { saved: res.saved, failed: res.failed };
+  }
+  for (const item of items) {
+    downloadFile(item.url, item.name);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  return { saved: items.length, failed: 0 };
+}

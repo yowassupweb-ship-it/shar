@@ -45,6 +45,10 @@ export interface SharDesktop {
   openExternal: (url: string) => Promise<void>;
   /** Скачать файл окном «Сохранить как» (в старых сборках приложения может не быть). */
   downloadFile?: (url: string, name: string) => Promise<void>;
+  /** Скачать несколько файлов в одну выбранную папку (папку спрашивают один раз). */
+  downloadFilesToFolder?: (items: Array<{ url: string; name: string }>) => Promise<{ saved: number; failed: number; dir?: string; canceled?: boolean }>;
+  /** Положить файлы в системный буфер обмена как файлы (Windows). Возвращает, сколько скопировано; 0 — не вышло. */
+  copyFilesToClipboard?: (items: Array<{ url: string; name: string }>) => Promise<number>;
   /** Число чатов с непрочитанным — на кнопку приложения в панели задач и в трей. */
   setBadgeCount?: (count: number) => void;
   /** Громкость сигнала карточек уведомлений (их звук играет главный процесс). */

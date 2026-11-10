@@ -9,6 +9,7 @@ const { spawn } = require('child_process');
 const nodeNet = require('net');
 const dns = require('dns');
 const { visibleFraction } = require('./occlusion.cjs');
+const { copyFiles: copyFilesToClipboard } = require('./fileclip.cjs');
 
 // Same IPv6-first-then-timeout-then-fallback issue as the bundled server (see its
 // NODE_OPTIONS below) — but THIS process isn't spawned with its own env, it's the
@@ -821,6 +822,8 @@ function registerWindowControls(mainWindow) {
   ipcMain.removeHandler('window:toggle-maximize');
   ipcMain.removeHandler('window:set-fullscreen');
   ipcMain.removeHandler('file:download');
+  ipcMain.removeHandler('clipboard:copy-files');
+  ipcMain.removeHandler('file:download-many');
   ipcMain.removeHandler('window:close');
   ipcMain.removeHandler('window:is-maximized');
   ipcMain.removeHandler('window:open-external');
@@ -866,6 +869,79 @@ function registerWindowControls(mainWindow) {
     if (!/^https?:/i.test(absolute)) return;
     if (name) downloadNames.set(absolute, name);
     mainWindow.webContents.downloadURL(absolute);
+  });
+
+  // Скачать несколько файлов по отдельности: папку спрашиваем один раз, а не окно «Сохранить как» на каждый файл.
+  ipcMain.handle('file:download-many', async (_event, items) => {
+    if (mainWindow.isDestroyed() || !Array.isArray(items) || !items.length || items.length > 200) return { saved: 0, failed: 0 };
+    const pick = await dialog.showOpenDialog(mainWindow, {
+      title: 'Куда сохранить файлы', defaultPath: app.getPath('downloads'), properties: ['openDirectory', 'createDirectory'],
+    });
+    if (pick.canceled || !pick.filePaths[0]) return { saved: 0, failed: 0, canceled: true };
+    const dir = pick.filePaths[0];
+    let saved = 0;
+    let failed = 0;
+    let last = '';
+    for (const item of items) {
+      try {
+        const absolute = new URL(String(item?.url || ''), mainWindow.webContents.getURL()).href;
+        if (!/^https?:/i.test(absolute)) { failed += 1; continue; }
+        const res = await mainWindow.webContents.session.fetch(absolute);
+        if (!res.ok) { failed += 1; continue; }
+        const clean = String(item?.name || 'file').replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'file';
+        const dot = clean.lastIndexOf('.');
+        const base = dot > 0 ? clean.slice(0, dot) : clean;
+        const ext = dot > 0 ? clean.slice(dot) : '';
+        let target = path.join(dir, clean);
+        for (let n = 2; fs.existsSync(target); n += 1) target = path.join(dir, `${base} (${n})${ext}`);
+        fs.writeFileSync(target, Buffer.from(await res.arrayBuffer()));
+        last = target;
+        saved += 1;
+      } catch (err) {
+        failed += 1;
+        console.error('[download-many] failed:', err?.message || err);
+      }
+    }
+    if (last) shell.showItemInFolder(last);
+    return { saved, failed, dir };
+  });
+
+  // «Копировать» файл в интерфейсе: качаем его во временную папку и кладём в системный буфер как файл (CF_HDROP),
+  // чтобы он вставился и в Проводник, и в поле чата. Имя сохраняем человеческое, а не uuid из адреса хранилища.
+  // Возвращает число скопированных файлов; 0 — не вышло (не Windows, нет связи), интерфейс тогда копирует по-своему.
+  ipcMain.handle('clipboard:copy-files', async (_event, items) => {
+    if (mainWindow.isDestroyed() || !Array.isArray(items) || !items.length || items.length > 20) return 0;
+    const dir = path.join(app.getPath('temp'), 'shar-clipboard', String(Date.now()));
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const saved = [];
+      for (const item of items) {
+        const absolute = new URL(String(item?.url || ''), mainWindow.webContents.getURL()).href;
+        if (!/^https?:/i.test(absolute)) continue;
+        const res = await mainWindow.webContents.session.fetch(absolute);
+        if (!res.ok) continue;
+        const clean = String(item?.name || 'file').replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'file';
+        let target = path.join(dir, clean);
+        for (let n = 2; fs.existsSync(target); n += 1) target = path.join(dir, `${n} ${clean}`);
+        fs.writeFileSync(target, Buffer.from(await res.arrayBuffer()));
+        saved.push(target);
+      }
+      if (!saved.length) return 0;
+      const handle = mainWindow.getNativeWindowHandle();
+      const owner = Number(handle.length >= 8 ? handle.readBigUInt64LE(0) : handle.readUInt32LE(0));
+      return (await copyFilesToClipboard(saved, owner)) ? saved.length : 0;
+    } catch (err) {
+      console.error('[clipboard] copy files failed:', err?.message || err);
+      return 0;
+    } finally {
+      // Старые временные копии подчищаем: файл в буфере нужен, пока его не вставили, а не вечно.
+      try {
+        const root = path.join(app.getPath('temp'), 'shar-clipboard');
+        for (const name of fs.readdirSync(root)) {
+          if (Date.now() - Number(name) > 60 * 60 * 1000) fs.rmSync(path.join(root, name), { recursive: true, force: true });
+        }
+      } catch { /* нет папки — нечего чистить */ }
+    }
   });
 
   ipcMain.handle('window:set-fullscreen', (event, on) => {
