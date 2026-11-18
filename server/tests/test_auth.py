@@ -88,3 +88,29 @@ def test_partial_session_hash_is_dropped_and_session_endpoint_does_not_crash(use
     res = client.get("/api/auth/session", headers={"cookie": f"{sessions.SESSION_COOKIE}={token}"})
     assert res.status_code == 200 and res.json() == {"authenticated": False}
     assert not redis_client.exists(sessions._SESSION_KEY + token)
+
+
+def test_db_outage_does_not_revoke_sessions_or_log_people_out(users, client, monkeypatch):
+    """Перезапуск Postgres: запросы получают 503 (не 401), сессия остаётся, вход не врёт «неверный пароль»; после — всё работает."""
+    from app.core import security
+
+    r = client.post("/api/auth/login", json={"username": users.ids["anna"], "password": "secret-pass"})
+    assert r.status_code == 200
+    cookie = {"cookie": r.headers["set-cookie"].split(";")[0]}
+
+    # база «упала»: слой запросов отвечает None на всё, проба SELECT 1 тоже
+    monkeypatch.setattr(security.db, "get_user_by_id", lambda *_a, **_k: None)
+    monkeypatch.setattr(security, "db_alive", lambda: False)
+    monkeypatch.setattr("app.modules.auth.router.db_alive", lambda: False)
+    client.app.state.verifier._cache.clear()
+    down = client.get("/api/chats", headers=cookie)
+    assert down.status_code == 503, down.text
+    assert client.get("/api/auth/session", headers=cookie).status_code == 503
+    monkeypatch.setattr("app.modules.auth.router.db.get_user_by_login", lambda *_a, **_k: None)
+    assert client.post("/api/auth/login", json={"username": users.ids["anna"], "password": "secret-pass"}).status_code == 503
+
+    # база вернулась — та же сессия работает, никто не разлогинен
+    monkeypatch.undo()
+    client.app.state.verifier._cache.clear()
+    assert client.get("/api/chats", headers=cookie).status_code == 200
+    assert client.get("/api/auth/session", headers=cookie).json()["authenticated"] is True

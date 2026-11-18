@@ -114,6 +114,18 @@ def keys_equal(supplied: str, expected: str) -> bool:
     return hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
 
 
+class DatabaseUnavailable(Exception):
+    """База не отвечает (перезапуск Postgres, обрыв туннеля). Это не «пользователя нет»: сессию не трогаем."""
+
+
+def db_alive() -> bool:
+    """Отвечает ли база. Слой запросов при сбое возвращает None, как и при «строки нет» — отличить их можно только пробой."""
+    try:
+        return bool(db.conn.fetch_one("SELECT 1 AS ok"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _load_identity(token: str) -> Identity | None:
     """Синхронно (Redis + база): вызывать только из пула потоков."""
     record = sessions.get_session(token)
@@ -122,6 +134,10 @@ def _load_identity(token: str) -> Identity | None:
     user_id = str(record["userId"])
     user = db.get_user_by_id(user_id)
     if not user:
+        # None бывает и при недоступной базе. Раньше сессия тут отзывалась в любом случае — и перезапуск Postgres
+        # (ночное автообновление сервера, 18.11.2026) разом разлогинил всех, кто в эти секунды делал запрос.
+        if not db_alive():
+            raise DatabaseUnavailable()
         sessions.revoke_session(token)  # пользователя удалили — сессия тоже
         return None
     if user.get("isDisabled") or user.get("is_disabled"):
@@ -141,6 +157,8 @@ def identity_of(user_id: str) -> Identity | None:
     if hit and hit[0] > now:
         return hit[1]
     user = db.get_user_by_id(user_id)
+    if not user and not db_alive():
+        return None  # база не ответила — не запоминаем «нет такого» на минуту
     ident = None
     if user and not (user.get("isDisabled") or user.get("is_disabled")):
         ident = Identity(str(user["id"]), str(user.get("role") or "user"), str(user.get("username") or ""), str(user.get("name") or ""))
@@ -175,7 +193,7 @@ class SessionVerifier:
         hit = self._cache.get(token)
         if hit and hit[0] > now:
             return hit[1]
-        ident = await run_in_threadpool(_load_identity, token)
+        ident = await run_in_threadpool(_load_identity, token)  # DatabaseUnavailable не кэшируется — летит выше
         if len(self._cache) > 5000:  # не даём кэшу расти бесконечно
             self._cache.clear()
         self._cache[token] = (now + self._ttl, ident)
@@ -201,13 +219,20 @@ class AuthGate:
         cookie = headers.get("cookie", "")
         if is_public(method, path) or not self.enforce:
             # Публичный маршрут: личность всё равно полезна своим модулям, если кука есть.
-            return Decision(True, await self.verifier.identity(cookie))
+            try:
+                return Decision(True, await self.verifier.identity(cookie))
+            except DatabaseUnavailable:
+                return Decision(True)
         if any(path.startswith(p) for p in INTERNAL_ONLY_PREFIXES) and self._internal_ok(headers):
             return Decision(True)
 
         if not session_cookie_value(cookie):
             return Decision(False, status=401, error="Требуется авторизация")
-        ident = await self.verifier.identity(cookie)
+        try:
+            ident = await self.verifier.identity(cookie)
+        except DatabaseUnavailable:
+            # 503, а не 401: клиент по 401 стирает вход, а сессия на самом деле жива — база просто моргнула.
+            return Decision(False, status=503, error="База данных временно недоступна, повторите через минуту")
         if ident is None:
             return Decision(False, status=401, error="Требуется авторизация")
 

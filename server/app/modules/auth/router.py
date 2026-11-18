@@ -18,7 +18,7 @@ from app.core import sessions as auth_sessions
 from app.core.db import db
 from app.core.passwords import hash_password, needs_rehash, verify_password
 from app.core.ratelimit import limiter
-from app.core.security import Identity, current_identity, session_cookie_value
+from app.core.security import Identity, current_identity, db_alive, session_cookie_value
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -93,6 +93,9 @@ def login(credentials: LoginRequest, request: Request, response: Response):
         raise HTTPException(status_code=429, detail="Слишком много попыток входа, попробуйте позже")
 
     user = db.get_user_by_login(login_name)
+    if user is None and not db_alive():
+        # Раньше при перезапуске базы вход отвечал «неверный пароль» — человек менял пароль, хотя виновата была база.
+        raise HTTPException(status_code=503, detail="База данных временно недоступна, повторите через минуту")
     stored = user.get("password") if user else _DUMMY_HASH
     ok = verify_password(credentials.password, stored) and user is not None
     if not ok:
@@ -126,7 +129,9 @@ def get_session(request: Request):
     user = db.get_user_by_id(record["userId"])
     if not user:
         # Пользователя не нашли — это может быть и недоступная база (обрыв туннеля, перезапуск), а не удаление.
-        # Сессию из-за этого не отзываем: иначе каждый сбой базы разлогинивал бы всех, кто в этот момент спросил.
+        # Сессию из-за этого не отзываем, а клиенту отвечаем 503, не «не вошёл»: иначе он сам сотрёт вход.
+        if not db_alive():
+            raise HTTPException(status_code=503, detail="База данных временно недоступна")
         return {"authenticated": False}
     if user.get("isDisabled") or user.get("is_disabled"):
         auth_sessions.revoke_session(token)  # отключён — сессия тоже
