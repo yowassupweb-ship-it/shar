@@ -522,7 +522,7 @@ button.nf-crumb[data-drop="true"] { background: color-mix(in srgb, var(--accent-
 /* Только наведение, клавиатурный фокус и уже начатый выбор: :focus-within держал кружок, пока на плитке оставался фокус
    (после меню, клика или перетаскивания), — он «застревал» без наведения. */
 .nf-item:hover .nf-check, .nf-item:focus-visible .nf-check, .nf-check:focus-visible, .nf-view:has(.nf-item[data-selected="true"]) .nf-check { opacity: 1; }
-@media (hover: none) { .nf-check { opacity: 1; } }
+/* На телефоне кружков нет, пока не начат выбор (долгое нажатие → «Выбрать»): иначе они висели на каждой плитке. */
 .nf-item[data-selected="true"] .nf-check { border-color: var(--accent-fill); background: var(--accent-fill); color: var(--on-accent); opacity: 1; }
 .nf-item[data-selected="true"] { background: color-mix(in srgb, var(--accent-fill) 14%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent-fill) 55%, transparent); }
 /* В списке галочка стоит на месте миниатюры, пока на строку не навели. */
@@ -537,4 +537,34 @@ button.nf-crumb[data-drop="true"] { background: color-mix(in srgb, var(--accent-
 .nf-selbar-count { font-size: var(--text-sm); font-weight: var(--weight-semibold); white-space: nowrap; }
 .nf-selbar-btn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .nf-selbar-hint { margin: 4px 10px 2px; max-width: 230px; }
-.nf-grid .nf-folder .nf-check { top: calc(var(--space-2) + 30px); }
+/* У папки галочка встаёт на место значка «общая» (угол плитки), а сам значок на это время прячется — раньше кружок висел
+   посреди плитки поверх превью. */
+.nf-grid .nf-folder .nf-check { top: calc(var(--space-2) - 6px); left: calc(var(--space-2) - 4px); }
+.nf-grid .nf-folder:hover .nft-badge[data-pos="shared"],
+.nf-grid .nf-folder[data-selected="true"] .nft-badge[data-pos="shared"],
+.nf-view:has(.nf-item[data-selected="true"]) .nf-grid .nf-folder .nft-badge[data-pos="shared"] { opacity: 0; }
+
+/* ── Дерево папок сбоку (FolderTree) ─────────────────────────────────────── */
+.nf-split { display: flex; flex: 1; min-height: 0; }
+.nf-split > .nf-view { flex: 1; min-width: 0; }
+.nf-side { flex: none; width: 260px; overflow-y: auto; padding: var(--space-3) var(--space-2); border-right: 1px solid var(--border-color); background: var(--surface-panel); }
+.nftr { display: grid; gap: 1px; }
+.nftr-row {
+  display: flex; align-items: center; gap: 6px; width: 100%; min-height: 30px; padding: 0 8px 0 calc(4px + var(--depth, 0) * 14px);
+  border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-2); font: inherit; font-size: var(--text-sm);
+  text-align: left; cursor: pointer;
+}
+@media (hover: hover) { .nftr-row:hover { background: var(--surface-hover); color: var(--text-main); } }
+.nftr-row[aria-current="page"] { background: var(--surface-selected); color: var(--text-main); font-weight: var(--weight-medium); }
+.nftr-row[data-drop="true"] { background: color-mix(in srgb, var(--accent-fill) 18%, transparent); box-shadow: inset 0 0 0 1.5px var(--accent-color); }
+.nftr-row:focus-visible { box-shadow: var(--focus-ring); outline: none; }
+.nftr-twist { display: grid; place-items: center; flex: none; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--text-muted); cursor: pointer; }
+.nftr-twist:disabled { cursor: default; }
+.nftr-twist svg { transition: transform var(--duration-fast) var(--ease-out); }
+.nftr-twist svg[data-open="true"] { transform: rotate(90deg); }
+.nftr-ico { flex: none; color: var(--folder, var(--accent-color)); fill: color-mix(in srgb, currentColor 22%, transparent); }
+.nftr-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nftr-loading { padding-left: calc(28px + var(--depth, 0) * 14px); color: var(--text-muted); font-size: var(--text-xs); line-height: 24px; }
+.nf-tree-toggle { flex: none; }
+/* Узко — дерево не помещается рядом со списком: прячем, кнопка тоже не нужна. */
+@media (max-width: 900px) { .nf-side, .nf-tree-toggle { display: none; } }

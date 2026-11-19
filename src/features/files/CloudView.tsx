@@ -77,8 +77,10 @@ function readSort(): SortId {
   return 'new';
 }
 
-export default function CloudView({ lead, trail, onOpenFolder, onCrumb, highlightId }: {
+export default function CloudView({ lead, tools, trail, onOpenFolder, onCrumb, highlightId }: {
   lead?: ReactNode;
+  /** Кнопка слева от пути (показать или скрыть дерево папок). */
+  tools?: ReactNode;
   trail: CloudFolder[];
   onOpenFolder: (f: CloudFolder) => void;
   onCrumb: (index: number) => void;
@@ -789,6 +791,7 @@ ${url}` });
     >
       <header className="nf-bar">
         <div className="nf-left">
+        {tools}
         <nav className="nf-crumbs" aria-label="Путь">
           {trail.length > 0 && <button type="button" className="nf-crumb" data-drop={dropKey === 'root' ? 'true' : undefined} onClick={() => onCrumb(-1)} {...dropTarget(null, 'Мои файлы', 'root')}>Мои файлы</button>}
           {trail.map((f, i) => (
@@ -894,6 +897,7 @@ ${url}` });
           {mailConnected && <MenuItem icon={<Mail size={16} />} onSelect={() => { setMenu(null); sendByMail(t); }}>Отправить по почте</MenuItem>}
           <MenuItem icon={<Link2 size={16} />} onSelect={() => { setMenu(null); void copyLink(t); }}>Копировать ссылку</MenuItem>
           {t.kind === 'file' && <MenuItem icon={<Copy size={16} />} onSelect={() => { const f = t.item as CloudFile; setMenu(null); void copyFile(f); }}>Копировать файл</MenuItem>}
+          <MenuItem icon={<Check size={16} />} onSelect={() => { setMenu(null); toggleSelect(t.item.id, t.kind); }}>{t.item.id in selected ? 'Снять выбор' : 'Выбрать'}</MenuItem>
           <MenuItem icon={<Info size={16} />} onSelect={() => { setMenu(null); setSheet({ type: 'props', target: t }); }}>Свойства</MenuItem>
           {t.kind === 'file' && <MenuItem icon={<History size={16} />} onSelect={() => { setMenu(null); setSheet({ type: 'versions', target: t }); }}>История версий</MenuItem>}
           {canEdit(t.item) && (

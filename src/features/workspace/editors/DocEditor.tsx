@@ -286,6 +286,7 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
       if (scrollTries++ < 60) scrollWait = requestAnimationFrame(watchScroll);
     };
     watchScroll();
+    let lastCaret: number | null = null;
     const selectionSub = injector.get<{ textSelection$: { subscribe: (fn: (p: { unitId: string; textRanges?: Array<{ startOffset: number; endOffset: number; segmentId?: string; segmentPage?: number; direction?: string; isActive?: boolean }> }) => void) => { unsubscribe: () => void } } }>(DocSelectionManagerService)
       .textSelection$.subscribe((p) => {
         if (p.unitId !== unitId) return;
@@ -295,10 +296,14 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
         if (r && r.startOffset !== r.endOffset) lastRange = { s: Math.min(r.startOffset, r.endOffset), e: Math.max(r.startOffset, r.endOffset) };
         else if (r) lastRange = null;
         // Курсор встал в прокомментированный текст — показать ветку (как клик по подсвеченному тексту в Google Docs).
-        if (r && r.startOffset === r.endOffset && !r.segmentId && onCommentQuoteRef.current) {
-          const hit = quoteSpots.current.find((q) => r.startOffset >= q.s && r.startOffset <= q.e);
+        // Только когда курсор действительно сдвинулся: после закрытия панели холст меняет ширину и заново сообщает то же
+        // выделение — без этой проверки крестик «не закрывал» комментарии, панель тут же открывалась снова.
+        const caret = r && r.startOffset === r.endOffset && !r.segmentId ? r.startOffset : null;
+        if (caret !== null && caret !== lastCaret && onCommentQuoteRef.current) {
+          const hit = quoteSpots.current.find((q) => caret >= q.s && caret <= q.e);
           if (hit) onCommentQuoteRef.current(hit.quote);
         }
+        lastCaret = caret;
       });
 
     // Копирование всего документа. Univer копирует то, что разложил холст, и на длинном документе выделение целиком

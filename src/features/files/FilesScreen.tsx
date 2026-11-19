@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { showToast } from '@/shared/ui/Toast';
 import { useShellOptions } from '@/shared/shell/ShellContext';
-import { Bot, Check, ChevronDown } from 'lucide-react';
+import { Bot, Check, ChevronDown, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { FolderTree } from './FolderTree';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { useAgentBridge } from '@/shared/core/agentBridge';
 import { navigate } from '@/shared/navigation/navigate';
@@ -61,6 +62,16 @@ export default function FilesScreen() {
   const [trail, setTrail] = useState<CloudFolder[]>([]);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [sectionMenu, setSectionMenu] = useState<MenuAnchor | null>(null);
+  // Дерево папок сбоку (как в «Офисе»): показать или скрыть — кнопкой у пути или Ctrl+Shift+D; помним на устройстве.
+  const [treeOpen, setTreeOpen] = useState<boolean>(() => { try { return localStorage.getItem('nf:tree') !== '0'; } catch { return true; } });
+  const toggleTree = useCallback(() => setTreeOpen((v) => { const next = !v; try { localStorage.setItem('nf:tree', next ? '1' : '0'); } catch { /* без памяти */ } return next; }), []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.code === 'KeyD') { e.preventDefault(); toggleTree(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [toggleTree]);
   const agentOn = useAgentBridge((s) => s.available);
   const cachedTrail = useRef<CloudFolder[]>([]);
   useEffect(() => { cachedTrail.current = trail; }, [trail]);
@@ -147,7 +158,28 @@ export default function FilesScreen() {
 
   return (
     <main className="nfn" aria-label="Файлы">
-      {view.kind === 'cloud' && <CloudView lead={lead} trail={trail} onOpenFolder={openFolder} onCrumb={crumb} highlightId={highlight} />}
+      {view.kind === 'cloud' && (
+        <div className="nf-split" data-tree={treeOpen ? 'true' : undefined}>
+          {treeOpen && (
+            <aside className="nf-side" aria-label="Дерево папок">
+              <FolderTree trail={trail} onOpen={(path) => { setTrail(path); go({ kind: 'cloud', folderId: path[path.length - 1]?.id ?? null }); }} />
+            </aside>
+          )}
+          <CloudView
+            lead={lead}
+            tools={(
+              <button type="button" className="nx-icon-btn nf-tree-toggle" onClick={toggleTree} aria-pressed={treeOpen}
+                title={treeOpen ? 'Скрыть дерево папок (Ctrl+Shift+D)' : 'Показать дерево папок (Ctrl+Shift+D)'} aria-label={treeOpen ? 'Скрыть дерево папок' : 'Показать дерево папок'}>
+                {treeOpen ? <PanelLeftClose size={17} aria-hidden="true" /> : <PanelLeftOpen size={17} aria-hidden="true" />}
+              </button>
+            )}
+            trail={trail}
+            onOpenFolder={openFolder}
+            onCrumb={crumb}
+            highlightId={highlight}
+          />
+        </div>
+      )}
       {view.kind === 'chats' && !view.chatId && <ChatList lead={lead} onOpen={(c) => go({ kind: 'chats', chatId: c.chatId, chatName: c.chatName })} />}
       {view.kind === 'chats' && view.chatId && (
         <ChatFiles lead={lead} key={view.chatId} chat={{ chatId: view.chatId, chatName: view.chatName || 'Чат' }} onBack={() => go({ kind: 'chats', chatId: null })} />

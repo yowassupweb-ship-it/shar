@@ -10,6 +10,8 @@ export type CursorPos = Record<string, unknown>;
 export interface RemoteCursor { userId: string; name: string; color: string; pos: CursorPos; movedAt: number }
 
 const SEND_MS = 80;
+/** Курсор человека, которого нет в присутствии, держим столько после его последнего движения (вдруг он закрыл окно аварийно). */
+const STALE_MS = 10 * 60_000;
 
 export const cursorColor = (userId: string) => `hsl(${hueOf(userId)} 70% 50%)`;
 
@@ -72,12 +74,19 @@ export function useCursors(itemId: string | null, viewers: Viewer[]) {
     if (joined && last.current && !timer.current) flush();
   }, [viewerKey, flush]);
 
-  const cursors = useMemo<RemoteCursor[]>(() => viewers
-    .filter((v) => positions[String(v.userId)])
-    .map((v) => {
-      const id = String(v.userId);
-      return { userId: id, name: v.name, color: cursorColor(id), pos: positions[id].pos, movedAt: positions[id].movedAt };
-    }), [viewers, positions]);
+  // Курсор держим, пока человек не закрыл материал (тогда приходит cursor: null), а не пока он в «присутствии»:
+  // присутствие в Shar OS следует за вниманием — окно коллеги потеряло фокус или он отошёл, и он выпадал из списка.
+  // У того, кто в этот момент двигался (и потому перечитывал присутствие), клетка коллеги пропадала. Имя помним с
+  // последнего раза, когда человек был в списке; курсор без движения дольше STALE_MS и без присутствия — убираем.
+  const names = useRef<Record<string, string>>({});
+  viewers.forEach((v) => { names.current[String(v.userId)] = v.name; });
+  const cursors = useMemo<RemoteCursor[]>(() => {
+    const present = new Set(viewers.map((v) => String(v.userId)));
+    const now = Date.now();
+    return Object.entries(positions)
+      .filter(([id, p]) => names.current[id] && (present.has(id) || now - p.movedAt < STALE_MS))
+      .map(([id, p]) => ({ userId: id, name: names.current[id], color: cursorColor(id), pos: p.pos, movedAt: p.movedAt }));
+  }, [viewers, positions]);
 
   return { cursors, send };
 }
