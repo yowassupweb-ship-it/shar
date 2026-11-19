@@ -1,7 +1,7 @@
 import type { Kind } from './types';
 
 /**
- * Прогрев тяжёлых редакторов. Univer (документ, таблица) — несколько мегабайт кода, и его разбор стоит от секунды
+ * Прогрев редакторов. Univer (таблица; документ — только в прежнем редакторе) — несколько мегабайт кода, и его разбор стоит от секунды
  * (обычный ПК) до 3–4 с (слабый) при первом открытии материала; прогретый открывается за единицы миллисекунд.
  * Заметка и презентация лёгкие, им прогрев не нужен.
  *
@@ -16,7 +16,11 @@ export function preloadEditor(kind: Kind): void {
   if (warmed.has(kind)) return;
   if (kind === 'document') {
     warmed.add(kind);
-    void import('./editors/DocEditor');
+    // Документ открывается своим редактором (лёгкий TipTap); Univer греем, только если человек вернулся к прежнему —
+    // иначе прогрев сам по себе тянул и разбирал несколько мегабайт, которые никто не откроет.
+    let legacy = false;
+    try { legacy = localStorage.getItem('nx:fast-docs') === '0'; } catch { /* без памяти — свой редактор */ }
+    void (legacy ? import('./editors/DocEditor') : import('./editors/FastDocEditor'));
   } else if (kind === 'table') {
     warmed.add(kind);
     // Разбор таблицы (xlsx → Univer) нужен exceljs; раньше он начинал грузиться только после редактора — цепочкой.
