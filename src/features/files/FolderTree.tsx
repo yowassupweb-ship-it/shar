@@ -5,7 +5,7 @@ import { realtime } from '@/shared/realtime/realtime';
 import { SearchField } from '@/shared/ui/SearchField';
 import type { MenuAnchor } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
-import { cachedFolder, folderChain, loadFolder, moveFile, moveFolder, prefetchFolder, type CloudFolder } from './api';
+import { cachedFolder, folderChain, loadFolder, moveFile, moveFolder, prefetchFolder, sharedPeople, type CloudFolder } from './api';
 
 /**
  * Дерево папок «Файлов» сбоку — как дерево в «Офисе»: корень «Мои файлы», папки раскрываются стрелкой (значок открытой и
@@ -146,7 +146,7 @@ function Row({ folder, path, depth, isOpen, leaf, current, dropOn, onToggle, onO
   onToggle?: (id: string) => void; onOpen: (path: CloudFolder[]) => void; onMenu?: MenuOpener;
   dropProps?: (dest: CloudFolder | null, key: string) => Record<string, unknown>;
 }) {
-  const shared = [...new Set([...(folder.sharedWith || []), ...(folder.editAccess || [])].map(String))].filter((id) => id !== String(folder.ownerId));
+  const shared = [...new Set([...sharedPeople(folder), ...(folder.editAccess || []).map(String)])].filter((id) => !id.startsWith('dept:') && id !== String(folder.ownerId));
   const Icon = isOpen ? FolderOpen : Folder;
   return (
     <div

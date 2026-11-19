@@ -16,7 +16,7 @@ import { Avatar } from '@/shared/ui/Avatar';
 import { askConfirm, Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import {
   cachedFolder, createFolder, deleteItem, fetchImageDims, fileUrl, fmtBytes, fmtDate, fmtDateShort, kindOf, loadFolder, myId, patchFolderCache,
-  moveFile, moveFolder, pinFolder, prefetchFolder, registerUpload, renameItem, replaceFileContent, setFolderColor, type CloudFile, type CloudFolder,
+  moveFile, moveFolder, pinFolder, prefetchFolder, sharedPeople, registerUpload, renameItem, replaceFileContent, setFolderColor, type CloudFile, type CloudFolder,
 } from './api';
 import { FileGlyph } from './FileGlyph';
 import { FolderTile } from './FolderTile';
@@ -721,7 +721,7 @@ ${url}` });
                       {mode === 'list' ? (
                         <span className="nf-badges">
                           {f.isPinned && <Pin size={11} aria-label="Закреплена" />}
-                          {(f.sharedWith?.length || 0) > 0 && <><Users size={11} aria-hidden="true" /> {f.sharedWith!.length}</>}
+                          {sharedPeople(f).length > 0 && <><Users size={11} aria-hidden="true" /> {sharedPeople(f).length}</>}
                         </span>
                       ) : (
                         <span className="nf-meta">

@@ -236,6 +236,14 @@ export async function pinFolder(id: string, pinned: boolean) {
   await fetch(`/api/cloud/folders/${encodeURIComponent(id)}/pin?${q()}&pinned=${pinned}`, { method: 'PATCH' }).catch(() => {});
 }
 
+/**
+ * Кому открыт файл или папка — только люди. Записи «dept:Название» остались от старого интерфейса: с отделом сотрудника
+ * (у него хранится код вроде «бухгалтерия») они не совпадают и доступа никому не дают — в счётчиках их не считаем.
+ */
+export function sharedPeople(item: { sharedWith?: string[]; ownerId?: string | number }): string[] {
+  return [...new Set((item.sharedWith || []).map(String))].filter((id) => !id.startsWith('dept:') && id !== String(item.ownerId ?? ''));
+}
+
 export async function saveAccess(kind: 'file' | 'folder', id: string, sharedWith: string[], editAccess: string[]) {
   const res = await put(`/api/cloud/${kind === 'file' ? 'files' : 'folders'}/${encodeURIComponent(id)}/access?${q()}`, { sharedWith, editAccess });
   if (!res.ok) throw new Error(String(res.status));

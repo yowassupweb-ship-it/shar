@@ -1,6 +1,6 @@
 import { Folder, Pin, Users } from 'lucide-react';
 import { thumbUrl } from '@/shared/ui/media';
-import { fileUrl, kindOf, type CloudFolder } from './api';
+import { fileUrl, kindOf, sharedPeople, type CloudFolder } from './api';
 import { FileGlyph } from './FileGlyph';
 
 /**
@@ -38,7 +38,7 @@ export function FolderTile({ folder }: { folder: CloudFolder }) {
         <span className="nft-grid">{Array.from({ length: 9 }, (_, i) => cell(others[i], i))}</span>
       )}
       {folder.isPinned && <span className="nft-badge" data-pos="pin" aria-label="Закреплена"><Pin size={11} strokeWidth={2.4} /></span>}
-      {(folder.sharedWith?.length || 0) > 0 && <span className="nft-badge" data-pos="shared" aria-label="Общая"><Users size={10} /></span>}
+      {sharedPeople(folder).length > 0 && <span className="nft-badge" data-pos="shared" aria-label="Общая"><Users size={10} /></span>}
     </span>
   );
 }
