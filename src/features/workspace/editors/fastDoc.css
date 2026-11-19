@@ -44,3 +44,20 @@
 .fdoc-content img.ProseMirror-selectednode { outline: 2px solid #1a73e8; }
 .fdoc-content hr[data-page-break] { border: 0; border-top: 1px dashed rgba(0, 0, 0, .25); margin: 8px 0; }
 .fdoc-content ::selection { background: rgba(26, 115, 232, .25); }
+
+/* Слой поверх текста (docOverlay.ts): цитаты комментариев, курсоры коллег, зоны агентов. */
+.fdoc-cq { background: rgb(255 214 10 / 0.35); border-bottom: 2px solid rgb(245 180 0); cursor: pointer; }
+.fdoc-rsel { background: color-mix(in srgb, var(--c) 22%, transparent); }
+.fdoc-rcaret { position: relative; display: inline-block; width: 0; height: 1.2em; vertical-align: text-bottom; pointer-events: none; }
+.fdoc-rcaret::after { content: ""; position: absolute; top: 0; bottom: 0; left: -1px; width: 2px; background: var(--c); }
+.fdoc-rflag {
+  position: absolute; bottom: 100%; left: -1px; padding: 0 5px; border-radius: 4px 4px 4px 0; background: var(--c); color: #fff;
+  font: 600 11px/16px Inter, system-ui, sans-serif; white-space: nowrap; animation: nws-cursor-flag 3.2s var(--ease-out) forwards;
+}
+.fdoc-zone { background: color-mix(in srgb, var(--c) 14%, transparent); box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--c) 70%, transparent); cursor: not-allowed; animation: fdoc-zone 1.6s ease-in-out infinite alternate; }
+@keyframes fdoc-zone { from { background: color-mix(in srgb, var(--c) 10%, transparent); } to { background: color-mix(in srgb, var(--c) 22%, transparent); } }
+.fdoc-zone-flag {
+  display: inline-block; margin-right: 4px; padding: 0 6px; border-radius: 999px; background: var(--c); color: #fff; user-select: none;
+  font: 600 11px/18px Inter, system-ui, sans-serif; vertical-align: 1px; white-space: nowrap;
+}
+@media (prefers-reduced-motion: reduce) { .fdoc-zone { animation: none; } }

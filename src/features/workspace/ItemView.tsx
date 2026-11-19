@@ -36,14 +36,15 @@ import { Spinner } from '@/shared/ui/Spinner';
 const DocEditor = lazy(() => import('./editors/DocEditor').then(async (m) => { await m.layoutFontsReady(); return m; }));
 const SheetEditor = lazy(() => import('./editors/SheetEditor'));
 const DeckEditor = lazy(() => import('./editors/DeckEditor'));
-// Быстрый редактор документов (TipTap, #704): включается в «⋯» документа, пока идёт проверка — по выбору человека.
+// Свой редактор документов (TipTap, #704) — по умолчанию с 20.11.2026; прежний (Univer) остаётся выбором в «⋯» документа.
 const FastDocEditor = lazy(() => import('./editors/FastDocEditor'));
+import { useAgentZones } from './useAgentZones';
 const FAST_DOCS_KEY = 'nx:fast-docs';
 const FAST_DOCS_EVENT = 'nx:fast-docs-changed';
 function readFastDocs(): boolean {
   // ?fastdoc=1 в адресе — включить только в этой вкладке (проверка, ссылка коллеге), не трогая выбор человека.
   if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('fastdoc') === '1') return true;
-  try { return localStorage.getItem(FAST_DOCS_KEY) === '1'; } catch { return false; }
+  try { return localStorage.getItem(FAST_DOCS_KEY) !== '0'; } catch { return true; }
 }
 function useFastDocs(): [boolean, (on: boolean) => void] {
   const [on, setOn] = useState(readFastDocs);
@@ -129,6 +130,8 @@ export function ItemView({ source, kindHint, onBack, onChanged, onDeleted, onOpe
 
   // Комментарии (документ и таблица, не по ссылке): панель справа, привязка — к выделению или ячейке редактора.
   const commentable = !shared && item && (item.kind === 'document' || item.kind === 'table');
+  // Где в документе сейчас работают агенты (подсвечено, людям там не печатать) — только в своём редакторе документов.
+  const agentZones = useAgentZones(item?.kind === 'document' && !shared ? String(item.id) : null, fastDocs);
   const comments = useComments(commentable ? item.id : null);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const commentsBridge = useRef<CommentsBridge | null>(null);
@@ -599,7 +602,7 @@ ${absolute(links.office(item!.kind, item!.id))}` });
       <div className="nws-main">
         <div className="nws-editor">
           <Suspense fallback={<EditorSkeleton kind={item.kind} />}>
-            <Editor content={item.content} onContent={session.setContent} readOnly={readOnly} loadKey={loadKey} title={item.title} visible cursors={cursors} onCursor={sendCursor} live={session.live} commentsBridge={commentsBridge} commentCells={commentCells} onAddComment={commentable ? addComment : undefined} onCommentCell={commentable ? showCellComment : undefined} commentQuotes={commentQuotes} onCommentQuote={commentable ? showQuoteComment : undefined} />
+            <Editor content={item.content} onContent={session.setContent} readOnly={readOnly} loadKey={loadKey} title={item.title} visible cursors={cursors} onCursor={sendCursor} live={session.live} commentsBridge={commentsBridge} commentCells={commentCells} onAddComment={commentable ? addComment : undefined} onCommentCell={commentable ? showCellComment : undefined} commentQuotes={commentQuotes} onCommentQuote={commentable ? showQuoteComment : undefined} agentZones={agentZones} />
           </Suspense>
         </div>
         {commentable && commentsOpen && (
@@ -651,8 +654,8 @@ ${absolute(links.office(item!.kind, item!.id))}` });
           <MenuItem icon={<Link2 size={15} />} onSelect={() => { setMenu(null); void copyLink(); }}>Скопировать ссылку на материал</MenuItem>
           <MenuItem icon={<Copy size={15} />} onSelect={() => { setMenu(null); void duplicate(); }}>Сделать копию</MenuItem>
           {item.kind === 'document' && (
-            <MenuItem icon={fastDocs ? <Check size={15} /> : <Zap size={15} />} onSelect={() => { setMenu(null); setFastDocs(!fastDocs); }}>
-              {fastDocs ? 'Быстрый редактор (бета) — включён' : 'Быстрый редактор (бета)'}
+            <MenuItem icon={fastDocs ? <Zap size={15} /> : <Check size={15} />} onSelect={() => { setMenu(null); setFastDocs(!fastDocs); }}>
+              {fastDocs ? 'Открыть в прежнем редакторе' : 'Прежний редактор — вернуть быстрый'}
             </MenuItem>
           )}
           {!readOnly && (

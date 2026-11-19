@@ -45,6 +45,8 @@ export interface EditorProps {
   commentQuotes?: string[];
   /** Документ: курсор встал в прокомментированный текст — показать ветку. */
   onCommentQuote?: (quote: string) => void;
+  /** Документ: зоны, где сейчас работают агенты (подсвечены, людям там не править). */
+  agentZones?: Array<{ id: string; label: string; color?: string; quote?: string; from?: number; to?: number }>;
   /** Таблица: выбрали ячейку с открытым комментарием — показать его ветку. */
   onCommentCell?: (cell: { sheet: string; cell: string }) => void;
 }

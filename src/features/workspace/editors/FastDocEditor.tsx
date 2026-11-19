@@ -12,6 +12,8 @@ import { emptySnapshot, parseSnapshot, type DocSnapshot } from '../lib/docSnapsh
 import { univerToHtml } from '../lib/univerHtml';
 import { pmToUniver } from '../lib/pmToUniver';
 import { docExtensions } from './docSchema';
+import { docOverlayPlugin, overlayRanges, setOverlay, type OverlayCursor, type OverlayZone } from './docOverlay';
+import { DocContextMenu } from './DocContextMenu';
 import type { EditorProps } from './types';
 import './fastDoc.css';
 
@@ -48,7 +50,13 @@ async function uploadPicture(file: File): Promise<string | null> {
   }
 }
 
-export default function FastDocEditor({ content, onContent, readOnly, loadKey, live }: EditorProps) {
+const NO_QUOTES: string[] = [];
+const NO_ZONES: OverlayZone[] = [];
+/** Своя позиция для коллег: позиции ProseMirror (pm: 1 — чтобы прежний редактор не путал их со своими смещениями). */
+type PmCursor = { pm: 1; from: number; to: number };
+const isPmCursor = (p: unknown): p is PmCursor => Boolean(p && typeof p === 'object' && (p as PmCursor).pm === 1 && Number.isInteger((p as PmCursor).from) && Number.isInteger((p as PmCursor).to));
+
+export default function FastDocEditor({ content, onContent, readOnly, loadKey, live, cursors = [], onCursor, commentsBridge, onAddComment, commentQuotes = NO_QUOTES, onCommentQuote, agentZones = NO_ZONES }: EditorProps) {
   const base = useRef<DocSnapshot>(parseSnapshot(content) ?? emptySnapshot());
   const [broken, setBroken] = useState(() => !parseSnapshot(content) && Boolean(content.trim()));
   const lastSaved = useRef(content);
@@ -113,6 +121,71 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
     })();
   };
 
+  // Слой поверх текста: цитаты комментариев, курсоры коллег, зоны агентов (editors/docOverlay.ts).
+  const blockedAt = useRef(0);
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    editor.registerPlugin(docOverlayPlugin((zone) => {
+      if (Date.now() - blockedAt.current < 2500) return;
+      blockedAt.current = Date.now();
+      showToast(`${zone.label} — здесь сейчас работает агент. Правьте другую часть документа, зона освободится сама`, 'info');
+    }));
+  }, [editor]);
+  const remote = useMemo<OverlayCursor[]>(() => cursors.flatMap((c) => (isPmCursor(c.pos) ? [{ userId: c.userId, name: c.name, color: c.color, from: c.pos.from, to: c.pos.to, movedAt: c.movedAt }] : [])), [cursors]);
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    editor.view.dispatch(setOverlay(editor.state, { quotes: commentQuotes, cursors: remote, zones: agentZones }));
+  }, [editor, commentQuotes, remote, agentZones, loadKey]);
+
+  // Своя позиция — коллегам; курсор в прокомментированном тексте — открыть ветку (только при настоящем движении).
+  const onCursorRef = useRef(onCursor);
+  onCursorRef.current = onCursor;
+  const onQuoteRef = useRef(onCommentQuote);
+  onQuoteRef.current = onCommentQuote;
+  useEffect(() => {
+    if (!editor) return undefined;
+    let lastCaret: number | null = null;
+    const onSelection = () => {
+      const { from, to, empty } = editor.state.selection;
+      onCursorRef.current?.(editor.isFocused ? ({ pm: 1, from, to } as PmCursor) : null);
+      const caret = empty ? from : null;
+      if (caret !== null && caret !== lastCaret && onQuoteRef.current) {
+        const hit = overlayRanges(editor.state)?.quotes.find((q) => caret >= q.from && caret <= q.to);
+        if (hit) onQuoteRef.current(hit.quote);
+      }
+      lastCaret = caret;
+    };
+    const onBlurCursor = () => onCursorRef.current?.(null);
+    editor.on('selectionUpdate', onSelection);
+    editor.on('focus', onSelection);
+    editor.on('blur', onBlurCursor);
+    return () => { editor.off('selectionUpdate', onSelection); editor.off('focus', onSelection); editor.off('blur', onBlurCursor); };
+  }, [editor]);
+
+  // Связь с панелью комментариев: выделенный текст — цитата нового комментария; переход к ветке — выделить её цитату.
+  useEffect(() => {
+    if (!commentsBridge || !editor) return undefined;
+    commentsBridge.current = {
+      anchor: () => {
+        const { from, to } = editor.state.selection;
+        const quote = editor.state.doc.textBetween(from, to, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
+        return quote ? { kind: 'text', quote } : null;
+      },
+      jump: (anchor) => {
+        if (anchor.kind !== 'text') return;
+        const hit = overlayRanges(editor.state)?.quotes.find((q) => q.quote === anchor.quote);
+        if (!hit) return;
+        editor.chain().focus().setTextSelection({ from: hit.from, to: hit.to }).scrollIntoView().run();
+      },
+      exec: () => false,
+      has: () => false,
+    };
+    return () => { commentsBridge.current = null; };
+  }, [commentsBridge, editor]);
+
+  // Своё контекстное меню (в стиле Шара) вместо меню браузера; Shift+ПКМ — системное (там подсказки орфографии).
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+
   // Новая версия с сервера (правка коллеги, агент, возврат из истории): открываем её, если человек сейчас ничего не ждёт сохранения.
   const firstLoad = useRef(true);
   useEffect(() => {
@@ -163,9 +236,10 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
     <div className="fdoc" data-readonly={readOnly ? 'true' : undefined}>
       {!readOnly && editor && <Toolbar editor={editor} onPicture={(files) => insertPictures.current(files)} />}
       <div className="fdoc-scroll nx-scroll-y">
-        <div className="fdoc-page" style={pageStyle}>
+        <div className="fdoc-page" style={pageStyle} onContextMenu={(e) => { if (e.shiftKey || !editor) return; e.preventDefault(); setMenuAt({ x: e.clientX, y: e.clientY }); }}>
           <EditorContent editor={editor} />
         </div>
+        {menuAt && editor && <DocContextMenu editor={editor} at={menuAt} readOnly={readOnly} onClose={() => setMenuAt(null)} onAddComment={onAddComment} />}
       </div>
     </div>
   );

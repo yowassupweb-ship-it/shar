@@ -666,6 +666,51 @@ def update_document(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     return {**_write(access, item, content=content), "ok": True, "mode": mode}
 
 
+def _agent_label(access: Access) -> str:
+    """Подпись зоны агента: имя ключа запуска («Claude», «GPT»…) без служебных хвостов."""
+    name = str(access.ctx.key_name or "").split("(")[0].split("·")[0].strip()
+    return name[:30] or "Агент"
+
+
+def _show_work(access: Access, item: dict[str, Any], quotes: list[str], *, seconds: int = 8) -> None:
+    """Подсветить у открывших документ, где агент только что правил (зона на несколько секунд). Не ломает правку."""
+    try:
+        from app.modules.workspace import zones
+
+        for quote in [q for q in quotes if q and q.strip()][:3]:
+            zones.claim(str(item["id"]), access.me.user_id, f"{_agent_label(access)} правит", quote, ttl=seconds)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("zones: show work failed: %s", exc)
+
+
+def document_focus(access: Access, args: dict[str, Any]) -> dict[str, Any]:
+    """Занять зону документа перед правкой: люди видят, где работает агент, и не могут печатать внутри неё."""
+    from app.modules.workspace import zones
+
+    item, snapshot = _document(access, args)
+    if not item.get("canEdit"):
+        raise ToolError("Этот материал вам открыт только для просмотра", "permission_denied")
+    quote = " ".join(str(args.get("quote") or "").split())
+    if not quote:
+        raise ToolError("quote — кусок текста документа (абзац или несколько), который вы будете править")
+    if quote not in " ".join(docformat.snapshot_text(snapshot).split()):
+        raise ToolError("Такого текста в документе нет — возьмите его из read_item (format=text) дословно", "text_not_found")
+    note = str(args.get("note") or "").strip()[:40]
+    zone = zones.claim(str(item["id"]), access.me.user_id, f"{_agent_label(access)}{': ' + note if note else ''}", quote,
+                       ttl=int(args.get("seconds") or zones.DEFAULT_TTL), zone_id=str(args.get("zone_id") or "") or None)
+    return {"zone": {"id": zone["id"], "label": zone["label"], "until": zone["until"]},
+            "note": "Зона занята: люди её видят и внутри неё не печатают. Правьте (edit_document), затем document_release. "
+                    "Зона живёт seconds (по умолчанию 90 с) и продлевается повторным document_focus с тем же zone_id."}
+
+
+def document_release(access: Access, args: dict[str, Any]) -> dict[str, Any]:
+    from app.modules.workspace import zones
+
+    access.need("edit", "править материалы")
+    item = access.load(args.get("id"))
+    return {"released": zones.release(str(item["id"]), access.me.user_id, str(args.get("zone_id") or "") or None)}
+
+
 def edit_document(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     item, snapshot = _document(access, args)
     try:
@@ -677,7 +722,9 @@ def edit_document(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     content = json.dumps(snapshot, ensure_ascii=False)
     if args.get("dry_run"):
         return {**_preview(item, content), "replaced": count}
-    return {**_write(access, item, content=content), "replaced": count}
+    written = _write(access, item, content=content)
+    _show_work(access, item, [edit["new_text"] for edit in _replacements(args)])
+    return {**written, "replaced": count}
 
 
 def create_table(access: Access, args: dict[str, Any]) -> dict[str, Any]:
@@ -1145,6 +1192,17 @@ TOOLS: list[dict[str, Any]] = [
      "inputSchema": {"type": "object", "properties": {"id": _ID, "old_text": {"type": "string"}, "new_text": {"type": "string"},
                                                      "replacements": {"type": "array", "maxItems": 50, "items": {"type": "object", "properties": {"old_text": {"type": "string"}, "new_text": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["old_text", "new_text"]}},
                                                      "replace_all": {"type": "boolean", "default": False}, **_DRY_RUN}, "required": ["id"]}},
+    {"name": "document_focus", "handler": document_focus, "level": "edit",
+     "description": "Занять зону документа, прежде чем долго править её: у людей, открывших документ, этот текст подсвечивается с вашей подписью "
+                    "и внутри него они не печатают — так вы и человек работаете в одном документе без конфликтов. quote — дословный кусок текста "
+                    "(read_item format=text), note — коротко, что делаете. Зона живёт seconds (90 по умолчанию), продлевается повторным вызовом "
+                    "с zone_id; закончили — document_release.",
+     "inputSchema": {"type": "object", "properties": {"id": _ID, "quote": {"type": "string"}, "note": {"type": "string"},
+                                                     "seconds": {"type": "integer", "minimum": 5, "maximum": 600}, "zone_id": {"type": "string"}},
+                     "required": ["id", "quote"]}},
+    {"name": "document_release", "handler": document_release, "level": "edit",
+     "description": "Отпустить зону документа (zone_id) или все свои зоны в нём — люди снова могут править это место.",
+     "inputSchema": {"type": "object", "properties": {"id": _ID, "zone_id": {"type": "string"}}, "required": ["id"]}},
     {"name": "update_document", "handler": update_document, "level": "edit",
      "description": "Структурная правка документа. По заголовку, без точного текста: replace_section (заменить содержимое раздела, заголовок остаётся), "
                     "delete_section, append_to_section (в конец раздела), insert_after_heading, insert_before_heading — раздел назван в heading (заголовки — в outline у read_item). "

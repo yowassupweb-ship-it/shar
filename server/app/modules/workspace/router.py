@@ -469,6 +469,18 @@ def set_share(item_id: str, body: ShareBody, me: Identity = Depends(current_iden
     return _shares_payload(item_id)
 
 
+@router.get("/api/workspace/items/{item_id}/zones")
+def get_zones(item_id: str, me: Identity = Depends(current_identity)):
+    """Где в документе сейчас работают агенты (их зоны подсвечены, людям там не печатать). Дальше — событием workspace_zones."""
+    from app.modules.workspace import zones
+
+    try:
+        store.get_visible(item_id, me.user_id, content=False)
+    except WorkspaceError as exc:
+        raise _raise(exc) from exc
+    return {"zones": zones.public(zones.active(item_id))}
+
+
 @router.post("/api/workspace/items/{item_id}/presence")
 def set_presence(item_id: str, body: PresenceBody, me: Identity = Depends(current_identity)):
     try:

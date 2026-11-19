@@ -990,3 +990,7 @@ html[data-platform="electron"][data-theme="black"]:has(.nx) #shar-titlebar {
 
 /* «Скрыто от агента» — перечёркнутый глаз после названия (shared/core/HiddenMark.tsx). */
 .nx-agent-hidden { display: inline-flex; flex: none; align-items: center; margin-left: 6px; color: var(--text-muted); vertical-align: -1px; }
+
+/* Подсказка клавиш справа в пункте меню (контекстные меню редакторов). */
+.nx-menu-item > span:has(> .nx-menu-kbd) { display: flex; flex: 1; align-items: center; min-width: 0; }
+.nx-menu-kbd { margin-left: auto; padding-left: 18px; color: var(--text-muted); font: inherit; font-size: var(--text-xs); white-space: nowrap; }
