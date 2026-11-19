@@ -337,3 +337,41 @@
 .pc-form input:focus-visible, .pc-form textarea:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 1px; border-color: transparent; }
 .pc-hint { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
 .pc-error { margin: 0; font-size: var(--text-sm); color: var(--state-danger); }
+
+/* Фото в форме: круг с камерой, кнопки рядом. */
+.pc-photo { display: flex; align-items: center; gap: var(--space-3); }
+.pc-photo-btn { position: relative; flex: none; padding: 0; border: 0; background: none; border-radius: 50%; cursor: pointer; }
+.pc-photo-btn:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 2px; }
+.pc-photo-cam {
+  position: absolute; right: -2px; bottom: -2px; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent-fill); color: var(--accent-contrast, #fff); box-shadow: 0 0 0 3px var(--surface-panel, var(--bg-color));
+}
+.pc-photo-text { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); min-width: 0; }
+.pc-photo-text .pc-hint { flex-basis: 100%; }
+.pc-photo-drop { color: var(--state-danger); }
+
+/* Контактные лица: правка. */
+.pc-people-edit { display: grid; gap: var(--space-2); margin: var(--space-1) 0 0; padding: 0; border: 0; min-width: 0; }
+.pc-people-edit legend { padding: 0; margin-bottom: var(--space-2); font-size: var(--text-md); font-weight: var(--weight-semibold); color: var(--text-1, var(--text-color)); }
+.pc-people-edit legend span { color: var(--text-muted); font-weight: var(--weight-regular, 400); }
+.pc-person-edit { display: grid; gap: var(--space-2); padding: var(--space-2) var(--space-3) var(--space-3); border: 1px solid var(--border-color); border-radius: var(--radius-lg, 12px); background: var(--surface-subtle, transparent); }
+.pc-person-edit-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text-2); }
+.pc-person-edit-head span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-person-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2) var(--space-3); }
+.pc-person-grid label { display: grid; gap: 4px; font-size: var(--text-sm); color: var(--text-2); min-width: 0; }
+.pc-people-add { justify-self: start; }
+@media (max-width: 520px) { .pc-person-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* Контактные лица: карточка. */
+.pc-people { display: grid; gap: var(--space-2); margin-top: var(--space-4); }
+.pc-people h3 { margin: 0 0 var(--space-1); font-size: var(--text-md); font-weight: var(--weight-semibold); }
+.pc-people h3 span { color: var(--text-muted); font-weight: var(--weight-regular, 400); }
+.pc-person { display: flex; gap: var(--space-3); padding: var(--space-3); border-radius: var(--radius-lg); background: var(--container-bg); box-shadow: inset 0 0 0 1px var(--border-color); }
+.pc-person .nx-avatar { flex: none; }
+.pc-person-body { display: grid; gap: 4px; min-width: 0; }
+.pc-person-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--space-2); font-weight: var(--weight-semibold); }
+.pc-person-name span { font-weight: var(--weight-regular, 400); font-size: var(--text-sm); color: var(--text-muted); }
+.pc-person-links { display: flex; flex-wrap: wrap; gap: 4px var(--space-3); font-size: var(--text-sm); }
+.pc-person-links a { display: inline-flex; align-items: center; gap: 4px; color: var(--accent-color); text-decoration: none; overflow-wrap: anywhere; }
+@media (hover: hover) { .pc-person-links a:hover { text-decoration: underline; text-underline-offset: 2px; } }
+.pc-person-note { margin: 0; font-size: var(--text-sm); color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }

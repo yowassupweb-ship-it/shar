@@ -11,7 +11,7 @@ import { showToast } from '@/shared/ui/Toast';
 import ContactDetail from './ContactDetail';
 import { contactName, matches, useContacts, useGroups, type Contact, type Group } from './data';
 import { PersonalDetail, PersonalEditor, PersonalRow, PersonalShareSheet } from './PersonalContacts';
-import { personalApi, personalTitle, usePersonalContacts, type PersonalContact } from './personal';
+import { personalApi, personalHaystack, personalTitle, usePersonalContacts, type PersonalContact } from './personal';
 
 type Scope = 'team' | 'mine';
 const SCOPE_KEY = 'nx:contacts-scope';
@@ -130,7 +130,7 @@ export default function ContactsScreen() {
   const [sharing, setSharing] = useState<PersonalContact | null>(null);
   const pFiltered = useMemo(() => {
     if (!deferred) return personal.contacts;
-    return personal.contacts.filter((c) => [c.name, c.company, c.position, c.phone, c.email, c.telegram, c.note].some((v) => v.toLowerCase().includes(deferred)));
+    return personal.contacts.filter((c) => personalHaystack(c).includes(deferred));
   }, [personal.contacts, deferred]);
   const pOpen = pActive ? personal.contacts.find((c) => c.id === pActive) : undefined;
   const saved = (c: PersonalContact) => {

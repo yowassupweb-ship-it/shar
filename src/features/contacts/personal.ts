@@ -5,6 +5,17 @@ import { useCallback, useEffect, useState } from 'react';
  * (людям и отделам; просмотр или редактирование). Сервер: server/app/modules/contacts.
  */
 
+/** Контактное лицо организации: бухгалтер, директор, менеджер — у каждого свои телефон и почта. */
+export interface ContactPerson {
+  name: string;
+  position: string;
+  phone: string;
+  email: string;
+  telegram: string;
+  note: string;
+}
+export const EMPTY_PERSON: ContactPerson = { name: '', position: '', phone: '', email: '', telegram: '', note: '' };
+
 export interface PersonalContact {
   id: string;
   name: string;
@@ -14,6 +25,11 @@ export interface PersonalContact {
   email: string;
   telegram: string;
   note: string;
+  /** Сайт с протоколом (сервер дописывает https://). */
+  website: string;
+  /** Фото: /api/avatars/pc<id>_… или пусто. */
+  avatar: string;
+  persons: ContactPerson[];
   ownerId: string;
   ownerName: string;
   /** Мой контакт (я владелец). */
@@ -24,8 +40,19 @@ export interface PersonalContact {
   updatedAt: string;
 }
 
-export type PersonalDraft = Pick<PersonalContact, 'name' | 'company' | 'position' | 'phone' | 'email' | 'telegram' | 'note'>;
-export const EMPTY_DRAFT: PersonalDraft = { name: '', company: '', position: '', phone: '', email: '', telegram: '', note: '' };
+export type PersonalDraft = Pick<PersonalContact, 'name' | 'company' | 'position' | 'phone' | 'email' | 'telegram' | 'note' | 'website' | 'persons'>;
+export const EMPTY_DRAFT: PersonalDraft = { name: '', company: '', position: '', phone: '', email: '', telegram: '', note: '', website: '', persons: [] };
+
+/** Сайт без протокола и хвостового слеша — для подписи ссылки. */
+export function siteLabel(url: string): string {
+  return url.replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/$/, '');
+}
+
+/** Всё, по чему ищется контакт: поля карточки и контактных лиц. */
+export function personalHaystack(c: PersonalContact): string {
+  return [c.name, c.company, c.position, c.phone, c.email, c.telegram, c.note, c.website,
+    ...(c.persons || []).flatMap((x) => [x.name, x.position, x.phone, x.email, x.telegram])].join('\n').toLowerCase();
+}
 
 export type ShareRole = 'view' | 'edit';
 export interface PersonalShares {
@@ -60,6 +87,12 @@ export const personalApi = {
   list: () => call<{ contacts: PersonalContact[]; ready: boolean }>('/api/contacts/personal'),
   create: (draft: PersonalDraft) => call<PersonalContact>('/api/contacts/personal', { method: 'POST', json: draft }),
   update: (id: string, draft: Partial<PersonalDraft>) => call<PersonalContact>(`/api/contacts/personal/${encodeURIComponent(id)}`, { method: 'PATCH', json: draft }),
+  setAvatar: (id: string, file: Blob) => {
+    const form = new FormData();
+    form.append('file', file, 'avatar');
+    return call<PersonalContact>(`/api/contacts/personal/${encodeURIComponent(id)}/avatar`, { method: 'POST', body: form });
+  },
+  dropAvatar: (id: string) => call<PersonalContact>(`/api/contacts/personal/${encodeURIComponent(id)}/avatar`, { method: 'DELETE' }),
   remove: (id: string) => call<{ ok: boolean }>(`/api/contacts/personal/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   shares: (id: string) => call<PersonalShares>(`/api/contacts/personal/${encodeURIComponent(id)}/shares`),
   setShare: (id: string, target: { userId: string } | { departmentId: string }, role: ShareRole | null) =>

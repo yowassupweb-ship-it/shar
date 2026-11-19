@@ -93,3 +93,39 @@ def test_validation_and_owner_rules(users, anna, boris):
 
 def test_requires_login(client):
     assert client.get("/api/contacts/personal").status_code in (401, 403)
+
+
+_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+
+
+def test_website_persons_and_avatar(users, anna, boris):
+    cid = _make(anna, website="romashka.ru", persons=[
+        {"name": "Ольга", "position": "Бухгалтер", "phone": "+7 901"},
+        {"name": "", "phone": "", "email": ""},  # пустая строка формы — выкидывается
+        {"name": "Пётр", "email": "petr@romashka.ru"},
+    ])
+    card = {c["id"]: c for c in anna.get("/api/contacts/personal").json()["contacts"]}[cid]
+    assert card["website"] == "https://romashka.ru"
+    assert [p["name"] for p in card["persons"]] == ["Ольга", "Пётр"] and card["persons"][0]["position"] == "Бухгалтер"
+    assert card["avatar"] == ""
+
+    r = anna.patch(f"/api/contacts/personal/{cid}", json={"persons": [{"name": "Ольга", "phone": "+7 902"}]})
+    assert r.status_code == 200, r.text
+    assert r.json()["persons"] == [{"name": "Ольга", "position": "", "phone": "+7 902", "email": "", "telegram": "", "note": ""}]
+    assert r.json()["website"] == "https://romashka.ru"  # не трогали — осталось
+    assert anna.patch(f"/api/contacts/personal/{cid}", json={"website": "ftp://x"}).status_code == 400
+
+    # фото: не картинка — 400; картинка — адрес /api/avatars/pc<id>_…, файл отдаётся
+    assert anna.post(f"/api/contacts/personal/{cid}/avatar", files={"file": ("a.txt", b"hello", "text/plain")}).status_code == 400
+    r = anna.post(f"/api/contacts/personal/{cid}/avatar", files={"file": ("a.png", _PNG, "image/png")})
+    assert r.status_code == 200, r.text
+    url = r.json()["avatar"]
+    assert url.startswith(f"/api/avatars/pc{cid}_") and anna.get(url).status_code == 200
+
+    # просмотр — фото не поменять; чужому — не видно вовсе
+    assert boris.post(f"/api/contacts/personal/{cid}/avatar", files={"file": ("a.png", _PNG, "image/png")}).status_code == 404
+    anna.put(f"/api/contacts/personal/{cid}/shares", json={"userId": users.ids["boris"], "role": "view"})
+    assert boris.post(f"/api/contacts/personal/{cid}/avatar", files={"file": ("a.png", _PNG, "image/png")}).status_code == 403
+
+    r = anna.delete(f"/api/contacts/personal/{cid}/avatar")
+    assert r.status_code == 200 and r.json()["avatar"] == "" and anna.get(url).status_code == 404
