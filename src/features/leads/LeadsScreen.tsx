@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { AlertCircle, ArrowUpRight, Check, ChevronLeft, Hand, Inbox, Mail, MessageSquare, Phone, RotateCcw, Settings2 } from 'lucide-react';
+import { AlertCircle, ArrowUpRight, Check, ChevronLeft, Hand, Mail, MessageSquare, Phone, RotateCcw, Settings2 } from 'lucide-react';
+import { LeadsToolIcon } from '@/shared/ui/CoreIcon';
 import { chatTitle, isGroupChat, useChatStore } from '@/features/chat';
 import { links, paths } from '@/shared/navigation/routes';
 import { realtime } from '@/shared/realtime/realtime';
@@ -91,7 +92,7 @@ export default function LeadsScreen() {
         ) : !data ? (
           <div className="nx-state"><Spinner size={22} label="Загружаю заявки" /></div>
         ) : !data.leads.length ? (
-          <div className="nx-state"><Inbox size={26} aria-hidden="true" /><p>{q ? 'Ничего не нашлось.' : status === 'new' ? 'Новых заявок нет.' : 'Заявок нет.'}</p></div>
+          <div className="nx-state"><LeadsToolIcon size={64} aria-hidden="true" /><p>{q ? 'Ничего не нашлось.' : status === 'new' ? 'Новых заявок нет.' : 'Заявок нет.'}</p></div>
         ) : (
           <div className="nld-list">
             {data.leads.map((l) => {

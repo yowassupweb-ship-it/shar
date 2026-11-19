@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { AlertCircle, ArrowLeft, ArrowUp, ArrowUpRight, Check, CheckCheck, CheckCircle2, Circle, CornerDownRight, Mail, MessageSquare, MessagesSquare, MoreHorizontal, Paperclip, Pencil, Plus, Smile, Trash2, X } from 'lucide-react';
+import { SocialToolIcon } from '@/shared/ui/CoreIcon';
 import RichInput, { type RichInputHandle } from '@/features/chat/RichInput';
 import { uploadFileWithProgress } from '@/shared/api/uploadFile';
 import { links, paths } from '@/shared/navigation/routes';
@@ -171,7 +172,7 @@ export default function DialogsTab() {
 
   const threadPane = openId
     ? <Thread key={openId} id={openId} tick={tick} onBack={narrow ? () => open(null) : undefined} onSent={load} />
-    : <section className="nsd-thread"><div className="nx-state"><MessagesSquare size={36} aria-hidden="true" /><h2>Выберите диалог или комментарий</h2><p>Переписка с клиентом или ветка под постом — ответ уходит туда, откуда написали.</p></div></section>;
+    : <section className="nsd-thread"><div className="nx-state"><SocialToolIcon size={72} aria-hidden="true" /><h2>Выберите диалог или комментарий</h2><p>Переписка с клиентом или ветка под постом — ответ уходит туда, откуда написали.</p></div></section>;
 
   return (
     <div className="nsd" data-narrow={narrow ? 'true' : undefined}>
