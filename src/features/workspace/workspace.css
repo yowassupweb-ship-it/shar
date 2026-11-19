@@ -1160,3 +1160,48 @@ html:is([data-theme="graphite"], [data-theme="black"]) .nws-text-marks > span { 
 .nws-search-row { display: flex; align-items: center; gap: var(--space-2); }
 .nws-search-row > .nx-search { flex: 1; min-width: 0; }
 .nws-search-row > .nws-density { flex: none; display: inline-grid; place-items: center; width: 38px; height: 38px; padding: 0; border-radius: 50%; }
+
+/* ── Контекстные меню Univer (таблицы, презентации) — как меню Шара (shared/ui/overlay, .nx-menu) ─────────────────
+   Univer рисует их сам (Tailwind-классы с !important у тёмной темы), поэтому перекрываем с !important. Токены
+   (стекло, цвета, радиусы) — те же, что у .nx-menu: всплывающие окна Univer добавлены в области токенов (tokens.css). */
+section.univer-popup > section > div[tabindex="-1"].univer-grid,
+section.univer-popup ul[role="menu"] {
+  background: var(--glass) !important; color: var(--text-main) !important; border: 0 !important;
+  border-radius: var(--radius-md) !important; padding: 6px !important; gap: 2px !important;
+  box-shadow: 0 0 0 1px var(--glass-brd), var(--glass-shadow) !important;
+  font-family: var(--font-sans); font-size: var(--text-sm) !important;
+}
+section.univer-popup { box-shadow: none !important; border-radius: var(--radius-md) !important; }
+/* Группы пунктов и разделители между ними */
+section.univer-popup > section > div[tabindex="-1"].univer-grid > div.univer-grid {
+  gap: 2px !important; padding: 4px 0 !important; border-color: var(--border-color) !important;
+}
+/* Пункт: высота, скругление, цвет, наведение — как .nx-menu-item */
+section.univer-popup > section > div[tabindex="-1"] button.univer-min-h-8,
+section.univer-popup li[role="menuitem"] {
+  min-height: 32px !important; padding: 6px 10px !important; border-radius: var(--radius-sm) !important;
+  color: var(--text-main) !important; background: transparent !important; font-size: var(--text-sm) !important;
+}
+section.univer-popup > section > div[tabindex="-1"] button.univer-min-h-8:hover,
+section.univer-popup > section > div[tabindex="-1"] button.univer-min-h-8:focus,
+section.univer-popup li[role="menuitem"]:hover { background: var(--surface-hover) !important; }
+section.univer-popup > section > div[tabindex="-1"] button.univer-min-h-8 svg,
+section.univer-popup li[role="menuitem"] svg { color: var(--text-2); }
+section.univer-popup > section > div[tabindex="-1"] button.univer-min-h-8 > span { gap: 10px !important; }
+/* Быстрые кнопки сверху (копировать, вырезать, вставить) */
+section.univer-popup > section > div[tabindex="-1"] .univer-grid-cols-3 > button {
+  background: transparent !important; color: var(--text-2) !important; border-radius: var(--radius-sm) !important;
+}
+section.univer-popup > section > div[tabindex="-1"] .univer-grid-cols-3 > button:hover { background: var(--surface-hover) !important; color: var(--text-main) !important; }
+section.univer-popup button:disabled, section.univer-popup [aria-disabled="true"] { opacity: .45; }
+/* Иконки меню — одноцветные, как у Шара: акцентный цвет Univer внутри иконок меню — тем же цветом, что и сама иконка. */
+section.univer-popup .univerjs-icon { --univer-primary-600: currentColor; }
+/* Подменю (Вставить → строки, столбцы…): Univer кладёт его отдельным слоем .univer-z-[1080], не в section.univer-popup. */
+.univer-z-\[1080\] > div.univer-rounded-md {
+  background: var(--glass) !important; color: var(--text-main) !important; border: 0 !important; border-radius: var(--radius-md) !important;
+  padding: 6px !important; box-shadow: 0 0 0 1px var(--glass-brd), var(--glass-shadow) !important; font-family: var(--font-sans); font-size: var(--text-sm);
+}
+.univer-z-\[1080\] > div.univer-rounded-md :is(button, [role="menuitem"], li) { color: var(--text-main) !important; border-radius: var(--radius-sm) !important; }
+.univer-z-\[1080\] > div.univer-rounded-md :is(button, [role="menuitem"], li):hover { background: var(--surface-hover) !important; }
+.univer-z-\[1080\] .univerjs-icon { --univer-primary-600: currentColor; color: var(--text-2); }
+.univer-z-\[1080\] input { background: var(--element-bg) !important; color: var(--text-main) !important; border-color: var(--border-color) !important; }

@@ -8,11 +8,13 @@
  */
 
 /* ── Токены: Графит (по умолчанию для тёмного) ─────────────────────────── */
-/* Univer-окна (поиск по документу) рисуются в body, вне .nx, — им нужны те же токены. */
+/* Univer-окна (поиск по документу, контекстные меню таблиц и презентаций) рисуются в body, вне .nx, — им нужны те же токены. */
 .nx,
 [data-u-comp="rect-popup"],
 .ntb,
 .nx-univer-find,
+section.univer-popup,
+.univer-z-\[1080\],
 .nem-host {
   --space-1: 4px;
   --space-2: 8px;
@@ -125,7 +127,9 @@
 html:not(.dark) .nx,
 html:not(.dark) [data-u-comp="rect-popup"],
 html:not(.dark) .ntb,
-html:not(.dark) .nx-univer-find {
+html:not(.dark) .nx-univer-find,
+html:not(.dark) section.univer-popup,
+html:not(.dark) .univer-z-\[1080\] {
   --bg-color: #f5f5f7;
   --container-bg: #ffffff;
   --element-bg: #ffffff;
@@ -162,6 +166,8 @@ html[data-theme="gray"] .nx,
 html[data-theme="gray"] [data-u-comp="rect-popup"],
 html[data-theme="gray"] .ntb,
 html[data-theme="gray"] .nx-univer-find,
+html[data-theme="gray"] section.univer-popup,
+html[data-theme="gray"] .univer-z-\[1080\],
 html[data-theme="gray"] .nem-host {
   --bg-color: #e3e3e6;
   --bg-sunken: #d8d8dc;
@@ -196,6 +202,8 @@ html[data-theme="black"] .nx,
 html[data-theme="black"] [data-u-comp="rect-popup"],
 html[data-theme="black"] .ntb,
 html[data-theme="black"] .nx-univer-find,
+html[data-theme="black"] section.univer-popup,
+html[data-theme="black"] .univer-z-\[1080\],
 html[data-theme="black"] .nem-host {
   --bg-color: #000000;
   --container-bg: #08080a;
