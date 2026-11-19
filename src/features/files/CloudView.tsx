@@ -4,7 +4,7 @@ import { realtime } from '@/shared/realtime/realtime';
 import { lazyComponent } from '@/shared/ui/lazy';
 import {
   AlertCircle, ArrowUpDown, Check, Archive, ChevronDown, ChevronRight, ClipboardPaste, Copy, Download, Files, ExternalLink, Folder, FolderInput, FolderPlus, LayoutGrid, Link2, List,
-  FileUp, Filter, History, Info, Mail, MoreHorizontal, Pencil, Pin, PinOff, RotateCw, Send, Trash2, Upload, Users, PenLine, X } from 'lucide-react';
+  FileUp, Filter, FolderTree, History, Info, Mail, MoreHorizontal, Pencil, Pin, PinOff, RotateCw, Send, Trash2, Upload, Users, PenLine, X } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
 import { AgentMenuItems } from '@/shared/core/AgentMenuItems';
 import { SearchField } from '@/shared/ui/SearchField';
@@ -16,7 +16,7 @@ import { Avatar } from '@/shared/ui/Avatar';
 import { askConfirm, Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import {
   cachedFolder, createFolder, deleteItem, fetchImageDims, fileUrl, fmtBytes, fmtDate, fmtDateShort, kindOf, loadFolder, myId, patchFolderCache,
-  moveFile, moveFolder, pinFolder, registerUpload, renameItem, replaceFileContent, setFolderColor, type CloudFile, type CloudFolder,
+  moveFile, moveFolder, pinFolder, prefetchFolder, registerUpload, renameItem, replaceFileContent, setFolderColor, type CloudFile, type CloudFolder,
 } from './api';
 import { FileGlyph } from './FileGlyph';
 import { FolderTile } from './FolderTile';
@@ -77,10 +77,15 @@ function readSort(): SortId {
   return 'new';
 }
 
-export default function CloudView({ lead, tools, trail, onOpenFolder, onCrumb, highlightId }: {
+/** Открыть меню действий папки снаружи (дерево папок): то же меню, что у плитки. path — путь к папке от корня. */
+export interface CloudMenuApi { openFolder: (folder: CloudFolder, anchor: MenuAnchor, path: CloudFolder[]) => void }
+
+export default function CloudView({ lead, tools, trail, onOpenFolder, onCrumb, highlightId, menuApi }: {
   lead?: ReactNode;
   /** Кнопка слева от пути (показать или скрыть дерево папок). */
   tools?: ReactNode;
+  /** Сюда CloudView кладёт открытие своего меню — для дерева папок. */
+  menuApi?: React.MutableRefObject<CloudMenuApi | null>;
   trail: CloudFolder[];
   onOpenFolder: (f: CloudFolder) => void;
   onCrumb: (index: number) => void;
@@ -93,7 +98,12 @@ export default function CloudView({ lead, tools, trail, onOpenFolder, onCrumb, h
   const [mode, setMode] = useState<Mode>(readMode);
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
-  const [menu, setMenu] = useState<{ target: Target; anchor: MenuAnchor } | null>(null);
+  const [menu, setMenu] = useState<{ target: Target; anchor: MenuAnchor; path?: CloudFolder[] } | null>(null);
+  useEffect(() => {
+    if (!menuApi) return undefined;
+    menuApi.current = { openFolder: (folder, anchor, path) => setMenu({ target: { kind: 'folder', item: folder }, anchor, path }) };
+    return () => { menuApi.current = null; };
+  }, [menuApi]);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [uploads, setUploads] = useState<Uploading[]>([]);
@@ -280,6 +290,15 @@ export default function CloudView({ lead, tools, trail, onOpenFolder, onCrumb, h
     // Документы — во встроенном просмотре, остальное — скачать (не внешний браузер с адресом 127.0.0.1).
     if (viewKindOf(f.name)) { setDoc({ url: fileUrl(f.url), name: f.name, size: f.size }); return; }
     downloadFile(fileUrl(f.url), f.name);
+  };
+
+  // «Копировать путь»: «Мои файлы / Папка / файл.pdf» — по нему агент (и коллега) понимает, о каком файле речь, даже когда их много.
+  const pathOf = (t: { kind: 'file' | 'folder'; item: { name: string } }, folders?: CloudFolder[]) => {
+    const chain = folders ?? (t.kind === 'folder' && trail.some((f) => f.id === (t.item as CloudFolder).id) ? trail.slice(0, trail.findIndex((f) => f.id === (t.item as CloudFolder).id)) : trail);
+    return ['Мои файлы', ...chain.map((f) => f.name), t.item.name].join(' / ');
+  };
+  const copyText = async (text: string, done: string) => {
+    try { await navigator.clipboard.writeText(text); showToast(done, 'success'); } catch { showToast('Не удалось скопировать', 'error'); }
   };
 
   const copyLink = async (t: Target) => {
@@ -686,6 +705,7 @@ ${url}` });
                     data-drop={dropKey === `f:${f.id}` ? 'true' : undefined}
                     data-selected={f.id in selected ? 'true' : undefined}
                     style={f.color ? ({ '--folder': f.color } as CSSProperties) : undefined}
+                    onMouseEnter={() => prefetchFolder(f.id)}
                     onClick={(e) => { if (renaming !== f.id) pick(e, f.id, 'folder', () => onOpenFolder(f)); }}
                     onKeyDown={(e) => { if (e.key === ' ') { e.preventDefault(); toggleSelect(f.id, 'folder'); } else if (e.key === 'Enter' && renaming !== f.id) pick(e, f.id, 'folder', () => onOpenFolder(f)); }}
                     {...itemHandlers(t)}
@@ -837,6 +857,10 @@ ${url}` });
           <button type="button" className="nx-primary nf-selbar-btn" aria-haspopup="menu" aria-expanded={Boolean(downloadMenu)} onClick={(e) => setDownloadMenu({ element: e.currentTarget, align: 'start', side: 'above' })}>
             <Download size={15} aria-hidden="true" /> Скачать <ChevronDown size={13} aria-hidden="true" />
           </button>
+          <button type="button" className="nx-ghost nf-selbar-btn" title="Пути выбранного — списком, по строке на файл (удобно дать агенту)"
+            onClick={() => void copyText([...selectedFolders().map((f) => pathOf({ kind: 'folder', item: f })), ...selectedFiles().map((f) => pathOf({ kind: 'file', item: f }))].join('\n'), `Скопированы пути: ${selectedCount}`)}>
+            <FolderTree size={15} aria-hidden="true" /> Пути
+          </button>
           <button type="button" className="nx-ghost nf-selbar-btn" onClick={() => setSelected(Object.fromEntries(ordered.map((x) => [x.id, x.kind])))} disabled={selectedCount === ordered.length}>Выбрать все</button>
           <button type="button" className="nx-icon-btn" aria-label="Снять выбор" title="Снять выбор (Esc)" onClick={() => setSelected({})}><X size={16} aria-hidden="true" /></button>
         </div>
@@ -896,6 +920,7 @@ ${url}` });
           <MenuItem icon={<Send size={16} />} onSelect={() => { setMenu(null); setSheet({ type: 'send', target: t }); }}>Отправить в чат</MenuItem>
           {mailConnected && <MenuItem icon={<Mail size={16} />} onSelect={() => { setMenu(null); sendByMail(t); }}>Отправить по почте</MenuItem>}
           <MenuItem icon={<Link2 size={16} />} onSelect={() => { setMenu(null); void copyLink(t); }}>Копировать ссылку</MenuItem>
+          <MenuItem icon={<FolderTree size={16} />} onSelect={() => { const m = menu; setMenu(null); void copyText(pathOf(t, m.path?.slice(0, -1)), 'Путь скопирован'); }}>Копировать путь</MenuItem>
           {t.kind === 'file' && <MenuItem icon={<Copy size={16} />} onSelect={() => { const f = t.item as CloudFile; setMenu(null); void copyFile(f); }}>Копировать файл</MenuItem>}
           <MenuItem icon={<Check size={16} />} onSelect={() => { setMenu(null); toggleSelect(t.item.id, t.kind); }}>{t.item.id in selected ? 'Снять выбор' : 'Выбрать'}</MenuItem>
           <MenuItem icon={<Info size={16} />} onSelect={() => { setMenu(null); setSheet({ type: 'props', target: t }); }}>Свойства</MenuItem>

@@ -9,7 +9,7 @@ import { navigate } from '@/shared/navigation/navigate';
 import { recordVisit } from '@/features/spotlight';
 import { links, paths } from '@/shared/navigation/routes';
 import { AGENT_SOURCE, folderChain, getFile, type CloudFolder, type FilesSource } from './api';
-import CloudView from './CloudView';
+import CloudView, { type CloudMenuApi } from './CloudView';
 import { ChatFiles, ChatList } from './ChatFilesView';
 
 /**
@@ -62,6 +62,7 @@ export default function FilesScreen() {
   const [trail, setTrail] = useState<CloudFolder[]>([]);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [sectionMenu, setSectionMenu] = useState<MenuAnchor | null>(null);
+  const cloudMenu = useRef<CloudMenuApi | null>(null);
   // Дерево папок сбоку (как в «Офисе»): показать или скрыть — кнопкой у пути или Ctrl+Shift+D; помним на устройстве.
   const [treeOpen, setTreeOpen] = useState<boolean>(() => { try { return localStorage.getItem('nf:tree') !== '0'; } catch { return true; } });
   const toggleTree = useCallback(() => setTreeOpen((v) => { const next = !v; try { localStorage.setItem('nf:tree', next ? '1' : '0'); } catch { /* без памяти */ } return next; }), []);
@@ -162,7 +163,8 @@ export default function FilesScreen() {
         <div className="nf-split" data-tree={treeOpen ? 'true' : undefined}>
           {treeOpen && (
             <aside className="nf-side" aria-label="Дерево папок">
-              <FolderTree trail={trail} onOpen={(path) => { setTrail(path); go({ kind: 'cloud', folderId: path[path.length - 1]?.id ?? null }); }} />
+              <FolderTree trail={trail} onOpen={(path) => { setTrail(path); go({ kind: 'cloud', folderId: path[path.length - 1]?.id ?? null }); }}
+                onMenu={(folder, anchor, path) => cloudMenu.current?.openFolder(folder, anchor, path)} />
             </aside>
           )}
           <CloudView
@@ -177,6 +179,7 @@ export default function FilesScreen() {
             onOpenFolder={openFolder}
             onCrumb={crumb}
             highlightId={highlight}
+            menuApi={cloudMenu}
           />
         </div>
       )}

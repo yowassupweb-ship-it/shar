@@ -163,6 +163,15 @@ export async function loadFolder(folderId: string | null) {
   return data;
 }
 
+/** Подгрузить папку заранее (наведение на плитку или строку дерева): клик потом откроет её из кэша мгновенно. */
+const prefetching = new Set<string>();
+export function prefetchFolder(folderId: string | null) {
+  const key = folderId || ROOT;
+  if (folderCache.has(key) || prefetching.has(key)) return;
+  prefetching.add(key);
+  void loadFolder(folderId).catch(() => undefined).finally(() => prefetching.delete(key));
+}
+
 export function patchFolderCache(folderId: string | null, fn: (d: { folders: CloudFolder[]; files: CloudFile[] }) => { folders: CloudFolder[]; files: CloudFile[] }) {
   const key = folderId || ROOT;
   const cur = folderCache.get(key);
