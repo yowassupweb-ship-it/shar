@@ -20,7 +20,30 @@ const CoreImage = forwardRef<SVGSVGElement, LucideProps>(function CoreIcon({ siz
 export const CoreIcon = CoreImage as unknown as LucideIcon;
 
 /** Значок — картинка, а не линия: плитке не нужна цветная подложка, картинка встаёт во весь её размер. */
-export const isImageIcon = (icon: unknown): boolean => icon === CoreIcon;
+export const isImageIcon = (icon: unknown): boolean => icon === CoreIcon || IMAGE_ICONS.has(icon);
+
+const IMAGE_ICONS = new Set<unknown>();
+
+/** Объёмный значок инструмента из картинки (public/icons/tool-icons) — встаёт вместо lucide с теми же size и className. */
+function imageIcon(src: string, name: string): LucideIcon {
+  const Icon = forwardRef<SVGSVGElement, LucideProps>(function ToolImage({ size = 24, className }, _ref) {
+    const px = Number(size) || 24;
+    return <img className={className ? `nx-core-icon ${className}` : 'nx-core-icon'} src={src} alt="" aria-hidden="true" width={px} height={px} draggable={false} />;
+  });
+  Icon.displayName = name;
+  const icon = Icon as unknown as LucideIcon;
+  IMAGE_ICONS.add(icon);
+  return icon;
+}
+
+const V = '?v=1';
+export const SearchToolIcon = imageIcon(`/icons/tool-icons/search.png${V}`, 'SearchToolIcon');
+export const UtmToolIcon = imageIcon(`/icons/tool-icons/utm-gen.png${V}`, 'UtmToolIcon');
+export const LeadsToolIcon = imageIcon(`/icons/tool-icons/zayavki.png${V}`, 'LeadsToolIcon');
+export const SocialToolIcon = imageIcon(`/icons/tool-icons/social.png${V}`, 'SocialToolIcon');
+export const StudioToolIcon = imageIcon(`/icons/tool-icons/studio.png${V}`, 'StudioToolIcon');
+export const GuideToolIcon = imageIcon(`/icons/tool-icons/instructions.png${V}`, 'GuideToolIcon');
+export const AdminToolIcon = imageIcon(`/icons/tool-icons/admin.png${V}`, 'AdminToolIcon');
 
 /** Мини-версия знака «Ядра» — линейный атом: пункты меню, мелкие кнопки и подписи, где объёмная картинка не к месту. */
 export const CoreMini: LucideIcon = Atom;

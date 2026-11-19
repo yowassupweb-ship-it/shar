@@ -139,7 +139,6 @@ export default function MoreScreen() {
     <div className="nmo nx-scroll-y">
       <div className="nmo-inner">
         <header className="nmo-head">
-          <h1>Ещё</h1>
           <SearchField
             ref={searchRef}
             value={query}

@@ -1,5 +1,5 @@
-import { FileText, Globe, Hash, MessagesSquare, Palette, Search, Settings, Shield, type LucideIcon } from 'lucide-react';
-import { CoreIcon } from '@/shared/ui/CoreIcon';
+import { Settings, type LucideIcon } from 'lucide-react';
+import { AdminToolIcon, CoreIcon, GuideToolIcon, LeadsToolIcon, SearchToolIcon, SocialToolIcon, StudioToolIcon, UtmToolIcon } from '@/shared/ui/CoreIcon';
 import { paths } from '@/shared/navigation/routes';
 
 /**
@@ -29,16 +29,16 @@ export interface Tool {
 
 export const TOOLS: Tool[] = [
   // Открывает окно поиска (Ctrl+K), а не страницу: на телефоне это единственный вход в него.
-  { id: 'spotlight', name: 'Поиск', hint: 'Поиск по всему Шару: чаты, люди, файлы, история', href: '#search', icon: Search, tint: ['#7dd3fc', '#2563eb'], standard: true },
-  { id: 'utm-generator', name: 'Генератор UTM', hint: 'Ссылки с метками для рекламы', href: paths.utm, icon: Hash, tint: ['#e879f9', '#db2777'] },
-  { id: 'site-leads', name: 'Заявки', hint: 'Заявки с corp и school.vs-travel.ru: кто взял, что закрыто', href: paths.leads, icon: Globe, tint: ['#5eead4', '#0f766e'] },
-  { id: 'social', name: 'Соцсети', hint: 'Сообщения и комментарии из ВКонтакте и MAX — ответ из Шара', href: paths.social, icon: MessagesSquare, tint: ['#7dd3fc', '#0284c7'] },
+  { id: 'spotlight', name: 'Поиск', hint: 'Поиск по всему Шару: чаты, люди, файлы, история', href: '#search', icon: SearchToolIcon, tint: ['#7dd3fc', '#2563eb'], standard: true },
+  { id: 'utm-generator', name: 'Генератор UTM', hint: 'Ссылки с метками для рекламы', href: paths.utm, icon: UtmToolIcon, tint: ['#e879f9', '#db2777'] },
+  { id: 'site-leads', name: 'Заявки', hint: 'Заявки с corp и school.vs-travel.ru: кто взял, что закрыто', href: paths.leads, icon: LeadsToolIcon, tint: ['#5eead4', '#0f766e'] },
+  { id: 'social', name: 'Соцсети', hint: 'Сообщения и комментарии из ВКонтакте и MAX — ответ из Шара', href: paths.social, icon: SocialToolIcon, tint: ['#7dd3fc', '#0284c7'] },
   // Чат с агентами. Не стандартный и не только для админа: админ видит сразу, остальным выдаёт админ (enabledTools).
   { id: 'core', name: 'Ядро', hint: 'Чат с агентами Шара: задачи, документы, ответы с ходом работы', href: paths.core, icon: CoreIcon, tint: ['#a78bfa', '#4f46e5'] },
   // Студия картинок: рисование, галерея, референсы; доступ тот же, что у «Ядра» (via), отдельно не выдаётся.
-  { id: 'studio', name: 'Студия', hint: 'Картинки: рисование, галерея, референсы, оценки — агенты учатся на них', href: paths.studio, icon: Palette, tint: ['#f9a8d4', '#c026d3'], via: 'core' },
-  { id: 'how-to-shar', name: 'Инструкция', hint: 'Как работать в Шаре', href: paths.guide, icon: FileText, tint: ['#a3e635', '#059669'], standard: true },
-  { id: 'admin', name: 'Админка', hint: 'Пользователи, права, система', href: paths.admin, icon: Shield, tint: ['#fbbf24', '#ea580c'], adminOnly: true },
+  { id: 'studio', name: 'Студия', hint: 'Картинки: рисование, галерея, референсы, оценки — агенты учатся на них', href: paths.studio, icon: StudioToolIcon, tint: ['#f9a8d4', '#c026d3'], via: 'core' },
+  { id: 'how-to-shar', name: 'Инструкция', hint: 'Как работать в Шаре', href: paths.guide, icon: GuideToolIcon, tint: ['#a3e635', '#059669'], standard: true },
+  { id: 'admin', name: 'Админка', hint: 'Пользователи, права, система', href: paths.admin, icon: AdminToolIcon, tint: ['#fbbf24', '#ea580c'], adminOnly: true },
   { id: 'settings', name: 'Настройки', hint: 'Профиль, уведомления, внешний вид', href: paths.settings, icon: Settings, tint: ['#9ca3af', '#475569'], standard: true },
 ];
 
