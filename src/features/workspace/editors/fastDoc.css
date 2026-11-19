@@ -61,3 +61,6 @@
   font: 600 11px/18px Inter, system-ui, sans-serif; vertical-align: 1px; white-space: nowrap;
 }
 @media (prefers-reduced-motion: reduce) { .fdoc-zone { animation: none; } }
+
+/* Рамка фокуса вокруг всего текста («инпут на весь документ»): у документа фокус — это курсор, рамка не нужна. */
+.fdoc .ProseMirror, .fdoc .ProseMirror:focus, .fdoc .ProseMirror:focus-visible, .fdoc .fdoc-content:focus-visible { outline: none !important; box-shadow: none !important; }

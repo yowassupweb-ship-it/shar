@@ -16,11 +16,10 @@ export function preloadEditor(kind: Kind): void {
   if (warmed.has(kind)) return;
   if (kind === 'document') {
     warmed.add(kind);
-    // Документ открывается своим редактором (лёгкий TipTap); Univer греем, только если человек вернулся к прежнему —
-    // иначе прогрев сам по себе тянул и разбирал несколько мегабайт, которые никто не откроет.
-    let legacy = false;
-    try { legacy = localStorage.getItem('nx:fast-docs') === '0'; } catch { /* без памяти — свой редактор */ }
-    void (legacy ? import('./editors/DocEditor') : import('./editors/FastDocEditor'));
+    // Греем тот редактор, который откроется: прежний (Univer) по умолчанию, быстрый — если человек выбрал его в «⋯».
+    let fast = false;
+    try { fast = localStorage.getItem('nx:fast-docs') === '1'; } catch { /* без памяти — прежний */ }
+    void (fast ? import('./editors/FastDocEditor') : import('./editors/DocEditor'));
   } else if (kind === 'table') {
     warmed.add(kind);
     // Разбор таблицы (xlsx → Univer) нужен exceljs; раньше он начинал грузиться только после редактора — цепочкой.

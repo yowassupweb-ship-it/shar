@@ -36,7 +36,8 @@ import { Spinner } from '@/shared/ui/Spinner';
 const DocEditor = lazy(() => import('./editors/DocEditor').then(async (m) => { await m.layoutFontsReady(); return m; }));
 const SheetEditor = lazy(() => import('./editors/SheetEditor'));
 const DeckEditor = lazy(() => import('./editors/DeckEditor'));
-// Свой редактор документов (TipTap, #704) — по умолчанию с 20.11.2026; прежний (Univer) остаётся выбором в «⋯» документа.
+// Быстрый редактор документов (TipTap, #704) — пока выбором в «⋯» документа: по умолчанию прежний (Univer) — у быстрого ещё нет
+// функций меню шапки, вкладок и тёмной темы. Включали по умолчанию 20.11.2026 и вернули в тот же день.
 const FastDocEditor = lazy(() => import('./editors/FastDocEditor'));
 import { useAgentZones } from './useAgentZones';
 const FAST_DOCS_KEY = 'nx:fast-docs';
@@ -44,7 +45,7 @@ const FAST_DOCS_EVENT = 'nx:fast-docs-changed';
 function readFastDocs(): boolean {
   // ?fastdoc=1 в адресе — включить только в этой вкладке (проверка, ссылка коллеге), не трогая выбор человека.
   if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('fastdoc') === '1') return true;
-  try { return localStorage.getItem(FAST_DOCS_KEY) !== '0'; } catch { return true; }
+  try { return localStorage.getItem(FAST_DOCS_KEY) === '1'; } catch { return false; }
 }
 function useFastDocs(): [boolean, (on: boolean) => void] {
   const [on, setOn] = useState(readFastDocs);
@@ -654,8 +655,8 @@ ${absolute(links.office(item!.kind, item!.id))}` });
           <MenuItem icon={<Link2 size={15} />} onSelect={() => { setMenu(null); void copyLink(); }}>Скопировать ссылку на материал</MenuItem>
           <MenuItem icon={<Copy size={15} />} onSelect={() => { setMenu(null); void duplicate(); }}>Сделать копию</MenuItem>
           {item.kind === 'document' && (
-            <MenuItem icon={fastDocs ? <Zap size={15} /> : <Check size={15} />} onSelect={() => { setMenu(null); setFastDocs(!fastDocs); }}>
-              {fastDocs ? 'Открыть в прежнем редакторе' : 'Прежний редактор — вернуть быстрый'}
+            <MenuItem icon={fastDocs ? <Check size={15} /> : <Zap size={15} />} onSelect={() => { setMenu(null); setFastDocs(!fastDocs); }}>
+              {fastDocs ? 'Быстрый редактор (бета) — включён' : 'Быстрый редактор (бета)'}
             </MenuItem>
           )}
           {!readOnly && (
