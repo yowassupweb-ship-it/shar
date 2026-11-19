@@ -12,7 +12,7 @@ const CoreImage = forwardRef<SVGSVGElement, LucideProps>(function CoreIcon({ siz
   // Атом круглый и светится по краям — в квадрате значка он кажется мельче линейных иконок. Рисуем крупнее,
   // а лишнее съедаем отрицательным полем: место в строке остаётся прежним, соседи не сдвигаются.
   const px = Number(size) || 24;
-  const big = Math.round(px * (px <= 24 ? 1.3 : 1.12));
+  const big = Math.round(px * (px <= 24 ? 1.3 : 0.92));
   const pull = (px - big) / 2;
   return <img className={className ? `nx-core-icon ${className}` : 'nx-core-icon'} src={SRC} alt="" aria-hidden="true" width={big} height={big} style={{ margin: pull }} draggable={false} />;
 });
@@ -44,6 +44,7 @@ export const SocialToolIcon = imageIcon(`/icons/tool-icons/social.png${V}`, 'Soc
 export const StudioToolIcon = imageIcon(`/icons/tool-icons/studio.png${V}`, 'StudioToolIcon');
 export const GuideToolIcon = imageIcon(`/icons/tool-icons/instructions.png${V}`, 'GuideToolIcon');
 export const AdminToolIcon = imageIcon(`/icons/tool-icons/admin.png${V}`, 'AdminToolIcon');
+export const SettingsToolIcon = imageIcon(`/icons/tool-icons/settings.png${V}`, 'SettingsToolIcon');
 
 /** Мини-версия знака «Ядра» — линейный атом: пункты меню, мелкие кнопки и подписи, где объёмная картинка не к месту. */
 export const CoreMini: LucideIcon = Atom;
