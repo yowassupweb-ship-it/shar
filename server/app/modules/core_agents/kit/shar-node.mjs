@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "1.4.0"; // 1.4.0 — тёплые процессы Claude (caps: warm)
+const VERSION = "1.4.1"; // 1.4.1 — окна подписок Claude, GPT и Kimi их же запросом /usage; 1.4.0 — тёплые процессы Claude (caps: warm)
 const SHAR_URL = String(process.env.SHAR_URL || "").replace(/\/+$/, "");
 const TOKEN = String(process.env.SHAR_NODE_TOKEN || "");
 // Отпечаток этого файла — так же, как его считает Шар (переводы строк без \r): разошёлся с присланным в опросе —
@@ -1573,8 +1573,80 @@ async function checkJob(job) {
   const dirs = userDirs(job.userId);
   const acc = await accountOf(job.provider, dirs);
   const models = acc.loggedIn ? await modelsOf(job.provider, dirs) : [];
-  const limits = acc.loggedIn && job.limits && job.provider === "claude" ? await claudeLimits(dirs, job.model) : null;
+  // Окна подписки: сначала тем же запросом, что и /usage самого CLI (без траты лимита, у всех трёх провайдеров);
+  // не вышло (токен истёк, ответ не узнан) — у Claude прежний способ, пробным запросом к Haiku.
+  let limits = null;
+  if (acc.loggedIn && job.limits) {
+    limits = await usageLimits(job.provider, dirs).catch((error) => { log(`лимиты ${job.provider}: ${error.message || error}`); return null; });
+    if (!limits?.length && job.provider === "claude") limits = await claudeLimits(dirs, job.model);
+  }
   await reporter(job).send({ type: "account", loggedIn: acc.loggedIn, account: acc.account, models, ...(limits ? { limits } : {}) });
+}
+
+// ── окна подписки: прямой вопрос провайдеру (как /usage и /status в самих CLI) ──────────────────────────────
+// Токен берём из входа CLI в каталоге человека и только читаем: обновлять его за спиной CLI нельзя — refresh-токены
+// одноразовые, и CLI выбило бы из подписки. Истёк — ответа нет, CLI обновит токен на следующем запуске.
+
+const readJsonFile = (file) => { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; } };
+const epochSec = (v) => {
+  if (typeof v === "number") return v > 1e12 ? Math.floor(v / 1000) : Math.floor(v);
+  const t = Date.parse(String(v || ""));
+  return Number.isFinite(t) ? Math.floor(t / 1000) : 0;
+};
+const expired = (v) => { const at = epochSec(v); return at > 0 && at <= Date.now() / 1000 + 30; };
+const windowKey = (minutes) => (minutes <= 360 ? "five_hour" : minutes <= 8 * 1440 ? "seven_day" : "month");
+const limitOf = (type, used, resetsAt, family) => ({
+  type, used: Math.max(0, Math.min(100, Math.round(Number(used) || 0))), resetsAt: epochSec(resetsAt), status: "", overage: false,
+  ...(family ? { family } : {}),
+});
+
+async function getJson(url, headers) {
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) });
+  if (!res.ok) throw new Error(`${new URL(url).host}: ${res.status}`);
+  return res.json();
+}
+
+/** Окна подписки провайдера в форме лимитов Шара: [{type: five_hour|seven_day|seven_day_opus|…|month, used, resetsAt}]. */
+async function usageLimits(provider, dirs) {
+  if (provider === "claude") {
+    const o = readJsonFile(path.join(dirs.home, ".claude", ".credentials.json"))?.claudeAiOauth;
+    if (!o?.accessToken || expired(o.expiresAt)) return null;
+    const v = await getJson("https://api.anthropic.com/api/oauth/usage", { Authorization: `Bearer ${o.accessToken}`, "anthropic-beta": "oauth-2025-04-20" });
+    return ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"]
+      .filter((k) => typeof v?.[k]?.utilization === "number")
+      .map((k) => limitOf(k, v[k].utilization, v[k].resets_at, k.startsWith("seven_day_") ? k.slice(10) : ""));
+  }
+  if (provider === "codex") {
+    const t = readJsonFile(path.join(dirs.codexHome, "auth.json"))?.tokens;
+    if (!t?.access_token) return null;
+    const v = await getJson("https://chatgpt.com/backend-api/wham/usage", { Authorization: `Bearer ${t.access_token}`, "ChatGPT-Account-Id": String(t.account_id || ""), "User-Agent": "codex_cli_rs" });
+    return ["primary_window", "secondary_window"].map((w) => v?.rate_limit?.[w]).filter((x) => typeof x?.used_percent === "number")
+      .map((x, i) => limitOf(x.limit_window_seconds ? windowKey(x.limit_window_seconds / 60) : i ? "seven_day" : "five_hour", x.used_percent, x.reset_at));
+  }
+  if (provider === "kimi") {
+    const c = readJsonFile(path.join(dirs.kimiHome, "credentials", "kimi-code.json")) || readJsonFile(path.join(dirs.home, ".kimi", "credentials", "kimi-code.json"));
+    if (!c?.access_token || expired(c.expires_at)) return null;
+    const v = await getJson("https://api.kimi.com/coding/v1/usages", { Authorization: `Bearer ${c.access_token}` });
+    const out = [];
+    for (const [src, key] of [["limit_5h", "five_hour"], ["limit_month_total", "month"]]) {
+      const u = v?.usages?.[src];
+      if (typeof u?.used_ratio === "number") out.push(limitOf(key, u.used_ratio * 100, u.reset_time));
+    }
+    if (out.length) return out;
+    // Прежняя форма ответа: limits[] с окном и {limit, used | remaining, resetTime}.
+    for (const l of v?.limits || []) {
+      const d = l.detail && typeof l.detail === "object" ? l.detail : l;
+      const limit = Number(d.limit);
+      const used = d.used != null ? Number(d.used) : limit - Number(d.remaining);
+      if (!(limit > 0) || !Number.isFinite(used)) continue;
+      const n = Number(l.window?.duration) || 0;
+      const unit = String(l.window?.timeUnit || "");
+      const minutes = unit.includes("HOUR") ? n * 60 : unit.includes("DAY") ? n * 1440 : unit.includes("SECOND") ? n / 60 : n;
+      out.push(limitOf(minutes ? windowKey(minutes) : "five_hour", (used / limit) * 100, d.resetTime || d.reset_time || d.resetAt));
+    }
+    return out;
+  }
+  return null;
 }
 
 /**

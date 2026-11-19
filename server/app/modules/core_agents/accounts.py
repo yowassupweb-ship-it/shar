@@ -182,17 +182,21 @@ def start_login(provider: str, me: Identity = Depends(current_identity)):
     return _overview(me)
 
 
+LIMIT_PROVIDERS = ("claude", "codex", "kimi")
+
+
 @router.post("/api/core/accounts/{provider}/limits")
 def check_limits(provider: str, model: str = "", me: Identity = Depends(current_identity)):
     """Кнопка «Проверить лимиты»: нода спросит у провайдера текущие окна подписки. Ответ придёт событием core_account
-    (лимиты в шапке чата обновятся сами). Пока умеет только Claude: GPT и Gemini окон подписки не отдают."""
+    (лимиты в шапке чата обновятся сами). Claude, GPT и Kimi — их же запросом /usage (окна 5 часов, неделя, месяц);
+    у Gemini окон подписки нет."""
     _guard(me)
     provider = _provider(provider)
-    if provider != "claude":
-        raise HTTPException(status_code=400, detail="Лимиты подписки можно проверить только у Claude")
+    if provider not in LIMIT_PROVIDERS:
+        raise HTTPException(status_code=400, detail="У этого агента нет окон подписки — лимиты есть у Claude, GPT и Kimi")
     row = store.account(me.user_id, provider)
     if row.get("state") != "ready" or not row.get("node_id") or not store.node_online(row["node_id"]):
-        raise HTTPException(status_code=409, detail="Claude не подключён или нода агентов не на связи")
+        raise HTTPException(status_code=409, detail="Агент не подключён или нода агентов не на связи")
     # Окна подписки у Opus и Sonnet разные — спрашиваем на выбранной в чате модели (имя уходит в аргументы CLI: только безопасные знаки).
     safe = model if re.fullmatch(r"[A-Za-z0-9._:/-]{1,58}", model or "") else ""
     store.enqueue("check", me.user_id, provider, node_id=row["node_id"], payload={"limits": True, **({"model": safe} if safe else {})})
