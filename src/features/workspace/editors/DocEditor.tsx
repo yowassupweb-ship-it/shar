@@ -3,7 +3,8 @@ import { DocSelectionManagerService, UniverDocsLayoutWorkerPlugin, UniverDocsPlu
 import { DocCanvasPopManagerService, UniverDocsUIPlugin } from '@univerjs/docs-ui';
 import { IRenderManagerService, UniverRenderEnginePlugin } from '@univerjs/engine-render';
 import { UniverNetworkPlugin } from '@univerjs/network';
-import { UniverUIPlugin } from '@univerjs/ui';
+import { ContextMenuPosition, IContextMenuService, UniverUIPlugin } from '@univerjs/ui';
+import { IContextService } from '@univerjs/core';
 import '@univerjs/network/facade';
 import { DOC_TOOLBAR } from '../lib/toolbarLayout';
 import { createUniver, ICommandService, IImageIoService, LocaleType, mergeLocales, type IDocumentData, type IPresetPlugin } from '@univerjs/presets';
@@ -33,6 +34,7 @@ import { showToast } from '@/shared/ui/Toast';
 import type { EditorProps } from './types';
 import { CursorLayer, type CursorShape } from '../CursorLayer';
 import { bindDoc } from '../live/docOps';
+import { DocInsertPicker, UniverDocMenu, type DocMenuContext } from './UniverDocMenu';
 import type { CursorPos, RemoteCursor } from '../useCursors';
 
 
@@ -139,6 +141,12 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
   onCursorRef.current = onCursor;
   const engine = useRef<{ injector: Injector; unitId: string } | null>(null);
   const [overlay, setOverlay] = useState<ReturnType<typeof measureCursors>>(null);
+  // Своё меню правого клика (как у Google) и всплывающий выбор эмодзи и символов.
+  const [ctxMenu, setCtxMenu] = useState<DocMenuContext | null>(null);
+  const [picker, setPicker] = useState<{ kind: 'emoji' | 'symbol'; at: { x: number; y: number } } | null>(null);
+  const execRef = useRef<{ has: (id: string) => boolean; exec: (id: string, params?: object) => void; insert: (text: string) => boolean }>({
+    has: () => false, exec: () => undefined, insert: () => false,
+  });
 
   // Новая версия с сервера: пересобираем редактор из неё.
   useEffect(() => {
@@ -364,14 +372,59 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
           } catch { /* документ уже разобран */ }
         },
         has: (id) => injector.get<ICommandService>(ICommandService).hasCommand(id),
-        exec: (id) => {
+        exec: (id, params) => {
           const commands = injector.get<ICommandService>(ICommandService);
           if (!commands.hasCommand(id)) return false;
-          void commands.executeCommand(id);
+          void commands.executeCommand(id, params);
           return true;
         },
+        insertText: (text) => execRef.current.insert(text),
+        pick: (kind, at) => setPicker({ kind, at }),
       };
     }
+
+    // ── Меню правого клика: своё, как у Google (длинный список с сочетаниями), вместо встроенного Univer. ─────────
+    // Встроенное выключаем публичным disable(); у картинок оставляем его меню (обтекание, порядок) — оно про картинку.
+    const commandsOf = () => injector.get<ICommandService>(ICommandService);
+    execRef.current = {
+      has: (id) => commandsOf().hasCommand(id),
+      exec: (id, params) => { if (commandsOf().hasCommand(id)) void commandsOf().executeCommand(id, params); },
+      // Вставка текста в позицию курсора — той же командой, что эмодзи (переводы строк — пробелами: это одна вставка).
+      insert: (text) => {
+        if (!text || !commandsOf().hasCommand('doc.command.insert-special-character')) return false;
+        void commandsOf().executeCommand('doc.command.insert-special-character', { value: text.replace(/\r?\n/g, ' ') });
+        return true;
+      },
+    };
+    const contextMenu = injector.get<IContextMenuService>(IContextMenuService);
+    contextMenu.disable();
+    const onContextMenu = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      // Меню только над листом документа (холст), а не над лентой, линейкой или всплывающими окнами.
+      if (event.shiftKey || !target || target.tagName !== 'CANVAS') return;
+      event.preventDefault();
+      event.stopPropagation();
+      let drawing = false;
+      try { drawing = Boolean(injector.get<IContextService>(IContextService).getContextValue('FOCUSING_COMMON_DRAWINGS')); } catch { /* нет сервиса */ }
+      if (drawing && !readOnly) {
+        contextMenu.enable();
+        contextMenu.triggerContextMenu({ clientX: event.clientX, clientY: event.clientY, stopPropagation: () => undefined }, ContextMenuPosition.DRAWING);
+        contextMenu.disable();
+        return;
+      }
+      let selected = false;
+      let inTable = false;
+      try {
+        const range = injector.get<DocSelectionManagerService>(DocSelectionManagerService).getActiveTextRange();
+        if (range) {
+          selected = range.startOffset !== range.endOffset;
+          const model = (doc as unknown as { getDocumentDataModel: () => { getSnapshot: () => { body?: { tables?: Array<{ startIndex: number; endIndex: number }> } } } }).getDocumentDataModel();
+          inTable = (model.getSnapshot()?.body?.tables || []).some((t) => range.startOffset >= t.startIndex && range.startOffset <= t.endIndex);
+        }
+      } catch { /* документ ещё не готов */ }
+      setCtxMenu({ x: event.clientX, y: event.clientY, selected, inTable });
+    };
+    el.addEventListener('contextmenu', onContextMenu, true);
 
     // Правки текста, форматирования и полей страницы идут мутациями; мутация без реальной разницы
     // (фокус, выделение) отсеивается сравнением с сохранённым отпечатком.
@@ -400,6 +453,9 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
     const stopTakeOver = takeOverWhenRendered(univerAPI, el, mount);
     return () => {
       window.removeEventListener('keydown', onFindKey);
+      el.removeEventListener('contextmenu', onContextMenu, true);
+      setCtxMenu(null);
+      setPicker(null);
       window.removeEventListener('keydown', onCopyKey, true);
       restoreEmoji();
       stopPasteUpload();
@@ -485,6 +541,18 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
         </div>
       )}
       {overlay && <CursorLayer shapes={overlay.shapes} style={overlay.frame} />}
+      {ctxMenu && (
+        <UniverDocMenu
+          ctx={ctxMenu}
+          readOnly={readOnly}
+          has={(id) => execRef.current.has(id)}
+          exec={(id, params) => execRef.current.exec(id, params)}
+          onClose={() => setCtxMenu(null)}
+          onComment={onAddComment ? () => onAddCommentRef.current?.() : undefined}
+          onPick={(kind) => setPicker({ kind, at: { x: ctxMenu.x, y: ctxMenu.y } })}
+        />
+      )}
+      {picker && <DocInsertPicker kind={picker.kind} at={picker.at} onPick={(v) => execRef.current.insert(v)} onClose={() => setPicker(null)} />}
     </div>
   );
 }

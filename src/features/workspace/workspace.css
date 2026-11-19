@@ -1001,6 +1001,10 @@ button.nws-cm-anchor { cursor: pointer; }
 /* Переименование материала прямо в строке списка */
 .nws-row-rename { width: 100%; min-width: 0; padding: 2px 6px; margin: -2px -6px; border: 1px solid var(--accent-color); border-radius: 6px; background: var(--element-bg); color: var(--text-main); font: inherit; font-weight: var(--weight-semibold); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 22%, transparent); }
 .nx-menu-item > span:has(> .nws-bar-item) { flex: 1; min-width: 0; }
+/* Меню документа (строка меню, правый клик) — просторнее, как у Google Документов: строка повыше, подпись в одну строку. */
+.nx-menu-item:has(.nws-bar-item) { min-height: 36px; padding-inline: 14px 16px; gap: 14px; }
+.nws-bar-item { white-space: nowrap; }
+.nx-menu:has(.nws-bar-item) { max-width: min(400px, calc(100vw - 2 * var(--space-4))); max-height: min(680px, calc(var(--nx-vvh, 100dvh) - 2 * var(--space-4))); }
 .nws-bar-noicon { display: inline-block; width: 15px; flex: none; }
 
 /* Документ в тёмной теме: Univer инвертирует цвета холста — страница становилась чисто чёрной, текст чисто белым.
@@ -1205,3 +1209,16 @@ section.univer-popup .univerjs-icon { --univer-primary-600: currentColor; }
 .univer-z-\[1080\] > div.univer-rounded-md :is(button, [role="menuitem"], li):hover { background: var(--surface-hover) !important; }
 .univer-z-\[1080\] .univerjs-icon { --univer-primary-600: currentColor; color: var(--text-2); }
 .univer-z-\[1080\] input { background: var(--element-bg) !important; color: var(--text-main) !important; border-color: var(--border-color) !important; }
+
+/* Выбор эмодзи и спецсимволов для документа (ПКМ → «Вставить эмодзи», «Вставка → Символы»). */
+.nws-insert-picker {
+  position: fixed; z-index: 1300; padding: var(--space-2); border-radius: var(--radius-lg);
+  background: var(--surface-panel, var(--bg-color)); box-shadow: var(--shadow-lg, 0 12px 32px rgb(0 0 0 / 0.18)), 0 0 0 1px var(--border-color);
+}
+.nws-insert-picker-title { padding: 4px 6px 8px; font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text-2); }
+.nws-symbols { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; }
+.nws-symbols button {
+  display: grid; place-items: center; aspect-ratio: 1; border: 0; border-radius: 8px; background: none; color: var(--text-color);
+  font-size: 17px; cursor: pointer;
+}
+.nws-symbols button:hover, .nws-symbols button:focus-visible { background: var(--hover-bg, color-mix(in srgb, var(--text-color) 8%, transparent)); outline: none; }

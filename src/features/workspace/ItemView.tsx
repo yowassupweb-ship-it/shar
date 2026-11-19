@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
   AArrowDown, AArrowUp, ArrowDownAZ, ArrowUpDown, ArrowUpZA, Bold, BookOpen, Pencil, ClipboardPaste, Columns2, Eraser, Filter, FilterX, Grid3x3, Hash, Italic, Keyboard, List, ListChecks, ListOrdered, Maximize, Minimize, MessageSquarePlus, Minus, PanelTop, Percent, Redo2, RefreshCw, RussianRuble, Scissors, Search, Settings2, Sigma, Strikethrough, Subscript, Superscript, Table, TableCellsMerge, TableCellsSplit, Underline, Undo2,
-  AlertCircle, ArrowLeft, Check, Copy, Download, FilePlus, Globe2, History, Link2, Lock, Mail, MessageSquare, Star, MoreHorizontal, Pin, PinOff, MonitorUp, Printer, Send, Share2, Trash2, Upload, Users, Zap,
+  AlertCircle, ArrowLeft, Check, Copy, Download, FilePlus, Globe2, History, Link2, Lock, Mail, MessageSquare, Star, MoreHorizontal, Pin, PinOff, MonitorUp, Printer, Send, Share2, Trash2, Upload, Users, Zap, Image as ImageIcon, Smile, Omega, CalendarDays, SeparatorHorizontal,
 } from 'lucide-react';
 import { useMailConnected, writeMail } from '@/features/mail';
 import { recordVisit } from '@/features/spotlight/history';
@@ -383,6 +383,14 @@ ${absolute(links.office(item!.kind, item!.id))}` });
     const can = (id: string) => Boolean(commentsBridge.current?.has(id));
     // Пункт-команда редактора: недоступная в этой сборке или в режиме просмотра — серая, как у Google.
     const cmd = (label: string, id: string, icon: React.ReactNode = <span className="nws-bar-noicon" />, hint?: string) => ({ label, icon, hint, onSelect: editorDo(id), disabled: readOnly || !can(id) });
+    // Эмодзи и символы: окошко выбора под строкой меню, у пункта «Вставка».
+    const pick = (label: string, kind: 'emoji' | 'symbol', icon: React.ReactNode) => ({
+      label, icon, disabled: readOnly || !commentsBridge.current?.pick,
+      onSelect: () => {
+        const r = document.querySelector('.nws-bar')?.getBoundingClientRect();
+        commentsBridge.current?.pick?.(kind, { x: (r?.left ?? 200) + 120, y: (r?.bottom ?? 80) + 6 });
+      },
+    });
     const comment = { label: 'Комментарий', onSelect: addComment, icon: <MessageSquarePlus size={15} />, hint: mac ? '⌥⌘M' : 'Ctrl+Alt+M' };
     const menus: BarMenu[] = [
       { id: 'file', label: 'Файл', items: [
@@ -425,12 +433,22 @@ ${absolute(links.office(item!.kind, item!.id))}` });
           : { label: 'Полный экран', onSelect: () => setFullScreen(true), icon: <Maximize size={15} /> },
       ] },
       { id: 'insert', label: 'Вставка', items: isDoc ? [
+        cmd('Изображение…', 'doc.command.insert-float-image', <ImageIcon size={15} />),
         cmd('Таблица', 'doc.operation.create-table', <Table size={15} />),
+        cmd('Ссылка', 'doc.operation.show-hyper-link-edit-popup', <Link2 size={15} />, `${mod}K`),
+        pick('Эмодзи', 'emoji', <Smile size={15} />),
+        pick('Специальные символы', 'symbol', <Omega size={15} />),
+        { label: 'Сегодняшняя дата', icon: <CalendarDays size={15} />, disabled: readOnly || !commentsBridge.current?.insertText,
+          onSelect: () => { commentsBridge.current?.insertText?.(new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })); } },
+        'sep',
+        cmd('Нумерованный список', 'doc.command.order-list', <ListOrdered size={15} />),
+        cmd('Маркированный список', 'doc.command.bullet-list', <List size={15} />),
+        cmd('Список задач', 'doc.command.check-list', <ListChecks size={15} />),
+        'sep',
         cmd('Горизонтальная линия', 'doc.command.horizontal-line', <Minus size={15} />),
+        cmd('Разрыв раздела (новая страница)', 'docs.operation.insert-section-break', <SeparatorHorizontal size={15} />),
         cmd('Разрыв колонки', 'docs.operation.insert-column-break', <Columns2 size={15} />),
         cmd('Колонтитулы', 'doc.command.open-header-footer-panel', <PanelTop size={15} />),
-        'sep',
-        cmd('Ссылка', 'doc.operation.show-hyper-link-edit-popup', <Link2 size={15} />, `${mod}K`),
         'sep',
         comment,
       ] : [

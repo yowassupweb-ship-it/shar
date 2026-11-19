@@ -7,8 +7,12 @@ export interface CommentsBridge {
   anchor: () => CommentAnchor | null;
   jump: (anchor: CommentAnchor) => void;
   /** Команда редактора по имени (отменить, жирный…). false — такой команды в этой сборке нет. */
-  exec: (commandId: string) => boolean;
+  exec: (commandId: string, params?: object) => boolean;
   has: (commandId: string) => boolean;
+  /** Вставить текст в позицию курсора (дата, символ). Нет у редакторов, где это не нужно. */
+  insertText?: (text: string) => boolean;
+  /** Открыть выбор эмодзи или спецсимвола у точки экрана (меню «Вставка»). */
+  pick?: (kind: 'emoji' | 'symbol', at: { x: number; y: number }) => void;
 }
 /**
  * Контракт редактора вида. Редактор сам разбирает и собирает формат содержимого;
