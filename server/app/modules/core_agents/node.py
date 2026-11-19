@@ -377,6 +377,12 @@ def _apply_run(job: dict, events: list[dict]) -> dict:
                 task_agent.finished(job, kind, body or "")  # запуск по задаче → отчёт в задаче
             except Exception as exc:  # отчёт не должен ломать завершение ответа
                 log.warning("task agent report failed: %s", exc)
+            try:
+                from app.modules.studio import router as studio
+
+                studio.finished(job, kind, body or "")  # запуск студии → картинка в галерею, человеку studio_ready
+            except Exception as exc:  # галерея не должна ломать завершение ответа
+                log.warning("studio run finish failed: %s", exc)
             store.finish_job(job["id"], kind, str(ev.get("error") or ""))
     return {"ok": True}
 

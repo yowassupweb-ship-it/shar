@@ -334,64 +334,25 @@ def test_forwarded_reaches_agent_and_chats_stay_closed(client, admin):
         _cleanup()
 
 
-def test_image_generate_attaches_to_answer_and_lands_in_agent_files(client, admin, monkeypatch):
-    """Картинка: Gemini по ключу человека (Google подменён), файл — в загрузки, к ответу агента и в «Файлы → Агенты»."""
+def test_agent_images_attach_to_answer_and_land_in_agent_files(client, admin):
+    """Картинку агент делает сам (своим средством) и отдаёт image_attach: файл — в загрузки, к ответу и в «Файлы → Агенты».
+    Своего генератора у Шара нет: запасной image_generate через Gemini удалён."""
     import base64
 
-    from app.modules.core_agents import images, store
-
-    class Res:
-        def __init__(self, data, status=200):
-            self._data, self.status_code, self.text = data, status, ""
-
-        def json(self):
-            return self._data
-
-        def raise_for_status(self):
-            pass
-
     png = base64.b64encode(b"\x89PNG\r\n\x1a\nfake").decode()
-    monkeypatch.setattr(images.requests, "get", lambda *a, **k: Res({"models": [
-        {"name": "models/gemini-2.5-flash-image", "supportedGenerationMethods": ["generateContent"]},
-        {"name": "models/gemini-3-flash-image-preview", "supportedGenerationMethods": ["generateContent"]},
-        {"name": "models/gemini-3-pro", "supportedGenerationMethods": ["generateContent"]}]}))
-    sent_to: list[str] = []
-
-    def post(url, **kwargs):
-        sent_to.append(url)
-        return Res({"candidates": [{"content": {"parts": [{"text": "Готово"}, {"inlineData": {"mimeType": "image/png", "data": png}}]}}],
-                    "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 1290}})
-
-    monkeypatch.setattr(images.requests, "post", post)
-    images._models.clear()
     try:
         node, token = _node(admin)
         _poll(client, token)
         uid = admin.get("/api/auth/session").json()["user"]["id"]
         thread = admin.post("/api/core/threads", json={}).json()["thread"]
-        # Без ключа Gemini — понятная ошибка, что подключить.
         db.conn.execute_query("INSERT INTO core_accounts (user_id, provider, state, node_id) VALUES (%s, 'claude', 'ready', %s)", (uid, int(node["id"])))
         sent = admin.post(f"/api/core/threads/{thread['id']}/messages", json={"id": uuid.uuid4().hex, "body": "Нарисуй Кострому"}).json()
         run = _poll(client, token).json()["jobs"][0]
-        no_key = _rpc(client, run["mcp"]["token"], "image_generate", prompt="Кострома на закате")
-        assert no_key["isError"] and "Gemini" in json.dumps(no_key, ensure_ascii=False)
+        gone = client.post("/api/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "image_generate", "arguments": {"prompt": "x"}}},
+                           headers={"Authorization": f"Bearer {run['mcp']['token']}"}).json()
+        assert "error" in gone or gone.get("result", {}).get("isError"), "image_generate больше нет"
 
-        db.conn.execute_query("INSERT INTO core_accounts (user_id, provider, state, secret_enc) VALUES (%s, 'gemini', 'ready', %s)",
-                              (uid, store.seal("AIza-test")))
-        made = _rpc(client, run["mcp"]["token"], "image_generate", prompt="Кострома на закате", aspect="16:9")
-        assert not made.get("isError"), made
-        image = made["structuredContent"]["image"]
-        assert image["url"].startswith("/api/uploads/") and image["model"] == "gemini-3-flash-image-preview"
-        assert "gemini-3-flash-image-preview:generateContent" in sent_to[-1]
-
-        reply = db.conn.fetch_one("SELECT props FROM core_messages WHERE id = %s", (sent["reply"]["id"],))
-        assert reply["props"]["attachments"][0]["url"] == image["url"]
-        chats = admin.get("/api/core/files/chats").json()
-        assert chats and chats[0]["chatId"] == thread["id"] and chats[0]["count"] == 1
-        files = admin.get("/api/core/files", params={"threadId": thread["id"]}).json()
-        assert files[0]["url"] == image["url"] and files[0]["fileType"] == "image" and files[0]["authorName"] == "Claude"
-
-        # Агент нарисовал сам (без Gemini): image_attach кладёт картинку в «Файлы → Агенты» и в ответ; не-картинку и чужой адрес не берёт.
+        # image_attach кладёт картинку в «Файлы → Агенты» и в ответ; не-картинку и чужой адрес не берёт.
         own = _rpc(client, run["mcp"]["token"], "image_attach", base64=png, name="своя картинка")
         assert not own.get("isError"), own
         assert own["structuredContent"]["image"]["url"].startswith("/api/uploads/")
@@ -408,9 +369,9 @@ def test_image_generate_attaches_to_answer_and_lands_in_agent_files(client, admi
         _events(client, token, run["id"], native)
         _events(client, token, run["id"], native)  # повтор доставки не создаёт вторую картинку
         reply = db.conn.fetch_one("SELECT props FROM core_messages WHERE id = %s", (sent["reply"]["id"],))
-        assert len(reply["props"]["attachments"]) == 4
-        assert reply["props"]["attachments"][3]["eventId"] == "run:image-1"
-        assert "встроенным image_gen" in run["system"] if run["provider"] == "codex" else "Gemini не нужен" in run["system"] and "image_attach" in run["system"]
+        assert len(reply["props"]["attachments"]) == 3
+        assert reply["props"]["attachments"][2]["eventId"] == "run:image-1"
+        assert "встроенным image_gen" in run["system"] if run["provider"] == "codex" else "image_attach" in run["system"] and "Gemini" not in run["system"]
     finally:
         _cleanup()
 

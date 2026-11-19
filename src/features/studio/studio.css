@@ -86,3 +86,8 @@
 .nst-copy { margin-left: 8px; padding: 0; border: 0; background: none; color: var(--accent-color); font: inherit; font-size: var(--text-xs); cursor: pointer; }
 .nst-foot { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .nst-foot .nx-primary, .nst-foot .nx-ghost { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; }
+
+/* Кто рисует и идущие запуски */
+.nst-agents { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.nst-runs { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; color: var(--text-2); font-size: var(--text-sm); }
+.nst-runs li { display: flex; align-items: center; gap: 8px; }

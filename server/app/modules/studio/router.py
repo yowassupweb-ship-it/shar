@@ -1,8 +1,10 @@
 """Студия картинок: рисование, галерея, референсы и то, чему агент учится на оценках.
 
 Раздел открыт тем, у кого включено «Ядро» (как и сам чат с агентами): отдельной выдачи прав нет — «идёт из коробки».
-Рисует тот же Gemini по ключу человека, что и MCP image_generate (core_agents/images.py), поэтому всё, что агент
-нарисовал в чате, тоже попадает сюда — в галерею — и наоборот: агент видит референсы человека и его оценки.
+Рисует агент «Ядра» по подписке человека — тот, кого он выбрал (GPT встроенным image_gen, Claude и Kimi — своим средством,
+обычно SVG). Запуск идёт в чат «Ядра» «Студия» (там видно, как агент работает), готовая картинка возвращается сюда
+(finished). Всё, что агент нарисовал и в обычном чате, тоже попадает в галерею — и наоборот: агент видит референсы
+человека и его оценки. Своего генератора у Шара нет (прежний Gemini по ключу удалён 18.11.2026).
 
   галерея     каждая нарисованная картинка: запрос, формат, референсы, из чего сделана (родитель), оценка (👍 / 👎 с
               причиной), избранное, заметка, метки;
@@ -11,8 +13,8 @@
               агентам в начало каждого запуска (prompt_block) и в профиль человека (memory.profile_note) — агент,
               который рисует в чате, учитывает вкус, а не начинает с нуля.
 
-  GET    /api/studio                      галерея, референсы, выводы, подключён ли ключ
-  POST   /api/studio/generate             {prompt, aspect, refs[], parentId?, useStyle?}
+  GET    /api/studio                      галерея, референсы, выводы, агенты, которые могут рисовать, идущие запуски
+  POST   /api/studio/generate             {prompt, agent, aspect, refs[], parentId?, useStyle?} → {runId}; картинка — событием studio_ready
   PATCH  /api/studio/images/{id}          {rating?, reason?, favorite?, note?, tags?, name?}
   DELETE /api/studio/images/{id}
   POST   /api/studio/refs                 {name, kind, note, key | imageId, tags}
@@ -34,6 +36,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core import schema
 from app.core.db import db
+from app.core.db.connection import Json
 from app.core.ratelimit import limiter
 from app.core.security import Identity, current_identity
 
@@ -231,7 +234,7 @@ def annotated_png(data: bytes, marks: list[dict]) -> Optional[bytes]:
 
 def record_image(user_id: str, file: dict, *, prompt: str = "", aspect: str = "", source: str = "studio", refs: Optional[list[str]] = None,
                  parent_id: Optional[str] = None) -> Optional[dict]:
-    """Картинка — в галерею: из студии, из чата с агентом (MCP image_generate) или от встроенного генератора GPT.
+    """Картинка — в галерею: из студии, из чата с агентом или от встроенного генератора GPT.
     Не падает: галерея не должна ломать рисование."""
     try:
         if not ready():
@@ -302,9 +305,9 @@ def prompt_block(user_id: str) -> str:
         got = insights(user_id)
         if not refs and not got["rated"]:
             return ""
-        parts = ["## Картинки (студия человека; рисует image_generate)"]
+        parts = ["## Картинки (студия человека)"]
         if refs:
-            parts.append("Референсы человека (приложить: image_generate reference_ids): "
+            parts.append("Референсы человека (смотреть по адресу из studio_refs): "
                          + "; ".join(f"{r['id']} — {r['name']} ({r['kindLabel'].lower()})" for r in refs) + ". Все — studio_refs.")
         if got["aspect"]:
             parts.append(f"Любимый формат: {got['aspect']}.")
@@ -335,58 +338,159 @@ def _learn(user_id: str, image: dict, rating: int, reason: str) -> None:
 
 # ── рисование ────────────────────────────────────────────────────────────────
 
-def make(user_id: str, prompt: str, *, aspect: str = "", ref_ids: Optional[list[str]] = None, parent_id: Optional[str] = None,
-         use_style: bool = False, source: str = "studio", name: str = "", source_url: str = "") -> dict:
-    """Нарисовать и записать. Референсы человека и родитель (правка готовой картинки) прикладываются к запросу."""
-    from app.modules.core_agents import images
+STUDIO_THREAD = "Студия: картинки"
+RUN_TTL_MIN = 60
+
+
+def _studio_thread(user_id: str, provider: str) -> dict:
+    """Чат «Ядра», куда уходят запуски студии: один на человека, чтобы ход работы агентов был в одном месте."""
+    row = db.conn.fetch_one("SELECT * FROM core_threads WHERE user_id = %s AND title = %s ORDER BY created_at DESC LIMIT 1", (user_id, STUDIO_THREAD))
+    if row:
+        return dict(row)
+    return dict(db.conn.fetch_one("INSERT INTO core_threads (id, user_id, title, peer) VALUES (%s, %s, %s, %s) RETURNING *",
+                                  (uuid.uuid4().hex[:24], user_id, STUDIO_THREAD, provider)))
+
+
+def image_agents(user_id: str) -> list[dict]:
+    """Кто из подключённых агентов человека может нарисовать: GPT — встроенным генератором, остальные — своим средством."""
+    from app.modules.core_agents import store
+
+    out = []
+    for a in store.ready_agents(user_id):
+        if a["provider"] == "gemini":
+            continue  # Gemini по ключу картинок больше не рисует (запасной путь удалён)
+        native = a["provider"] == "codex"
+        out.append({"id": a["provider"], "label": a["label"], "model": a["model"], "nodeOnline": a["nodeOnline"],
+                    "how": "встроенный генератор картинок" if native else "своим средством: обычно SVG или код"})
+    return sorted(out, key=lambda x: x["id"] != "codex")
+
+
+def make(user_id: str, prompt: str, *, agent: str = "", aspect: str = "", ref_ids: Optional[list[str]] = None, parent_id: Optional[str] = None,
+         use_style: bool = False) -> dict:
+    """Поручить картинку агенту «Ядра». Ответ сразу — {runId}; картинка придёт, когда агент закончит (finished → studio_ready)."""
+    from app.modules.core_agents import dispatch, images
+    from app.modules.core_chat.router import _announce, _touch, present_message
+    from app.modules.files.uploads import save_upload_bytes
 
     prompt = str(prompt or "").strip()
     if not prompt:
         raise StudioError("Опишите, что нарисовать")
+    choices = image_agents(user_id)
+    chosen = next((a for a in choices if a["id"] == (agent or "").split(":")[0]), None) or (choices[0] if choices else None)
+    if chosen is None:
+        raise StudioError("Рисует агент «Ядра» по вашей подписке: подключите GPT, Claude или Kimi в настройках «Ядра»")
     refs = list_refs(user_id, list(dict.fromkeys(ref_ids or []))[:MAX_REFS_PER_RUN]) if ref_ids else []
     parent = None
-    if not parent_id and source_url:
-        # Агент прислал адрес картинки из галереи («правь эту») — это та же картинка с теми же метками человека.
-        found = db.conn.fetch_one("SELECT id FROM studio_images WHERE user_id = %s AND url = %s ORDER BY created_at DESC LIMIT 1", (user_id, source_url))
-        if found:
-            parent_id = found["id"]
     if parent_id:
         parent = db.conn.fetch_one("SELECT * FROM studio_images WHERE id = %s AND user_id = %s", (parent_id, user_id))
         if not parent:
             raise StudioError("Исходная картинка не найдена")
-        source_url = parent["url"]
-    extra_text, extra_images = "", []
-    marks = list((parent or {}).get("marks") or [])
-    if marks:
-        extra_text = marks_text(marks)
-        try:
-            mime, data = images._source(source_url)  # noqa: SLF001 — тот же загрузчик исходников, что у правки
-            drawn = annotated_png(data, marks)
-            if drawn:
-                extra_images.append(("image/png", drawn))
-                extra_text += " Последняя приложенная картинка — схема меток: маркеры нарисованы поверх исходного фото только для указания мест, в результат их не переноси."
-        except images.ImageError:
-            pass
-    full = prompt
+
+    attachments: list[dict] = []
+    lines = [f"Нарисуйте картинку для «Студии» Шара по запросу человека: {prompt}"]
+    if aspect:
+        lines.append(f"Соотношение сторон: {aspect}.")
+    if parent:
+        attachments.append({"name": f"исходник-{parent['id'][:6]}", "url": parent["url"], "type": parent.get("mime") or "image/png"})
+        lines.append("Это правка готовой картинки: исходник приложен — меняйте только то, о чём просят, остальное сохраните.")
+        marks = list(parent.get("marks") or [])
+        if marks:
+            lines.append(marks_text(marks))
+            try:
+                mime, data = images._source(parent["url"])  # noqa: SLF001 — тот же загрузчик исходников
+                drawn = annotated_png(data, marks)
+                if drawn:
+                    saved = save_upload_bytes("метки.png", drawn, "image/png", user_id)
+                    attachments.append({"name": "метки", "url": saved["url"], "type": "image/png"})
+                    lines.append("Приложенная схема «метки» — копия исходника с пронумерованными маркерами: только чтобы показать места, в результат маркеры не переносите.")
+            except images.ImageError:
+                pass
+    if refs:
+        attachments += [{"name": r["name"] or "референс", "url": r["url"], "type": "image/png"} for r in refs]
+        lines.append("Референсы человека приложены — учитывайте: " + "; ".join(f"«{r['name']}» — {r['kindLabel'].lower()}{(': ' + r['note']) if r.get('note') else ''}" for r in refs) + ".")
     if use_style:
         style = style_text(user_id)
         if style:
-            full = f"{prompt}\n\nУчитывай вкус заказчика. {style}"
-    try:
-        file = images.generate(user_id, full, aspect=aspect, source_url=source_url, name=name or prompt, refs=refs,
-                               extra_text=extra_text, extra_images=extra_images)
-    except images.ImageError as exc:
-        raise StudioError(str(exc)) from exc
-    if refs:
-        db.conn.execute_query("UPDATE studio_refs SET uses = uses + 1 WHERE user_id = %s AND id = ANY(%s)", (user_id, [r["id"] for r in refs]))
-    saved = record_image(user_id, file, prompt=prompt, aspect=aspect, source=source, refs=[r["id"] for r in refs], parent_id=parent_id)
-    return {"image": saved, "file": file, "note": file.get("note") or ""}
+            lines.append(f"Учитывайте вкус человека. {style}")
+    lines.append("Сделайте ровно одну картинку своим средством и отдайте её человеку как файл (у GPT — встроенный генератор картинок; "
+                 "у остальных — аккуратный SVG в папку готовых картинок). Вопросов не задавайте, ответьте одной строкой, что нарисовали.")
+
+    thread = _studio_thread(user_id, chosen["id"])
+    user = db.get_user_by_id(user_id) or {}
+    run_id = f"studio-{uuid.uuid4().hex[:20]}"
+    props = {"studioRun": {"prompt": prompt, "aspect": aspect, "refs": [r["id"] for r in refs], "parentId": parent_id or None, "agent": chosen["id"]},
+             "agentNote": "\n\n".join(lines), "attachments": attachments}
+    created = db.conn.fetch_one(
+        """INSERT INTO core_messages (id, thread_id, user_id, role, actor, body, props, status)
+           VALUES (%s, %s, %s, 'user', %s, %s, %s, 'done') RETURNING *""",
+        (run_id, thread["id"], user_id, user.get("name") or user.get("username") or "Студия", f"🎨 {prompt}"[:4000], Json(props)))
+    _touch(thread["id"])
+    message = present_message(created)
+    _announce(user_id, message, thread["id"])
+    reply = dispatch.dispatch(user_id, thread, message, wanted=chosen["id"])
+    if reply is None:
+        raise StudioError("Не получилось запустить агента: проверьте подключение в настройках «Ядра»")
+    if reply.get("status") == "failed":
+        _mark_done(run_id, error=str(reply.get("body") or "Агент не запустился"))
+        raise StudioError(str(reply.get("body") or "Агент не запустился"))
+    return {"runId": run_id, "agent": chosen["label"], "threadId": thread["id"]}
+
+
+def _mark_done(run_id: str, *, error: str = "", image_id: str = "") -> None:
+    db.conn.execute_query(
+        "UPDATE core_messages SET props = jsonb_set(props, '{studioRun,doneAt}', to_jsonb(now()::text)) "
+        "|| jsonb_build_object('studioResult', jsonb_build_object('error', %s::text, 'imageId', %s::text)) WHERE id = %s",
+        (error[:500], image_id, run_id))
+
+
+def pending_runs(user_id: str) -> list[dict]:
+    """Запуски студии, которые ещё рисуются (за последний час) — чтобы после перезагрузки страницы не терялся «рисует…»."""
+    rows = db.conn.fetch_all(
+        "SELECT id, props, created_at FROM core_messages WHERE user_id = %s AND role = 'user' AND props ? 'studioRun' "
+        "AND NOT (props->'studioRun' ? 'doneAt') AND created_at > now() - make_interval(mins => %s) ORDER BY created_at DESC LIMIT 10",
+        (user_id, RUN_TTL_MIN)) or []
+    return [{"runId": r["id"], "prompt": (r["props"].get("studioRun") or {}).get("prompt") or "", "agent": (r["props"].get("studioRun") or {}).get("agent") or "",
+             "startedAt": r["created_at"].isoformat() if r.get("created_at") else None} for r in rows]
+
+
+def finished(job: dict, kind: str, body: str) -> None:
+    """Ответ агента закончился (core_agents/node.py). Если это запуск студии — картинку в галерею, человеку событие studio_ready."""
+    from app.core.realtime import sse_manager
+
+    payload = job.get("payload") or {}
+    run_id = str(payload.get("userMessageId") or "")
+    if not run_id.startswith("studio-") or not ready():
+        return
+    user_msg = db.conn.fetch_one("SELECT props FROM core_messages WHERE id = %s", (run_id,))
+    run = ((user_msg or {}).get("props") or {}).get("studioRun")
+    if not run or run.get("doneAt"):
+        return
+    user_id = job["user_id"]
+    agent_msg = db.conn.fetch_one("SELECT props FROM core_messages WHERE id = %s", (job.get("message_id"),))
+    files = [f for f in ((agent_msg or {}).get("props") or {}).get("attachments") or [] if str(f.get("type") or "").startswith("image/") and f.get("url")]
+    saved = None
+    for f in files[-1:]:  # просили одну — берём последнюю (агенты иногда сначала отдают черновик)
+        existing = db.conn.fetch_one("SELECT id FROM studio_images WHERE user_id = %s AND url = %s", (user_id, f["url"]))
+        if existing:  # растровую картинку агента галерея уже записала как «из чата» — переписываем в запуск студии
+            row = db.conn.fetch_one(
+                "UPDATE studio_images SET source = 'studio', prompt = %s, aspect = %s, refs = %s, parent_id = %s, model = %s WHERE id = %s RETURNING *",
+                (run.get("prompt") or "", run.get("aspect") or "", list(run.get("refs") or []), run.get("parentId"), run.get("agent") or "", existing["id"]))
+            saved = _image_view(dict(row)) if row else None
+        else:
+            saved = record_image(user_id, {**f, "model": run.get("agent") or ""}, prompt=run.get("prompt") or "", aspect=run.get("aspect") or "",
+                                 refs=list(run.get("refs") or []), parent_id=run.get("parentId"))
+    if saved and run.get("refs"):
+        db.conn.execute_query("UPDATE studio_refs SET uses = uses + 1 WHERE user_id = %s AND id = ANY(%s)", (user_id, list(run["refs"])))
+    error = "" if saved else (body.strip()[:400] if kind == "failed" and body else "Агент закончил, но картинку не отдал. Откройте чат «Студия: картинки» в «Ядре» — там видно почему.")
+    _mark_done(run_id, error=error, image_id=(saved or {}).get("id") or "")
+    sse_manager.push(user_id, {"type": "studio_ready", "runId": run_id, "image": saved, "error": error, "note": body.strip()[:300] if saved else ""})
 
 
 # ── маршруты ─────────────────────────────────────────────────────────────────
 
 class GenerateBody(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
+    agent: str = Field(default="", max_length=40)
     aspect: str = Field(default="", max_length=8)
     refs: list[str] = Field(default_factory=list, max_length=MAX_REFS_PER_RUN)
     parentId: Optional[str] = Field(default=None, max_length=64)
@@ -431,15 +535,12 @@ def _tags(items: list[str]) -> list[str]:
 @router.get("/api/studio")
 def get_studio(me: Identity = Depends(current_identity)):
     _guard(me)
-    from app.modules.core_agents import images, store
+    from app.modules.core_agents import images
 
-    has_key = False
-    try:
-        has_key = bool(store.unseal((store.account(me.user_id, "gemini") or {}).get("secret_enc") or ""))
-    except Exception:  # noqa: BLE001
-        pass
+    agents = image_agents(me.user_id)
     return {"images": list_images(me.user_id), "refs": list_refs(me.user_id), "insights": insights(me.user_id),
-            "hasKey": has_key, "kinds": KINDS, "aspects": sorted(images.ASPECTS), "model": images.latest_model(me.user_id) if has_key else ""}
+            "agents": agents, "pending": pending_runs(me.user_id), "hasKey": bool(agents),
+            "kinds": KINDS, "aspects": sorted(images.ASPECTS), "model": ""}
 
 
 @router.post("/api/studio/generate")
@@ -448,11 +549,10 @@ async def generate(body: GenerateBody, me: Identity = Depends(current_identity))
     if not limiter.allow(f"studio:{me.user_id}", 20, 60):
         raise HTTPException(status_code=429, detail="Слишком часто — подождите минуту")
     try:
-        got = await run_in_threadpool(make, me.user_id, body.prompt, aspect=body.aspect, ref_ids=body.refs, parent_id=body.parentId,
-                                      use_style=body.useStyle)
+        return await run_in_threadpool(make, me.user_id, body.prompt, agent=body.agent, aspect=body.aspect, ref_ids=body.refs,
+                                       parent_id=body.parentId, use_style=body.useStyle)
     except StudioError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from None
-    return {"image": got["image"], "note": got["note"]}
 
 
 def _own_image(image_id: str, me: Identity) -> dict:

@@ -10,6 +10,7 @@ import { askConfirm, Sheet } from '@/shared/ui/overlay';
 import { SearchField } from '@/shared/ui/SearchField';
 import { Spinner } from '@/shared/ui/Spinner';
 import { showToast } from '@/shared/ui/Toast';
+import { realtime } from '@/shared/realtime/realtime';
 import { studioApi, type StudioImage, type StudioInsights, type StudioRef, type StudioState } from './api';
 import './studio.css';
 
@@ -73,8 +74,8 @@ export default function StudioScreen() {
           <>
             {!state.hasKey && (
               <p className="nst-banner" role="status">
-                Картинки рисует Gemini по вашему ключу Google. Подключите его: Настройки → Ядро → Gemini (ключ из AI Studio). Без него студия хранит
-                галерею и референсы, но рисовать не сможет.
+                Рисует агент «Ядра» по вашей подписке — GPT встроенным генератором картинок, Claude и Kimi своим средством (обычно SVG).
+                Подключите агента: Настройки → Ядро. Без него студия хранит галерею и референсы, но рисовать не сможет.
               </p>
             )}
             {tab === 'create' && <CreateTab state={state} seed={seed} onDone={prepend} onOpen={setOpen} onClearSeed={() => setSeed(null)} />}
@@ -102,10 +103,32 @@ function CreateTab({ state, seed, onDone, onOpen, onClearSeed }: {
   const [picked, setPicked] = useState<string[]>([]);
   const [parent, setParent] = useState<StudioImage | null>(null);
   const [useStyle, setUseStyle] = useState(state.insights.rated > 0);
-  const [busy, setBusy] = useState(false);
   const [last, setLast] = useState<StudioImage | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const area = useRef<HTMLTextAreaElement>(null);
+  // Кто рисует: помним выбор на устройстве; по умолчанию — GPT (встроенный генератор), если подключён.
+  const [agent, setAgent] = useState<string>(() => {
+    let saved = '';
+    try { saved = localStorage.getItem('nst:agent') || ''; } catch { /* без памяти */ }
+    return state.agents.some((a) => a.id === saved) ? saved : state.agents[0]?.id || '';
+  });
+  const pickAgent = (id: string) => { setAgent(id); try { localStorage.setItem('nst:agent', id); } catch { /* без памяти */ } };
+  // Идущие запуски: агент рисует в фоне (до пары минут), результат приходит событием studio_ready.
+  const [runs, setRuns] = useState<Array<{ runId: string; prompt: string; agent: string }>>(() => state.pending.map((r) => ({ runId: r.runId, prompt: r.prompt, agent: r.agent })));
+  const [starting, setStarting] = useState(false);
+  const busy = starting || runs.length > 0;
+  useEffect(() => realtime.subscribe((event) => {
+    const e = event as { type?: string; runId?: string; image?: StudioImage | null; error?: string; note?: string };
+    if (e.type !== 'studio_ready' || !e.runId) return;
+    setRuns((cur) => cur.filter((r) => r.runId !== e.runId));
+    if (e.image) {
+      setLast(e.image);
+      onDone(e.image);
+      if (e.note) showToast(e.note.slice(0, 160), 'info');
+    } else {
+      showToast(e.error || 'Агент не отдал картинку', 'error');
+    }
+  }), [onDone]);
 
   useEffect(() => {
     if (!seed) return;
@@ -120,19 +143,18 @@ function CreateTab({ state, seed, onDone, onOpen, onClearSeed }: {
   const chosen = picked.map((id) => refById.get(id)).filter((r): r is StudioRef => Boolean(r));
 
   async function run() {
-    if (busy || !prompt.trim()) return;
-    setBusy(true);
+    if (starting || !prompt.trim() || !agent) return;
+    setStarting(true);
     try {
-      const got = await studioApi.generate({ prompt: prompt.trim(), aspect, refs: picked, parentId: parent?.id, useStyle });
-      setLast(got.image);
-      onDone(got.image);
+      const got = await studioApi.generate({ prompt: prompt.trim(), agent, aspect, refs: picked, parentId: parent?.id, useStyle });
+      setRuns((cur) => [{ runId: got.runId, prompt: prompt.trim(), agent }, ...cur]);
       setParent(null);
-      if (got.note) showToast(got.note.slice(0, 160), 'info');
     } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Не получилось нарисовать', 'error');
-    } finally { setBusy(false); }
+      showToast(e instanceof Error ? e.message : 'Не получилось поручить картинку', 'error');
+    } finally { setStarting(false); }
   }
 
+  const agentLabel = (id: string) => state.agents.find((a) => a.id === id)?.label || id;
   const recent = state.images.filter((i) => i.id !== last?.id).slice(0, 8);
   return (
     <div className="nst-create">
@@ -175,18 +197,36 @@ function CreateTab({ state, seed, onDone, onOpen, onClearSeed }: {
           </span>
           <Switch checked={useStyle} label="Учитывать мой вкус" onChange={setUseStyle} disabled={!state.insights.rated} />
         </label>
-        <button type="button" className="nx-primary nst-go" disabled={busy || !prompt.trim() || !state.hasKey} onClick={() => void run()}>
-          {busy ? <Spinner size={16} /> : <Sparkles size={16} aria-hidden="true" />} {busy ? 'Рисую… до минуты' : parent ? 'Доработать' : 'Нарисовать'}
+        {state.agents.length > 0 && (
+          <div className="nst-agents" role="radiogroup" aria-label="Кто рисует">
+            <span className="nst-label">Рисует</span>
+            {state.agents.map((a) => (
+              <button key={a.id} type="button" role="radio" aria-checked={agent === a.id} className="nst-chip" title={`${a.label}: ${a.how}${a.nodeOnline ? '' : ' · нода не на связи'}`}
+                disabled={!a.nodeOnline} onClick={() => pickAgent(a.id)}>
+                {a.label}{a.id === 'codex' ? ' · генератор' : ' · SVG'}
+              </button>
+            ))}
+          </div>
+        )}
+        <button type="button" className="nx-primary nst-go" disabled={starting || !prompt.trim() || !state.hasKey || !agent} onClick={() => void run()}>
+          {starting ? <Spinner size={16} /> : <Sparkles size={16} aria-hidden="true" />} {parent ? 'Доработать' : 'Нарисовать'}
         </button>
-        <span className="nst-hint">Ctrl+Enter — нарисовать</span>
+        {runs.length > 0 && (
+          <ul className="nst-runs" aria-live="polite">
+            {runs.map((r) => (
+              <li key={r.runId}><Spinner size={14} /> <span>{agentLabel(r.agent)} рисует: «{r.prompt.slice(0, 60)}{r.prompt.length > 60 ? '…' : ''}»</span></li>
+            ))}
+          </ul>
+        )}
+        <span className="nst-hint">Ctrl+Enter — нарисовать. Агент работает в чате «Ядра» «Студия: картинки» — там видно, как идёт дело.</span>
       </section>
 
       <section className="nst-stage" aria-label="Результат">
-        {busy && !last ? <div className="nst-wait"><Spinner size={28} label="Рисую" /></div> : null}
+        {busy && !last ? <div className="nst-wait"><Spinner size={28} label="Агент рисует" /></div> : null}
         {last ? (
           <button type="button" className="nst-result" onClick={() => onOpen(last.id)} aria-label="Открыть картинку">
             <img src={last.url} alt={last.prompt} />
-            {busy && <span className="nst-result-busy"><Spinner size={22} label="Рисую новую" /></span>}
+            {busy && <span className="nst-result-busy"><Spinner size={22} label="Агент рисует новую" /></span>}
           </button>
         ) : !busy && (
           <div className="nx-state"><Wand2 size={26} aria-hidden="true" /><p>Результат появится здесь. Оценивайте картинки — студия и агенты в чате запомнят, что вам нравится.</p></div>

@@ -973,7 +973,7 @@ def tool_search(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     query, level = str(args.get("query") or "").strip().casefold(), str(args.get("level") or "")
     words = query.split()
     aliases = {"permissions": "permission capabilities", "approval": "request_permission", "cells": "table range",
-               "versions": "item_versions diff_item", "image": "image_generate"}
+               "versions": "item_versions diff_item", "image": "image_attach"}
     stems = [_stem(word) for word in words]
     found = []
     for tool in TOOLS:

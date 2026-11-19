@@ -525,34 +525,8 @@ def connect_gemini(access, args: dict[str, Any]) -> dict[str, Any]:
             "note": "Ключ сохранён зашифрованным. Посоветуйте человеку удалить сообщение с ключом из чата."}
 
 
-def image_generate(access, args: dict[str, Any]) -> dict[str, Any]:
-    """Запасной путь: нарисовать картинку (или поправить присланную) Gemini по ключу человека; картинка — в ответ агента, в «Файлы → Агенты»
-    и в галерею студии (там человек оценивает её — это то, чему агент учится). У агентов есть свои средства — см. image_attach."""
-    from app.modules.core_agents import images
-    from app.modules.studio import router as studio
-
-    ids = [str(i).strip() for i in args.get("reference_ids") or [] if str(i).strip()][:6]
-    studio_url = ""
-    try:
-        if studio.ready():
-            source_url = str(args.get("source_url") or "")
-            got = studio.make(access.me.user_id, str(args.get("prompt") or ""), aspect=str(args.get("aspect") or ""), ref_ids=ids,
-                              use_style=bool(args.get("use_style")), source="chat", name=str(args.get("name") or ""), source_url=source_url)
-            file = got["file"]
-            studio_url = f"/studio?image={got['image']['id']}" if got.get("image") else ""
-        else:  # схема студии на проде ещё не догнана — рисуем как раньше, без галереи и референсов
-            file = images.generate(access.me.user_id, str(args.get("prompt") or ""), aspect=str(args.get("aspect") or ""),
-                                   source_url=str(args.get("source_url") or ""), name=str(args.get("name") or ""))
-    except (images.ImageError, studio.StudioError) as exc:
-        raise _err(str(exc)) from exc
-    images.attach_to_job(str(access.ctx.scope.get("job") or ""), file)
-    return {"image": {"name": file["name"], "url": file["url"], "model": file["model"], **({"studioUrl": studio_url} if studio_url else {})},
-            "note": "Картинка уже показана человеку в чате под вашим ответом и лежит в его галерее («Студия») — не вставляйте её ссылкой ещё раз."
-                    + (f" Комментарий модели: {file['note']}" if file.get("note") else "")}
-
-
 def image_attach(access, args: dict[str, Any]) -> dict[str, Any]:
-    """Отдать человеку картинку, которую агент создал сам: base64 или вложение Шара (/api/uploads/…). Gemini не нужен."""
+    """Отдать человеку картинку, которую агент создал сам: base64 или вложение Шара (/api/uploads/…)."""
     import base64
     from app.modules.core_agents import images
 
@@ -574,7 +548,7 @@ def image_attach(access, args: dict[str, Any]) -> dict[str, Any]:
 
 
 def studio_refs(access, args: dict[str, Any]) -> dict[str, Any]:
-    """Референсы человека в студии: id для image_generate (reference_ids), название, что это, заметка."""
+    """Референсы человека в студии: название, что это, заметка и адрес картинки — смотреть и учитывать, когда рисуете."""
     from app.modules.studio import router as studio
 
     if not studio.ready():
@@ -935,23 +909,12 @@ TOOLS: list[dict[str, Any]] = [
     {"name": "agent_schedule_cancel", "app": "agent", "handler": agent_schedule_cancel, "level": "create",
      "description": "Отменить запланированный запуск по id из agent_schedules. Уже созданный ответ агента не останавливает. Нужен confirm: true.",
      "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "confirm": {"type": "boolean"}}, "required": ["id", "confirm"]}},
-    {"name": "image_generate", "app": "files", "handler": image_generate, "level": "create",
-     "description": "Запасной способ: нарисовать картинку по описанию или поправить готовую (source_url — вложение человека или адрес картинки) — Gemini по ключу человека. "
-                    "Если вы умеете рисовать сами (встроенный генератор, код, SVG), делайте это и отдавайте результат через image_attach — Gemini не нужен. "
-                    "Картинка сама появится в чате под ответом, в «Файлах → Агенты» и в галерее «Студии» (человек оценивает её — учитывайте оценки). "
-                    "prompt — подробно: что, стиль, свет, текст на картинке; aspect — 1:1, 16:9, 9:16, 4:3, 3:4. reference_ids — референсы человека из "
-                    "studio_refs (стиль, персонаж, предмет) — к запросу приложатся сами; use_style — учесть вкус человека по его оценкам.",
-     "inputSchema": {"type": "object", "properties": {"prompt": {"type": "string"}, "aspect": {"type": "string"},
-                                                     "source_url": {"type": "string"}, "name": {"type": "string", "description": "имя файла"},
-                                                     "reference_ids": {"type": "array", "items": {"type": "string"}, "description": "id из studio_refs, до 6"},
-                                                     "use_style": {"type": "boolean", "description": "учесть вкус человека (оценки в студии)"}},
-                     "required": ["prompt"]}},
     {"name": "image_attach", "app": "files", "handler": image_attach, "level": "create",
      "description": "Отдать человеку картинку, которую вы создали сами (любым своим средством): base64 (PNG, JPEG, WebP, GIF до 15 МБ) или url вложения Шара /api/uploads/…. "
                     "Картинка попадёт в «Файлы → Агенты» и появится в чате под вашим ответом. name — имя файла без расширения.",
      "inputSchema": {"type": "object", "properties": {"base64": {"type": "string"}, "url": {"type": "string"}, "name": {"type": "string"}}}},
     {"name": "studio_refs", "app": "files", "handler": studio_refs, "level": "read",
-     "description": "Референсы человека в «Студии» картинок: стили, персонажи, предметы, логотипы. Возьмите id для image_generate (reference_ids), "
+     "description": "Референсы человека в «Студии» картинок: стили, персонажи, предметы, логотипы — с адресами картинок. Смотрите их, "
                     "когда просьба про его бренд, героя или стиль. query — поиск по названию, заметке, меткам.",
      "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}}},
     {"name": "studio_mark", "app": "files", "handler": studio_mark, "level": "create",

@@ -45,11 +45,20 @@ export interface StudioInsights {
   rated: number;
 }
 
+/** Агент «Ядра», который может нарисовать: GPT — встроенным генератором, остальные — своим средством (обычно SVG). */
+export interface StudioAgent { id: string; label: string; model: string; nodeOnline: boolean; how: string }
+
+/** Запуск, который ещё рисуется (агент работает в чате «Ядра» «Студия: картинки»). */
+export interface StudioRun { runId: string; prompt: string; agent: string; startedAt: string | null }
+
 export interface StudioState {
   images: StudioImage[];
   refs: StudioRef[];
   insights: StudioInsights;
+  /** Есть ли кто рисовать (подключённый агент). */
   hasKey: boolean;
+  agents: StudioAgent[];
+  pending: StudioRun[];
   kinds: Record<string, string>;
   aspects: string[];
   model: string;
@@ -72,8 +81,9 @@ async function call<T>(url: string, method = 'GET', body?: unknown): Promise<T> 
 
 export const studioApi = {
   load: () => call<StudioState>('/api/studio'),
-  generate: (body: { prompt: string; aspect: string; refs: string[]; parentId?: string; useStyle: boolean }) =>
-    call<{ image: StudioImage; note: string }>('/api/studio/generate', 'POST', body),
+  /** Поручить картинку агенту. Ответ сразу — runId; картинка придёт событием studio_ready, когда агент закончит. */
+  generate: (body: { prompt: string; agent: string; aspect: string; refs: string[]; parentId?: string; useStyle: boolean }) =>
+    call<{ runId: string; agent: string; threadId: string }>('/api/studio/generate', 'POST', body),
   /** Своё фото для правки: файл, загруженный в Шар, становится картинкой галереи. */
   uploadPhoto: (key: string, name = '') => call<{ image: StudioImage }>('/api/studio/uploads', 'POST', { key, name }),
   patchImage: (id: string, patch: Partial<Pick<StudioImage, 'rating' | 'reason' | 'favorite' | 'note' | 'tags' | 'name' | 'marks'>>) =>
