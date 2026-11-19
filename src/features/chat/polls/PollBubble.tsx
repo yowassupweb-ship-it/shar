@@ -98,7 +98,7 @@ export default function PollBubble({ poll, messageId, currentUserId, usersById, 
   const showVoters = !poll.isAnonymous && totalVotes > 0;
 
   return (
-    <div className="flex flex-col gap-2.5" style={{ color: textColor, minWidth: 220 }}>
+    <div className="cxm-poll flex flex-col gap-2.5" style={{ color: textColor }}>
       <div className="flex items-start gap-1.5">
         <span className="text-[15px] font-semibold leading-snug">{poll.question}</span>
       </div>

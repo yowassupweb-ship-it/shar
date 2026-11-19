@@ -17,7 +17,8 @@ import { cachedFolder, folderChain, loadFolder, moveFile, moveFolder, prefetchFo
 
 const OPEN_KEY = 'nf:tree-open';
 const DRAG_TYPE = 'application/x-shar-cloud-item';
-const MAX_FACES = 3;
+/** Одна аватарка и кружок «+N» с остальными: строка дерева узкая, ряд из трёх лиц теснил названия. */
+const MAX_FACES = 1;
 
 function readOpen(): Set<string> {
   try { return new Set(JSON.parse(localStorage.getItem(OPEN_KEY) || '[]') as string[]); } catch { return new Set(); }

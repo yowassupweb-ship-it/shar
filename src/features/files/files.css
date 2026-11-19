@@ -545,9 +545,10 @@ button.nf-crumb[data-drop="true"] { background: color-mix(in srgb, var(--accent-
 .nf-view:has(.nf-item[data-selected="true"]) .nf-grid .nf-folder .nft-badge[data-pos="shared"] { opacity: 0; }
 
 /* ── Дерево папок сбоку (FolderTree) ─────────────────────────────────────── */
-.nf-split { display: flex; flex: 1; min-height: 0; }
+.nf-split { position: relative; display: flex; flex: 1; min-height: 0; --nf-side: 260px; }
+.nf-split > .nx-splitter { left: var(--nf-side); }
 .nf-split > .nf-view { flex: 1; min-width: 0; }
-.nf-side { flex: none; width: 260px; overflow-y: auto; padding: var(--space-3) var(--space-2); border-right: 1px solid var(--border-color); background: var(--surface-panel); }
+.nf-side { flex: none; width: var(--nf-side); overflow-y: auto; padding: var(--space-3) var(--space-2); border-right: 1px solid var(--border-color); background: var(--surface-panel); }
 .nftr { display: grid; gap: 1px; }
 .nftr-row {
   display: flex; align-items: center; gap: 6px; width: 100%; min-height: 30px; padding: 0 8px 0 calc(4px + var(--depth, 0) * 14px);
@@ -569,7 +570,8 @@ button.nf-crumb[data-drop="true"] { background: color-mix(in srgb, var(--accent-
 /* Узко — дерево не помещается рядом со списком: прячем, кнопка тоже не нужна. */
 @media (max-width: 900px) { .nf-side, .nf-tree-toggle { display: none; } }
 /* Дерево: поиск, аватарки доступа, меню «⋯» на строке */
-.nftr-search { margin: 0 2px var(--space-2); }
+/* Поиск дерева: отступ под кольцо фокуса и тень — иначе их обрезала прокрутка панели (поле выглядело срезанным слева). */
+.nftr-search { position: sticky; top: calc(-1 * var(--space-3)); z-index: 2; margin: 4px 5px var(--space-2); min-width: 0; }
 .nftr-faces { display: inline-flex; align-items: center; flex: none; }
 .nftr-faces > * { margin-left: -4px; box-shadow: 0 0 0 1.5px var(--surface-panel); border-radius: 50%; }
 .nftr-faces > :first-child { margin-left: 0; }
@@ -579,3 +581,5 @@ button.nf-crumb[data-drop="true"] { background: color-mix(in srgb, var(--accent-
 @media (hover: none) { .nftr-menu { opacity: 1; } }
 .nftr-menu:hover { background: var(--surface-hover); color: var(--text-main); }
 .nftr-empty { margin: var(--space-2) var(--space-2); color: var(--text-muted); font-size: var(--text-sm); }
+
+.nf-side { overflow-x: hidden; }

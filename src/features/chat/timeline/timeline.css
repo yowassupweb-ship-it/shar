@@ -2025,3 +2025,9 @@ button.cxm-status { cursor: pointer; }
   .cxf-file:hover { background: color-mix(in srgb, var(--element-bg), currentColor 6%); }
 }
 .cxm-rp .nem { height: 290px; }
+
+/* Опрос: пузырь шире обычного и не уже 260 px, а сам опрос не задаёт ширину сверх пузыря — при узком окне (≈700 px)
+   варианты вылезали за край и проценты обрезались (раньше у опроса стоял min-width 220 внутри пузыря в 216). */
+.cxm-bubble:has(.cxm-poll) { min-width: min(260px, 100%); max-width: min(92%, 560px); }
+.cxm-poll { min-width: 0; max-width: 100%; }
+.cxm-poll button { min-width: 0; }

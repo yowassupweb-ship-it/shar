@@ -3,6 +3,7 @@ import { showToast } from '@/shared/ui/Toast';
 import { useShellOptions } from '@/shared/shell/ShellContext';
 import { Bot, Check, ChevronDown, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { FolderTree } from './FolderTree';
+import Splitter from '@/shared/ui/Splitter';
 import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { useAgentBridge } from '@/shared/core/agentBridge';
 import { navigate } from '@/shared/navigation/navigate';
@@ -63,6 +64,7 @@ export default function FilesScreen() {
   const [highlight, setHighlight] = useState<string | null>(null);
   const [sectionMenu, setSectionMenu] = useState<MenuAnchor | null>(null);
   const cloudMenu = useRef<CloudMenuApi | null>(null);
+  const splitRef = useRef<HTMLDivElement>(null);
   // Дерево папок сбоку (как в «Офисе»): показать или скрыть — кнопкой у пути или Ctrl+Shift+D; помним на устройстве.
   const [treeOpen, setTreeOpen] = useState<boolean>(() => { try { return localStorage.getItem('nf:tree') !== '0'; } catch { return true; } });
   const toggleTree = useCallback(() => setTreeOpen((v) => { const next = !v; try { localStorage.setItem('nf:tree', next ? '1' : '0'); } catch { /* без памяти */ } return next; }), []);
@@ -160,13 +162,14 @@ export default function FilesScreen() {
   return (
     <main className="nfn" aria-label="Файлы">
       {view.kind === 'cloud' && (
-        <div className="nf-split" data-tree={treeOpen ? 'true' : undefined}>
+        <div className="nf-split" ref={splitRef} data-tree={treeOpen ? 'true' : undefined}>
           {treeOpen && (
             <aside className="nf-side" aria-label="Дерево папок">
               <FolderTree trail={trail} onOpen={(path) => { setTrail(path); go({ kind: 'cloud', folderId: path[path.length - 1]?.id ?? null }); }}
                 onMenu={(folder, anchor, path) => cloudMenu.current?.openFolder(folder, anchor, path)} />
             </aside>
           )}
+          {treeOpen && <Splitter containerRef={splitRef} cssVar="--nf-side" storageKey="nf:tree-width" min={200} max={520} initial={260} label="Ширина дерева папок" />}
           <CloudView
             lead={lead}
             tools={(
