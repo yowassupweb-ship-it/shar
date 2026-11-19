@@ -66,8 +66,8 @@ export default function FilesScreen() {
   const cloudMenu = useRef<CloudMenuApi | null>(null);
   const splitRef = useRef<HTMLDivElement>(null);
   // Дерево папок сбоку (как в «Офисе»): показать или скрыть — кнопкой у пути или Ctrl+Shift+D; помним на устройстве.
-  const [treeOpen, setTreeOpen] = useState<boolean>(() => { try { return localStorage.getItem('nf:tree') !== '0'; } catch { return true; } });
-  const toggleTree = useCallback(() => setTreeOpen((v) => { const next = !v; try { localStorage.setItem('nf:tree', next ? '1' : '0'); } catch { /* без памяти */ } return next; }), []);
+  const [treeOpen, setTreeOpen] = useState<boolean>(() => { try { return localStorage.getItem('nf:tree-v2') !== '0'; } catch { return true; } });
+  const toggleTree = useCallback(() => setTreeOpen((v) => { const next = !v; try { localStorage.setItem('nf:tree-v2', next ? '1' : '0'); } catch { /* без памяти */ } return next; }), []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.code === 'KeyD') { e.preventDefault(); toggleTree(); }

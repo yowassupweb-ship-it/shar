@@ -1,8 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronRight, Folder, FolderOpen, HardDrive, MoreHorizontal } from 'lucide-react';
+import { ChevronRight, Folder, FolderOpen, HardDrive, MoreHorizontal, Users } from 'lucide-react';
 import { displayName, useChatStore } from '@/features/chat';
 import { realtime } from '@/shared/realtime/realtime';
-import { Avatar } from '@/shared/ui/Avatar';
 import { SearchField } from '@/shared/ui/SearchField';
 import type { MenuAnchor } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
@@ -18,7 +17,6 @@ import { cachedFolder, folderChain, loadFolder, moveFile, moveFolder, prefetchFo
 const OPEN_KEY = 'nf:tree-open';
 const DRAG_TYPE = 'application/x-shar-cloud-item';
 /** Одна аватарка и кружок «+N» с остальными: строка дерева узкая, ряд из трёх лиц теснил названия. */
-const MAX_FACES = 1;
 
 function readOpen(): Set<string> {
   try { return new Set(JSON.parse(localStorage.getItem(OPEN_KEY) || '[]') as string[]); } catch { return new Set(); }
@@ -131,16 +129,14 @@ export function FolderTree({ trail, onOpen, onMoved, onMenu }: {
   );
 }
 
-/** Аватарки тех, кому папка открыта: до трёх, остальные — «+N». */
+/** Кому папка открыта — тихо: значок «люди» и число, как в дереве Офиса. Имена — в подсказке при наведении. */
 function Faces({ ids }: { ids: string[] }) {
   const users = useChatStore((s) => s.users);
   if (!ids.length) return null;
-  const shown = ids.filter((id) => !id.startsWith('dept:')).map((id) => users[id]).filter(Boolean).slice(0, MAX_FACES);
-  const more = ids.length - shown.length;
+  const names = ids.map((id) => (id.startsWith('dept:') ? 'отдел' : users[id] ? displayName(users[id]) : '')).filter(Boolean);
   return (
-    <span className="nftr-faces" title={`Открыта: ${ids.length}`}>
-      {shown.map((u) => <Avatar key={u.id} name={displayName(u)} seed={String(u.id)} src={u.avatar} person size={16} />)}
-      {more > 0 && <span className="nftr-more-faces">+{more}</span>}
+    <span className="nftr-shared" title={`Открыта: ${names.join(', ') || ids.length}`} aria-label={`Общий доступ: ${ids.length}`}>
+      <Users size={12} aria-hidden="true" />{ids.length}
     </span>
   );
 }
