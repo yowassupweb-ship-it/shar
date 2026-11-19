@@ -13,6 +13,7 @@ from fastapi.responses import Response
 from app.core.camel import snake_to_camel
 from app.core.db import db
 from app.core.security import Identity, current_identity
+from app.modules.mail import folder_rules
 from app.modules.mail.crypto import _deobfuscate_pw
 from app.modules.mail.imap import _owned_account
 from app.modules.mail.service import (
@@ -78,14 +79,11 @@ def get_mail_messages(accountId: str, folder: str = 'INBOX', limit: int = 50, of
     # here is a synthetic id ("custom:<uuid>") and the actual message set is
     # resolved from that folder's sender-pattern rules instead.
     if folder.startswith('custom:'):
-        folder_id = folder.split(':', 1)[1]
-        if not userId:
-            raise HTTPException(status_code=400, detail="userId is required for custom folders")
-        rules = db.get_mail_folder_rules(userId, folder_id)
-        patterns = [r['email_pattern'] for r in rules]
-        msgs = db.get_email_messages_by_patterns(accountId, patterns, limit, offset)
+        msgs = folder_rules.folder_messages(accountId, userId, folder.split(':', 1)[1], limit, offset, search)
         return [(_mail_light if light else _mail_message_for_client)(msg) for msg in msgs]
-    msgs = db.get_email_messages(accountId, folder, limit, offset, search)
+    # «Входящие» — без писем, разложенных правилами по своим папкам.
+    routed = folder_rules.inbox_messages(accountId, userId, folder, limit, offset, search) if folder.upper() == 'INBOX' else None
+    msgs = routed if routed is not None else db.get_email_messages(accountId, folder, limit, offset, search)
     return [(_mail_light if light else _mail_message_for_client)(msg) for msg in msgs]
 
 

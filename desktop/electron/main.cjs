@@ -10,6 +10,7 @@ const nodeNet = require('net');
 const dns = require('dns');
 const { visibleFraction } = require('./occlusion.cjs');
 const { copyFiles: copyFilesToClipboard } = require('./fileclip.cjs');
+const computerControl = require('./computer.cjs');
 
 // Same IPv6-first-then-timeout-then-fallback issue as the bundled server (see its
 // NODE_OPTIONS below) — but THIS process isn't spawned with its own env, it's the
@@ -909,6 +910,9 @@ function registerWindowControls(mainWindow) {
   // «Копировать» файл в интерфейсе: качаем его во временную папку и кладём в системный буфер как файл (CF_HDROP),
   // чтобы он вставился и в Проводник, и в поле чата. Имя сохраняем человеческое, а не uuid из адреса хранилища.
   // Возвращает число скопированных файлов; 0 — не вышло (не Windows, нет связи), интерфейс тогда копирует по-своему.
+  // Управление компьютером агентом «Ядра» — по умолчанию выключено (computer.cjs).
+  computerControl.register(mainWindow);
+
   ipcMain.handle('clipboard:copy-files', async (_event, items) => {
     if (mainWindow.isDestroyed() || !Array.isArray(items) || !items.length || items.length > 20) return 0;
     const dir = path.join(app.getPath('temp'), 'shar-clipboard', String(Date.now()));

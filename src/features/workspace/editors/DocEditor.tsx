@@ -28,6 +28,8 @@ import { SharEmojiPicker } from '@/shared/emoji/SharEmojiPicker';
 import { emptySnapshot, ensureDrawingResource, fingerprint, localizeImages, parseSnapshot, type DocSnapshot } from '../lib/docSnapshot';
 import { addLinkButton, addWebFonts, docsLayoutFonts, loadLayoutFonts, relayoutOnHostResize, stepToolbarWidth, throttleWindowResize, disableBlockHandle, reserveToolbarSpace, hidePopupsUnderToolbar, docLinkProbe, hideMissingFonts, isDarkTheme, overrideComponent, styleDocSurface, univerTheme, tagFindDialog, useUniverTheme } from '../lib/univerTheme';
 import { retireMount, takeOverWhenRendered } from '../lib/univerSwap';
+import { univerToHtml, univerToText } from '../lib/univerHtml';
+import { showToast } from '@/shared/ui/Toast';
 import type { EditorProps } from './types';
 import { CursorLayer, type CursorShape } from '../CursorLayer';
 import { bindDoc } from '../live/docOps';
@@ -299,6 +301,44 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
         }
       });
 
+    // Копирование всего документа. Univer копирует то, что разложил холст, и на длинном документе выделение целиком
+    // в буфер не доходило. Если выделено всё (Ctrl+A или мышью от начала до конца) — берём текст из модели, с
+    // оформлением (lib/univerHtml.ts): в Word, Google Docs и почту вставляется как есть.
+    const copyWhole = async () => {
+      try {
+        const snapshot = doc.save() as unknown as Parameters<typeof univerToHtml>[0];
+        const html = univerToHtml(snapshot, { image: (src) => { try { return new URL(src, window.location.href).href; } catch { return null; } } });
+        const text = univerToText(snapshot);
+        if (typeof ClipboardItem !== 'undefined') {
+          await navigator.clipboard.write([new ClipboardItem({
+            'text/html': new Blob([`<meta charset="utf-8">${html}`], { type: 'text/html' }),
+            'text/plain': new Blob([text], { type: 'text/plain' }),
+          })]);
+        } else {
+          await navigator.clipboard.writeText(text);
+        }
+        showToast('Документ скопирован целиком', 'success');
+      } catch {
+        showToast('Не удалось скопировать документ', 'error');
+      }
+    };
+    const wholeSelected = () => {
+      if (!lastRange) return false;
+      const length = streamOf().length; // в конце потока — «\r\n»: выделение до них и есть «всё»
+      return lastRange.s <= 0 && lastRange.e >= Math.max(0, length - 2);
+    };
+    const onCopyKey = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.code !== 'KeyC') return;
+      if (!el.contains(event.target as Node | null) && !el.contains(document.activeElement)) return;
+      if (!wholeSelected()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void copyWhole();
+    };
+    window.addEventListener('keydown', onCopyKey, true);
+    univerAPI.createMenu({ id: 'nx.doc.copy-all', title: 'Копировать весь документ', tooltip: 'Копировать весь документ с оформлением', action: () => { void copyWhole(); } })
+      .appendTo(['contextMenu.mainArea', 'contextMenu.others']);
+
     // Комментарии: привязка — выделенный текст (последнее непустое выделение, пока курсор не поставили в другое место);
     // переход к ветке — найти цитату в тексте и выделить её.
     const streamOf = () => String((doc as unknown as { getDocumentDataModel: () => { getSnapshot: () => { body?: { dataStream?: string } } } }).getDocumentDataModel().getSnapshot()?.body?.dataStream || '');
@@ -355,6 +395,7 @@ export default function DocEditor({ content, onContent, readOnly, loadKey, visib
     const stopTakeOver = takeOverWhenRendered(univerAPI, el, mount);
     return () => {
       window.removeEventListener('keydown', onFindKey);
+      window.removeEventListener('keydown', onCopyKey, true);
       restoreEmoji();
       stopPasteUpload();
       window.clearTimeout(readyTimer);

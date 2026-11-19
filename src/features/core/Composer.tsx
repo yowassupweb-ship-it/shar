@@ -8,6 +8,7 @@ import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { paths } from '@/shared/navigation/routes';
 import { Select, type SelectGroup } from '@/shared/ui/Select';
 import { Sheet } from '@/shared/ui/overlay';
+import { effortOptions, effortTitle } from './effort';
 import { coreApi, type CoreAttachment, type CoreCatalog, type CoreContextItem, type CoreMessage } from './api';
 import { formatBytes } from './parts';
 import { BrandMark } from './brands';
@@ -152,7 +153,6 @@ export const Composer = forwardRef<ComposerHandle, {
   const where = useWhere();
   const attached = useAgentBridge((s) => s.attached);
   const [more, setMore] = useState<MenuAnchor | null>(null);
-  const effortOptions = [{ value: '', label: 'Обычно' }, ...(catalog?.efforts || []).filter((e) => e.id !== 'medium').map((e) => ({ value: e.id, label: e.label }))];
   const setMode = (mode: string) => {
     useCore.setState((st) => (st.catalog ? { catalog: { ...st.catalog, mode } } : st));
     void coreApi.setMode(mode).catch(() => undefined);
@@ -167,6 +167,9 @@ export const Composer = forwardRef<ComposerHandle, {
   const def = defaultAgent && agents.some((a) => a.id === defaultAgent.split(':')[0]) ? defaultAgent : '';
   const base = peerAgent ?? agents.find((a) => a.id === def.split(':')[0]) ?? agents[0];
   const agentValue = picked || (peerAgent ? optionOf(peerAgent) : def || (base ? optionOf(base) : ''));
+  // Нагрузка — словами отвечающего агента (у Kimi — его Low / High / Max), как в Senate (effort.ts).
+  const effortAgent = agentValue.split(':')[0];
+  const effortChoices = effortOptions(effortAgent);
   const toggleDefault = (id: string) => {
     const a = agents.find((x) => x.id === id);
     if (!a) return;
@@ -387,10 +390,10 @@ export const Composer = forwardRef<ComposerHandle, {
           )}
           {/* Широко — нагрузка и режим разрешений на панели; узко — в «⋯» (контейнерный запрос в core.css). */}
           {!!catalog?.efforts.length && (
-            <span className="ncore-effort ncore-wide" title="Нагрузка: как долго агент думает перед ответом">
+            <span className="ncore-effort ncore-wide" title={`${effortTitle(effortAgent)}: ${effortChoices.find((o) => o.value === effort)?.hint || 'как долго агент думает перед ответом'}`}>
               <Dumbbell size={14} aria-hidden="true" />
-              <Select className="ncore-picker" label="Нагрузка: как долго думать перед ответом" value={effort} onChange={setEffort} placeholder="Обычно"
-                groups={[{ options: effortOptions }]} />
+              <Select className="ncore-picker" label={effortTitle(effortAgent)} value={effort} onChange={setEffort} placeholder={effortChoices[0].label}
+                groups={[{ options: effortChoices }]} />
             </span>
           )}
           {!noAgents && !!catalog?.modes?.length && (
@@ -406,8 +409,8 @@ export const Composer = forwardRef<ComposerHandle, {
           </button>
           {more && (
             <Menu anchor={more} label="Настройки ответа" onClose={() => setMore(null)} compact>
-              <div className="nx-menu-label ncore-menu-label" role="presentation"><Dumbbell size={12} aria-hidden="true" />Нагрузка</div>
-              {effortOptions.map((o) => (
+              <div className="nx-menu-label ncore-menu-label" role="presentation"><Dumbbell size={12} aria-hidden="true" />{effortTitle(effortAgent)}</div>
+              {effortChoices.map((o) => (
                 <MenuItem key={o.value || 'normal'} icon={effort === o.value ? <Check size={15} /> : <span className="ncore-menu-gap" />} onSelect={() => { setEffort(o.value); setMore(null); }}>{o.label}</MenuItem>
               ))}
               {!noAgents && !!catalog?.modes?.length && (<>

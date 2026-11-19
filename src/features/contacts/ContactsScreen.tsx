@@ -1,14 +1,23 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
-import { AlertCircle, Check, ChevronDown, RotateCw, Search, Users } from 'lucide-react';
+import { AlertCircle, Check, ChevronDown, Plus, RotateCw, Search, Users } from 'lucide-react';
 import { useShellOptions } from '@/shared/shell/ShellContext';
 import { SearchField } from '@/shared/ui/SearchField';
 import { SectionIcon } from '@/shared/ui/SectionIcon';
 import { Avatar } from '@/shared/ui/Avatar';
 import { plural } from '@/shared/ui/format';
-import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
+import { askConfirm, Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import Splitter from '@/shared/ui/Splitter';
+import { showToast } from '@/shared/ui/Toast';
 import ContactDetail from './ContactDetail';
 import { contactName, matches, useContacts, useGroups, type Contact, type Group } from './data';
+import { PersonalDetail, PersonalEditor, PersonalRow, PersonalShareSheet } from './PersonalContacts';
+import { personalApi, personalTitle, usePersonalContacts, type PersonalContact } from './personal';
+
+type Scope = 'team' | 'mine';
+const SCOPE_KEY = 'nx:contacts-scope';
+function readScope(): Scope {
+  try { return localStorage.getItem(SCOPE_KEY) === 'mine' ? 'mine' : 'team'; } catch { return 'team'; }
+}
 
 /**
  * Раздел «Контакты» нового шара: мастер-деталь, как чаты.
@@ -108,6 +117,36 @@ export default function ContactsScreen() {
   const layoutRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
+  // «Сотрудники» — справочник компании; «Мои контакты» — личная записная книжка с доступом, как у документов.
+  const [scope, setScopeState] = useState<Scope>(readScope);
+  const mine = scope === 'mine';
+  const setScope = (next: Scope) => {
+    try { localStorage.setItem(SCOPE_KEY, next); } catch { /* приватное окно — просто не запомним */ }
+    setScopeState(next);
+  };
+  const personal = usePersonalContacts(mine);
+  const [pActive, setPActive] = useState<string | null>(null);
+  const [editor, setEditor] = useState<{ contact: PersonalContact | null } | null>(null);
+  const [sharing, setSharing] = useState<PersonalContact | null>(null);
+  const pFiltered = useMemo(() => {
+    if (!deferred) return personal.contacts;
+    return personal.contacts.filter((c) => [c.name, c.company, c.position, c.phone, c.email, c.telegram, c.note].some((v) => v.toLowerCase().includes(deferred)));
+  }, [personal.contacts, deferred]);
+  const pOpen = pActive ? personal.contacts.find((c) => c.id === pActive) : undefined;
+  const saved = (c: PersonalContact) => {
+    personal.setContacts((all) => (all.some((x) => x.id === c.id) ? all.map((x) => (x.id === c.id ? { ...x, ...c, shared: x.shared } : x)) : [...all, c])
+      .sort((a, b) => personalTitle(a).localeCompare(personalTitle(b), 'ru')));
+    setPActive(c.id);
+  };
+  const removePersonal = async (c: PersonalContact) => {
+    if (!(await askConfirm({ title: `Удалить «${personalTitle(c)}»?`, text: c.shared ? 'Контакт пропадёт и у тех, кому вы его открыли.' : undefined, confirm: 'Удалить', tone: 'danger' }))) return;
+    try {
+      await personalApi.remove(c.id);
+      personal.setContacts((all) => all.filter((x) => x.id !== c.id));
+      setPActive(null);
+    } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалил контакт', 'error'); }
+  };
+
   const deptName = useCallback((id: string) => departments.find((d) => d.id === id)?.name || id, [departments]);
   const visible = useMemo(
     () => contacts.filter((c) => (!onlineOnly || c.isOnline) && matches(c, deferred, deptName)),
@@ -117,7 +156,7 @@ export default function ContactsScreen() {
   const groups = dept ? allGroups.filter((g) => g.id === dept) : allGroups;
   const shown = new Set(groups.flatMap((g) => [...g.members, ...g.subs.flatMap((s) => s.members)].map((c) => c.id))).size;
   const onlineCount = contacts.filter((c) => c.isOnline).length;
-  const active = activeId ? contacts.find((c) => c.id === activeId) : undefined;
+  const active = !mine && activeId ? contacts.find((c) => c.id === activeId) : undefined;
 
   useEffect(() => {
     const onPop = () => setActiveId(readUserParam());
@@ -142,8 +181,8 @@ export default function ContactsScreen() {
 
   // Стрелки вверх/вниз ходят по строкам списка, Enter открывает (строки — кнопки).
   useShellOptions({
-    navHidden: narrow && Boolean(active),
-    onReselect: () => { if (readUserParam()) back(); },
+    navHidden: narrow && Boolean(mine ? pOpen : active),
+    onReselect: () => { if (mine) setPActive(null); else if (readUserParam()) back(); },
   });
 
   const onListKey = (e: React.KeyboardEvent) => {
@@ -163,8 +202,40 @@ export default function ContactsScreen() {
   const filtered = Boolean(deferred || onlineOnly || dept);
 
   let body;
+  if (mine) {
+    if (personal.phase === 'loading' || personal.phase === 'idle') {
+      body = <Skeleton />;
+    } else if (personal.phase === 'error') {
+      body = (
+        <div className="nx-state" data-tone="danger" role="alert">
+          <AlertCircle size={28} aria-hidden="true" />
+          <h2>Не загрузил контакты</h2>
+          <p>{personal.error || 'Сервер не ответил.'}</p>
+          <button type="button" className="nx-ghost" onClick={() => void personal.reload()}><RotateCw size={14} aria-hidden="true" /> Повторить</button>
+        </div>
+      );
+    } else if (!personal.ready) {
+      body = (
+        <div className="nx-state">
+          <Users size={28} aria-hidden="true" />
+          <h2>Личные контакты скоро включатся</h2>
+          <p>На сервере ещё не применена схема для этого раздела — после выпуска можно будет заводить свои контакты.</p>
+        </div>
+      );
+    } else if (!pFiltered.length) {
+      body = (
+        <div className="nx-state">
+          {deferred ? <Search size={28} aria-hidden="true" /> : <Users size={28} aria-hidden="true" />}
+          <h2>{deferred ? 'Ничего не нашёл' : 'Своих контактов пока нет'}</h2>
+          <p>{deferred ? 'Ищу по имени, организации, телефону, почте и заметке.' : 'Добавьте клиента или подрядчика — и откройте его тем, кому он нужен.'}</p>
+          {!deferred && <button type="button" className="nx-primary" onClick={() => setEditor({ contact: null })}><Plus size={15} aria-hidden="true" /> Новый контакт</button>}
+        </div>
+      );
+    } else {
+      body = pFiltered.map((c) => <PersonalRow key={c.id} c={c} active={c.id === pActive} onOpen={setPActive} />);
+    }
   // Пока не известны и люди, и отделы — скелет: иначе группы перестроились бы на глазах.
-  if (phase === 'loading') {
+  } else if (phase === 'loading') {
     body = <Skeleton />;
   } else if (!contacts.length && phase === 'error') {
     body = (
@@ -190,43 +261,58 @@ export default function ContactsScreen() {
 
   return (
     <>
-      <div ref={layoutRef} className="ctn" data-pane={active ? 'detail' : 'list'}>
+      <div ref={layoutRef} className="ctn" data-pane={(mine ? pOpen : active) ? 'detail' : 'list'}>
         <aside className="ctl" aria-label="Сотрудники">
           <header className="ctl-head">
             <div className="ctl-title">
               <h1>Контакты</h1>
               <span className="ctl-total" aria-live="polite">
-                {filtered ? `${shown} из ${contacts.length}` : `${contacts.length} ${plural(contacts.length, ['сотрудник', 'сотрудника', 'сотрудников'])}`}
+                {mine
+                  ? (personal.phase === 'ready' && personal.ready ? `${pFiltered.length}${deferred ? ` из ${personal.contacts.length}` : ''} ${plural(pFiltered.length, ['контакт', 'контакта', 'контактов'])}` : '')
+                  : filtered ? `${shown} из ${contacts.length}` : `${contacts.length} ${plural(contacts.length, ['сотрудник', 'сотрудника', 'сотрудников'])}`}
               </span>
             </div>
-            <SearchField
-              value={query}
-              onChange={setQuery}
-              placeholder="Имя, должность, отдел"
-              label="Поиск сотрудника"
-              onKeyDown={(e) => {
-                if (e.key === 'ArrowDown') { e.preventDefault(); listRef.current?.querySelector<HTMLElement>('.ctl-row')?.focus(); }
-              }}
-            />
-            <div className="ctl-filters">
-              <div className="nx-segment" role="group" aria-label="Кого показать">
-                <button type="button" aria-pressed={!onlineOnly} onClick={() => setOnlineOnly(false)}>Все</button>
-                <button type="button" aria-pressed={onlineOnly} onClick={() => setOnlineOnly(true)}>
-                  В сети{onlineCount > 0 && <span className="ctl-seg-count">{onlineCount}</span>}
+            <div className="nx-segment ctl-scope" role="group" aria-label="Какие контакты">
+              <button type="button" aria-pressed={!mine} onClick={() => setScope('team')}>Сотрудники</button>
+              <button type="button" aria-pressed={mine} onClick={() => setScope('mine')}>Мои контакты</button>
+            </div>
+            <div className="ctl-search-row">
+              <SearchField
+                value={query}
+                onChange={setQuery}
+                placeholder={mine ? 'Имя, организация, телефон' : 'Имя, должность, отдел'}
+                label={mine ? 'Поиск контакта' : 'Поиск сотрудника'}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowDown') { e.preventDefault(); listRef.current?.querySelector<HTMLElement>('.ctl-row')?.focus(); }
+                }}
+              />
+              {mine && personal.ready && (
+                <button type="button" className="nx-primary ctl-add" onClick={() => setEditor({ contact: null })} aria-label="Новый контакт" title="Новый контакт">
+                  <Plus size={16} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+            {!mine && (
+              <div className="ctl-filters">
+                <div className="nx-segment" role="group" aria-label="Кого показать">
+                  <button type="button" aria-pressed={!onlineOnly} onClick={() => setOnlineOnly(false)}>Все</button>
+                  <button type="button" aria-pressed={onlineOnly} onClick={() => setOnlineOnly(true)}>
+                    В сети{onlineCount > 0 && <span className="ctl-seg-count">{onlineCount}</span>}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="nx-ghost ctl-dept-btn"
+                  aria-haspopup="menu"
+                  aria-expanded={Boolean(deptAnchor)}
+                  data-active={dept ? 'true' : undefined}
+                  onClick={(e) => setDeptAnchor(deptAnchor ? null : { element: e.currentTarget, align: 'end' })}
+                >
+                  <span className="ctl-dept-label">{deptLabel}</span>
+                  <ChevronDown size={14} aria-hidden="true" />
                 </button>
               </div>
-              <button
-                type="button"
-                className="nx-ghost ctl-dept-btn"
-                aria-haspopup="menu"
-                aria-expanded={Boolean(deptAnchor)}
-                data-active={dept ? 'true' : undefined}
-                onClick={(e) => setDeptAnchor(deptAnchor ? null : { element: e.currentTarget, align: 'end' })}
-              >
-                <span className="ctl-dept-label">{deptLabel}</span>
-                <ChevronDown size={14} aria-hidden="true" />
-              </button>
-            </div>
+            )}
           </header>
 
           <div ref={listRef} className="ctl-list nx-scroll-y" onKeyDown={onListKey}>
@@ -246,7 +332,26 @@ export default function ContactsScreen() {
           />
         )}
 
-        {active ? (
+        {mine ? (
+          pOpen ? (
+            <PersonalDetail
+              key={pOpen.id}
+              contact={pOpen}
+              onBack={() => setPActive(null)}
+              onEdit={() => setEditor({ contact: pOpen })}
+              onShare={() => setSharing(pOpen)}
+              onDelete={() => void removePersonal(pOpen)}
+            />
+          ) : (
+            <section className="ctd" aria-label="Карточка контакта">
+              <div className="nx-state ctd-empty-state">
+                <SectionIcon name="contacts" size={72} />
+                <h2>Выберите контакт</h2>
+                <p>Свои контакты видите вы и те, кому вы их откроете: людям или целым отделам — как документы.</p>
+              </div>
+            </section>
+          )
+        ) : active ? (
           <ContactDetail key={active.id} contact={active} departments={departments} onBack={back} />
         ) : (
           <section className="ctd" aria-label="Карточка сотрудника">
@@ -259,6 +364,14 @@ export default function ContactsScreen() {
         )}
       </div>
 
+      {editor && <PersonalEditor initial={editor.contact} onSaved={saved} onClose={() => setEditor(null)} />}
+      {sharing && (
+        <PersonalShareSheet
+          contact={sharing}
+          onClose={() => setSharing(null)}
+          onChanged={(count) => personal.setContacts((all) => all.map((x) => (x.id === sharing.id ? { ...x, shared: count } : x)))}
+        />
+      )}
       {deptAnchor && (
         <Menu anchor={deptAnchor} label="Отдел" onClose={() => setDeptAnchor(null)}>
           <MenuItem icon={dept ? <span className="ctl-menu-gap" /> : <Check size={16} />} onSelect={() => { setDept(null); setDeptAnchor(null); }}>

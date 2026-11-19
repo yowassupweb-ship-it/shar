@@ -582,7 +582,8 @@
   white-space: pre-wrap;
   overflow-wrap: break-word;
   pointer-events: none;
-  scrollbar-color: transparent transparent;
+  /* Без scrollbar-color: при нём Chromium 121+ берёт системную полосу (15 px) вместо ::-webkit-scrollbar (10 px, как у
+     поля ввода) — слой становился уже поля на 5 px, переносил строки раньше, и курсор уезжал выше своей строки. */
 }
 .nws-note-back::-webkit-scrollbar { background: transparent; }
 .nws-note-back::-webkit-scrollbar-thumb { background: transparent; }
@@ -1120,3 +1121,42 @@ html:is([data-theme="graphite"], [data-theme="black"]) .nws-text-marks > span { 
 .nws-skel-slide { flex: none; aspect-ratio: 16 / 9; width: min(100% - 48px, 880px); margin: 32px auto 0; border-radius: 8px; }
 .nws-skel-lines { display: grid; gap: 14px; padding: 28px 32px; }
 @media (prefers-reduced-motion: reduce) { .nws-skel { animation: none; } }
+
+/* ── Тесный список: кнопки шапки и виды схлопываются в кружки (контейнерные запросы по ширине списка) ───────── */
+.nws-head-btn { flex: none; }
+.nws-density[aria-pressed="true"] { background: var(--surface-selected); color: var(--accent-fill); }
+@container (max-width: 410px) {
+  .nws-fold .nws-kbd { display: none; }
+  .nws-fold[data-hint] { width: 34px; padding: 0; justify-content: center; }
+}
+@container (max-width: 330px) {
+  .nws-head-btn { width: 34px; height: 34px; min-width: 0; padding: 0; border-radius: 50%; justify-content: center; gap: 0; }
+  .nws-head-btn .nws-head-label { display: none; }
+  /* Виды: неактивные — кружки со значком (название в подсказке), активный держит подпись. */
+  .nws-kinds { display: flex; gap: 4px; }
+  .nws-kinds button { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: 36px; min-height: 36px; padding: 0; border-radius: 999px; }
+  .nws-kinds button span { display: none; }
+  .nws-kinds button[aria-pressed="true"] { flex: 1 1 auto; width: auto; min-width: 36px; padding: 0 12px; }
+  .nws-kinds button[aria-pressed="true"] span { display: inline; }
+}
+
+/* ── Компактный список деревом: одна плотная строка на материал ─────────────────────────────────────────── */
+.nws-list[data-density="compact"] { gap: var(--space-2); }
+.nws-list[data-density="compact"] .nws-rows { gap: 0; }
+.nws-list[data-density="compact"] .nws-group { margin: var(--space-2) var(--space-2) 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+.nws-list[data-density="compact"] .nws-row { gap: 6px; min-height: 26px; padding: 2px 8px; border-radius: 6px; }
+.nws-list[data-density="compact"] .nws-kind-icon { width: 18px; height: 18px; border-radius: 5px; }
+.nws-list[data-density="compact"] .nws-kind-icon svg { width: 12px; height: 12px; }
+.nws-list[data-density="compact"] .nws-row-title { font-size: var(--text-sm); font-weight: var(--weight-regular, 400); }
+.nws-list[data-density="compact"] .nws-row-snippet:not([data-hit]) { display: none; }
+.nws-list[data-density="compact"] .nws-row-meta > span:first-child { display: none; }
+.nws-list[data-density="compact"] .nws-row-meta { gap: 0; }
+.nws-list[data-density="compact"] .nws-row-presence { margin-left: 0; }
+.nws-list[data-density="compact"] .nws-folder-toggle { min-height: 26px; padding: 1px 6px; gap: 6px; font-size: var(--text-sm); }
+.nws-list[data-density="compact"] .nws-folder-items { margin-left: 9px; padding-left: 4px; }
+.nws-list[data-density="compact"] .nws-folder-empty { line-height: 20px; margin-bottom: 2px; }
+
+/* Поиск и переключатель вида — в одной строке: кнопка справа от поля. */
+.nws-search-row { display: flex; align-items: center; gap: var(--space-2); }
+.nws-search-row > .nx-search { flex: 1; min-width: 0; }
+.nws-search-row > .nws-density { flex: none; display: inline-grid; place-items: center; width: 38px; height: 38px; padding: 0; border-radius: 50%; }

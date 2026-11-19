@@ -217,7 +217,8 @@ export async function syncFolder(folder: string): Promise<void> {
   if (!acc || get().syncing[folder] || isLocked(acc)) return;
   set((s) => ({ syncing: { ...s.syncing, [folder]: true } }));
   try {
-    await call('/api/mail/sync', json('POST', { accountId: acc, userId: myId(), folder }))
+    // Своя папка с правилами живёт поверх «Входящих»: забираем с сервера их.
+    await call('/api/mail/sync', json('POST', { accountId: acc, userId: myId(), folder: folder.startsWith('custom:') ? 'INBOX' : folder }))
       .then(() => setLocked(acc, false))
       .catch((e) => { if (e instanceof MailError && e.status === 409) setLocked(acc, true); });
     await loadFolder(folder);

@@ -9,8 +9,9 @@ import { Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { Spinner } from '@/shared/ui/Spinner';
 import { showToast } from '@/shared/ui/Toast';
 import { dayKey, formatDay, formatListTime, plural } from '@/shared/ui/format';
-import { coreApi, type CoreLimit, type CoreMessage, type CoreThread } from './api';
+import { coreApi, type CoreLimit, type CoreMessage, type CoreThread, type ProviderId } from './api';
 import { ChatStats, LimitBadges, limitsForModel } from './ChatStats';
+import { LIMIT_PROVIDERS } from './effort';
 import { Composer, COMMANDS, type ComposerHandle, type SendOptions } from './Composer';
 import { MessageItem, type MessageHandlers } from './MessageItem';
 import { BrandMark } from './brands';
@@ -46,6 +47,10 @@ function useNarrow() {
  * Два места: страница /core и выдвижная панель справа (embedded, CorePanel). В панели всегда узкая раскладка
  * (список или переписка), а открытый чат хранится в панели, а не в адресе — иначе он менял бы адрес раздела слева.
  */
+/** Когда последний раз спрашивали лимиты агента — между заходами в Ядро и вкладками. */
+const limitsAskedAt = new Map<string, number>();
+const LIMITS_EVERY_MS = 5 * 60_000;
+
 export default function CoreScreen({ embedded = false, onClose }: { embedded?: boolean; onClose?: () => void } = {}) {
   const [params, setParams] = useSearchParams();
   const panelThread = useCorePanel((s) => s.thread);
@@ -188,6 +193,23 @@ const HELP = [
 
 function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string | null; onSelect: (id: string | null) => void; narrow: boolean; onList: () => void }) {
   const catalog = useCore((s) => s.catalog);
+  // Лимиты подписок обновляются сами, пока Ядро открыто: раз в 5 минут спрашиваем Claude, GPT и Kimi их же запросом
+  // /usage (нода, без траты лимита). Ответ приходит событием core_account — шапка перерисуется сама.
+  const limitAgentsKey = (catalog?.agents ?? []).filter((a) => a.online && LIMIT_PROVIDERS.includes(a.id as ProviderId)).map((a) => a.id).join(',');
+  useEffect(() => {
+    if (!limitAgentsKey) return undefined;
+    const ask = () => {
+      if (document.visibilityState !== 'visible') return;
+      for (const id of limitAgentsKey.split(',')) {
+        if (Date.now() - (limitsAskedAt.get(id) ?? 0) < LIMITS_EVERY_MS) continue;
+        limitsAskedAt.set(id, Date.now());
+        void coreApi.checkLimits(id as ProviderId).catch(() => undefined);
+      }
+    };
+    ask();
+    const timer = window.setInterval(ask, 60_000);
+    return () => window.clearInterval(timer);
+  }, [limitAgentsKey]);
   const thread = useCore((s) => [...(s.threads ?? []), ...(s.archived ?? [])].find((t) => t.id === threadId) ?? null);
   const log = useCore((s) => (threadId ? s.logs[threadId] : undefined));
   const messages = log?.messages ?? EMPTY;
@@ -338,6 +360,9 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
     : headAgent?.limits?.length ? headAgent : catalog?.agents.find((a) => a.limits?.length);
   const limitModel = limitAgent && limitAgent.id === selectedAgent?.id ? selectedModel : limitAgent?.model;
   const shownLimits = limitsForModel(limitAgent?.limits, limitModel);
+  // «Проверить лимиты» — у выбранного агента, если у него есть окна подписки (Claude, GPT, Kimi), иначе у первого такого.
+  const limitTarget = (selectedAgent && LIMIT_PROVIDERS.includes(selectedAgent.id as ProviderId) ? selectedAgent : null)
+    ?? catalog?.agents.find((a) => LIMIT_PROVIDERS.includes(a.id as ProviderId)) ?? null;
 
   let lastDay = 0;
   return (
@@ -384,13 +409,13 @@ function Conversation({ threadId, onSelect, narrow, onList }: { threadId: string
             {headMenu && (
               <Menu anchor={headMenu} label="Действия с чатом" onClose={() => setHeadMenu(null)} compact>
                 <MenuItem icon={<Pencil size={15} />} onSelect={() => { setHeadMenu(null); setRenaming(true); }}>Переименовать</MenuItem>
-                {catalog?.agents.some((x) => x.id === 'claude') && (
+                {limitTarget && (
                   <MenuItem icon={<Hourglass size={15} />} onSelect={() => {
                     setHeadMenu(null);
-                    coreApi.checkLimits('claude', selectedAgent?.id === 'claude' ? selectedModel : '')
-                      .then(() => showToast('Спрашиваю у Claude, сколько осталось, — лимиты в шапке обновятся через несколько секунд', 'info'))
+                    coreApi.checkLimits(limitTarget.id as ProviderId, limitTarget.id === selectedAgent?.id ? selectedModel : '')
+                      .then(() => showToast(`Спрашиваю у ${limitTarget.name}, сколько осталось, — лимиты в шапке обновятся через несколько секунд`, 'info'))
                       .catch((cause) => showToast(cause instanceof Error ? cause.message : 'Не получилось', 'error'));
-                  }}>Проверить лимиты</MenuItem>
+                  }}>Проверить лимиты {limitTarget.name}</MenuItem>
                 )}
                 <MenuItem icon={thread.archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}
                   onSelect={() => { setHeadMenu(null); void patchThread(thread.id, { archived: !thread.archived }).then(() => { if (!thread.archived) onSelect(null); }); }}>

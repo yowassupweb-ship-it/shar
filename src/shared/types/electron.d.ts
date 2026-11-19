@@ -54,6 +54,13 @@ export interface SharDesktop {
   /** Громкость сигнала карточек уведомлений (их звук играет главный процесс). */
   notifications?: { setVolume: (volume: number) => void; getVolume: () => Promise<number> };
   windowControls: WindowControls;
+  /** Управление компьютером агентом «Ядра» (desktop/electron/computer.cjs). */
+  computer?: {
+    get: () => Promise<{ enabled: boolean; deviceId: string; name: string; supported: boolean; stopKey: string; width: number; height: number }>;
+    set: (on: boolean) => Promise<boolean>;
+    run: (action: string, args: Record<string, unknown>) => Promise<{ ok: boolean; error?: string; image?: string; width?: number; height?: number }>;
+    onChanged: (cb: (data: { enabled: boolean }) => void) => () => void;
+  };
   startup?: {
     get: () => Promise<{ supported: boolean; openAtLogin: boolean; preferred?: boolean }>;
     set: (openAtLogin: boolean) => Promise<{ supported: boolean; openAtLogin: boolean; preferred?: boolean }>;

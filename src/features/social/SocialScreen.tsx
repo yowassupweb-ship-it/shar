@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { AlertCircle, ChevronLeft, History, MessageCircle, MessagesSquare, Plug, Plus, RefreshCw, Settings2, Trash2 } from 'lucide-react';
+import { AlertCircle, ChevronLeft, History, Plug, Plus, RefreshCw, Settings2, Trash2 } from 'lucide-react';
 import { chatTitle, isGroupChat, useChatStore } from '@/features/chat';
 import { paths } from '@/shared/navigation/routes';
 import { askConfirm, Sheet } from '@/shared/ui/overlay';
@@ -18,13 +18,13 @@ const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString('ru-RU',
 
 /**
  * Модуль «Соцсети»: переписка с клиентами из ВКонтакте и MAX — отдельно от чатов Шара. Каждый клиент —
- * свой диалог со значком площадки, все площадки в одном списке. Две вкладки: «Диалоги» (личные и
- * беседы) и «Комментарии» (автор под постом). Подключения сообществ и ботов — за шестерёнкой.
+ * свой диалог со значком площадки, все площадки и личные сообщения, беседы и комментарии под постами — одной
+ * лентой, у строки подписано, что это и откуда. Подключения сообществ и ботов — за шестерёнкой.
  */
 export default function SocialScreen() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-  const view = params.get('view') === 'accounts' ? 'accounts' : params.get('tab') === 'comments' ? 'comments' : 'dialogs';
+  const view = params.get('view') === 'accounts' ? 'accounts' : 'dialogs';
   const go = (next: Record<string, string>) => setParams(next, { replace: true });
   return (
     <div className="nx-page nsc-page" data-view={view}>
@@ -37,15 +37,11 @@ export default function SocialScreen() {
           <h1>{view === 'accounts' ? 'Настройки' : 'Соцсети'}</h1>
           {view !== 'accounts' && (
             <span className="nx-page-tools">
-              <nav className="nx-segment" aria-label="Вкладки">
-                <button type="button" aria-pressed={view === 'dialogs'} onClick={() => go({})}><MessagesSquare size={13} aria-hidden="true" /> Диалоги</button>
-                <button type="button" aria-pressed={view === 'comments'} onClick={() => go({ tab: 'comments' })}><MessageCircle size={13} aria-hidden="true" /> Комментарии</button>
-              </nav>
               <button type="button" className="nx-icon-btn" onClick={() => go({ view: 'accounts' })} aria-label="Настройки" title="Уведомления и подключения ВКонтакте и MAX"><Settings2 size={17} /></button>
             </span>
           )}
         </header>
-        {view === 'accounts' ? <div className="nx-scroll-y nsc-accounts-wrap"><div className="nsc-accounts"><NotifySettings /><AccountsTab /></div></div> : <DialogsTab key={view} mode={view} />}
+        {view === 'accounts' ? <div className="nx-scroll-y nsc-accounts-wrap"><div className="nsc-accounts"><NotifySettings /><AccountsTab /></div></div> : <DialogsTab />}
       </div>
     </div>
   );

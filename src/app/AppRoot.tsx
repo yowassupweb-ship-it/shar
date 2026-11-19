@@ -21,6 +21,7 @@ import LoginScreen from './LoginScreen';
 import ElectronTitlebar from './electron/ElectronTitlebar';
 import { startWorkspaceToasts } from '@/features/workspace/live';
 import { warmEditorsInBackground } from '@/features/workspace/editorWarmup';
+import { startComputerBridge } from '@/shared/platform/computerBridge';
 import { checkMailAccess, useMail } from '@/features/mail/api';
 import { startMailBadge, useMailBadge } from '@/features/mail/badge';
 import { showToast } from '@/shared/ui/Toast';
@@ -99,6 +100,8 @@ function Workspace({ me }: { me: User }) {
   const coreOpen = useCorePanel((s) => s.open);
   // Чаты показывают «Переслать агенту» только тем, кому «Ядро» включено; пересланное открывает панель.
   useEffect(() => { setAgentAvailable(coreAvailable); }, [coreAvailable]);
+  // Shar OS: агент «Ядра» может управлять этим компьютером, только если человек сам включил (Настройки → Устройства).
+  useEffect(() => startComputerBridge(), []);
   useEffect(() => {
     if (!coreAvailable) return undefined;
     const open = () => useCorePanel.setState({ open: true });

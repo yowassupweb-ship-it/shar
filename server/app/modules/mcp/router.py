@@ -69,8 +69,12 @@ def _call_tool(ctx: keys.KeyContext, name: str, args: dict[str, Any]) -> dict[st
                                                        "(tool_search include_schema), повторите один раз, а если повторится — сообщите владельцу название инструмента."}]}
     if name not in ("list_items", "list_folders") and not name.endswith(("_list", "_read", "_search")):  # чтение в журнал не пишем: шум
         keys.log_call(ctx, name, str(data.get("id") or item_id), str(data.get("title") or ""))
+    image = data.pop("__image__", None) if isinstance(data, dict) else None  # снимок экрана (computer_*) — агенту картинкой
     text = json.dumps(data, ensure_ascii=False, default=str)  # даты задач и событий приходят datetime
-    return {"content": [{"type": "text", "text": text}], "structuredContent": json.loads(text)}
+    content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+    if image:
+        content.insert(0, {"type": "image", "data": image, "mimeType": "image/jpeg"})
+    return {"content": content, "structuredContent": json.loads(text)}
 
 
 @router.get("/api/mcp")

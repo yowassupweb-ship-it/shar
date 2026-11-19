@@ -59,8 +59,16 @@ async function transformFor(kind: Kind): Promise<Transform | null> {
 // Правка у сервера (в журнале и у коллег) — «Сохранено»; сервер долго не отвечает — «Сохраняю…»; нет связи — правки ждут.
 const LIVE_STATE: Record<LiveStatus, SaveState> = { synced: 'saved', sending: 'saving', saving: 'saving', offline: 'pending' };
 
-export function useItemSession(source: Source) {
-  const key = 'token' in source ? `t:${source.token}` : `i:${source.id}`;
+export interface SessionOptions {
+  /** Документ открыт быстрым редактором (TipTap): совместная правка шагами ProseMirror, а не мутациями Univer. */
+  pmDocs?: boolean;
+}
+
+export function useItemSession(source: Source, options: SessionOptions = {}) {
+  const pmDocs = Boolean(options.pmDocs);
+  const key = `${'token' in source ? `t:${source.token}` : `i:${source.id}`}|${pmDocs ? 'pm' : 'univer'}`;
+  const pmDocsRef = useRef(pmDocs);
+  pmDocsRef.current = pmDocs;
   const sourceRef = useRef(source);
   sourceRef.current = source;
 
@@ -116,7 +124,8 @@ export function useItemSession(source: Source) {
     setError('');
     try {
       const loaded = await fetchItem();
-      const transform = loaded.live ? await transformFor(loaded.kind) : null;
+      const transform = !loaded.live ? null
+        : loaded.kind === 'document' && pmDocsRef.current ? (await import('./live/pmOps')).pmTransform : await transformFor(loaded.kind);
       pendingContent.current = null;
       pendingTitle.current = null;
       liveContent.current = null;

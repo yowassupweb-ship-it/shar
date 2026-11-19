@@ -256,9 +256,11 @@ function upsertOne(t: Thread, m: Message): Thread {
 }
 
 /** Картинка в буфер. Браузер принимает только PNG — перекодируем через canvas. */
-export async function copyImage(url: string): Promise<boolean> {
+export async function copyImage(url: string, silent = false): Promise<boolean> {
   try {
     const res = await fetch(url);
+    // Сервер ответил ошибкой (файла нет) — не пытаемся «перекодировать» страницу ошибки.
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     let blob = await res.blob();
     if (blob.type !== 'image/png') {
       const bmp = await createImageBitmap(blob);
@@ -270,10 +272,10 @@ export async function copyImage(url: string): Promise<boolean> {
       blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('png'))), 'image/png'));
     }
     await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-    showToast('Картинка скопирована', 'success');
+    if (!silent) showToast('Картинка скопирована', 'success');
     return true;
   } catch {
-    showToast('Не удалось скопировать картинку', 'error');
+    if (!silent) showToast('Не удалось скопировать картинку', 'error');
     return false;
   }
 }

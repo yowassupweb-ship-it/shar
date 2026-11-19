@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { HiddenMark } from '@/shared/core/HiddenMark';
 import { useSearchParams } from 'react-router';
-import { Check, ChevronsDownUp, ChevronsUpDown, Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, UserPlus, LayoutGrid, Lock, MonitorUp, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
+import { Check, ChevronsDownUp, ChevronsUpDown, Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, UserPlus, LayoutGrid, ListTree, Lock, MonitorUp, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
 import { useShellOptions } from '@/shared/shell/ShellContext';
 import { realtime } from '@/shared/realtime/realtime';
 import { SearchField } from '@/shared/ui/SearchField';
@@ -48,6 +48,7 @@ import './office-apple.css';
 
 const NARROW = '(max-width: 899px)';
 const LIST_FOLDED_KEY = 'nx:office-list-folded';
+const LIST_COMPACT_KEY = 'nx:office-list-compact';
 /** Порядок материалов в папке — у каждой папки свой, помнится на этом устройстве. */
 const FOLDER_SORT_KEY = 'nx:office-folder-sort';
 type FolderSort = 'manual' | 'name' | 'updated';
@@ -213,6 +214,12 @@ export default function OfficeScreen() {
   const [listFolded, setListFolded] = useState(() => { try { return localStorage.getItem(LIST_FOLDED_KEY) === '1'; } catch { return false; } });
   const toggleList = useCallback(() => setListFolded((was) => {
     try { localStorage.setItem(LIST_FOLDED_KEY, was ? '0' : '1'); } catch { /* приватное окно — просто не запомним */ }
+    return !was;
+  }), []);
+  // Компактный список: одна плотная строка на материал, папки деревом (workspace.css, [data-density="compact"]).
+  const [compact, setCompact] = useState(() => { try { return localStorage.getItem(LIST_COMPACT_KEY) === '1'; } catch { return false; } });
+  const toggleCompact = useCallback(() => setCompact((was) => {
+    try { localStorage.setItem(LIST_COMPACT_KEY, was ? '0' : '1'); } catch { /* приватное окно — просто не запомним */ }
     return !was;
   }), []);
   const folded = listFolded && !narrow;
@@ -741,6 +748,7 @@ export default function OfficeScreen() {
     <div className="nws" ref={layoutRef} data-open={openId ? 'true' : undefined} data-list={folded ? 'folded' : undefined}>
       <aside
         className={`nws-list${dropping ? ' is-dropping' : ''}`}
+        data-density={compact ? 'compact' : undefined}
         aria-label="Материалы"
         onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDropping(true); } }}
         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropping(false); }}
@@ -763,25 +771,31 @@ export default function OfficeScreen() {
               <kbd className="nws-kbd" aria-hidden="true">Ctrl+Shift+D</kbd>
             </button>
           )}
-          <button type="button" className="nx-ghost nws-import" disabled={importing} title={`${importRule.label}: ${importRule.hint}`} aria-label={importRule.label} onClick={() => fileInput.current?.click()}>
-            <Upload size={15} aria-hidden="true" /> Импорт
+          {/* Подписи кнопок прячутся контейнерным запросом (workspace.css), когда списку тесно: остаются кружки со значком. */}
+          <button type="button" className="nx-ghost nws-import nws-head-btn" disabled={importing} title={`${importRule.label}: ${importRule.hint}`} aria-label={importRule.label} onClick={() => fileInput.current?.click()}>
+            <Upload size={15} aria-hidden="true" /><span className="nws-head-label">Импорт</span>
           </button>
-          <button type="button" className="nx-primary" aria-haspopup="menu" aria-expanded={Boolean(create)} disabled={Boolean(busy) && !importing} onClick={(e) => setCreate({ element: e.currentTarget, align: 'end' })}>
-            <Plus size={15} aria-hidden="true" /> Создать
+          <button type="button" className="nx-primary nws-head-btn" title="Создать" aria-label="Создать" aria-haspopup="menu" aria-expanded={Boolean(create)} disabled={Boolean(busy) && !importing} onClick={(e) => setCreate({ element: e.currentTarget, align: 'end' })}>
+            <Plus size={15} aria-hidden="true" /><span className="nws-head-label">Создать</span>
           </button>
           <input ref={fileInput} type="file" accept={importRule.accept} hidden onChange={(e) => void importPicked(e.target.files?.[0])} />
         </header>
 
         <div className="nws-kinds" role="group" aria-label="Вид материалов">
-          <button type="button" aria-pressed={filter === 'all'} onClick={() => select(null, 'all')}><LayoutGrid size={16} aria-hidden="true" /><span>Все</span></button>
+          <button type="button" title="Все материалы" aria-pressed={filter === 'all'} onClick={() => select(null, 'all')}><LayoutGrid size={16} aria-hidden="true" /><span>Все</span></button>
           {KIND_LIST.map((k) => (
-            <button key={k.kind} type="button" aria-pressed={filter === k.kind} onClick={() => select(null, k.kind)} style={{ '--a': k.tint[0], '--b': k.tint[1] } as React.CSSProperties}>
+            <button key={k.kind} type="button" title={k.plural} aria-pressed={filter === k.kind} onClick={() => select(null, k.kind)} style={{ '--a': k.tint[0], '--b': k.tint[1] } as React.CSSProperties}>
               <k.icon size={16} aria-hidden="true" /><span>{k.short}</span>
             </button>
           ))}
         </div>
 
-        <SearchField value={query} onChange={setQuery} placeholder="Найти по названию и тексту" />
+        <div className="nws-search-row">
+          <SearchField value={query} onChange={setQuery} placeholder="Найти по названию и тексту" />
+          <button type="button" className="nx-ghost nws-density" aria-pressed={compact} title={compact ? 'Обычный список' : 'Компактный список деревом'} aria-label={compact ? 'Обычный список' : 'Компактный список деревом'} onClick={toggleCompact}>
+            <ListTree size={16} aria-hidden="true" />
+          </button>
+        </div>
         {importing && <p className="nws-hint" role="status">{busy.includes('/') ? `Читаю PDF: ${busy.split(':')[1]}` : 'Импортирую…'}</p>}
 
         <div

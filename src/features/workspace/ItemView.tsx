@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
   AArrowDown, AArrowUp, ArrowDownAZ, ArrowUpDown, ArrowUpZA, Bold, BookOpen, Pencil, ClipboardPaste, Columns2, Eraser, Filter, FilterX, Grid3x3, Hash, Italic, Keyboard, List, ListChecks, ListOrdered, Maximize, Minimize, MessageSquarePlus, Minus, PanelTop, Percent, Redo2, RefreshCw, RussianRuble, Scissors, Search, Settings2, Sigma, Strikethrough, Subscript, Superscript, Table, TableCellsMerge, TableCellsSplit, Underline, Undo2,
-  AlertCircle, ArrowLeft, Check, Copy, Download, FilePlus, Globe2, History, Link2, Lock, Mail, MessageSquare, Star, MoreHorizontal, Pin, PinOff, MonitorUp, Printer, Send, Share2, Trash2, Upload, Users,
+  AlertCircle, ArrowLeft, Check, Copy, Download, FilePlus, Globe2, History, Link2, Lock, Mail, MessageSquare, Star, MoreHorizontal, Pin, PinOff, MonitorUp, Printer, Send, Share2, Trash2, Upload, Users, Zap,
 } from 'lucide-react';
 import { useMailConnected, writeMail } from '@/features/mail';
 import { recordVisit } from '@/features/spotlight/history';
@@ -36,6 +36,29 @@ import { Spinner } from '@/shared/ui/Spinner';
 const DocEditor = lazy(() => import('./editors/DocEditor').then(async (m) => { await m.layoutFontsReady(); return m; }));
 const SheetEditor = lazy(() => import('./editors/SheetEditor'));
 const DeckEditor = lazy(() => import('./editors/DeckEditor'));
+// Быстрый редактор документов (TipTap, #704): включается в «⋯» документа, пока идёт проверка — по выбору человека.
+const FastDocEditor = lazy(() => import('./editors/FastDocEditor'));
+const FAST_DOCS_KEY = 'nx:fast-docs';
+const FAST_DOCS_EVENT = 'nx:fast-docs-changed';
+function readFastDocs(): boolean {
+  // ?fastdoc=1 в адресе — включить только в этой вкладке (проверка, ссылка коллеге), не трогая выбор человека.
+  if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('fastdoc') === '1') return true;
+  try { return localStorage.getItem(FAST_DOCS_KEY) === '1'; } catch { return false; }
+}
+function useFastDocs(): [boolean, (on: boolean) => void] {
+  const [on, setOn] = useState(readFastDocs);
+  useEffect(() => {
+    const sync = () => setOn(readFastDocs());
+    window.addEventListener(FAST_DOCS_EVENT, sync);
+    window.addEventListener('storage', sync);
+    return () => { window.removeEventListener(FAST_DOCS_EVENT, sync); window.removeEventListener('storage', sync); };
+  }, []);
+  const set = (next: boolean) => {
+    try { localStorage.setItem(FAST_DOCS_KEY, next ? '1' : '0'); } catch { /* приватное окно */ }
+    window.dispatchEvent(new Event(FAST_DOCS_EVENT));
+  };
+  return [on, set];
+}
 
 const EDITORS: Record<Kind, ComponentType<EditorProps>> = {
   note: NoteEditor,
@@ -69,7 +92,8 @@ export function ItemView({ source, kindHint, onBack, onChanged, onDeleted, onOpe
   /** Создана копия — открыть её. */
   onOpen?: (id: string, kind: Kind) => void;
 }) {
-  const session = useItemSession(source);
+  const [fastDocs, setFastDocs] = useFastDocs();
+  const session = useItemSession(source, { pmDocs: fastDocs });
   const { item, status, state, error, conflict, loadKey } = session;
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
   const [downloadMenu, setDownloadMenu] = useState<MenuAnchor | null>(null);
@@ -194,7 +218,7 @@ export function ItemView({ source, kindHint, onBack, onChanged, onDeleted, onOpe
   if (status === 'error' || !item) return <div className="nws-missing" role="alert">{error || 'Не удалось открыть.'} <button type="button" className="nx-ghost" onClick={() => void session.reload()}>Повторить</button></div>;
 
   const info = KINDS[item.kind];
-  const Editor = EDITORS[item.kind];
+  const Editor = item.kind === 'document' && fastDocs ? FastDocEditor : EDITORS[item.kind];
   const readOnly = !item.canEdit;
   const accessLevel: AccessLevel = item.accessLevel ?? 'private';
   const AccessIcon = ACCESS_ICON[accessLevel];
@@ -467,6 +491,8 @@ ${absolute(links.office(item!.kind, item!.id))}` });
     menus.push({ id: 'help', label: 'Справка', items: [
       { label: 'Инструкция по Шару', onSelect: () => navigate(paths.guide), icon: <BookOpen size={15} /> },
     ] });
+    // Быстрый редактор документов: оформление — на его панели; команды Univer («Правка», «Формат»…) тут не работают.
+    if (isDoc && fastDocs) return menus.filter((m) => m.id === 'file' || m.id === 'help');
     return menus;
   };
 
@@ -624,6 +650,11 @@ ${absolute(links.office(item!.kind, item!.id))}` });
           {canSticky(item.kind) && <MenuItem icon={<MonitorUp size={15} />} onSelect={() => { setMenu(null); void openSticky(item.id, null, { kind: item.kind }); }}>{stickyLabel(item.kind)}</MenuItem>}
           <MenuItem icon={<Link2 size={15} />} onSelect={() => { setMenu(null); void copyLink(); }}>Скопировать ссылку на материал</MenuItem>
           <MenuItem icon={<Copy size={15} />} onSelect={() => { setMenu(null); void duplicate(); }}>Сделать копию</MenuItem>
+          {item.kind === 'document' && (
+            <MenuItem icon={fastDocs ? <Check size={15} /> : <Zap size={15} />} onSelect={() => { setMenu(null); setFastDocs(!fastDocs); }}>
+              {fastDocs ? 'Быстрый редактор (бета) — включён' : 'Быстрый редактор (бета)'}
+            </MenuItem>
+          )}
           {!readOnly && (
             <>
               <MenuItem icon={<Upload size={15} />} onSelect={() => { setMenu(null); pickImport('replace'); }}>Импорт из файла (заменить)…</MenuItem>

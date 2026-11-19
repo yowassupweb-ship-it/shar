@@ -11,6 +11,7 @@ import { useLongPress } from '@/shared/ui/useLongPress';
 import ForwardSheet from './ForwardSheet';
 import RichInput, { type RichInputHandle } from './RichInput';
 import { readDraft, writeDraft } from './drafts';
+import { readAttachDraft, writeAttachDraft } from './attachDrafts';
 import { scheduleMessage, whenLabel } from './scheduled';
 import { ScheduledBar, ScheduleMenu, SchedulePicker } from './ScheduledUi';
 import { deleteMessage, editMessage, forwardMessages, forwardToAgentFrom } from './messageActions';
@@ -54,7 +55,13 @@ export default function Composer({ chatId, readOnly }: { chatId: string; readOnl
   const forwardDraft = useChatStore((s) => s.forwardDraft[chatId]);
   const [forwarding, setForwarding] = useState<Msg[] | null>(null);
   const [text, setText] = useState(() => readDraft(chatId));
-  const [files, setFiles] = useState<File[]>([]);
+  const [files, setFilesState] = useState<File[]>(() => readAttachDraft(chatId));
+  // Вложения переживают смену чата: Composer пересоздаётся, а список лежит в attachDrafts.
+  const setFiles = (next: File[] | ((prev: File[]) => File[])) => {
+    const value = typeof next === 'function' ? next(readAttachDraft(chatId)) : next;
+    writeAttachDraft(chatId, value);
+    setFilesState(value);
+  };
   const [recording, setRecording] = useState(false);
   const [plusAnchor, setPlusAnchor] = useState<MenuAnchor | null>(null);
   const [pollOpen, setPollOpen] = useState(false);

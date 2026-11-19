@@ -149,3 +149,6 @@
 .nsd-edit-bar > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nsd-edit-bar b { font-weight: var(--weight-semibold); color: var(--accent-color); }
 .nsd-edit-bar .nx-icon-btn { width: 26px; height: 26px; }
+
+/* Комментарий в общей ленте — меткой, чтобы отличался от переписки с первого взгляда. */
+.nsd-tag { display: inline-block; padding: 0 6px; margin-right: 1px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent-fill) 16%, transparent); color: var(--accent-color); font-size: 11px; font-weight: var(--weight-semibold); line-height: 17px; }

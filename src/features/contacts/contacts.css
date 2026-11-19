@@ -318,3 +318,22 @@
 }
 .ctd { container-type: inline-size; }
 .ctd-empty-state .nx-sicon { margin-bottom: var(--space-2); object-fit: contain; filter: var(--icon-shadow); }
+
+/* ── Мои контакты: переключатель, строка поиска, форма и мелочи ───────────────────────────────────────── */
+.ctl-scope { width: 100%; }
+.ctl-scope button { flex: 1; }
+.ctl-search-row { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.ctl-search-row > .nx-search { flex: 1; min-width: 0; }
+.ctl-add { flex: none; display: inline-grid; place-items: center; width: 38px; height: 38px; padding: 0; border-radius: 50%; }
+.pc-shared { display: inline-flex; flex: none; align-items: center; gap: 3px; color: var(--accent-color); font-size: var(--text-xs); }
+.pc-note { white-space: pre-wrap; overflow-wrap: anywhere; }
+.pc-form { display: grid; gap: var(--space-3); }
+.pc-form label { display: grid; gap: 4px; font-size: var(--text-sm); color: var(--text-2); }
+.pc-form input, .pc-form textarea {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: var(--radius-md);
+  background: var(--element-bg); color: var(--text-main); font: inherit; font-size: var(--text-md);
+}
+.pc-form textarea { resize: vertical; min-height: 84px; }
+.pc-form input:focus-visible, .pc-form textarea:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 1px; border-color: transparent; }
+.pc-hint { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
+.pc-error { margin: 0; font-size: var(--text-sm); color: var(--state-danger); }

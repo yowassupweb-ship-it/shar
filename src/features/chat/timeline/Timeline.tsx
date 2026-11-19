@@ -890,7 +890,7 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
           start={viewer.start}
           onClose={() => setViewer(null)}
           onJump={jumpTo}
-          onCopy={(u) => copyImage(u)}
+          onCopy={(u) => copyImage(u, true)}
         />
       )}
 

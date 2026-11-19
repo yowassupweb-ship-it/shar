@@ -141,8 +141,8 @@ export interface DialogMessage {
 }
 
 /** mode: «Диалоги» — личные и беседы, «Комментарии» — комментарии к постам (две вкладки раздела). */
-export function listDialogs(mode: 'dialogs' | 'comments', filter: { waiting?: boolean; platform?: Platform | ''; q?: string }) {
-  const qs = new URLSearchParams({ kind: mode });
+export function listDialogs(mode: 'dialogs' | 'comments' | 'all', filter: { waiting?: boolean; platform?: Platform | ''; q?: string }) {
+  const qs = new URLSearchParams(mode === 'all' ? {} : { kind: mode });
   if (filter.waiting) qs.set('filter', 'waiting');
   if (filter.platform) qs.set('platform', filter.platform);
   if (filter.q?.trim()) qs.set('q', filter.q.trim());

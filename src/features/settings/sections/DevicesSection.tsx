@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { LogOut, Monitor, ShieldCheck, Smartphone, Tablet } from 'lucide-react';
 import { askConfirm } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
+import { ComputerControl } from './ComputerControl';
 import { ApiError, loadDevices, revokeDevice, revokeOtherDevices, type Device } from '../api';
 
 function when(unixSeconds: number): string {
@@ -62,6 +63,8 @@ export default function DevicesSection() {
 
   const others = devices.filter((d) => !d.current);
   return (
+    <>
+    <ComputerControl />
     <section className="nx-block">
       <h2 className="nx-block-title">Где выполнен вход</h2>
       {error && <p className="nx-note">{error}</p>}
@@ -94,5 +97,6 @@ export default function DevicesSection() {
         </div>
       )}
     </section>
+    </>
   );
 }

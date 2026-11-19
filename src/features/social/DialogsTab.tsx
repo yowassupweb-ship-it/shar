@@ -73,7 +73,9 @@ const topIn = (scroller: HTMLElement, el: HTMLElement) => el.getBoundingClientRe
  * на него ведёт ссылка из карточки в чате. Новое сообщение или чужой ответ приходят событием
  * social_changed — список и открытый диалог обновляются сами.
  */
-export default function DialogsTab({ mode }: { mode: 'dialogs' | 'comments' }) {
+/** Диалоги и комментарии — одной лентой, свежие сверху; у каждой строки подписано, что это и откуда. */
+export default function DialogsTab() {
+  const mode = 'all';
   const [params, setParams] = useSearchParams();
   const openId = params.get('dialog');
   const narrow = useSyncExternalStore(subscribeNarrow, () => window.matchMedia(NARROW).matches, () => false);
@@ -128,13 +130,13 @@ export default function DialogsTab({ mode }: { mode: 'dialogs' | 'comments' }) {
   }, [list, openId]);
 
   const listPane = (
-    <aside className="nsd-list" aria-label={mode === 'comments' ? 'Комментарии' : 'Диалоги'}>
+    <aside className="nsd-list" aria-label="Диалоги и комментарии">
       <div className="nsd-filters">
         <div className="nsd-filter-row">
           <div className="nx-segment" role="group" aria-label="Какие диалоги">
             <button type="button" aria-pressed={!waitingOnly} onClick={() => setWaitingOnly(false)}>Все</button>
             <button type="button" aria-pressed={waitingOnly} onClick={() => setWaitingOnly(true)}>
-              Ждут ответа{list && list.waiting[mode] > 0 && <span className="nsd-count">{list.waiting[mode]}</span>}
+              Ждут ответа{list && list.waiting.dialogs + list.waiting.comments > 0 && <span className="nsd-count">{list.waiting.dialogs + list.waiting.comments}</span>}
             </button>
           </div>
           <div className="nx-segment" role="group" aria-label="Площадка">
@@ -143,7 +145,7 @@ export default function DialogsTab({ mode }: { mode: 'dialogs' | 'comments' }) {
             <button type="button" aria-pressed={platform === 'max'} onClick={() => setPlatform('max')}>MAX</button>
           </div>
         </div>
-        <SearchField value={q} onChange={setQ} placeholder={mode === 'comments' ? 'Автор, текст, пост' : 'Клиент, текст'} label="Поиск" />
+        <SearchField value={q} onChange={setQ} placeholder="Клиент, текст, пост" label="Поиск" />
       </div>
       <div className="nsd-rows nx-scroll-y" ref={rows}>
         {error ? (
@@ -151,13 +153,13 @@ export default function DialogsTab({ mode }: { mode: 'dialogs' | 'comments' }) {
         ) : !list ? (
           <div className="nx-state"><Spinner size={20} label="Загружаю диалоги" /></div>
         ) : !list.dialogs.length ? (
-          <div className="nx-state"><MessagesSquare size={24} aria-hidden="true" /><p>{q ? 'Ничего не нашлось.' : waitingOnly ? 'Все ответы даны.' : mode === 'comments' ? 'Комментариев пока нет — они появятся с первым комментарием под постом.' : 'Диалогов пока нет — они появятся с первым сообщением клиента.'}</p></div>
+          <div className="nx-state"><MessagesSquare size={24} aria-hidden="true" /><p>{q ? 'Ничего не нашлось.' : waitingOnly ? 'Все ответы даны.' : 'Пока пусто — здесь появятся сообщения клиентов и комментарии под постами.'}</p></div>
         ) : list.dialogs.map((d) => (
           <button key={d.id} type="button" className="nsd-row" aria-current={d.id === openId ? 'true' : undefined} data-waiting={d.waiting ? 'true' : undefined} onClick={() => open(d.id)}>
             <SocialAvatar platform={d.platform} name={d.title || d.clientName} seed={d.id} src={d.avatar} size={38} />
             <span className="nsd-row-text">
               <span className="nsd-row-top"><b>{d.title || d.clientName}</b><time>{when(d.lastAt)}</time></span>
-              <span className="nsd-row-src">{mode === 'comments' ? (d.context ? `Пост: ${d.context}` : d.sourceTitle) : `${KIND_LABEL[d.kind]}${d.kind === 'group' && d.sourceTitle && d.sourceTitle !== d.title ? ` · ${d.sourceTitle}` : ''}`}</span>
+              <span className="nsd-row-src" data-kind={d.kind}>{d.kind === 'comments' ? <><b className="nsd-tag">Комментарий</b>{d.context ? ` · Пост: ${d.context}` : d.sourceTitle ? ` · ${d.sourceTitle}` : ''}</> : `${KIND_LABEL[d.kind]}${d.kind === 'group' && d.sourceTitle && d.sourceTitle !== d.title ? ` · ${d.sourceTitle}` : ''}`}</span>
               <span className="nsd-row-last">{d.lastDir === 'out' && <span className="nsd-you">Вы: </span>}{d.lastDir === 'in' && d.handled && <span className="nsd-you">Ответ дан · </span>}{d.lastText}</span>
             </span>
             {d.waiting && <span className="nsd-dot" aria-label="Ждёт ответа" />}
@@ -169,7 +171,7 @@ export default function DialogsTab({ mode }: { mode: 'dialogs' | 'comments' }) {
 
   const threadPane = openId
     ? <Thread key={openId} id={openId} tick={tick} onBack={narrow ? () => open(null) : undefined} onSent={load} />
-    : <section className="nsd-thread"><div className="nx-state"><MessagesSquare size={36} aria-hidden="true" /><h2>{mode === 'comments' ? 'Выберите комментарий' : 'Выберите диалог'}</h2><p>{mode === 'comments' ? 'Здесь комментарии автора под постом и ответ — прямо в ветку под его комментарием.' : 'Здесь вся переписка с клиентом и ответ — во ВКонтакте или MAX, откуда он написал.'}</p></div></section>;
+    : <section className="nsd-thread"><div className="nx-state"><MessagesSquare size={36} aria-hidden="true" /><h2>Выберите диалог или комментарий</h2><p>Переписка с клиентом или ветка под постом — ответ уходит туда, откуда написали.</p></div></section>;
 
   return (
     <div className="nsd" data-narrow={narrow ? 'true' : undefined}>

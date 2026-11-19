@@ -44,7 +44,7 @@ export function SocialCard({ card, time, createdAt }: { card: SocialCardData; ti
           <span className="cxs-social-links">
             {card.dialogId && (
               <button type="button" className="cxs-social-open cxs-social-linkbtn"
-                onClick={() => navigate(`${paths.social}?${card.sourceType === 'comments' ? 'tab=comments&' : ''}dialog=${encodeURIComponent(card.dialogId!)}`)}>
+                onClick={() => navigate(`${paths.social}?dialog=${encodeURIComponent(card.dialogId!)}`)}>
                 <MessagesSquare size={13} aria-hidden="true" /> Открыть диалог
               </button>
             )}

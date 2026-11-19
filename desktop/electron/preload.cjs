@@ -84,6 +84,17 @@ contextBridge.exposeInMainWorld('sharDesktop', {
   // Положить файлы в системный буфер обмена (Windows): [{ url, name }] → сколько скопировано.
   copyFilesToClipboard: (items) => ipcRenderer.invoke('clipboard:copy-files', (Array.isArray(items) ? items : []).map((i) => ({ url: String(i?.url || ''), name: String(i?.name || '') }))),
   windowControls,
+  // Управление компьютером агентом «Ядра»: включает сам человек; «Стоп» — кнопка на плашке или Ctrl+Alt+Q.
+  computer: {
+    get: () => ipcRenderer.invoke('computer:get'),
+    set: (on) => ipcRenderer.invoke('computer:set', Boolean(on)),
+    run: (action, args) => ipcRenderer.invoke('computer:run', String(action || ''), args && typeof args === 'object' ? args : {}),
+    onChanged: (cb) => {
+      const listener = (_e, data) => cb(data);
+      ipcRenderer.on('computer:changed', listener);
+      return () => ipcRenderer.removeListener('computer:changed', listener);
+    },
+  },
   startup: {
     get: () => ipcRenderer.invoke('startup:get'),
     set: (openAtLogin) => ipcRenderer.invoke('startup:set', Boolean(openAtLogin)),

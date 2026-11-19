@@ -1217,12 +1217,17 @@ TOOLS: list[dict[str, Any]] = [
 from app.modules.mcp import apps as _apps  # noqa: E402 — им нужен ToolError выше
 from app.modules.mcp import files as _files  # noqa: E402
 
-TOOLS += _apps.TOOLS + _files.TOOLS
+from app.modules.computer import router as _computer  # noqa: E402
+
+TOOLS += _apps.TOOLS + _files.TOOLS + _computer.TOOLS
 BY_NAME = {t["name"]: t for t in TOOLS}
 
 
 def _open(ctx: KeyContext, tool: dict[str, Any]) -> bool:
     """Инструмент «Офиса» — по уровню доступа; календарь, задачи, файлы и прочее — ещё и по списку apps ключа."""
+    # Управление компьютером человека (computer_*) — только запускам «Ядра» (ключ с job), не личным ключам внешних программ.
+    if tool.get("core") and not ctx.scope.get("job"):
+        return False
     return LEVELS[tool["level"]] <= LEVELS[ctx.scope["access"]] and (not tool.get("app") or tool["app"] in ctx.scope.get("apps", []))
 
 

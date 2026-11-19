@@ -104,7 +104,9 @@ export function bindDoc(injector: Injector, unitId: string, channel: LiveChannel
 
   const apply = (ops: LiveOp[]) => {
     for (const op of ops) {
-      if (op.id !== TEXT) continue;
+      // Правка другого вида — из быстрого редактора (шаг ProseMirror, live/pmOps.ts). Пропустить её нельзя: наш
+      // документ разошёлся бы с общим, и наше сохранение затёрло бы чужое. Бросаем — канал откроет документ заново.
+      if (op.id !== TEXT) throw new Error(`Правка другого редактора (${op.id}) — документ откроется заново`);
       const actions = op.params.actions as JSONXActions;
       const info = selection.getSelectionInfo();
       if (info?.textRanges?.length) {

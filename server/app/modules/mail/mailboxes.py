@@ -30,6 +30,11 @@ def get_mailboxes(accountId: str, refresh: bool = False, me: Identity = Depends(
         raise HTTPException(status_code=502, detail=f"Почтовый сервер не ответил: {e}")
     mark_password(acc['id'], True)
     unread = db.get_email_unread_counts(str(acc['id'])) or {}
+    # Разложенное правилами по своим папкам во «Входящих» не считаем — его счётчик у папки.
+    inbox = roles.get('inbox')
+    if inbox and unread.get(inbox):
+        from app.modules.mail import folder_rules
+        unread[inbox] = max(0, int(unread[inbox]) - folder_rules.routed_unread_in_inbox(str(acc['id']), userId, inbox))
     order = ['inbox', 'drafts', 'sent', 'junk', 'trash', 'archive']
     special = [
         {'role': role, 'folder': roles[role], 'title': _ROLE_TITLES[role], 'unread': int(unread.get(roles[role], 0) or 0)}

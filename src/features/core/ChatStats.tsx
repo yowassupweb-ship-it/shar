@@ -4,7 +4,7 @@ import type { CoreLimit, CoreMessage, CoreThread } from './api';
 import { formatTokens, modelLabel } from './parts';
 
 const AGENT_NAME: Record<string, string> = { gemini: 'Gemini', claude: 'Claude', codex: 'GPT', kimi: 'Kimi' };
-const WINDOW_NAME: Record<string, string> = { five_hour: '5 ч', seven_day: 'неделя', seven_day_opus: 'неделя Opus', seven_day_sonnet: 'неделя Sonnet' };
+const WINDOW_NAME: Record<string, string> = { five_hour: '5 ч', seven_day: 'неделя', seven_day_opus: 'неделя Opus', seven_day_sonnet: 'неделя Sonnet', month: 'месяц' };
 
 /** Семейство модели по её имени: у Claude недельные окна свои у Opus и Sonnet. */
 export function modelFamily(model?: string): string {

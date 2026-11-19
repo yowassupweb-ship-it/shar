@@ -20,6 +20,7 @@ import Compose, { type ComposeMode } from './Compose';
 import { fileSize, fmtFullDate, fmtListDate } from './format';
 import { Spinner } from '@/shared/ui/Spinner';
 import { FileGlyph, kindOf, useAttachmentMenu } from '@/features/files';
+import { MailFolders } from './MailFolders';
 
 /**
  * Раздел «Почта» нового Шара — как Mail.app: слева ящики, в середине список,
@@ -403,6 +404,7 @@ export default function MailScreen() {
           );
         })}
       </nav>
+      <MailFolders accountId={accountId} current={folder} />
       {boxesError && (
         <div className="nmb-error" role="alert">
           <AlertCircle size={14} aria-hidden="true" />

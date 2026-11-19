@@ -20,12 +20,15 @@ def _collect() -> list[APIRouter]:
     from app.modules.calls import signaling as calls_signaling
     from app.modules.chats import chat_notifications, chats, inline, messages, receipts
     from app.modules.cloud import router as cloud
+    from app.modules.computer import router as computer
+    from app.modules.contacts import router as contacts
     from app.modules.departments import router as departments
     from app.modules.files import avatars, backgrounds, stickers, uploads
     from app.modules.integrations import router as integrations
     from app.modules.leads import router as leads
     from app.modules.mail import accounts, email_chat_rules, mailboxes
     from app.modules.mail import avatars as mail_avatars
+    from app.modules.mail import folder_rules as mail_folder_rules
     from app.modules.mail import messages as mail_messages
     from app.modules.mail import sync as mail_sync
     from app.modules.mcp import keys as mcp_keys
@@ -60,8 +63,8 @@ def _collect() -> list[APIRouter]:
 
     mods = [
         auth, users, departments, chats, messages, receipts, chat_notifications, inline,
-        realtime, calls_rooms, calls_signaling, mail_messages, mail_avatars, mail_sync, accounts, mailboxes, email_chat_rules,
-        cloud, uploads, avatars, backgrounds, stickers, calendar_workdays, calendar, todos_folders, todos, notifications, push, requests_mod, admin,
+        realtime, calls_rooms, calls_signaling, mail_messages, mail_avatars, mail_folder_rules, mail_sync, accounts, mailboxes, email_chat_rules,
+        cloud, computer, contacts, uploads, avatars, backgrounds, stickers, calendar_workdays, calendar, todos_folders, todos, notifications, push, requests_mod, admin,
         client_errors, health, utm, og, chats_scheduled, leads, social, integrations, workspace_folders, workspace, workspace_public, search, birthdays,
         mcp_keys, mcp, core_chat, core_accounts, core_hidden, core_integrations, core_mcp_servers, core_memory, core_node, core_task_agent, core_tours, usage, studio,
     ]

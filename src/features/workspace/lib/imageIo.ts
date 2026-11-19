@@ -10,7 +10,7 @@ import { showToast } from '@/shared/ui/Toast';
  * разбухает до мегабайт, а автосохранение отправляет его целиком после каждой паузы в наборе. Здесь файл уходит
  * на сервер (как вложение чата), а в документе остаётся короткая ссылка.
  */
-async function uploadImage(file: File): Promise<string | null> {
+export async function uploadImage(file: File): Promise<string | null> {
   try {
     const uploaded = await uploadFileWithProgress(file, () => undefined);
     return attachmentUrl(uploaded.url);

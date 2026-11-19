@@ -166,7 +166,8 @@ export class LiveChannel {
     if (this.queued.length) {
       const ops = this.queued;
       this.queued = [];
-      editor.apply(ops);
+      // Правка не легла (другой редактор, несовместимость) — открыть заново, а не уронить окно.
+      try { editor.apply(ops); } catch (cause) { console.warn('[live] queued op failed', cause); this.hooks.onReset(); }
     }
     this.scheduleSave();
     return () => { if (this.editor === editor) this.editor = null; };
