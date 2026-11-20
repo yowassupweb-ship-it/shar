@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Bell, Bot, ChevronLeft, ChevronRight, KeyRound, LayoutGrid, LogOut, MonitorSmartphone, Palette, RotateCw, User, Volume2 } from 'lucide-react';
-import { CoreIcon, isImageIcon } from '@/shared/ui/CoreIcon';
+import { ChevronLeft, ChevronRight, RotateCw } from 'lucide-react';
+import { CoreIcon, isImageIcon, SettingsIcons } from '@/shared/ui/CoreIcon';
 import { useAgentBridge } from '@/shared/core/agentBridge';
 import { logout } from '@/shared/session/session';
 import { adoptServerChatPrefs } from '@/shared/settings/chatPrefs';
@@ -40,15 +40,15 @@ interface SectionDef {
 }
 
 const SECTIONS: SectionDef[] = [
-  { id: 'profile', label: 'Профиль', icon: User, tint: ['#818cf8', '#6d28d9'], needsProfile: true },
-  { id: 'account', label: 'Логин и пароль', icon: KeyRound, tint: ['#fbbf24', '#ea580c'], needsProfile: true },
-  { id: 'devices', label: 'Устройства', icon: MonitorSmartphone, tint: ['#22d3ee', '#0e7490'] },
-  { id: 'appearance', label: 'Внешний вид', icon: Palette, tint: ['#f472b6', '#db2777'] },
-  { id: 'sounds', label: 'Звуки', icon: Volume2, tint: ['#60a5fa', '#2563eb'] },
-  { id: 'notifications', label: 'Уведомления', icon: Bell, tint: ['#fb923c', '#dc2626'] },
-  { id: 'sections', label: 'Разделы в меню', icon: LayoutGrid, tint: ['#34d399', '#059669'], needsProfile: true },
+  { id: 'profile', label: 'Профиль', icon: SettingsIcons.profile, tint: ['#818cf8', '#6d28d9'], needsProfile: true },
+  { id: 'account', label: 'Логин и пароль', icon: SettingsIcons.account, tint: ['#fbbf24', '#ea580c'], needsProfile: true },
+  { id: 'devices', label: 'Устройства', icon: SettingsIcons.devices, tint: ['#22d3ee', '#0e7490'] },
+  { id: 'appearance', label: 'Внешний вид', icon: SettingsIcons.appearance, tint: ['#f472b6', '#db2777'] },
+  { id: 'sounds', label: 'Звуки', icon: SettingsIcons.sounds, tint: ['#60a5fa', '#2563eb'] },
+  { id: 'notifications', label: 'Уведомления', icon: SettingsIcons.notifications, tint: ['#fb923c', '#dc2626'] },
+  { id: 'sections', label: 'Разделы в меню', icon: SettingsIcons.sections, tint: ['#34d399', '#059669'], needsProfile: true },
   { id: 'core', label: 'Ядро — агенты', icon: CoreIcon, tint: ['#c084fc', '#4338ca'], needsCore: true },
-  { id: 'mcp', label: 'MCP', icon: Bot, tint: ['#a78bfa', '#4f46e5'] },
+  { id: 'mcp', label: 'MCP', icon: SettingsIcons.mcp, tint: ['#a78bfa', '#4f46e5'] },
 ];
 
 const isSection = (v: string | null): v is SectionId => SECTIONS.some((s) => s.id === v);
@@ -133,7 +133,7 @@ export default function SettingsScreen() {
         </div>
         <div className="nx-group">
           <button type="button" className="nx-row nst-nav-row nst-danger" onClick={() => void signOut()}>
-            <span className="nst-icon" style={{ '--a': '#f87171', '--b': '#b91c1c' } as CSSProperties} aria-hidden="true"><LogOut size={16} /></span>
+            <span className="nst-icon" data-image aria-hidden="true"><SettingsIcons.exit size={28} /></span>
             <span className="nx-row-label">Выйти из аккаунта</span>
           </button>
         </div>

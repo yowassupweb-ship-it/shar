@@ -49,5 +49,19 @@ export const GuideToolIcon = imageIcon(`/icons/tool-icons/instructions.png${V}`,
 export const AdminToolIcon = imageIcon(`/icons/tool-icons/admin.png${V}`, 'AdminToolIcon');
 export const SettingsToolIcon = imageIcon(`/icons/tool-icons/settings.png${V}`, 'SettingsToolIcon');
 
+// Разделы настроек (public/icons/settings-icons, 128 px).
+const S = (name: string, label: string) => imageIcon(`/icons/settings-icons/${name}.png${V}`, label);
+export const SettingsIcons = {
+  profile: S('profile', 'ProfileIcon'),
+  account: S('login', 'LoginIcon'),
+  devices: S('devices', 'DevicesIcon'),
+  appearance: S('visual', 'VisualIcon'),
+  sounds: S('sound', 'SoundIcon'),
+  notifications: S('notifications', 'NotificationsIcon'),
+  sections: S('menu-parts', 'MenuPartsIcon'),
+  mcp: S('mcp', 'McpIcon'),
+  exit: S('exit', 'ExitIcon'),
+};
+
 /** Мини-версия знака «Ядра» — линейный атом: пункты меню, мелкие кнопки и подписи, где объёмная картинка не к месту. */
 export const CoreMini: LucideIcon = Atom;
