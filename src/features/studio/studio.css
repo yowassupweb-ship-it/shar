@@ -91,3 +91,16 @@
 .nst-agents { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .nst-runs { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; color: var(--text-2); font-size: var(--text-sm); }
 .nst-runs li { display: flex; align-items: center; gap: 8px; }
+
+/* Генерация: поле точек с бегущими волнами (GenDots). */
+.nst-dots { position: relative; display: grid; place-items: center; min-height: 320px; border-radius: var(--radius-lg); overflow: hidden;
+  background: radial-gradient(120% 90% at 50% 50%, color-mix(in srgb, var(--accent-color) 10%, transparent), transparent 70%), var(--surface-hover);
+  --gen-second: #c026d3; }
+.nst-dots canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.nst-dots-label { position: relative; padding: 6px 14px; border-radius: 999px; font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text-main, var(--text-color));
+  background: color-mix(in srgb, var(--bg-color) 70%, transparent); backdrop-filter: blur(6px); box-shadow: 0 0 0 1px var(--border-color); }
+.nst-dots[data-compact] { position: absolute; inset: 0; min-height: 0; border-radius: inherit; background: color-mix(in srgb, var(--bg-color) 45%, transparent); }
+.nst-result-busy { background: none !important; backdrop-filter: none !important; }
+.nst-run-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-color); animation: nst-run-pulse 1.2s ease-in-out infinite; }
+@keyframes nst-run-pulse { 0%, 100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.15); } }
+@media (prefers-reduced-motion: reduce) { .nst-run-dot { animation: none; } }

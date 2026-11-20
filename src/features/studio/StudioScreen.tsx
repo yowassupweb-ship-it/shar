@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router';
 import {
   AlertCircle, BookmarkPlus, ChevronLeft, Download, ImagePlus, Images, Pencil, Plus, Sparkles, Star, ThumbsDown, ThumbsUp, Trash2, Wand2, X,
 } from 'lucide-react';
+import { GenDots } from './GenDots';
 import { paths } from '@/shared/navigation/routes';
 import { downloadOnClick } from '@/shared/platform/download';
 import { Switch } from '@/shared/ui/controls';
@@ -158,7 +159,7 @@ function CreateTab({ state, seed, onDone, onOpen, onClearSeed }: {
   const recent = state.images.filter((i) => i.id !== last?.id).slice(0, 8);
   return (
     <div className="nst-create">
-      <section className="nst-form" aria-label="Что нарисовать">
+      <section className="nst-form" aria-label="Что создать">
         {parent && (
           <div className="nst-parent">
             <img src={parent.url} alt="" />
@@ -167,7 +168,7 @@ function CreateTab({ state, seed, onDone, onOpen, onClearSeed }: {
           </div>
         )}
         <textarea ref={area} className="nst-prompt" value={prompt} rows={5} onChange={(e) => setPrompt(e.target.value)}
-          placeholder={parent ? 'Что изменить: «сделай фон светлее», «добавь надпись…»' : 'Что нарисовать: сюжет, стиль, свет, текст на картинке'}
+          placeholder={parent ? 'Что изменить: «сделай фон светлее», «добавь надпись…»' : 'Опишите изображение: сюжет, стиль, свет, текст на картинке'}
           aria-label="Запрос"
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void run(); } }} />
         <div className="nst-chips" role="radiogroup" aria-label="Формат">
@@ -198,7 +199,7 @@ function CreateTab({ state, seed, onDone, onOpen, onClearSeed }: {
           <Switch checked={useStyle} label="Учитывать мой вкус" onChange={setUseStyle} disabled={!state.insights.rated} />
         </label>
         {state.agents.length > 0 && (
-          <div className="nst-agents" role="radiogroup" aria-label="Кто рисует">
+          <div className="nst-agents" role="radiogroup" aria-label="Кто создаёт изображение">
             <span className="nst-label">Рисует</span>
             {state.agents.map((a) => (
               <button key={a.id} type="button" role="radio" aria-checked={agent === a.id} className="nst-chip" title={`${a.label}: ${a.how}${a.nodeOnline ? '' : ' · нода не на связи'}`}
@@ -209,24 +210,23 @@ function CreateTab({ state, seed, onDone, onOpen, onClearSeed }: {
           </div>
         )}
         <button type="button" className="nx-primary nst-go" disabled={starting || !prompt.trim() || !state.hasKey || !agent} onClick={() => void run()}>
-          {starting ? <Spinner size={16} /> : <Sparkles size={16} aria-hidden="true" />} {parent ? 'Доработать' : 'Нарисовать'}
+          {starting ? <Spinner size={16} /> : <Sparkles size={16} aria-hidden="true" />} {parent ? 'Доработать' : 'Создать'}
         </button>
         {runs.length > 0 && (
           <ul className="nst-runs" aria-live="polite">
             {runs.map((r) => (
-              <li key={r.runId}><Spinner size={14} /> <span>{agentLabel(r.agent)} рисует: «{r.prompt.slice(0, 60)}{r.prompt.length > 60 ? '…' : ''}»</span></li>
+              <li key={r.runId}><span className="nst-run-dot" aria-hidden="true" /> <span>{agentLabel(r.agent)} создаёт изображение: «{r.prompt.slice(0, 60)}{r.prompt.length > 60 ? '…' : ''}»</span></li>
             ))}
           </ul>
         )}
-        <span className="nst-hint">Ctrl+Enter — нарисовать. Агент работает в чате «Ядра» «Студия: картинки» — там видно, как идёт дело.</span>
       </section>
 
       <section className="nst-stage" aria-label="Результат">
-        {busy && !last ? <div className="nst-wait"><Spinner size={28} label="Агент рисует" /></div> : null}
+        {busy && !last ? <GenDots /> : null}
         {last ? (
           <button type="button" className="nst-result" onClick={() => onOpen(last.id)} aria-label="Открыть картинку">
             <img src={last.url} alt={last.prompt} />
-            {busy && <span className="nst-result-busy"><Spinner size={22} label="Агент рисует новую" /></span>}
+            {busy && <span className="nst-result-busy"><GenDots label="Создаю новую" compact /></span>}
           </button>
         ) : !busy && (
           <div className="nx-state"><Wand2 size={26} aria-hidden="true" /><p>Результат появится здесь. Оценивайте картинки — студия и агенты в чате запомнят, что вам нравится.</p></div>
