@@ -278,3 +278,4 @@ html:not([data-theme="graphite"]):not([data-theme="black"]) .fdoc-content [data-
 .fdoc-hf-bar button:hover { background: var(--surface-hover); }
 .fdoc-hf-bar .fdoc-hf-done { background: var(--accent-fill); color: #fff; }
 .fdoc-hf-bar .fdoc-hf-done:hover { background: color-mix(in srgb, var(--accent-fill) 88%, #000); }
+.fdoc-hf-input:focus, .fdoc-hf-input:focus-visible { outline: none !important; box-shadow: none !important; }
