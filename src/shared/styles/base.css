@@ -794,6 +794,8 @@ html.nx-locked body {
   --btn-transition: background var(--duration-fast) var(--ease-out), transform 0.08s ease;
 }
 @media (hover: hover) { .nxv-btn:hover { background: rgb(255 255 255 / .14); } }
+/* Масштаб в процентах — кнопка: 100% (настоящий размер) ↔ по экрану. */
+.nxv-zoom { width: auto; min-width: 54px; padding: 0 8px; font-size: var(--text-xs); font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; }
 /* Отбивка действий: копирование — галочка (или крест) на самой кнопке, масштаб и скачивание — плашка сверху по центру. */
 .nxv-btn[data-state="busy"] { opacity: .55; cursor: progress; }
 .nxv-btn[data-state="ok"] { background: rgb(52 199 89 / .28); color: #fff; }

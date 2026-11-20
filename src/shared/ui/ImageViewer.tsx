@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, MessageSquareText, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, MessageSquareText, RotateCw, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { thumbUrl } from './media';
 import { downloadOnClick } from '@/shared/platform/download';
 
@@ -13,6 +13,10 @@ import { downloadOnClick } from '@/shared/platform/download';
  * вбок — соседнее фото, свайп вниз — закрыть. Клавиатура: ←/→, Esc, +/−/0.
  *
  * Жесты пишут transform прямо в DOM — без перерисовки React на каждый кадр.
+ *
+ * Открывается в натуральном размере: маленькое фото не растягивается, большое вписывается в экран (не крупнее).
+ * В шапке — масштаб в процентах от настоящего размера; нажатие на него (или «1») — 100%, «0» — по экрану.
+ * R — повернуть, Home/End — первое и последнее фото.
  */
 
 export interface ViewerItem {
@@ -23,11 +27,11 @@ export interface ViewerItem {
   name?: string;
 }
 
-// Меньше 100% — тоже можно: крупное фото иначе не разглядеть целиком, его закрывали панели.
-const MIN = 0.25;
-/** Начальный размер фото относительно «вписать в экран». */
-const INITIAL_FIT = 0.9;
-const MAX = 6;
+// Масштаб view.scale — относительно «базового» размера на экране (натуральный, но не больше экрана).
+const MIN = 0.1;
+/** Поля вокруг большого фото, вписанного в экран. */
+const FIT_MARGIN = 0.94;
+const MAX = 16;
 
 export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
   items: ViewerItem[];
@@ -39,12 +43,22 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
 }) {
   const [index, setIndex] = useState(() => Math.max(0, Math.min(start, items.length - 1)));
   const [fullLoaded, setFullLoaded] = useState(false);
+  /** На экране оригинал (а не превью) — по нему считаем настоящий размер. */
+  const fullRef = useRef(false);
   const stageRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const stripRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const view = useRef({ scale: 1, x: 0, y: 0 });
+  /** Во сколько раз базовый размер меньше натурального (1 — фото целиком помещается как есть). */
+  const base = useRef(1);
+  const [rotation, setRotation] = useState(0);
+  const rotationRef = useRef(0);
+  rotationRef.current = rotation;
+  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
+  const [percent, setPercent] = useState(100);
+  const zoomAtRef = useRef<(next: number, cx: number, cy: number, animate?: boolean) => void>(() => undefined);
   const item = items[index];
 
   // Отбивка действий: кнопка сама показывает, что произошло (копируется → скопировано / не вышло), а короткая плашка сверху
@@ -76,13 +90,13 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
     if (!img) return;
     const { scale, x, y } = view.current;
     img.style.transition = animate ? 'transform .22s cubic-bezier(.22,1,.36,1)' : 'none';
-    img.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${scale})`;
+    img.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${scale}) rotate(${rotationRef.current}deg)`;
     img.style.cursor = scale > 1 ? 'grab' : 'zoom-in';
     if (Math.abs(scale - shownScale.current) > 0.004) {
       shownScale.current = scale;
-      say(`${Math.round(scale * INITIAL_FIT * 100)}%`, 900);
+      setPercent(Math.round(scale * base.current * 100));
     }
-  }, [say]);
+  }, []);
 
   const reset = useCallback((animate = true) => {
     view.current = { scale: 1, x: 0, y: 0 };
@@ -96,7 +110,8 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
     });
   }, [items.length]);
 
-  useEffect(() => { setFullLoaded(false); reset(false); }, [index, reset]);
+  useEffect(() => { setFullLoaded(false); setNatural(null); setRotation(0); reset(false); }, [index, reset]);
+  useEffect(() => { apply(true); }, [rotation, apply]);
 
   // Фото — на весь экран, по большей стороне, которая упрётся первой (как в
   // «Фото» iOS): верхняя полоса и лента миниатюр лежат поверх, а не отнимают
@@ -106,12 +121,29 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
     const img = imgRef.current;
     const stage = stageRef.current;
     if (!img || !stage || !img.naturalWidth || !img.naturalHeight) return;
-    // Открывается на 90% «по размеру экрана»: небольшие поля вокруг, фото не упирается в края. Это и есть масштаб 1 просмотрщика —
-    // двойной клик, «0» и сброс возвращают к нему же.
-    const k = Math.min(stage.clientWidth / img.naturalWidth, stage.clientHeight / img.naturalHeight) * INITIAL_FIT;
-    img.style.width = `${Math.floor(img.naturalWidth * k)}px`;
-    img.style.height = `${Math.floor(img.naturalHeight * k)}px`;
+    // Натуральный размер настоящего файла (превью меньше — берём размер оригинала, когда он загрузится).
+    const nw = img.naturalWidth;
+    const nh = img.naturalHeight;
+    // Повёрнутое на 90° вписываем по переставленным сторонам.
+    const turned = Math.abs(rotationRef.current % 180) === 90;
+    const fitK = Math.min(stage.clientWidth / (turned ? nh : nw), stage.clientHeight / (turned ? nw : nh)) * FIT_MARGIN;
+    // Не растягиваем: маленькое фото — как есть (100%), большое — по экрану. Это и есть масштаб 1 просмотрщика.
+    // Пока на экране превью (оно меньше оригинала), вписываем его по экрану — настоящий размер узнаем у оригинала.
+    const k = fullRef.current ? Math.min(1, fitK) : fitK;
+    base.current = k;
+    img.style.width = `${Math.floor(nw * k)}px`;
+    img.style.height = `${Math.floor(nh * k)}px`;
+    setPercent(Math.round(view.current.scale * k * 100));
   }, []);
+  useEffect(() => { fit(); }, [rotation, fit]);
+  /** 100% — настоящий размер, пиксель в пиксель; повторно — обратно по экрану. */
+  const toggleActual = useCallback(() => {
+    const r = stageRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const actual = 1 / base.current;
+    if (Math.abs(view.current.scale - actual) < 0.01) reset();
+    else zoomAtRef.current(actual, r.left + r.width / 2, r.top + r.height / 2, true);
+  }, [reset]);
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage) return undefined;
@@ -152,6 +184,7 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
     if (s <= 1) { v.x = 0; v.y = 0; }
     apply(animate);
   }, [apply]);
+  zoomAtRef.current = zoomAt;
 
   const zoomBy = useCallback((k: number) => {
     const r = stageRef.current?.getBoundingClientRect();
@@ -166,10 +199,14 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
       else if (e.key === '+' || e.key === '=') { const r = stageRef.current?.getBoundingClientRect(); if (r) zoomAt(view.current.scale * 1.4, r.left + r.width / 2, r.top + r.height / 2, true); }
       else if (e.key === '-') { const r = stageRef.current?.getBoundingClientRect(); if (r) zoomAt(view.current.scale / 1.4, r.left + r.width / 2, r.top + r.height / 2, true); }
       else if (e.key === '0') reset();
+      else if (e.key === '1') toggleActual();
+      else if (e.key === 'r' || e.key === 'R' || e.key === 'к' || e.key === 'К') setRotation((d) => (d + 90) % 360);
+      else if (e.key === 'Home') setIndex(0);
+      else if (e.key === 'End') setIndex(items.length - 1);
     };
     document.addEventListener('keydown', onKey, true);
     return () => document.removeEventListener('keydown', onKey, true);
-  }, [go, onClose, reset, zoomAt]);
+  }, [go, onClose, reset, zoomAt, toggleActual, items.length]);
 
   // Колесо — зум (без модификаторов тоже: прокручивать тут нечего).
   useEffect(() => {
@@ -255,7 +292,7 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
       const now = performance.now();
       if (now - g.tapAt < 300) {
         g.tapAt = 0;
-        if (view.current.scale !== 1) reset(); else zoomAt(2.5, e.clientX, e.clientY, true);
+        if (view.current.scale !== 1) reset(); else zoomAt(base.current < 0.98 ? 1 / base.current : 2.5, e.clientX, e.clientY, true);
       } else {
         g.tapAt = now;
       }
@@ -285,8 +322,8 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
     <div ref={rootRef} className="nxv" role="dialog" aria-modal="true" aria-label="Просмотр фото">
       <header className="nxv-bar">
         <div className="nxv-meta">
-          {item.author && <b>{item.author}</b>}
-          <span>{[item.date, items.length > 1 ? `${index + 1} из ${items.length}` : ''].filter(Boolean).join(' · ')}</span>
+          {(item.name || item.author) && <b title={item.name || item.author}>{item.name || item.author}</b>}
+          <span>{[item.name ? item.author : '', item.date, natural ? `${natural.w}×${natural.h}` : '', items.length > 1 ? `${index + 1} из ${items.length}` : ''].filter(Boolean).join(' · ')}</span>
         </div>
         <div className="nxv-actions">
           {onJump && item.messageId && (
@@ -302,7 +339,10 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
             </button>
           )}
           <button type="button" className="nxv-btn" onClick={() => zoomBy(1 / 1.4)} aria-label="Уменьшить" title="Уменьшить (−)"><ZoomOut size={18} /></button>
+          <button type="button" className="nxv-btn nxv-zoom" onClick={toggleActual} aria-label={`Масштаб ${percent}%. Нажмите: настоящий размер или по экрану`}
+            title="100% — настоящий размер (1) · ещё раз — по экрану (0)">{percent}%</button>
           <button type="button" className="nxv-btn" onClick={() => zoomBy(1.4)} aria-label="Увеличить" title="Увеличить (+)"><ZoomIn size={18} /></button>
+          <button type="button" className="nxv-btn" onClick={() => setRotation((d) => (d + 90) % 360)} aria-label="Повернуть" title="Повернуть (R)"><RotateCw size={18} /></button>
           <a className="nxv-btn" href={item.url} download={item.name || true} onClick={(e) => { downloadOnClick(item.url, item.name)(e); say(window.sharDesktop?.downloadFile ? 'Сохранение…' : 'Скачивание началось', 1800); }} aria-label="Скачать" title="Скачать"><Download size={18} /></a>
           <a className="nxv-btn" href={item.url} target="_blank" rel="noopener noreferrer" aria-label="Открыть оригинал" title="Открыть оригинал"><ExternalLink size={18} /></a>
           <button ref={closeRef} type="button" className="nxv-btn" onClick={onClose} aria-label="Закрыть" title="Закрыть (Esc)"><X size={20} /></button>
@@ -330,9 +370,10 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
           src={fullLoaded || preview === item.url ? item.url : preview}
           alt={item.name || ''}
           draggable={false}
-          onLoad={() => {
+          onLoad={(e) => {
+            fullRef.current = fullLoaded || preview === item.url;
             fit();
-            if (fullLoaded || preview === item.url) return;
+            if (fullRef.current) { setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight }); return; }
             // Превью на экране — грузим оригинал и подменяем без мигания.
             const full = new Image();
             full.onload = () => setFullLoaded(true);

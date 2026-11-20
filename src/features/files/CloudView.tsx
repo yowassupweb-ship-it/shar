@@ -915,6 +915,8 @@ ${url}` });
 
       {menu && t && (
         <Menu anchor={menu.anchor} label={t.item.name} onClose={() => setMenu(null)}>
+          {/* Полное имя — отдельным блоком над пунктами: в плитке оно обрезано, а меню — про этот файл. */}
+          <div className="nf-menu-name" title={t.item.name}>{t.item.name}</div>
           {canEdit(t.item) && (
             <>
               <AccessMenuItem target={t} onSelect={() => { setMenu(null); setSheet({ type: 'access', target: t }); }} />
