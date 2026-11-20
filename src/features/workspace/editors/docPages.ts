@@ -61,12 +61,23 @@ export function computePages(view: EditorView, g: PageGeometry): PagesState {
   let add = 0;
   if (content < 40) return { deco: DecorationSet.empty, pages: 1 };
   const list = units(dom);
+  let breakAfter = false;
   for (const el of list) {
     const r = el.getBoundingClientRect();
     let top = (r.top - base.top) / z + add;
     const height = r.height / z;
     let bottom = top + height;
     let page = Math.floor(top / stride);
+    // После разрыва страницы (hr) — следующий блок с нового листа.
+    if (breakAfter) {
+      breakAfter = false;
+      if (top - page * stride > 1) {
+        const push = (page + 1) * stride - top;
+        decos.push(Decoration.widget(Math.max(0, view.posAtDOM(el, 0) - 1), spacer(push, false), { side: -1, key: `pgb${decos.length}-${Math.round(push)}` }));
+        add += push; top += push; bottom += push; page += 1;
+      }
+    }
+    if (el.tagName === 'HR') { breakAfter = true; continue; }
     // Начало попало в промежуток между листами (после прошлого блока) — на следующий лист.
     if (top - page * stride > content) {
       const push = (page + 1) * stride - top;

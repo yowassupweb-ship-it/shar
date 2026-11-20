@@ -33,6 +33,9 @@ function paragraphCss(ps: Record<string, unknown>): string {
   if (first) css.push(`text-indent:${first}pt`);
   const end = pt(ps.indentEnd as Pt);
   if (end) css.push(`padding-right:${end}pt`);
+  // Горизонтальная линия Univer — пустой абзац с нижней границей (doc.command.horizontal-line).
+  const bb = ps.borderBottom as { padding?: number; width?: number; color?: { rgb?: string } } | undefined;
+  if (bb) css.push(`border-bottom:${Math.max(1, Number(bb.width) || 1)}px solid ${bb.color?.rgb || '#CDD0D8'};padding-bottom:${Number(bb.padding) || 5}pt;margin-bottom:${Number(bb.padding) || 5}pt`);
   return css.join(';');
 }
 

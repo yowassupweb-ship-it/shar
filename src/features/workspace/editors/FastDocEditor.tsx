@@ -411,6 +411,15 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
       'doc.operation.show-hyper-link-edit-popup': link,
       'doc.command.insert-float-image': () => pictureInput.current?.click(),
       'docs.operation.insert-section-break': run((c) => c.setHorizontalRule()),
+      // Горизонтальная линия — как у Univer: пустой абзац с нижней границей, курсор — в новый абзац под ней.
+      'doc.command.horizontal-line': () => {
+        const { $from } = editor.state.selection;
+        const at = $from.after(1);
+        editor.chain().focus().insertContentAt(at, [
+          { type: 'paragraph', attrs: { ps: { borderBottom: { padding: 5, color: { rgb: '#CDD0D8' }, width: 1, dashStyle: 0 } } } },
+          { type: 'paragraph' },
+        ]).setTextSelection(at + 3).run();
+      },
       'docs.operation.open-page-setting': () => setPageSetup(true),
       'shar.insert.emoji': pickAt('emoji'),
       'shar.insert.symbol': pickAt('symbol'),

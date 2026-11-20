@@ -125,7 +125,9 @@ span.fdoc-pgap { width: 100%; }
 .fdoc-content a { color: color-mix(in srgb, #1a73e8 80%, var(--page-text)); text-decoration: underline; cursor: text; }
 .fdoc-content img { max-width: 100%; height: auto; vertical-align: bottom; }
 .fdoc-content img.ProseMirror-selectednode { outline: 2px solid #1a73e8; }
-.fdoc-content hr[data-page-break] { border: 0; border-top: 1px dashed rgba(0, 0, 0, .25); margin: 8px 0; }
+/* Разрыв страницы: как в Google — текст просто продолжается со следующего листа (docPages.ts), сам разрыв не виден; выделенный — пунктир. */
+.fdoc-content hr { border: 0; height: 2px; margin: 0; background: transparent; }
+.fdoc-content hr.ProseMirror-selectednode { background: repeating-linear-gradient(90deg, #4285f4 0 6px, transparent 6px 10px); }
 .fdoc-content ::selection { background: rgba(26, 115, 232, .25); }
 
 /* Слой поверх текста (docOverlay.ts): цитаты комментариев, курсоры коллег, зоны агентов. */
