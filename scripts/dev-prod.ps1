@@ -60,13 +60,25 @@ function Start-Part([string]$Name) {
 
 switch ($Part) {
     'tunnel' {
-        $conn = Connect-SharServer $CredentialFile
-        try {
-            New-SSHLocalPortForward -SessionId $conn.Session.SessionId -BoundHost '127.0.0.1' -BoundPort $DbPort -RemoteAddress '127.0.0.1' -RemotePort 5432 | Out-Null
-            Write-Host "Туннель 127.0.0.1:$DbPort → боевой PostgreSQL. Закройте окно, чтобы разорвать."
-            while ($conn.Session.Connected) { Start-Sleep -Seconds 5 }
-        } finally { Disconnect-SharServer $conn }
-        return
+        # Туннель сам поднимается заново: SSH рвётся (сон ПК, смена сети, обрыв у провайдера) — раньше окно просто
+        # закрывалось, порт пропадал, и API отвечал «База данных временно недоступна», пока туннель не перезапустят руками.
+        # Каждые 5 с проверяем и сессию, и сам проброс (порт слушает); упало что-то одно — переподключаемся.
+        while ($true) {
+            $conn = $null
+            try {
+                $conn = Connect-SharServer $CredentialFile
+                try { $conn.Session.Session.KeepAliveInterval = [TimeSpan]::FromSeconds(15) } catch { }
+                New-SSHLocalPortForward -SessionId $conn.Session.SessionId -BoundHost '127.0.0.1' -BoundPort $DbPort -RemoteAddress '127.0.0.1' -RemotePort 5432 | Out-Null
+                Write-Host "$(Get-Date -Format HH:mm:ss) Туннель 127.0.0.1:$DbPort → боевой PostgreSQL. Закройте окно, чтобы разорвать."
+                while ($conn.Session.Connected -and (Get-NetTCPConnection -State Listen -LocalPort $DbPort -ErrorAction SilentlyContinue)) { Start-Sleep -Seconds 5 }
+                Write-Host "$(Get-Date -Format HH:mm:ss) Туннель упал — переподключаюсь"
+            } catch {
+                Write-Host "$(Get-Date -Format HH:mm:ss) Не подключились: $($_.Exception.Message) — повтор через 5 с"
+            } finally {
+                if ($conn) { try { Disconnect-SharServer $conn } catch { } }
+            }
+            Start-Sleep -Seconds 5
+        }
     }
     'api' {
         foreach ($line in Get-Content -LiteralPath $envFile) {
