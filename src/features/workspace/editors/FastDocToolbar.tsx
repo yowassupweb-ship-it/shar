@@ -129,7 +129,7 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink }: {
   const [painter, setPainter] = useState<null | { marks: ReturnType<Editor['state']['selection']['$from']['marks']>; align: string | null; ps: Ps | null }>(null);
   const [sizeDraft, setSizeDraft] = useState('');
   const run = (fn: (c: Chain) => Chain) => fn(editor.chain().focus()).run();
-  const open = (kind: string) => (e: React.MouseEvent<HTMLElement>) => setPop((p) => (p?.kind === kind ? null : { kind, at: e.currentTarget.getBoundingClientRect() }));
+  const open = (kind: string) => (e: React.MouseEvent<HTMLElement>) => { const at = e.currentTarget.getBoundingClientRect(); setPop((p) => (p?.kind === kind ? null : { kind, at })); };
   const close = () => setPop(null);
 
   // Копировать формат: запомнили оформление у курсора, следующее выделение получает его (Esc — отмена).

@@ -1236,3 +1236,7 @@ section.univer-popup .univerjs-icon { --univer-primary-600: currentColor; }
 /* Univer держит у каретки скрытое поле ввода (рамка 1×1 px): на тёмной странице оно светилось точкой над курсором.
    Прозрачность его не выключает — фокус, набор и IME работают как прежде. */
 [id^="univer-doc-selection-container"] { opacity: 0 !important; }
+
+/* Галочка в пункте меню («Инструменты → Beta-редактор»). */
+.nws-check { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 4px; box-shadow: inset 0 0 0 1.5px var(--text-muted); color: #fff; }
+.nws-check[data-on] { background: var(--accent-fill); box-shadow: none; }

@@ -511,15 +511,21 @@ ${absolute(links.office(item!.kind, item!.id))}` });
       ] });
     }
     menus.push({ id: 'tools', label: 'Инструменты', items: [
-      { ...cmd('Поиск по функциям', 'ui.operation.open-feature-search', <Search size={15} />), disabled: !can('ui.operation.open-feature-search') },
-      { ...cmd('Быстрые клавиши', 'base-ui.operation.toggle-shortcut-panel', <Keyboard size={15} />), disabled: !can('base-ui.operation.toggle-shortcut-panel') },
+      ...(isDoc && fastDocs ? [] : [
+        { ...cmd('Поиск по функциям', 'ui.operation.open-feature-search', <Search size={15} />), disabled: !can('ui.operation.open-feature-search') },
+        { ...cmd('Быстрые клавиши', 'base-ui.operation.toggle-shortcut-panel', <Keyboard size={15} />), disabled: !can('base-ui.operation.toggle-shortcut-panel') },
+      ]),
+      // Свой редактор документов (бета) — галочкой: включён — документы открываются в нём, выключен — в Univer.
+      ...(isDoc ? [...(fastDocs ? [] : ['sep' as const]), {
+        label: 'Beta-редактор', onSelect: () => setFastDocs(!fastDocs),
+        icon: fastDocs ? <span className="nws-check" data-on="" aria-hidden="true"><Check size={12} /></span> : <span className="nws-check" aria-hidden="true" />,
+      }] : []),
     ] });
     menus.push({ id: 'help', label: 'Справка', items: [
       { label: 'Инструкция по Шару', onSelect: () => navigate(paths.guide), icon: <BookOpen size={15} /> },
     ] });
     // Свой редактор документов понимает те же команды (FastDocEditor → commentsBridge), недоступное в нём — серое.
     // «Инструменты» — функции Univer (поиск по функциям, панель клавиш): в своём редакторе их нет.
-    if (isDoc && fastDocs) return menus.filter((m) => m.id !== 'tools');
     return menus;
   };
 

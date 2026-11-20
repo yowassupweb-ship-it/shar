@@ -248,6 +248,21 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
   // Поля прокрутки и вертикальная линейка — 72 px; «по ширине» не уменьшает меньше 50% и не увеличивает больше 100%.
   const zoom = zoomPick === 'fit' ? (room ? Math.max(0.5, Math.min(1, (room - 72) / page.width)) : 1) : zoomPick;
   const pickZoom = (z: number | 'fit') => { setZoomPick(z); try { localStorage.setItem(ZOOM_KEY, String(z)); } catch { /* без памяти */ } };
+  // Ctrl+колесо (и щипок на тачпаде) — масштаб листа, а не всего окна, как в Google Документах.
+  const zoomNow = useRef(zoom);
+  zoomNow.current = zoom;
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return undefined;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const next = Math.round(Math.min(2, Math.max(0.5, zoomNow.current * Math.exp(-e.deltaY * 0.0015))) * 100) / 100;
+      if (next !== zoomNow.current) { zoomNow.current = next; pickZoom(next); }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const stepZoom = (d: 1 | -1) => {
     const cur = zoom;
     const next = d > 0 ? ZOOMS.find((z) => z > cur + 0.001) : [...ZOOMS].reverse().find((z) => z < cur - 0.001);
