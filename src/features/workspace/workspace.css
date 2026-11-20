@@ -1133,7 +1133,13 @@ html:is([data-theme="graphite"], [data-theme="black"]) .nws-text-marks > span { 
 /* ── Тесный список: кнопки шапки и виды схлопываются в кружки (контейнерные запросы по ширине списка) ───────── */
 .nws-head-btn { flex: none; }
 .nws-density[aria-pressed="true"] { background: var(--surface-selected); color: var(--accent-fill); }
+/* Подсказка сочетания у «Скрыть список» важнее подписей кнопок: тесно — сначала кнопки становятся кружками,
+   и только в совсем узком списке пропадает и подсказка. */
 @container (max-width: 410px) {
+  .nws-head-btn { width: 34px; height: 34px; min-width: 0; padding: 0; border-radius: 50%; justify-content: center; gap: 0; }
+  .nws-head-btn .nws-head-label { display: none; }
+}
+@container (max-width: 250px) {
   .nws-fold .nws-kbd { display: none; }
   .nws-fold[data-hint] { width: 34px; padding: 0; justify-content: center; }
 }
