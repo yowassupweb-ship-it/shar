@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { HiddenMark } from '@/shared/core/HiddenMark';
 import { useSearchParams } from 'react-router';
-import { Check, ChevronsDownUp, ChevronsUpDown, Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, UserPlus, LayoutGrid, ListTree, Lock, MonitorUp, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
+import { Check, ChevronsDownUp, ChevronsUpDown, Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, UserPlus, LayoutGrid, ListTree, MessageSquare, MonitorUp, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
 import { useShellOptions } from '@/shared/shell/ShellContext';
 import { realtime } from '@/shared/realtime/realtime';
 import { SearchField } from '@/shared/ui/SearchField';
@@ -106,7 +106,6 @@ const ItemRow = memo(function ItemRow({ item, active, terms, snippet, onOpen, on
 }) {
   const info = KINDS[item.kind];
   const press = useLongPress((x, y) => onMenu(item, { x, y }));
-  const AccessIcon = item.accessLevel === 'all' ? Globe2 : Lock;
   const mine = item.ownerId === myId();
   return (
     <button
@@ -163,7 +162,13 @@ const ItemRow = memo(function ItemRow({ item, active, terms, snippet, onOpen, on
         <span>{since(item.updatedAt)}</span>
         <span className="nws-row-flags">
           {item.pinned && <Pin size={11} aria-label="Закреплено" />}
-          {!mine ? <Users size={11} aria-label={`Владелец: ${item.ownerName}`} /> : <AccessIcon size={11} aria-label={item.accessLevel === 'all' ? 'Видят все' : 'Личное'} />}
+          {item.comments && item.comments.open > 0 && (
+            <span className="nws-row-talk" data-unanswered={item.comments.unanswered > 0 || undefined}
+              title={item.comments.unanswered > 0 ? `Без ответа: ${item.comments.unanswered} из ${item.comments.open}` : `Открытых комментариев: ${item.comments.open}`}>
+              <MessageSquare size={11} aria-hidden="true" />{item.comments.open}
+            </span>
+          )}
+          {!mine ? <Users size={11} aria-label={`Владелец: ${item.ownerName}`} /> : item.accessLevel === 'all' ? <Globe2 size={11} aria-label="Видят все" /> : null}
         </span>
       </span>
     </button>

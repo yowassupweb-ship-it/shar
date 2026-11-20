@@ -43,6 +43,8 @@ export interface Item {
   rootPosition?: number | null;
   /** Кто сейчас в материале (кроме смотрящего) — аватарки на строке списка. */
   viewers?: Viewer[];
+  /** Открытые ветки комментариев; unanswered — на которые ещё никто не ответил. Нет — комментариев нет. */
+  comments?: { open: number; unanswered: number };
   /** Документ и таблица (GET /items/{id}): совместная правка — с какой версии журнала содержимое и что после неё. */
   live?: LiveStart;
 }

@@ -41,6 +41,20 @@ def ready() -> bool:
     return store.table_ready("workspace_item_comments")
 
 
+def summary_many(item_ids: list[Any]) -> dict[str, dict[str, int]]:
+    """Комментарии для строк списка: открытые ветки и те из них, на которые ещё никто не ответил. Одним запросом."""
+    ids = [int(i) for i in item_ids if str(i).isdigit()]
+    if not ids or not ready():
+        return {}
+    rows = db.conn.fetch_all(
+        "SELECT c.item_id::text AS id, count(*) AS open, "
+        "count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM workspace_item_comments r WHERE r.parent_id = c.id)) AS unanswered "
+        "FROM workspace_item_comments c WHERE c.item_id = ANY(%s) AND c.parent_id IS NULL AND NOT c.resolved GROUP BY c.item_id",
+        (ids,),
+    ) or []
+    return {r["id"]: {"open": int(r["open"]), "unanswered": int(r["unanswered"])} for r in rows}
+
+
 def _clean_anchor(anchor: Any) -> dict[str, Any]:
     if not isinstance(anchor, dict):
         return {}

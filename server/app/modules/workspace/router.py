@@ -136,8 +136,13 @@ def list_items(kind: Optional[str] = None, q: str = "", templates: bool = False,
     present_now = store.viewers_many([str(r["id"]) for r in rows], exclude=me.user_id)
     # Чужие материалы: кто и как ими поделился — одним запросом на список, а не по два на строку.
     roles = store.share_roles([r["id"] for r in rows if str(r["owner_id"]) != me.user_id], me.user_id, depts)
+    # Комментарии на строке: значок с числом открытых веток, яркий — если на какую-то ещё не ответили.
+    from app.modules.workspace import comments as ws_comments
+
+    talk = ws_comments.summary_many([r["id"] for r in rows if r.get("kind") in ("document", "spreadsheet", "presentation")])
     return {"items": [{**store.present(row, me.user_id, depts=depts, owners=owners, folder_roles=folder_roles, roles=roles.get(str(row["id"]))),
                        "viewers": present_now.get(str(row["id"]), []),
+                       **({"comments": talk[str(row["id"])]} if str(row["id"]) in talk else {}),
                        **({"snippet": store.search_snippet(row.get("hit"), row.get("snippet") or "")} if match and row.get("hit") else {})}
                       for row in rows]}
 
