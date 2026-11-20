@@ -139,7 +139,31 @@ async function json<T>(res: Response): Promise<T> {
 const folderCache = new Map<string, { folders: CloudFolder[]; files: CloudFile[] }>();
 const ROOT = '__root__';
 
+// Кэш папок переживает перезагрузку окна: после Ctrl+R или обновления приложения папка показывается сразу из него,
+// а свежий список подтягивается следом. Свой на каждого пользователя; только последние папки, чтобы не раздувать хранилище.
+const STORE_KEY = 'nf:folder-cache:v1';
+const prefetching = new Set<string>();
+const STORE_MAX = 40;
+let restored = false;
+function restoreCache() {
+  if (restored) return;
+  restored = true;
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    const saved = raw ? (JSON.parse(raw) as { uid: string; entries: Array<[string, { folders: CloudFolder[]; files: CloudFile[] }]> }) : null;
+    if (saved && saved.uid === myId()) for (const [k, v] of saved.entries) if (!folderCache.has(k)) folderCache.set(k, v);
+  } catch { /* испорченная запись — просто без кэша */ }
+}
+let saveTimer = 0;
+function persistCache() {
+  window.clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(() => {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ uid: myId(), entries: [...folderCache.entries()].slice(-STORE_MAX) })); } catch { /* переполнено — не страшно */ }
+  }, 800);
+}
+
 export function cachedFolder(folderId: string | null) {
+  restoreCache();
   return folderCache.get(folderId || ROOT) || null;
 }
 
@@ -161,12 +185,48 @@ export async function loadFolder(folderId: string | null) {
     folders: (Array.isArray(folders) ? folders : []).sort(byPinOrderName),
     files: (Array.isArray(files) ? files : []).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id)),
   };
+  folderCache.delete(folderId || ROOT); // свежее — в конец: при обрезке кэша уходит давно не открытое
   folderCache.set(folderId || ROOT, data);
+  persistCache();
+  warmChildren(data.folders);
+  return data;
+}
+
+// Подпапки открытой папки — заранее, по две за раз: следующий клик откроет любую из кэша, без ожидания.
+const warmQueue: string[] = [];
+let warming = 0;
+function warmChildren(folders: CloudFolder[]) {
+  for (const f of folders.slice(0, 16)) if (!folderCache.has(f.id) && !warmQueue.includes(f.id)) warmQueue.push(f.id);
+  const next = () => {
+    while (warming < 2 && warmQueue.length) {
+      const id = warmQueue.shift()!;
+      if (folderCache.has(id) || prefetching.has(id)) continue;
+      warming += 1;
+      prefetching.add(id);
+      void fetchFolder(id).catch(() => undefined).finally(() => { prefetching.delete(id); warming -= 1; next(); });
+    }
+  };
+  // Не мешаем первому показу: начинаем, когда браузер свободен.
+  const idle = (window as unknown as { requestIdleCallback?: (fn: () => void) => void }).requestIdleCallback;
+  if (idle) idle(next); else window.setTimeout(next, 300);
+}
+
+/** Загрузка без прогрева детей: прогретая подпапка своих детей уже не тянет (иначе прогрев расползся бы на всё дерево). */
+async function fetchFolder(folderId: string) {
+  const uid = myId();
+  const [folders, files] = await Promise.all([
+    fetch(`/api/cloud/folders?userId=${encodeURIComponent(uid)}&parentId=${encodeURIComponent(folderId)}`, { cache: 'no-store' }).then((r) => json<CloudFolder[]>(r)),
+    fetch(`/api/cloud/files?userId=${encodeURIComponent(uid)}&folderId=${encodeURIComponent(folderId)}`, { cache: 'no-store' }).then((r) => json<CloudFile[]>(r)),
+  ]);
+  const data = {
+    folders: (Array.isArray(folders) ? folders : []).sort(byPinOrderName),
+    files: (Array.isArray(files) ? files : []).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id)),
+  };
+  if (!folderCache.has(folderId)) { folderCache.set(folderId, data); persistCache(); }
   return data;
 }
 
 /** Подгрузить папку заранее (наведение на плитку или строку дерева): клик потом откроет её из кэша мгновенно. */
-const prefetching = new Set<string>();
 export function prefetchFolder(folderId: string | null) {
   const key = folderId || ROOT;
   if (folderCache.has(key) || prefetching.has(key)) return;
