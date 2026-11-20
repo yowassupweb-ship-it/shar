@@ -1,6 +1,8 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUp, CalendarDays, Check, Dumbbell, MoreHorizontal, ShieldCheck, CheckSquare, CornerDownRight, FileSpreadsheet, FileText, Folder, Forward, LayoutGrid, Mail, MessageCircle, MonitorUp,
   ListChecks, Paperclip, Plug, Presentation, Slash, StickyNote, User, X } from 'lucide-react';
+import { KindIcon } from '@/features/workspace/KindIcon';
+import { KINDS } from '@/features/workspace/kinds';
 import { CoreMini } from '@/shared/ui/CoreIcon';
 import { clearAgentAttached, clearAgentForward, detachFromAgent, useAgentBridge, type AgentForward } from '@/shared/core/agentBridge';
 import { navigate } from '@/shared/navigation/navigate';
@@ -104,7 +106,7 @@ function WhereChips({ items, struck, onToggle }: { items: WhereItem[]; struck: S
         return (
           <button key={item.key} type="button" className="ncore-where-chip" aria-pressed={!off} data-off={off || undefined} data-here={item.here || undefined}
             onClick={() => onToggle(item.key)} title={off ? 'Не уйдёт агенту — щёлкните, чтобы вернуть' : `${item.here ? 'Это окно. ' : ''}Щёлкните, чтобы агент этого не видел`}>
-            <Icon size={12} aria-hidden="true" /><span>{item.title}</span>
+            {item.kind in KINDS ? <KindIcon kind={item.kind} size={16} /> : <Icon size={12} aria-hidden="true" />}<span>{item.title}</span>
           </button>
         );
       })}

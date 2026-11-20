@@ -1,4 +1,4 @@
-import { createContext, memo, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, Folder, FolderOpen, HardDrive, MoreHorizontal, Users } from 'lucide-react';
 import { displayName, useChatStore } from '@/features/chat';
 import { realtime } from '@/shared/realtime/realtime';
@@ -14,9 +14,9 @@ import { cachedFolder, folderChain, loadFolder, moveFile, moveFolder, prefetchFo
  * Сверху — поиск по папкам (по всем, не только раскрытым). На папку дерева можно бросить файл или папку из списка справа.
  */
 
-const OPEN_KEY = 'nf:tree-open';
+// v2: прежний ключ копил раскрытыми всех предков каждой посещённой папки — дерево «само» раскрывалось целиком.
+const OPEN_KEY = 'nf:tree-open-v2';
 const DRAG_TYPE = 'application/x-shar-cloud-item';
-/** Одна аватарка и кружок «+N» с остальными: строка дерева узкая, ряд из трёх лиц теснил названия. */
 
 function readOpen(): Set<string> {
   try { return new Set(JSON.parse(localStorage.getItem(OPEN_KEY) || '[]') as string[]); } catch { return new Set(); }
@@ -34,7 +34,9 @@ export function FolderTree({ trail, onOpen, onMoved, onMenu }: {
   /** Меню действий папки — то же, что у плитки справа. */
   onMenu?: MenuOpener;
 }) {
-  const [open, setOpen] = useState<Set<string>>(readOpen);
+  // Раскрытое руками (запоминается) и свёрнутое руками из пути к открытой папке (на время работы).
+  const [userOpen, setUserOpen] = useState<Set<string>>(readOpen);
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [children, setChildren] = useState<Record<string, CloudFolder[]>>((): Record<string, CloudFolder[]> => {
     const root = cachedFolder(null);
     return root ? { '': root.folders } : {};
@@ -51,18 +53,20 @@ export function FolderTree({ trail, onOpen, onMoved, onMenu }: {
   }, []);
 
   useEffect(() => { void load(null); }, [load]);
+  // Видно раскрытым: раскрытое руками + путь к открытой папке (его не запоминаем — иначе со временем раскрывалось всё).
+  const open = useMemo(() => {
+    const next = new Set(userOpen);
+    trail.slice(0, -1).forEach((f) => { if (!collapsed.has(f.id)) next.add(f.id); });
+    return next;
+  }, [userOpen, collapsed, trail]);
+  // Подпапки раскрытого — по одному разу: не загрузилось (нет связи) — не долбим сервер по кругу, ждём события или клика.
+  const asked = useRef(new Set<string>());
   useEffect(() => {
-    if (!trail.length) return;
-    setOpen((cur) => {
-      const next = new Set(cur);
-      trail.slice(0, -1).forEach((f) => next.add(f.id));
-      return next;
-    });
-  }, [trail]);
-  useEffect(() => {
-    open.forEach((id) => { if (!(id in children)) void load(id); });
-    try { localStorage.setItem(OPEN_KEY, JSON.stringify([...open].slice(-200))); } catch { /* без памяти */ }
+    open.forEach((id) => { if (!(id in children) && !asked.current.has(id)) { asked.current.add(id); void load(id); } });
   }, [open, children, load]);
+  useEffect(() => {
+    try { localStorage.setItem(OPEN_KEY, JSON.stringify([...userOpen].slice(-200))); } catch { /* без памяти */ }
+  }, [userOpen]);
 
   useEffect(() => {
     let timer = 0;
@@ -73,11 +77,14 @@ export function FolderTree({ trail, onOpen, onMoved, onMenu }: {
     });
   }, [load, open]);
 
-  const toggle = useCallback((id: string) => setOpen((cur) => {
-    const next = new Set(cur);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    return next;
-  }), []);
+  const openRef = useRef(open);
+  openRef.current = open;
+  const toggle = useCallback((id: string) => {
+    const closing = openRef.current.has(id);
+    asked.current.delete(id); // раскрыли снова — попробуем загрузить ещё раз
+    setUserOpen((cur) => { const next = new Set(cur); if (closing) next.delete(id); else next.add(id); return next; });
+    setCollapsed((cur) => { const next = new Set(cur); if (closing) next.add(id); else next.delete(id); return next; });
+  }, []);
 
   const current = trail[trail.length - 1]?.id ?? null;
 
@@ -245,7 +252,9 @@ const Level = memo(function Level({ parent, path, depth, childrenOf, open, curre
       {list.map((f) => {
         const isOpen = open.has(f.id);
         const known = childrenOf[f.id];
-        const leaf = known !== undefined && known.length === 0;
+        // Стрелка — только у папок с подпапками: знаем список — по нему, ещё нет — по признаку с сервера.
+        const leaf = known !== undefined ? known.length === 0
+          : f.hasFolders !== undefined ? !f.hasFolders : !(f.previewFiles || []).some((p) => p.fileType === 'folder');
         const here = [...path, f];
         return (
           <div key={f.id} role="group">

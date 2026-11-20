@@ -20,6 +20,8 @@ export interface CloudFolder {
   sortOrder?: number;
   color?: string | null;
   fileCount?: number;
+  /** Есть ли подпапки (сервер считает точно). Нет поля — старый сервер: смотрим на превью. */
+  hasFolders?: boolean;
   /** Сколько файлов каждого вида в папке (с вложенными): для верхнего фильтра. */
   kinds?: { image?: number; video?: number; doc?: number };
   /** Подпапки приходят без адреса, с fileType «folder» и своим цветом. */

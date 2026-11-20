@@ -47,12 +47,13 @@ def summary_many(item_ids: list[Any]) -> dict[str, dict[str, int]]:
     if not ids or not ready():
         return {}
     rows = db.conn.fetch_all(
-        "SELECT c.item_id::text AS id, count(*) AS open, "
-        "count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM workspace_item_comments r WHERE r.parent_id = c.id)) AS unanswered "
-        "FROM workspace_item_comments c WHERE c.item_id = ANY(%s) AND c.parent_id IS NULL AND NOT c.resolved GROUP BY c.item_id",
+        "SELECT c.item_id::text AS id, count(*) FILTER (WHERE NOT c.resolved) AS open, "
+        "count(*) FILTER (WHERE NOT c.resolved AND NOT EXISTS (SELECT 1 FROM workspace_item_comments r WHERE r.parent_id = c.id)) AS unanswered, "
+        "count(*) FILTER (WHERE c.resolved) AS resolved "
+        "FROM workspace_item_comments c WHERE c.item_id = ANY(%s) AND c.parent_id IS NULL GROUP BY c.item_id",
         (ids,),
     ) or []
-    return {r["id"]: {"open": int(r["open"]), "unanswered": int(r["unanswered"])} for r in rows}
+    return {r["id"]: {"open": int(r["open"]), "unanswered": int(r["unanswered"]), "resolved": int(r["resolved"])} for r in rows}
 
 
 def _clean_anchor(anchor: Any) -> dict[str, Any]:

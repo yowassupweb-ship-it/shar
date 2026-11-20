@@ -138,6 +138,7 @@
 .nws-row-flags { display: inline-flex; gap: 4px; align-items: center; }
 /* Комментарии на строке: тихо — есть открытые; ярко (акцент, плашка) — на какой-то ещё не ответили. */
 .nws-row-talk { display: inline-flex; align-items: center; gap: 2px; font-variant-numeric: tabular-nums; }
+.nws-row-talk[data-resolved] { opacity: .55; }
 .nws-row-talk[data-unanswered] { padding: 1px 5px; border-radius: 999px; background: var(--accent-fill); color: var(--accent-contrast, #fff); font-weight: var(--weight-semibold); }
 /* Цветная метка заметки — узкая полоска слева. */
 .nws-row[data-color]:not([data-color="default"])::before {

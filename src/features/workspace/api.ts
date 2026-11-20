@@ -36,6 +36,12 @@ const enc = encodeURIComponent;
 
 export interface SharedResult { mode: 'view' | 'edit'; item: SharedItem }
 
+/** Свой комментарий добавлен, решён или удалён — списку «Офиса» пора обновить значок на строке. */
+function commentsChanged<T>(value: T): T {
+  window.dispatchEvent(new Event('nx:comments-changed'));
+  return value;
+}
+
 export const workspaceApi = {
   list: (kind: Kind | null, q = '', templates = false, limit?: number) => {
     const qs = new URLSearchParams();
@@ -105,10 +111,10 @@ export const workspaceApi = {
   /** Комментарии как в Google Docs. ready = false — на сервере ещё нет таблицы (старый сервер). */
   comments: (id: string) => call<{ comments: Comment[]; ready: boolean }>(`/api/workspace/items/${enc(id)}/comments`),
   addComment: (id: string, body: string, anchor?: CommentAnchor | null, parentId?: string | null) =>
-    call<{ comment: Comment }>(`/api/workspace/items/${enc(id)}/comments`, { method: 'POST', json: { body, anchor: anchor ?? null, parentId: parentId ?? null } }).then((r) => r.comment),
+    call<{ comment: Comment }>(`/api/workspace/items/${enc(id)}/comments`, { method: 'POST', json: { body, anchor: anchor ?? null, parentId: parentId ?? null } }).then((r) => commentsChanged(r.comment)),
   changeComment: (id: string, commentId: string, patch: { body?: string; resolved?: boolean }) =>
-    call<{ comment: Comment }>(`/api/workspace/items/${enc(id)}/comments/${enc(commentId)}`, { method: 'PATCH', json: patch }).then((r) => r.comment),
-  deleteComment: (id: string, commentId: string) => call<{ ok: boolean }>(`/api/workspace/items/${enc(id)}/comments/${enc(commentId)}`, { method: 'DELETE' }),
+    call<{ comment: Comment }>(`/api/workspace/items/${enc(id)}/comments/${enc(commentId)}`, { method: 'PATCH', json: patch }).then((r) => commentsChanged(r.comment)),
+  deleteComment: (id: string, commentId: string) => call<{ ok: boolean }>(`/api/workspace/items/${enc(id)}/comments/${enc(commentId)}`, { method: 'DELETE' }).then(commentsChanged),
 
   // По ссылке, без входа.
   shared: (token: string) => call<SharedResult>(`/api/share/workspace/${enc(token)}`),

@@ -124,7 +124,7 @@ export default function SettingsScreen() {
                 aria-current={open === s.id ? 'page' : undefined}
                 onClick={() => go(s.id)}
               >
-                <span className="nst-icon" data-image={isImageIcon(Icon) || undefined} style={{ '--a': s.tint[0], '--b': s.tint[1] } as CSSProperties} aria-hidden="true"><Icon size={Icon === CoreIcon ? 22 : isImageIcon(Icon) ? 28 : 16} /></span>
+                <span className="nst-icon" data-image={isImageIcon(Icon) || undefined} style={{ '--a': s.tint[0], '--b': s.tint[1] } as CSSProperties} aria-hidden="true"><Icon size={Icon === CoreIcon ? 19 : isImageIcon(Icon) ? 28 : 16} /></span>
                 <span className="nx-row-label">{s.label}</span>
                 {!wide && <ChevronRight size={16} className="nst-chevron" aria-hidden="true" />}
               </button>

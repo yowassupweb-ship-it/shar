@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
-import { Cloud, ExternalLink, FileSpreadsheet, FileText, Link2, NotebookPen, Paperclip, Presentation, Search, X } from 'lucide-react';
+import { Cloud, ExternalLink, Link2, Paperclip, Search, X } from 'lucide-react';
+import { KindIcon } from '@/features/workspace/KindIcon';
 import { internalPath, links } from '@/shared/navigation/routes';
 import { Sheet } from '@/shared/ui/overlay';
 import { Spinner } from '@/shared/ui/Spinner';
@@ -25,10 +26,11 @@ export function attachmentsOf(metadata: Record<string, unknown> | undefined): At
 }
 
 const KIND: Record<OfficeKind, { label: string; icon: ReactNode }> = {
-  note: { label: 'Заметка', icon: <NotebookPen size={16} /> },
-  document: { label: 'Документ', icon: <FileText size={16} /> },
-  table: { label: 'Таблица', icon: <FileSpreadsheet size={16} /> },
-  presentation: { label: 'Презентация', icon: <Presentation size={16} /> },
+  // Значки — общие для всего Шара (KindIcon): тот же рисунок и цветная подложка, что в «Офисе».
+  note: { label: 'Заметка', icon: <KindIcon kind="note" size={28} /> },
+  document: { label: 'Документ', icon: <KindIcon kind="document" size={28} /> },
+  table: { label: 'Таблица', icon: <KindIcon kind="table" size={28} /> },
+  presentation: { label: 'Презентация', icon: <KindIcon kind="presentation" size={28} /> },
 };
 
 const bytes = (n?: number | null) => (!n ? '' : n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} КБ` : `${(n / 1048576).toFixed(1)} МБ`);

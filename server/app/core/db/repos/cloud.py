@@ -243,10 +243,18 @@ class CloudRepo:
                     'color': sfd.get('color') or None,
                 })
 
+        # Есть ли внутри подпапки — точно, без лимита превью: по нему дерево решает, рисовать ли стрелку раскрытия.
+        with_children: set = set()
+        if folder_ids:
+            placeholders = ','.join(['%s'] * len(folder_ids))
+            with_children = {str(r['parent_id']) for r in (self.conn.fetch_all(
+                f"SELECT DISTINCT parent_id FROM cloud_folders WHERE parent_id IN ({placeholders})", tuple(folder_ids)) or [])}
+
         result = []
         for r in rows:
             d = dict(r)
             fid = d.get('id')
+            d['has_folders'] = str(fid) in with_children
             file_previews = preview_map.get(fid, [])[:9]
             folder_previews = subfolder_map.get(fid, [])
             # Mix: folders first (up to 3), then files (rest)

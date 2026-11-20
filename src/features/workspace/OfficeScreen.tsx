@@ -162,10 +162,12 @@ const ItemRow = memo(function ItemRow({ item, active, terms, snippet, onOpen, on
         <span>{since(item.updatedAt)}</span>
         <span className="nws-row-flags">
           {item.pinned && <Pin size={11} aria-label="Закреплено" />}
-          {item.comments && item.comments.open > 0 && (
-            <span className="nws-row-talk" data-unanswered={item.comments.unanswered > 0 || undefined}
-              title={item.comments.unanswered > 0 ? `Без ответа: ${item.comments.unanswered} из ${item.comments.open}` : `Открытых комментариев: ${item.comments.open}`}>
-              <MessageSquare size={11} aria-hidden="true" />{item.comments.open}
+          {item.comments && (item.comments.open > 0 || (item.comments.resolved ?? 0) > 0) && (
+            // Без ответа — ярко; открытые с ответом — обычным цветом; все решены — серым.
+            <span className="nws-row-talk" data-unanswered={item.comments.unanswered > 0 || undefined} data-resolved={item.comments.open === 0 || undefined}
+              title={item.comments.open === 0 ? `Все комментарии решены: ${item.comments.resolved}`
+                : item.comments.unanswered > 0 ? `Без ответа: ${item.comments.unanswered} из ${item.comments.open}` : `Открытых комментариев: ${item.comments.open}`}>
+              <MessageSquare size={11} aria-hidden="true" />{item.comments.open || item.comments.resolved}
             </span>
           )}
           {!mine ? <Users size={11} aria-label={`Владелец: ${item.ownerName}`} /> : item.accessLevel === 'all' ? <Globe2 size={11} aria-label="Видят все" /> : null}
@@ -360,6 +362,7 @@ export default function OfficeScreen() {
     let timer = 0;
     const off = realtime.subscribe((event) => {
       const e = event as { type?: string; itemId?: string; viewers?: Viewer[] };
+      if (e.type === 'workspace_comments') { window.clearTimeout(timer); timer = window.setTimeout(() => void load(), 250); return; }
       if (e.type === 'workspace_presence_list' && e.itemId) {
         const me = myId();
         const viewers = (e.viewers || []).filter((v) => String(v.userId) !== me);
@@ -371,7 +374,10 @@ export default function OfficeScreen() {
       window.clearTimeout(timer);
       timer = window.setTimeout(() => void load(), 250);
     });
-    return () => { off(); window.clearTimeout(timer); };
+    // Свои правки комментариев сервер нам не присылает (событие — коллегам): счётчик на строке обновляем сами.
+    const onMine = () => { window.clearTimeout(timer); timer = window.setTimeout(() => void load(), 250); };
+    window.addEventListener('nx:comments-changed', onMine);
+    return () => { off(); window.removeEventListener('nx:comments-changed', onMine); window.clearTimeout(timer); };
   }, [load]);
 
   // Присутствие истекает молча (закрыли вкладку без «ухода») — раз в 30 с сверяем аватарки на строках.
