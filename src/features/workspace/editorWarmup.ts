@@ -18,7 +18,7 @@ export function preloadEditor(kind: Kind): void {
     warmed.add(kind);
     // Греем тот редактор, который откроется: прежний (Univer) по умолчанию, быстрый — если человек выбрал его в «⋯».
     let fast = false;
-    try { fast = localStorage.getItem('nx:fast-docs') === '1'; } catch { /* без памяти — прежний */ }
+    try { fast = localStorage.getItem('nx:fast-docs') !== '0'; } catch { /* без памяти — свой */ }
     void (fast ? import('./editors/FastDocEditor') : import('./editors/DocEditor'));
   } else if (kind === 'table') {
     warmed.add(kind);
