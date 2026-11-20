@@ -31,6 +31,8 @@ function paragraphCss(ps: Record<string, unknown>): string {
   const first = pt(ps.indentFirstLine as Pt);
   if (start) css.push(`padding-left:${start}pt`);
   if (first) css.push(`text-indent:${first}pt`);
+  const end = pt(ps.indentEnd as Pt);
+  if (end) css.push(`padding-right:${end}pt`);
   return css.join(';');
 }
 

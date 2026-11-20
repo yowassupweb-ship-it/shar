@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react';
-import { ChevronDown, ChevronUp, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ChevronDown, ChevronUp, Replace, X } from 'lucide-react';
 
 /** Строка поиска внутри материала (Ctrl+F). Сама ничего не ищет: показывает запрос, счётчик и кнопки. */
-export function FindBar({ query, onQuery, count, index, onNext, onPrev, onClose, focusToken }: {
+export function FindBar({ query, onQuery, count, index, onNext, onPrev, onClose, focusToken, replace, replaceOpen }: {
   query: string;
   onQuery: (next: string) => void;
   count: number;
@@ -13,8 +13,15 @@ export function FindBar({ query, onQuery, count, index, onNext, onPrev, onClose,
   onClose: () => void;
   /** Меняется при каждом новом Ctrl+F: поле снова получает фокус и выделяется. */
   focusToken: number;
+  /** Замена (документ): текущее совпадение или все. Нет — строка только ищет. */
+  replace?: { one: (text: string) => void; all: (text: string) => void };
+  /** Открыть сразу с полем замены (Ctrl+H, «Найти и заменить»). */
+  replaceOpen?: boolean;
 }) {
   const input = useRef<HTMLInputElement>(null);
+  const [withReplace, setWithReplace] = useState(Boolean(replaceOpen));
+  const [to, setTo] = useState('');
+  useEffect(() => { if (replaceOpen) setWithReplace(true); }, [replaceOpen, focusToken]);
   useEffect(() => { input.current?.focus(); input.current?.select(); }, [focusToken]);
 
   return (
@@ -38,7 +45,21 @@ export function FindBar({ query, onQuery, count, index, onNext, onPrev, onClose,
       </span>
       <button type="button" className="nx-icon-btn" onClick={onPrev} disabled={!count} aria-label="Предыдущее совпадение" title="Предыдущее (Shift+Enter)"><ChevronUp size={15} /></button>
       <button type="button" className="nx-icon-btn" onClick={onNext} disabled={!count} aria-label="Следующее совпадение" title="Следующее (Enter)"><ChevronDown size={15} /></button>
+      {replace && (
+        <button type="button" className="nx-icon-btn" aria-pressed={withReplace} onClick={() => setWithReplace((v) => !v)} aria-label="Заменить" title="Найти и заменить (Ctrl+H)"><Replace size={15} /></button>
+      )}
       <button type="button" className="nx-icon-btn" onClick={onClose} aria-label="Закрыть поиск" title="Закрыть (Esc)"><X size={15} /></button>
+      {replace && withReplace && (
+        <div className="nws-find-replace">
+          <input value={to} placeholder="Заменить на" aria-label="Заменить на" spellCheck={false} onChange={(e) => setTo(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); if (count) replace.one(to); }
+              else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); }
+            }} />
+          <button type="button" className="nx-ghost nws-find-btn" disabled={!count} onClick={() => replace.one(to)}>Заменить</button>
+          <button type="button" className="nx-ghost nws-find-btn" disabled={!count} onClick={() => replace.all(to)}>Все</button>
+        </div>
+      )}
     </div>
   );
 }

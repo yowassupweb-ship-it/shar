@@ -79,28 +79,41 @@ function Pop({ anchor, onClose, children, className }: { anchor: DOMRect; onClos
     <div ref={box} className={`fdoc-pop ${className || ''}`} style={{ left, top: anchor.bottom + 6 }} onMouseDown={(e) => { if ((e.target as HTMLElement).tagName !== 'INPUT') e.preventDefault(); }}>
       {children}
     </div>,
-    document.body,
+    // В корень Шара (.nx), а не в body: там заданы цвета темы — иначе фон окна был прозрачным.
+    document.querySelector('.nx') || document.body,
   );
 }
 
-function Palette({ onPick, onReset, resetLabel }: { onPick: (c: string) => void; onReset: () => void; resetLabel: string }) {
-  const sw = (c: string) => <button key={c} type="button" className="fdoc-sw" style={{ background: c }} onClick={() => onPick(c)} aria-label={c} title={c} />;
+function Palette({ current, onPick, onReset, resetLabel, ResetIcon }: { current: string; onPick: (c: string) => void; onReset: () => void; resetLabel: string; ResetIcon: typeof RemoveFormatting }) {
+  const cur = current.toLowerCase();
+  const sw = (c: string) => (
+    <button key={c} type="button" className="fdoc-sw" style={{ background: c }} data-light={GRAYS.indexOf(c) >= 6 || undefined}
+      aria-pressed={cur === c} onClick={() => onPick(c)} aria-label={c} title={c} />
+  );
   return (
     <div className="fdoc-palette">
-      <button type="button" className="fdoc-pal-reset" onClick={onReset}>{resetLabel}</button>
-      <div className="fdoc-pal-row">{GRAYS.map(sw)}</div>
-      <div className="fdoc-pal-row fdoc-pal-gap">{BRIGHT.map(sw)}</div>
-      {SHADES.map((row, i) => <div key={i} className="fdoc-pal-row">{row.map(sw)}</div>)}
-      <label className="fdoc-pal-custom">Свой цвет <input type="color" onChange={(e) => onPick(e.target.value)} /></label>
+      <button type="button" className="fdoc-pal-reset" onClick={onReset}><ResetIcon size={15} aria-hidden="true" />{resetLabel}</button>
+      <div className="fdoc-pal-grid">{GRAYS.map(sw)}</div>
+      <div className="fdoc-pal-grid fdoc-pal-bright">{BRIGHT.map(sw)}</div>
+      <div className="fdoc-pal-grid">{SHADES.flat().map(sw)}</div>
+      <div className="fdoc-pal-foot">
+        <span>Свой</span>
+        <label className="fdoc-sw fdoc-sw-custom" title="Выбрать свой цвет" aria-label="Выбрать свой цвет">
+          <Plus size={12} aria-hidden="true" />
+          <input type="color" defaultValue={/^#[0-9a-f]{6}$/i.test(cur) ? cur : '#1a73e8'} onChange={(e) => onPick(e.target.value)} />
+        </label>
+      </div>
     </div>
   );
 }
 
-export function FastDocToolbar({ editor, onPicture, onPick, onLink }: {
+export function FastDocToolbar({ editor, onPicture, onPick, onLink, zoom }: {
   editor: Editor;
   onPicture: () => void;
   onPick: (kind: 'emoji' | 'symbol', at: { x: number; y: number }) => void;
   onLink: () => void;
+  /** Масштаб листа — выпадающим списком в панели, как «100%» у Google. */
+  zoom: { value: number; fit: boolean; pick: (z: number | 'fit') => void; options: number[] };
 }) {
   const st = useEditorState({
     editor,
@@ -196,6 +209,9 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink }: {
           const { $from } = editor.state.selection;
           setPainter({ marks: editor.state.storedMarks || $from.marks(), align: ($from.parent.attrs.textAlign as string) || null, ps: ($from.parent.attrs.ps as Ps) || null });
         })}
+        <button type="button" className="fdoc-drop fdoc-drop-zoom" onMouseDown={(e) => e.preventDefault()} onClick={open('zoom')} aria-haspopup="listbox" title="Масштаб (Ctrl+колесо)">
+          <span>{Math.round(zoom.value * 100)}%</span><ChevronDown size={14} aria-hidden="true" />
+        </button>
         <span className="fdoc-sep" />
         <button type="button" className="fdoc-drop fdoc-drop-style" onMouseDown={(e) => e.preventDefault()} onClick={open('style')} aria-haspopup="listbox" title="Стиль абзаца">
           <span>{styleLabel}</span><ChevronDown size={14} aria-hidden="true" />
@@ -258,6 +274,15 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink }: {
           ))}
         </Pop>
       )}
+      {pop?.kind === 'zoom' && (
+        <Pop anchor={pop.at} onClose={close} className="fdoc-pop-list fdoc-pop-sizes">
+          <button type="button" className="fdoc-pop-item" aria-selected={zoom.fit} onClick={() => { zoom.pick('fit'); close(); }}>По ширине</button>
+          <div className="fdoc-pop-sep" />
+          {zoom.options.map((z) => (
+            <button key={z} type="button" className="fdoc-pop-item" aria-selected={!zoom.fit && Math.abs(zoom.value - z) < 0.005} onClick={() => { zoom.pick(z); close(); }}>{Math.round(z * 100)}%</button>
+          ))}
+        </Pop>
+      )}
       {pop?.kind === 'font' && (
         <Pop anchor={pop.at} onClose={close} className="fdoc-pop-list">
           {FONTS.map((f) => (
@@ -272,12 +297,12 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink }: {
       )}
       {pop?.kind === 'color' && (
         <Pop anchor={pop.at} onClose={close}>
-          <Palette resetLabel="Сбросить цвет" onReset={() => { run((c) => c.unsetColor()); close(); }} onPick={(c) => { run((ch) => ch.setColor(c)); close(); }} />
+          <Palette current={st.color} resetLabel="Цвет по умолчанию" ResetIcon={Baseline} onReset={() => { run((c) => c.unsetColor()); close(); }} onPick={(c) => { run((ch) => ch.setColor(c)); close(); }} />
         </Pop>
       )}
       {pop?.kind === 'bg' && (
         <Pop anchor={pop.at} onClose={close}>
-          <Palette resetLabel="Без выделения" onReset={() => { run((c) => c.unsetBackgroundColor()); close(); }} onPick={(c) => { run((ch) => ch.setBackgroundColor(c)); close(); }} />
+          <Palette current={st.bg} resetLabel="Без выделения" ResetIcon={RemoveFormatting} onReset={() => { run((c) => c.unsetBackgroundColor()); close(); }} onPick={(c) => { run((ch) => ch.setBackgroundColor(c)); close(); }} />
         </Pop>
       )}
       {pop?.kind === 'align' && (

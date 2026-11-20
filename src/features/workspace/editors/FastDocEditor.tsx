@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EditorContent, useEditor, useEditorState, type Editor } from '@tiptap/react';
 import { Extension } from '@tiptap/core';
-import { Minus, MoveHorizontal, Plus } from 'lucide-react';
 import { uploadFileWithProgress } from '@/shared/api/uploadFile';
 import { attachmentUrl } from '@/shared/ui/format';
 import { showToast } from '@/shared/ui/Toast';
@@ -15,7 +14,7 @@ import { docPagesPlugin, pagesRelayout } from './docPages';
 import { DocContextMenu } from './DocContextMenu';
 import { DocInsertPicker } from './UniverDocMenu';
 import { FindBar } from './FindBar';
-import { HorizontalRuler, VerticalRuler, type MarginKey, type PageBox } from './DocRulers';
+import { HorizontalRuler, VerticalRuler, type IndentKey, type Indents, type MarginKey, type PageBox } from './DocRulers';
 import { PageSetupSheet } from './PageSetupSheet';
 import { FastDocToolbar } from './FastDocToolbar';
 import type { EditorProps } from './types';
@@ -82,7 +81,6 @@ const ZOOMS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 2];
 function readZoom(): number | 'fit' {
   try { const v = localStorage.getItem(ZOOM_KEY); return !v || v === 'fit' ? 'fit' : Math.min(2, Math.max(0.5, Number(v) || 1)); } catch { return 'fit'; }
 }
-const plural = (n: number, forms: [string, string, string]) => forms[n % 10 === 1 && n % 100 !== 11 ? 0 : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 1 : 2];
 
 /** Промежуток между листами (в пикселях листа), как в Google Документах. */
 const PAGE_GAP = 16;
@@ -112,7 +110,7 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
   }, []);
 
   const insertPictures = useRef<(files: File[]) => void>(() => undefined);
-  const openFind = useRef<() => void>(() => undefined);
+  const openFind = useRef<(withReplace?: boolean) => void>(() => undefined);
 
   // Слой поверх текста (цитаты, курсоры коллег, зоны агентов) и поиск — плагинами внутри расширения: подключаются
   // один раз вместе с редактором (registerPlugin в эффекте добавлял их дважды — «different instances of a keyed plugin»).
@@ -163,6 +161,7 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
       handleKeyDown: (_view, event) => {
         // Ctrl+F — свой поиск по документу (по физической клавише: работает в любой раскладке).
         if ((event.ctrlKey || event.metaKey) && !event.altKey && event.code === 'KeyF') { event.preventDefault(); openFind.current(); return true; }
+        if ((event.ctrlKey || event.metaKey) && !event.altKey && event.code === 'KeyH') { event.preventDefault(); openFind.current(true); return true; }
         return false;
       },
     },
@@ -190,7 +189,7 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
   }, [editor, commentQuotes, remote, agentZones, loadKey]);
 
   // ── Поиск ────────────────────────────────────────────────────────────────────
-  const [find, setFind] = useState<{ open: boolean; token: number }>({ open: false, token: 0 });
+  const [find, setFind] = useState<{ open: boolean; token: number; replace?: boolean }>({ open: false, token: 0 });
   const findInfo = useEditorState({ editor, selector: ({ editor: e }) => (e ? (({ query, matches, index }) => ({ query, count: matches.length, index }))(findState(e.state)) : { query: '', count: 0, index: 0 }) });
   const setFindMeta = useCallback((meta: { query?: string; index?: number }) => {
     if (!editor || editor.isDestroyed) return;
@@ -203,15 +202,35 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
       el?.scrollIntoView({ block: 'center' });
     }
   }, [editor]);
-  openFind.current = () => {
+  openFind.current = (withReplace = false) => {
     const sel = editor && !editor.state.selection.empty ? editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to, ' ').slice(0, 100) : '';
-    setFind((f) => ({ open: true, token: f.token + 1 }));
+    setFind((f) => ({ open: true, token: f.token + 1, replace: withReplace }));
     if (sel) setFindMeta({ query: sel });
   };
   const stepFind = (d: 1 | -1) => {
     if (!findInfo?.count) return;
     setFindMeta({ index: (findInfo.index + d + findInfo.count) % findInfo.count });
   };
+  // Замена: текущее совпадение (курсор переходит к следующему) или все сразу — одной правкой (одним Ctrl+Z).
+  const replaceFind = useMemo(() => ({
+    one: (text: string) => {
+      if (!editor || readOnly) return;
+      const st = findState(editor.state);
+      const hit = st.matches[st.index];
+      if (!hit) return;
+      editor.view.dispatch(text ? editor.state.tr.insertText(text, hit.from, hit.to) : editor.state.tr.delete(hit.from, hit.to));
+      setFindMeta({ index: st.index });
+    },
+    all: (text: string) => {
+      if (!editor || readOnly) return;
+      const st = findState(editor.state);
+      if (!st.matches.length) return;
+      const tr = editor.state.tr;
+      for (const m of [...st.matches].reverse()) { if (text) tr.insertText(text, m.from, m.to); else tr.delete(m.from, m.to); }
+      editor.view.dispatch(tr);
+      showToast(`Заменено: ${st.matches.length}`, 'success');
+    },
+  }), [editor, readOnly, setFindMeta]);
   const closeFind = () => { setFind((f) => ({ ...f, open: false })); setFindMeta({ query: '' }); editor?.commands.focus(); };
 
   // ── Страница: поля, колонтитулы, размер ─────────────────────────────────────
@@ -231,6 +250,31 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
     else flush(editor);
   }, [editor, flush]);
   const onMargin = useCallback((key: MarginKey, value: number, done: boolean) => applyStyle({ [key]: value }, done), [applyStyle]);
+
+  // Отступы абзаца, где курсор (pt) — для синих маркеров на линейке; перетаскивание меняет стиль абзацев выделения.
+  const indents = useEditorState({
+    editor,
+    selector: ({ editor: e }): Indents | null => {
+      if (!e) return null;
+      const ps = (e.state.selection.$from.parent.attrs.ps as Record<string, unknown> | null) || {};
+      const v = (x: unknown) => Number(typeof x === 'object' && x ? (x as { v?: number }).v : x) || 0;
+      return { start: v(ps.indentStart), firstLine: v(ps.indentFirstLine), end: v(ps.indentEnd) };
+    },
+    equalityFn: (a, b) => JSON.stringify(a) === JSON.stringify(b),
+  });
+  const onIndent = useCallback((key: IndentKey, value: number, done: boolean) => {
+    if (!done || !editor || readOnly) return;
+    const field = key === 'start' ? 'indentStart' : key === 'firstLine' ? 'indentFirstLine' : 'indentEnd';
+    const { state } = editor;
+    const tr = state.tr;
+    state.doc.nodesBetween(state.selection.from, state.selection.to, (node, pos) => {
+      if (node.type.name !== 'paragraph' && node.type.name !== 'heading') return true;
+      tr.setNodeMarkup(pos, undefined, { ...node.attrs, ps: { ...((node.attrs.ps as Record<string, unknown>) || {}), [field]: { v: value } } });
+      return false;
+    });
+    if (tr.docChanged) editor.view.dispatch(tr);
+    editor.commands.focus();
+  }, [editor, readOnly]);
   const [pageSetup, setPageSetup] = useState(false);
 
   // ── Масштаб и строка состояния ──────────────────────────────────────────────
@@ -263,11 +307,7 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const stepZoom = (d: 1 | -1) => {
-    const cur = zoom;
-    const next = d > 0 ? ZOOMS.find((z) => z > cur + 0.001) : [...ZOOMS].reverse().find((z) => z < cur - 0.001);
-    if (next) pickZoom(next);
-  };
+
   // ── Листы: пересчёт разбивки после паузы в наборе, смены полей, масштаба, ширины окна, шрифтов и картинок ─────
   const geometry = useRef({ pageHeight: 1124, marginTop: 72, marginBottom: 72, gap: PAGE_GAP, zoom: 1 });
   geometry.current = { pageHeight: page.height, marginTop: page.marginTop, marginBottom: page.marginBottom, gap: PAGE_GAP, zoom };
@@ -299,39 +339,6 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
   }, [editor, loadKey]);
   useEffect(() => { relayout.current(); }, [page, zoom, room]);
 
-  // Линейка слева — у листа, где курсор (как в Google Документах).
-  const [caretPage, setCaretPage] = useState(0);
-  useEffect(() => {
-    if (!editor) return undefined;
-    const onSel = () => {
-      if (editor.isDestroyed) return;
-      try {
-        const c = editor.view.coordsAtPos(editor.state.selection.head);
-        const top = (editor.view.dom as HTMLElement).getBoundingClientRect().top;
-        const y = (c.top - top) / (geometry.current.zoom || 1) + geometry.current.marginTop;
-        setCaretPage(Math.max(0, Math.floor(y / (geometry.current.pageHeight + PAGE_GAP))));
-      } catch { /* ещё не разложено */ }
-    };
-    editor.on('selectionUpdate', onSel);
-    return () => { editor.off('selectionUpdate', onSel); };
-  }, [editor]);
-
-  // Слова и страницы — после паузы в наборе, а не на каждую букву (большой документ — десятки тысяч знаков).
-  const [stats, setStats] = useState({ words: 0, chars: 0, pages: 1 });
-  useEffect(() => {
-    if (!editor) return undefined;
-    let t = 0;
-    const count = () => {
-      if (editor.isDestroyed) return;
-      const text = editor.state.doc.textBetween(0, editor.state.doc.content.size, ' ', ' ');
-      const words = (text.match(/[\p{L}\p{N}]+(?:[-'’][\p{L}\p{N}]+)*/gu) || []).length;
-      setStats({ words, chars: text.replace(/\s/g, '').length, pages: 1 });
-    };
-    const soon = () => { window.clearTimeout(t); t = window.setTimeout(count, 400); };
-    count();
-    editor.on('update', soon);
-    return () => { window.clearTimeout(t); editor.off('update', soon); };
-  }, [editor, page.height, loadKey]);
 
   // ── Эмодзи, символы, меню ПКМ ───────────────────────────────────────────────
   const [picker, setPicker] = useState<{ kind: 'emoji' | 'symbol'; at: { x: number; y: number } } | null>(null);
@@ -390,7 +397,7 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
       'univer.command.cut': clip('cut'),
       'univer.command.copy': clip('copy'),
       'univer.command.paste': clip('paste'),
-      'ui.operation.open-find-dialog': () => openFind.current(),
+      'ui.operation.open-find-dialog': () => openFind.current(true),
       'doc.command.set-inline-format-bold': run((c) => c.toggleBold()),
       'doc.command.set-inline-format-italic': run((c) => c.toggleItalic()),
       'doc.command.set-inline-format-underline': run((c) => c.toggleUnderline()),
@@ -484,51 +491,47 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
   return (
     <div className="fdoc" data-readonly={readOnly ? 'true' : undefined}>
       {!readOnly && editor && <FastDocToolbar editor={editor} onPicture={() => pictureInput.current?.click()} onPick={(kind, at) => setPicker({ kind, at })}
-        onLink={() => commands['doc.operation.show-hyper-link-edit-popup']?.()} />}
+        onLink={() => commands['doc.operation.show-hyper-link-edit-popup']?.()}
+        zoom={{ value: zoom, fit: zoomPick === 'fit', pick: pickZoom, options: ZOOMS }} />}
       <input ref={pictureInput} type="file" accept="image/*" hidden onChange={(e) => { const f = [...(e.target.files || [])]; e.target.value = ''; if (f.length) insertPictures.current(f); }} />
       {find.open && (
         <div className="fdoc-find-bar">
           <FindBar query={findInfo?.query ?? ''} onQuery={(q) => setFindMeta({ query: q })} count={findInfo?.count ?? 0} index={findInfo?.index ?? 0}
-            onNext={() => stepFind(1)} onPrev={() => stepFind(-1)} onClose={closeFind} focusToken={find.token} />
+            onNext={() => stepFind(1)} onPrev={() => stepFind(-1)} onClose={closeFind} focusToken={find.token}
+            replace={readOnly ? undefined : replaceFind} replaceOpen={find.replace} />
         </div>
       )}
       <div ref={scrollRef} className="fdoc-scroll nx-scroll-y">
-        <div className="fdoc-hruler-row" style={{ width: page.width, zoom }}>
-          <HorizontalRuler page={page} readOnly={readOnly} zoom={zoom} onChange={onMargin} />
-        </div>
-        <div className="fdoc-stage" style={{ width: page.width, zoom }}>
-          <div className="fdoc-vruler-col" style={{ top: Math.min(caretPage, pages - 1) * (page.height + PAGE_GAP) }}>
-            <VerticalRuler page={page} readOnly={readOnly} hasHeader hasFooter zoom={zoom} onChange={onMargin} />
+        {/* Линейка сверху — полоса на всю ширину (как в Google Документах), дорожка — шириной с лист, по центру. */}
+        <div className="fdoc-hruler-row">
+          <div className="fdoc-hruler-track" style={{ width: page.width, zoom }}>
+            <HorizontalRuler page={page} zoom={zoom} readOnly={readOnly} indents={readOnly ? null : indents ?? null} onMargin={onMargin} onIndent={onIndent} />
           </div>
-          <div className="fdoc-page" style={pageStyle} onContextMenu={(e) => { if (e.shiftKey || !editor) return; e.preventDefault(); setMenuAt({ x: e.clientX, y: e.clientY }); }}>
-            {/* Листы — подложки с промежутком; текст идёт поверх, распорки (docPages.ts) переносят его на следующий лист. */}
+        </div>
+        <div className="fdoc-body">
+          {/* Вертикальные линейки — у левого края окна, по одной на лист; едут вместе с листами. */}
+          <div className="fdoc-vcol" style={{ zoom }} aria-hidden="true">
             {Array.from({ length: pages }, (_, i) => (
-              <div key={i} className="fdoc-sheet" style={{ top: i * (page.height + PAGE_GAP), height: page.height }} aria-hidden="true">
-                {headerText && <div className="fdoc-hf" data-kind="header" style={{ top: page.marginHeader, left: page.marginLeft, right: page.marginRight }}>{headerText}</div>}
-                {footerText && <div className="fdoc-hf" data-kind="footer" style={{ bottom: page.marginFooter, left: page.marginLeft, right: page.marginRight }}>{footerText}</div>}
+              <div key={i} className="fdoc-vslot" style={{ top: i * (page.height + PAGE_GAP) }}>
+                <VerticalRuler page={page} zoom={zoom} readOnly={readOnly} onMargin={onMargin} />
               </div>
             ))}
-            <EditorContent editor={editor} className="fdoc-flow" />
+          </div>
+          <div className="fdoc-stage" style={{ width: page.width, zoom }}>
+            <div className="fdoc-page" style={pageStyle} onContextMenu={(e) => { if (e.shiftKey || !editor) return; e.preventDefault(); setMenuAt({ x: e.clientX, y: e.clientY }); }}>
+              {/* Листы — подложки с промежутком; текст идёт поверх, распорки (docPages.ts) переносят его на следующий лист. */}
+              {Array.from({ length: pages }, (_, i) => (
+                <div key={i} className="fdoc-sheet" style={{ top: i * (page.height + PAGE_GAP), height: page.height }} aria-hidden="true">
+                  {headerText && <div className="fdoc-hf" data-kind="header" style={{ top: page.marginHeader, left: page.marginLeft, right: page.marginRight }}>{headerText}</div>}
+                  {footerText && <div className="fdoc-hf" data-kind="footer" style={{ bottom: page.marginFooter, left: page.marginLeft, right: page.marginRight }}>{footerText}</div>}
+                </div>
+              ))}
+              <EditorContent editor={editor} className="fdoc-flow" />
+            </div>
           </div>
         </div>
         {menuAt && editor && <DocContextMenu editor={editor} at={menuAt} readOnly={readOnly} onClose={() => setMenuAt(null)} onAddComment={onAddComment} />}
       </div>
-      <footer className="fdoc-status" aria-label="Строка состояния">
-        <span>Страница {Math.min(caretPage + 1, pages)} из {pages}</span>
-        <span className="fdoc-status-dot" aria-hidden="true" />
-        <span title={`Знаков без пробелов: ${stats.chars.toLocaleString('ru-RU')}`}>{stats.words.toLocaleString('ru-RU')} {plural(stats.words, ['слово', 'слова', 'слов'])}</span>
-        <span className="fdoc-status-gap" />
-        <div className="fdoc-zoom" role="group" aria-label="Масштаб">
-          <button type="button" className="fdoc-zbtn" onClick={() => stepZoom(-1)} disabled={zoom <= ZOOMS[0] + 0.001} aria-label="Уменьшить" title="Уменьшить"><Minus size={14} /></button>
-          <input type="range" className="fdoc-zrange" min={50} max={200} step={5} value={Math.round(zoom * 100)} aria-label="Масштаб листа"
-            onChange={(e) => pickZoom(Number(e.target.value) / 100)} />
-          <button type="button" className="fdoc-zbtn" onClick={() => stepZoom(1)} disabled={zoom >= ZOOMS[ZOOMS.length - 1] - 0.001} aria-label="Увеличить" title="Увеличить"><Plus size={14} /></button>
-          <button type="button" className="fdoc-zpct" data-fit={zoomPick === 'fit' || undefined} onClick={() => pickZoom(zoomPick === 'fit' ? 1 : 'fit')}
-            title={zoomPick === 'fit' ? 'По ширине окна — нажмите для 100%' : 'Нажмите: по ширине окна'}>
-            {zoomPick === 'fit' && <MoveHorizontal size={13} aria-hidden="true" />}{Math.round(zoom * 100)}%
-          </button>
-        </div>
-      </footer>
       {picker && <DocInsertPicker kind={picker.kind} at={picker.at} onPick={(v) => insertText(v)} onClose={() => setPicker(null)} />}
       {pageSetup && <PageSetupSheet page={page} onClose={() => setPageSetup(false)}
         onApply={(next) => applyStyle({ pageSize: { width: next.width, height: next.height }, marginTop: next.marginTop, marginBottom: next.marginBottom,
