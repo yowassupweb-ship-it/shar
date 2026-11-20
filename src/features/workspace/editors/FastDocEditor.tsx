@@ -4,7 +4,7 @@ import { Extension } from '@tiptap/core';
 import { redoDepth, undoDepth } from '@tiptap/pm/history';
 import {
   AlignCenter, AlignJustify, AlignLeft, AlignRight, Baseline, Bold, Highlighter, ImagePlus, Italic, Link as LinkIcon, List, ListChecks,
-  ListOrdered, Omega, Redo2, RemoveFormatting, Smile, Strikethrough, Underline as UnderlineIcon, Undo2,
+  ListOrdered, Minus, MoveHorizontal, Omega, Plus, Redo2, RemoveFormatting, Smile, Strikethrough, Underline as UnderlineIcon, Undo2,
 } from 'lucide-react';
 import { uploadFileWithProgress } from '@/shared/api/uploadFile';
 import { attachmentUrl } from '@/shared/ui/format';
@@ -15,6 +15,7 @@ import { pmToUniver } from '../lib/pmToUniver';
 import { docExtensions } from './docSchema';
 import { docOverlayPlugin, overlayRanges, setOverlay, type OverlayCursor, type OverlayZone } from './docOverlay';
 import { docFindPlugin, findKey, findState } from './docFind';
+import { docPagesPlugin, pagesRelayout } from './docPages';
 import { DocContextMenu } from './DocContextMenu';
 import { DocInsertPicker } from './UniverDocMenu';
 import { FindBar } from './FindBar';
@@ -85,6 +86,17 @@ async function uploadPicture(file: File): Promise<string | null> {
   }
 }
 
+// Масштаб листа: «по ширине» (лист не шире окна, но не крупнее 100%) или выбранный вручную; помним на устройстве.
+const ZOOM_KEY = 'fdoc:zoom';
+const ZOOMS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 2];
+function readZoom(): number | 'fit' {
+  try { const v = localStorage.getItem(ZOOM_KEY); return !v || v === 'fit' ? 'fit' : Math.min(2, Math.max(0.5, Number(v) || 1)); } catch { return 'fit'; }
+}
+const plural = (n: number, forms: [string, string, string]) => forms[n % 10 === 1 && n % 100 !== 11 ? 0 : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 1 : 2];
+
+/** Промежуток между листами (в пикселях листа), как в Google Документах. */
+const PAGE_GAP = 16;
+
 const NO_QUOTES: string[] = [];
 const NO_ZONES: OverlayZone[] = [];
 /** Своя позиция для коллег: позиции ProseMirror (pm: 1 — чтобы прежний редактор не путал их со своими смещениями). */
@@ -115,6 +127,7 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
   // Слой поверх текста (цитаты, курсоры коллег, зоны агентов) и поиск — плагинами внутри расширения: подключаются
   // один раз вместе с редактором (registerPlugin в эффекте добавлял их дважды — «different instances of a keyed plugin»).
   const blockedAt = useRef(0);
+  const [pages, setPages] = useState(1);
   const extensions = useMemo(() => [...docExtensions(), Extension.create({
     name: 'sharDocLayers',
     addProseMirrorPlugins: () => [
@@ -124,6 +137,7 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
         showToast(`${zone.label} — здесь сейчас работает агент. Правьте другую часть документа, зона освободится сама`, 'info');
       }),
       docFindPlugin(),
+      docPagesPlugin((n) => setPages(n)),
     ],
   })], []);
 
@@ -228,6 +242,91 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
   }, [editor, flush]);
   const onMargin = useCallback((key: MarginKey, value: number, done: boolean) => applyStyle({ [key]: value }, done), [applyStyle]);
   const [pageSetup, setPageSetup] = useState(false);
+
+  // ── Масштаб и строка состояния ──────────────────────────────────────────────
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [zoomPick, setZoomPick] = useState<number | 'fit'>(readZoom);
+  const [room, setRoom] = useState(0);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return undefined;
+    const ro = new ResizeObserver(() => setRoom(el.clientWidth));
+    ro.observe(el);
+    setRoom(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+  // Поля прокрутки и вертикальная линейка — 72 px; «по ширине» не уменьшает меньше 50% и не увеличивает больше 100%.
+  const zoom = zoomPick === 'fit' ? (room ? Math.max(0.5, Math.min(1, (room - 72) / page.width)) : 1) : zoomPick;
+  const pickZoom = (z: number | 'fit') => { setZoomPick(z); try { localStorage.setItem(ZOOM_KEY, String(z)); } catch { /* без памяти */ } };
+  const stepZoom = (d: 1 | -1) => {
+    const cur = zoom;
+    const next = d > 0 ? ZOOMS.find((z) => z > cur + 0.001) : [...ZOOMS].reverse().find((z) => z < cur - 0.001);
+    if (next) pickZoom(next);
+  };
+  // ── Листы: пересчёт разбивки после паузы в наборе, смены полей, масштаба, ширины окна, шрифтов и картинок ─────
+  const geometry = useRef({ pageHeight: 1124, marginTop: 72, marginBottom: 72, gap: PAGE_GAP, zoom: 1 });
+  geometry.current = { pageHeight: page.height, marginTop: page.marginTop, marginBottom: page.marginBottom, gap: PAGE_GAP, zoom };
+  const relayout = useRef<() => void>(() => undefined);
+  useEffect(() => {
+    if (!editor) return undefined;
+    let t = 0;
+    let raf = 0;
+    const run = () => { if (editor.isDestroyed) return; try { pagesRelayout(editor.view, geometry.current); } catch { /* вид ещё не готов */ } };
+    const soon = (ms = 250) => { window.clearTimeout(t); t = window.setTimeout(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(run); }, ms); };
+    relayout.current = () => soon(0);
+    const onUpdate = () => soon();
+    editor.on('update', onUpdate);
+    const onImg = (e: Event) => { if ((e.target as HTMLElement)?.tagName === 'IMG') soon(50); };
+    // Вид редактора появляется, когда смонтирован EditorContent, — подключаемся к нему, как только он есть.
+    let dom: HTMLElement | null = null;
+    let wait = 0;
+    const attach = () => {
+      try { dom = editor.view.dom as HTMLElement; } catch { wait = requestAnimationFrame(attach); return; }
+      dom.addEventListener('load', onImg, true);
+      soon(0);
+    };
+    attach();
+    void document.fonts?.ready.then(() => soon(0));
+    return () => {
+      window.clearTimeout(t); cancelAnimationFrame(raf); cancelAnimationFrame(wait);
+      editor.off('update', onUpdate); dom?.removeEventListener('load', onImg, true); relayout.current = () => undefined;
+    };
+  }, [editor, loadKey]);
+  useEffect(() => { relayout.current(); }, [page, zoom, room]);
+
+  // Линейка слева — у листа, где курсор (как в Google Документах).
+  const [caretPage, setCaretPage] = useState(0);
+  useEffect(() => {
+    if (!editor) return undefined;
+    const onSel = () => {
+      if (editor.isDestroyed) return;
+      try {
+        const c = editor.view.coordsAtPos(editor.state.selection.head);
+        const top = (editor.view.dom as HTMLElement).getBoundingClientRect().top;
+        const y = (c.top - top) / (geometry.current.zoom || 1) + geometry.current.marginTop;
+        setCaretPage(Math.max(0, Math.floor(y / (geometry.current.pageHeight + PAGE_GAP))));
+      } catch { /* ещё не разложено */ }
+    };
+    editor.on('selectionUpdate', onSel);
+    return () => { editor.off('selectionUpdate', onSel); };
+  }, [editor]);
+
+  // Слова и страницы — после паузы в наборе, а не на каждую букву (большой документ — десятки тысяч знаков).
+  const [stats, setStats] = useState({ words: 0, chars: 0, pages: 1 });
+  useEffect(() => {
+    if (!editor) return undefined;
+    let t = 0;
+    const count = () => {
+      if (editor.isDestroyed) return;
+      const text = editor.state.doc.textBetween(0, editor.state.doc.content.size, ' ', ' ');
+      const words = (text.match(/[\p{L}\p{N}]+(?:[-'’][\p{L}\p{N}]+)*/gu) || []).length;
+      setStats({ words, chars: text.replace(/\s/g, '').length, pages: 1 });
+    };
+    const soon = () => { window.clearTimeout(t); t = window.setTimeout(count, 400); };
+    count();
+    editor.on('update', soon);
+    return () => { window.clearTimeout(t); editor.off('update', soon); };
+  }, [editor, page.height, loadKey]);
 
   // ── Эмодзи, символы, меню ПКМ ───────────────────────────────────────────────
   const [picker, setPicker] = useState<{ kind: 'emoji' | 'symbol'; at: { x: number; y: number } } | null>(null);
@@ -371,8 +470,9 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
   const pageStyle = useMemo(() => ({
     '--fdoc-w': `${page.width}px`,
     '--fdoc-h': `${page.height}px`,
-    paddingTop: page.marginTop, paddingBottom: page.marginBottom, paddingLeft: page.marginLeft, paddingRight: page.marginRight,
-  }) as React.CSSProperties, [page]);
+    minHeight: pages * (page.height + PAGE_GAP) - PAGE_GAP,
+    paddingTop: page.marginTop, paddingBottom: 0, paddingLeft: page.marginLeft, paddingRight: page.marginRight,
+  }) as React.CSSProperties, [page, pages]);
 
   if (broken) return <div className="nws-missing" role="alert">Не удалось прочитать содержимое документа: файл повреждён.</div>;
 
@@ -386,22 +486,43 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
             onNext={() => stepFind(1)} onPrev={() => stepFind(-1)} onClose={closeFind} focusToken={find.token} />
         </div>
       )}
-      <div className="fdoc-scroll nx-scroll-y">
-        <div className="fdoc-hruler-row" style={{ width: page.width }}>
-          <HorizontalRuler page={page} readOnly={readOnly} onChange={onMargin} />
+      <div ref={scrollRef} className="fdoc-scroll nx-scroll-y">
+        <div className="fdoc-hruler-row" style={{ width: page.width, zoom }}>
+          <HorizontalRuler page={page} readOnly={readOnly} zoom={zoom} onChange={onMargin} />
         </div>
-        <div className="fdoc-stage" style={{ width: page.width }}>
-          <div className="fdoc-vruler-col">
-            <VerticalRuler page={page} readOnly={readOnly} hasHeader hasFooter onChange={onMargin} />
+        <div className="fdoc-stage" style={{ width: page.width, zoom }}>
+          <div className="fdoc-vruler-col" style={{ top: Math.min(caretPage, pages - 1) * (page.height + PAGE_GAP) }}>
+            <VerticalRuler page={page} readOnly={readOnly} hasHeader hasFooter zoom={zoom} onChange={onMargin} />
           </div>
           <div className="fdoc-page" style={pageStyle} onContextMenu={(e) => { if (e.shiftKey || !editor) return; e.preventDefault(); setMenuAt({ x: e.clientX, y: e.clientY }); }}>
-            {headerText && <div className="fdoc-hf" data-kind="header" style={{ top: page.marginHeader, left: page.marginLeft, right: page.marginRight }} title="Верхний колонтитул">{headerText}</div>}
-            <EditorContent editor={editor} />
-            {footerText && <div className="fdoc-hf" data-kind="footer" style={{ bottom: page.marginFooter, left: page.marginLeft, right: page.marginRight }} title="Нижний колонтитул">{footerText}</div>}
+            {/* Листы — подложки с промежутком; текст идёт поверх, распорки (docPages.ts) переносят его на следующий лист. */}
+            {Array.from({ length: pages }, (_, i) => (
+              <div key={i} className="fdoc-sheet" style={{ top: i * (page.height + PAGE_GAP), height: page.height }} aria-hidden="true">
+                {headerText && <div className="fdoc-hf" data-kind="header" style={{ top: page.marginHeader, left: page.marginLeft, right: page.marginRight }}>{headerText}</div>}
+                {footerText && <div className="fdoc-hf" data-kind="footer" style={{ bottom: page.marginFooter, left: page.marginLeft, right: page.marginRight }}>{footerText}</div>}
+              </div>
+            ))}
+            <EditorContent editor={editor} className="fdoc-flow" />
           </div>
         </div>
         {menuAt && editor && <DocContextMenu editor={editor} at={menuAt} readOnly={readOnly} onClose={() => setMenuAt(null)} onAddComment={onAddComment} />}
       </div>
+      <footer className="fdoc-status" aria-label="Строка состояния">
+        <span>Страница {Math.min(caretPage + 1, pages)} из {pages}</span>
+        <span className="fdoc-status-dot" aria-hidden="true" />
+        <span title={`Знаков без пробелов: ${stats.chars.toLocaleString('ru-RU')}`}>{stats.words.toLocaleString('ru-RU')} {plural(stats.words, ['слово', 'слова', 'слов'])}</span>
+        <span className="fdoc-status-gap" />
+        <div className="fdoc-zoom" role="group" aria-label="Масштаб">
+          <button type="button" className="fdoc-zbtn" onClick={() => stepZoom(-1)} disabled={zoom <= ZOOMS[0] + 0.001} aria-label="Уменьшить" title="Уменьшить"><Minus size={14} /></button>
+          <input type="range" className="fdoc-zrange" min={50} max={200} step={5} value={Math.round(zoom * 100)} aria-label="Масштаб листа"
+            onChange={(e) => pickZoom(Number(e.target.value) / 100)} />
+          <button type="button" className="fdoc-zbtn" onClick={() => stepZoom(1)} disabled={zoom >= ZOOMS[ZOOMS.length - 1] - 0.001} aria-label="Увеличить" title="Увеличить"><Plus size={14} /></button>
+          <button type="button" className="fdoc-zpct" data-fit={zoomPick === 'fit' || undefined} onClick={() => pickZoom(zoomPick === 'fit' ? 1 : 'fit')}
+            title={zoomPick === 'fit' ? 'По ширине окна — нажмите для 100%' : 'Нажмите: по ширине окна'}>
+            {zoomPick === 'fit' && <MoveHorizontal size={13} aria-hidden="true" />}{Math.round(zoom * 100)}%
+          </button>
+        </div>
+      </footer>
       {picker && <DocInsertPicker kind={picker.kind} at={picker.at} onPick={(v) => insertText(v)} onClose={() => setPicker(null)} />}
       {pageSetup && <PageSetupSheet page={page} onClose={() => setPageSetup(false)}
         onApply={(next) => applyStyle({ pageSize: { width: next.width, height: next.height }, marginTop: next.marginTop, marginBottom: next.marginBottom,
@@ -463,7 +584,8 @@ function Toolbar({ editor, onPicture, onPick }: { editor: Editor; onPicture: () 
         {btn('u', 'Подчёркнутый (Ctrl+U)', st.underline, <UnderlineIcon size={16} />, () => run((c) => c.toggleUnderline()))}
         {btn('s', 'Зачёркнутый', st.strike, <Strikethrough size={16} />, () => run((c) => c.toggleStrike()))}
         <label className="fdoc-btn fdoc-color" title="Цвет текста" onMouseDown={(e) => e.preventDefault()}>
-          <Baseline size={16} style={{ color: st.color }} />
+          <Baseline size={16} />
+          <span className="fdoc-swatch" style={{ background: st.color }} aria-hidden="true" />
           <input type="color" value={/^#[0-9a-f]{6}$/i.test(st.color) ? st.color : '#000000'} aria-label="Цвет текста"
             onChange={(e) => run((c) => c.setColor(e.target.value))} />
         </label>

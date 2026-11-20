@@ -36,8 +36,8 @@ import { Spinner } from '@/shared/ui/Spinner';
 const DocEditor = lazy(() => import('./editors/DocEditor').then(async (m) => { await m.layoutFontsReady(); return m; }));
 const SheetEditor = lazy(() => import('./editors/SheetEditor'));
 const DeckEditor = lazy(() => import('./editors/DeckEditor'));
-// Свой редактор документов (TipTap, #704) — по умолчанию с 20.11.2026 (второй раз): строка меню, линейки, параметры
-// страницы, поиск и тёмная тема у него теперь есть. Прежний (Univer) — запасным выбором в «⋯» документа.
+// Свой редактор документов (TipTap, #704) — пока выбором в «⋯» (или ?fastdoc=1): основным станет, когда его функции
+// совпадут с Univer/Google Документами один в один (решение владельца 20.11.2026). По умолчанию — Univer.
 const FastDocEditor = lazy(() => import('./editors/FastDocEditor'));
 import { useAgentZones } from './useAgentZones';
 const FAST_DOCS_KEY = 'nx:fast-docs';
@@ -46,8 +46,7 @@ function readFastDocs(): boolean {
   // ?fastdoc=1 в адресе — включить только в этой вкладке (проверка, ссылка коллеге), не трогая выбор человека.
   if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('fastdoc') === '1') return true;
   if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('fastdoc') === '0') return false;
-  // Явно выключил («0») — остаётся на прежнем; не выбирал — свой редактор.
-  try { return localStorage.getItem(FAST_DOCS_KEY) !== '0'; } catch { return true; }
+  try { return localStorage.getItem(FAST_DOCS_KEY) === '1'; } catch { return false; }
 }
 function useFastDocs(): [boolean, (on: boolean) => void] {
   const [on, setOn] = useState(readFastDocs);
@@ -677,7 +676,7 @@ ${absolute(links.office(item!.kind, item!.id))}` });
           <MenuItem icon={<Copy size={15} />} onSelect={() => { setMenu(null); void duplicate(); }}>Сделать копию</MenuItem>
           {item.kind === 'document' && (
             <MenuItem icon={fastDocs ? <History size={15} /> : <Zap size={15} />} onSelect={() => { setMenu(null); setFastDocs(!fastDocs); }}>
-              {fastDocs ? 'Открыть в прежнем редакторе' : 'Вернуться в новый редактор'}
+              {fastDocs ? 'Вернуться в редактор Univer' : 'Новый редактор (бета)'}
             </MenuItem>
           )}
           {!readOnly && (

@@ -47,7 +47,8 @@ function clampMargin(page: PageBox, key: MarginKey, value: number): number {
   }
 }
 
-function useDrag(page: PageBox, onChange: (key: MarginKey, value: number, done: boolean) => void) {
+/** zoom — масштаб листа на экране: сдвиг мыши в пикселях экрана переводим в пиксели листа. */
+function useDrag(page: PageBox, onChange: (key: MarginKey, value: number, done: boolean) => void, zoom = 1) {
   const [drag, setDrag] = useState<{ key: MarginKey; value: number } | null>(null);
   const start = useRef({ pos: 0, value: 0 });
   const begin = (key: MarginKey, axis: 'x' | 'y', sign: 1 | -1) => (e: ReactPointerEvent<HTMLElement>) => {
@@ -59,7 +60,7 @@ function useDrag(page: PageBox, onChange: (key: MarginKey, value: number, done: 
     start.current = { pos: axis === 'x' ? e.clientX : e.clientY, value: page[key] };
     setDrag({ key, value: page[key] });
     const move = (ev: PointerEvent) => {
-      const delta = ((axis === 'x' ? ev.clientX : ev.clientY) - start.current.pos) * sign;
+      const delta = (((axis === 'x' ? ev.clientX : ev.clientY) - start.current.pos) * sign) / zoom;
       const raw = start.current.value + delta;
       const snapped = ev.altKey ? raw : Math.round(raw / STEP) * STEP;
       const value = clampMargin(page, key, snapped);
@@ -70,7 +71,7 @@ function useDrag(page: PageBox, onChange: (key: MarginKey, value: number, done: 
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
       el.removeEventListener('pointercancel', up);
-      const delta = ((axis === 'x' ? ev.clientX : ev.clientY) - start.current.pos) * sign;
+      const delta = (((axis === 'x' ? ev.clientX : ev.clientY) - start.current.pos) * sign) / zoom;
       const raw = start.current.value + delta;
       const value = clampMargin(page, key, ev.altKey ? raw : Math.round(raw / STEP) * STEP);
       setDrag(null);
@@ -107,8 +108,8 @@ function ticks(length: number, origin: number) {
   return out;
 }
 
-export function HorizontalRuler({ page, readOnly, onChange }: { page: PageBox; readOnly?: boolean; onChange: (key: MarginKey, value: number, done: boolean) => void }) {
-  const { drag, begin } = useDrag(page, onChange);
+export function HorizontalRuler({ page, readOnly, zoom = 1, onChange }: { page: PageBox; readOnly?: boolean; zoom?: number; onChange: (key: MarginKey, value: number, done: boolean) => void }) {
+  const { drag, begin } = useDrag(page, onChange, zoom);
   const shown = drag ? { ...page, [drag.key]: drag.value } : page;
   return (
     <div className="fdoc-hruler" style={{ width: page.width }} aria-label="Линейка: поля слева и справа">
@@ -134,10 +135,10 @@ export function HorizontalRuler({ page, readOnly, onChange }: { page: PageBox; r
   );
 }
 
-export function VerticalRuler({ page, readOnly, hasHeader, hasFooter, onChange }: {
-  page: PageBox; readOnly?: boolean; hasHeader?: boolean; hasFooter?: boolean; onChange: (key: MarginKey, value: number, done: boolean) => void;
+export function VerticalRuler({ page, readOnly, hasHeader, hasFooter, zoom = 1, onChange }: {
+  page: PageBox; readOnly?: boolean; hasHeader?: boolean; hasFooter?: boolean; zoom?: number; onChange: (key: MarginKey, value: number, done: boolean) => void;
 }) {
-  const { drag, begin } = useDrag(page, onChange);
+  const { drag, begin } = useDrag(page, onChange, zoom);
   const shown = drag ? { ...page, [drag.key]: drag.value } : page;
   const at = (key: MarginKey) => (key === 'marginTop' || key === 'marginHeader' ? shown[key] : page.height - shown[key]);
   const keys: MarginKey[] = ['marginTop', 'marginBottom', ...(hasHeader ? ['marginHeader' as const] : []), ...(hasFooter ? ['marginFooter' as const] : [])];

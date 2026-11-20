@@ -35,11 +35,14 @@ html[data-theme="black"] .fdoc { --page-bg: #161618; --page-text: #ececee; --pag
 .fdoc-stage { position: relative; margin: 0 auto; }
 .fdoc-page {
   position: relative; box-sizing: border-box; width: var(--fdoc-w, 794px); min-height: var(--fdoc-h, 1124px); margin: 0 auto;
-  background-color: var(--page-bg); color: var(--page-text); box-shadow: var(--page-shadow);
-  /* Граница каждой страницы — тонкая линия фоном: ориентир, где закончится лист при печати; текст не переносится. */
-  background-image: repeating-linear-gradient(to bottom, transparent 0, transparent calc(var(--fdoc-h, 1124px) - 1px), var(--page-line) calc(var(--fdoc-h, 1124px) - 1px), var(--page-line) var(--fdoc-h, 1124px));
+  color: var(--page-text);
 }
-@media (max-width: 860px) {
+/* Лист — отдельная подложка с тенью; между листами промежуток (PAGE_GAP), текст переносят распорки docPages.ts. */
+.fdoc-sheet { position: absolute; left: 0; right: 0; background: var(--page-bg); box-shadow: var(--page-shadow); border-radius: 2px; pointer-events: none; }
+.fdoc-flow { position: relative; z-index: 1; }
+.fdoc-pgap { display: block; pointer-events: none; user-select: none; }
+span.fdoc-pgap { width: 100%; }
+@media (max-width: 600px), (pointer: coarse) and (max-width: 900px) {
   .fdoc-scroll { padding: 0; } .fdoc-stage { width: auto !important; } .fdoc-page { width: auto; max-width: 100%; box-shadow: none; padding-left: 16px !important; padding-right: 16px !important; }
   .fdoc-hruler-row, .fdoc-vruler-col { display: none; }
 }
@@ -129,3 +132,27 @@ html[data-theme="black"] .fdoc { --page-bg: #161618; --page-text: #ececee; --pag
 
 /* Рамка фокуса вокруг всего текста («инпут на весь документ»): у документа фокус — это курсор, рамка не нужна. */
 .fdoc .ProseMirror, .fdoc .ProseMirror:focus, .fdoc .ProseMirror:focus-visible, .fdoc .fdoc-content:focus-visible { outline: none !important; box-shadow: none !important; }
+
+/* Строка состояния: страница, слова, масштаб (как была у прежнего редактора). */
+.fdoc-status {
+  flex: none; display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 12px 0 16px;
+  border-top: 1px solid var(--border-color); background: var(--surface-panel, var(--bg-color));
+  color: var(--text-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.fdoc-status-dot { width: 3px; height: 3px; border-radius: 50%; background: currentColor; opacity: .6; }
+.fdoc-status-gap { flex: 1; }
+.fdoc-zoom { display: inline-flex; align-items: center; gap: 4px; }
+.fdoc-zbtn { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); cursor: pointer; }
+.fdoc-zbtn:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-main); }
+.fdoc-zbtn:disabled { opacity: .35; cursor: default; }
+.fdoc-zrange { width: 120px; accent-color: var(--accent-fill); }
+.fdoc-zpct {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 58px; height: 24px; padding: 0 8px; justify-content: center;
+  border: 1px solid var(--border-color); border-radius: 6px; background: transparent; color: var(--text-main); font: inherit; cursor: pointer;
+}
+.fdoc-zpct[data-fit] { color: var(--accent-color); border-color: color-mix(in srgb, var(--accent-fill) 45%, var(--border-color)); }
+@media (max-width: 600px) { .fdoc-zrange { display: none; } }
+
+/* Кнопка цвета: значок обычного цвета панели, под ним — полоска выбранного цвета (в тёмной теме чёрный значок «выворачивался»). */
+.fdoc-color { flex-direction: column; gap: 1px; }
+.fdoc-swatch { display: block; width: 16px; height: 3px; border-radius: 1px; margin-top: -2px; box-shadow: 0 0 0 .5px var(--border-color); }
