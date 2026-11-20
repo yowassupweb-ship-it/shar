@@ -45,7 +45,11 @@ const ParagraphStyle = Extension.create({
           default: null,
           parseHTML: (el) => { try { return JSON.parse(el.getAttribute('data-ps') || 'null'); } catch { return null; } },
           // Сам стиль — в data-ps (вернётся в снимок как был), а видимое — CSS: интервал, отступы до/после, красная строка.
-          renderHTML: (attrs) => (attrs.ps ? { 'data-ps': JSON.stringify(attrs.ps), style: paragraphCss(attrs.ps) } : {}),
+          // data-named — именованный стиль Univer («Название» 2, «Подзаголовок» 3): по нему CSS рисует их иначе, чем заголовки.
+          renderHTML: (attrs) => (attrs.ps ? {
+            'data-ps': JSON.stringify(attrs.ps), style: paragraphCss(attrs.ps),
+            ...(attrs.ps.namedStyleType ? { 'data-named': String(attrs.ps.namedStyleType) } : {}),
+          } : {}),
         },
       },
     }];
@@ -77,6 +81,37 @@ const Superscript = Mark.create({
   renderHTML: ({ HTMLAttributes }) => ['sup', mergeAttributes(HTMLAttributes), 0],
 });
 
+/** Сочетания клавиш Google Документов, которых нет в TipTap по умолчанию. */
+const GoogleKeys = Extension.create({
+  name: 'sharGoogleKeys',
+  addKeyboardShortcuts() {
+    const indent = (d: 1 | -1) => () => {
+      const ed = this.editor;
+      if (ed.isActive('listItem')) return d > 0 ? ed.commands.sinkListItem('listItem') : ed.commands.liftListItem('listItem');
+      if (ed.isActive('taskItem')) return d > 0 ? ed.commands.sinkListItem('taskItem') : ed.commands.liftListItem('taskItem');
+      const { state } = ed;
+      const tr = state.tr;
+      state.doc.nodesBetween(state.selection.from, state.selection.to, (node, pos) => {
+        if (node.type.name !== 'paragraph' && node.type.name !== 'heading') return true;
+        const ps = { ...((node.attrs.ps as Record<string, unknown>) || {}) };
+        ps.indentStart = { v: Math.max(0, pt(ps.indentStart as Pt) + d * 36) };
+        tr.setNodeMarkup(pos, undefined, { ...node.attrs, ps });
+        return false;
+      });
+      if (tr.docChanged) ed.view.dispatch(tr);
+      return true;
+    };
+    return {
+      'Mod-.': () => this.editor.commands.toggleMark('superscript'),
+      'Mod-,': () => this.editor.commands.toggleMark('subscript'),
+      'Mod-\\': () => this.editor.commands.unsetAllMarks(),
+      'Alt-Shift-5': () => this.editor.commands.toggleStrike(),
+      'Mod-]': indent(1),
+      'Mod-[': indent(-1),
+    };
+  },
+});
+
 export function docExtensions(): AnyExtension[] {
   return [
     StarterKit.configure({
@@ -95,5 +130,6 @@ export function docExtensions(): AnyExtension[] {
     Subscript,
     Superscript,
     ParagraphStyle,
+    GoogleKeys,
   ];
 }

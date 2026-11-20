@@ -156,3 +156,68 @@ span.fdoc-pgap { width: 100%; }
 /* Кнопка цвета: значок обычного цвета панели, под ним — полоска выбранного цвета (в тёмной теме чёрный значок «выворачивался»). */
 .fdoc-color { flex-direction: column; gap: 1px; }
 .fdoc-swatch { display: block; width: 16px; height: 3px; border-radius: 1px; margin-top: -2px; box-shadow: 0 0 0 .5px var(--border-color); }
+
+/* ── Панель как в Google Документах: в одну строку (лишнее листается вбок), выпадающие списки, палитры ─────── */
+.fdoc-bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.fdoc-bar::-webkit-scrollbar { display: none; }
+.fdoc-bar > * { flex: none; }
+.fdoc-drop {
+  display: inline-flex; align-items: center; justify-content: space-between; gap: 6px; height: 30px; padding: 0 6px 0 8px;
+  border: 0; border-radius: 6px; background: transparent; color: var(--text-main); font: inherit; font-size: 13px; cursor: pointer;
+}
+.fdoc-drop:hover { background: var(--surface-hover); }
+.fdoc-drop span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fdoc-drop-style { width: 132px; }
+.fdoc-drop-font { width: 116px; }
+.fdoc-drop svg { flex: none; color: var(--text-muted); }
+.fdoc-size { display: inline-flex; align-items: center; gap: 1px; }
+.fdoc-size .fdoc-btn { width: 24px; height: 28px; }
+.fdoc-size-input {
+  width: 38px; height: 26px; padding: 0; border: 1px solid var(--border-color); border-radius: 5px; background: transparent;
+  color: var(--text-main); font: inherit; font-size: 13px; text-align: center;
+}
+.fdoc-size-input:focus { outline: 2px solid var(--accent-fill); outline-offset: -1px; border-color: transparent; }
+.fdoc-btn-drop { width: auto; padding: 0 3px 0 6px; display: inline-flex; gap: 1px; }
+.fdoc-btn-drop svg:last-child { color: var(--text-muted); }
+
+.fdoc-pop {
+  position: fixed; z-index: 1300; padding: 6px; border-radius: 12px; background: var(--glass, var(--surface-panel));
+  box-shadow: 0 0 0 1px var(--glass-brd, var(--border-color)), var(--glass-shadow, 0 12px 32px rgb(0 0 0 / .18));
+  backdrop-filter: blur(18px); animation: nx-pop var(--duration-base) var(--ease-spring);
+}
+.fdoc-pop-list { display: grid; min-width: 200px; max-height: min(420px, 70vh); overflow-y: auto; scrollbar-width: none; }
+.fdoc-pop-sizes { min-width: 72px; }
+.fdoc-pop-row { display: flex; gap: 2px; }
+.fdoc-pop-item {
+  display: block; width: 100%; padding: 7px 12px; border: 0; border-radius: 7px; background: transparent; color: var(--text-main);
+  font: inherit; font-size: 14px; text-align: left; cursor: pointer; white-space: nowrap;
+}
+.fdoc-pop-item:hover { background: var(--surface-hover); }
+.fdoc-pop-item[aria-selected="true"] { background: color-mix(in srgb, var(--accent-fill) 14%, transparent); color: var(--accent-color); }
+.fdoc-pop-sep { height: 1px; margin: 5px 4px; background: var(--border-color); }
+/* Стили абзаца в списке — так, как они выглядят в тексте (как в Google Документах). */
+.fdoc-pop-item[data-style="title"] { font-size: 22px; }
+.fdoc-pop-item[data-style="subtitle"] { font-size: 16px; color: var(--text-muted); }
+.fdoc-pop-item[data-style="h1"] { font-size: 19px; font-weight: 700; }
+.fdoc-pop-item[data-style="h2"] { font-size: 16px; font-weight: 700; }
+.fdoc-pop-item[data-style="h3"] { font-size: 15px; font-weight: 700; }
+.fdoc-pop-item[data-style="h4"], .fdoc-pop-item[data-style="h5"] { font-size: 14px; font-weight: 700; }
+.fdoc-palette { display: grid; gap: 3px; width: 252px; }
+.fdoc-pal-row { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; }
+.fdoc-pal-gap { margin: 4px 0; }
+.fdoc-sw { width: 21px; height: 21px; padding: 0; border: 0; border-radius: 50%; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .12); cursor: pointer; }
+.fdoc-sw:hover { transform: scale(1.15); box-shadow: 0 0 0 2px var(--accent-fill); }
+.fdoc-pal-reset, .fdoc-pal-custom {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--text-main); font: inherit; font-size: 13px; cursor: pointer; text-align: left;
+}
+.fdoc-pal-reset:hover, .fdoc-pal-custom:hover { background: var(--surface-hover); }
+.fdoc-pal-custom input { width: 28px; height: 22px; padding: 0; border: 0; background: none; cursor: pointer; }
+
+/* Название и подзаголовок — именованные стили Univer (data-named), как в Google Документах. */
+.fdoc-content h1[data-named="2"] { font-size: 26pt; font-weight: 400; }
+.fdoc-content h2[data-named="3"] { font-size: 15pt; font-weight: 400; color: color-mix(in srgb, var(--page-text) 60%, transparent); }
+.fdoc-content h4 { font-size: 12pt; }
+.fdoc-content h5 { font-size: 11pt; color: color-mix(in srgb, var(--page-text) 70%, transparent); }
+/* Копирование формата: курсор-валик над текстом. */
+.fdoc-painting { cursor: copy; }

@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EditorContent, useEditor, useEditorState, type Editor } from '@tiptap/react';
 import { Extension } from '@tiptap/core';
-import { redoDepth, undoDepth } from '@tiptap/pm/history';
-import {
-  AlignCenter, AlignJustify, AlignLeft, AlignRight, Baseline, Bold, Highlighter, ImagePlus, Italic, Link as LinkIcon, List, ListChecks,
-  ListOrdered, Minus, MoveHorizontal, Omega, Plus, Redo2, RemoveFormatting, Smile, Strikethrough, Underline as UnderlineIcon, Undo2,
-} from 'lucide-react';
+import { Minus, MoveHorizontal, Plus } from 'lucide-react';
 import { uploadFileWithProgress } from '@/shared/api/uploadFile';
 import { attachmentUrl } from '@/shared/ui/format';
 import { showToast } from '@/shared/ui/Toast';
@@ -21,6 +17,7 @@ import { DocInsertPicker } from './UniverDocMenu';
 import { FindBar } from './FindBar';
 import { HorizontalRuler, VerticalRuler, type MarginKey, type PageBox } from './DocRulers';
 import { PageSetupSheet } from './PageSetupSheet';
+import { FastDocToolbar } from './FastDocToolbar';
 import type { EditorProps } from './types';
 import './fastDoc.css';
 
@@ -38,13 +35,6 @@ import './fastDoc.css';
  */
 
 const SAVE_IDLE_MS = 400;
-const SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48];
-const STYLES = [
-  { value: 'p', label: 'Обычный текст' },
-  { value: '1', label: 'Заголовок 1' },
-  { value: '2', label: 'Заголовок 2' },
-  { value: '3', label: 'Заголовок 3' },
-];
 
 type DocStyle = {
   marginTop?: number; marginBottom?: number; marginLeft?: number; marginRight?: number; marginHeader?: number; marginFooter?: number;
@@ -478,7 +468,8 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
 
   return (
     <div className="fdoc" data-readonly={readOnly ? 'true' : undefined}>
-      {!readOnly && editor && <Toolbar editor={editor} onPicture={() => pictureInput.current?.click()} onPick={(kind, at) => setPicker({ kind, at })} />}
+      {!readOnly && editor && <FastDocToolbar editor={editor} onPicture={() => pictureInput.current?.click()} onPick={(kind, at) => setPicker({ kind, at })}
+        onLink={() => commands['doc.operation.show-hyper-link-edit-popup']?.()} />}
       <input ref={pictureInput} type="file" accept="image/*" hidden onChange={(e) => { const f = [...(e.target.files || [])]; e.target.value = ''; if (f.length) insertPictures.current(f); }} />
       {find.open && (
         <div className="fdoc-find-bar">
@@ -531,84 +522,3 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
   );
 }
 
-function Toolbar({ editor, onPicture, onPick }: { editor: Editor; onPicture: () => void; onPick: (kind: 'emoji' | 'symbol', at: { x: number; y: number }) => void }) {
-  const st = useEditorState({
-    editor,
-    selector: ({ editor: e }) => ({
-      bold: e.isActive('bold'), italic: e.isActive('italic'), underline: e.isActive('underline'), strike: e.isActive('strike'),
-      bullet: e.isActive('bulletList'), ordered: e.isActive('orderedList'), task: e.isActive('taskList'), link: e.isActive('link'),
-      align: (['center', 'right', 'justify'] as const).find((a) => e.isActive({ textAlign: a })) ?? 'left',
-      style: e.isActive('heading', { level: 1 }) ? '1' : e.isActive('heading', { level: 2 }) ? '2' : e.isActive('heading', { level: 3 }) ? '3' : 'p',
-      size: String(e.getAttributes('textStyle').fontSize || '').replace(/pt$/, ''),
-      color: String(e.getAttributes('textStyle').color || '#000000'),
-      // Глубина истории — дёшево; e.can().undo() прогонял команду вхолостую на каждую букву.
-      canUndo: undoDepth(e.state) > 0, canRedo: redoDepth(e.state) > 0,
-    }),
-  });
-  const run = (fn: (c: ReturnType<Editor['chain']>) => ReturnType<Editor['chain']>) => fn(editor.chain().focus()).run();
-  const btn = (key: string, title: string, active: boolean, icon: React.ReactNode, action: (e: React.MouseEvent<HTMLButtonElement>) => void, disabled = false) => (
-    <button key={key} type="button" className="fdoc-btn" title={title} aria-label={title} aria-pressed={active} disabled={disabled}
-      onMouseDown={(e) => e.preventDefault()} onClick={action}>{icon}</button>
-  );
-  const below = (e: React.MouseEvent<HTMLButtonElement>) => { const r = e.currentTarget.getBoundingClientRect(); return { x: r.left, y: r.bottom + 6 }; };
-  const setLink = () => {
-    const prev = String(editor.getAttributes('link').href || '');
-    const url = window.prompt('Адрес ссылки (пусто — убрать)', prev || 'https://');
-    if (url === null) return;
-    if (!url.trim() || url.trim() === 'https://') run((c) => c.extendMarkRange('link').unsetLink());
-    else run((c) => c.extendMarkRange('link').setLink({ href: url.trim() }));
-  };
-
-  return (
-    <div className="fdoc-bar-wrap">
-      <div className="fdoc-bar" role="toolbar" aria-label="Оформление">
-        {btn('undo', 'Отменить (Ctrl+Z)', false, <Undo2 size={16} />, () => run((c) => c.undo()), !st.canUndo)}
-        {btn('redo', 'Повторить (Ctrl+Y)', false, <Redo2 size={16} />, () => run((c) => c.redo()), !st.canRedo)}
-        <span className="fdoc-sep" />
-        <select className="fdoc-select" value={st.style} aria-label="Стиль абзаца" onChange={(e) => {
-          const v = e.target.value;
-          run((c) => (v === 'p' ? c.setParagraph() : c.setHeading({ level: Number(v) as 1 | 2 | 3 })));
-        }}>
-          {STYLES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-        </select>
-        <select className="fdoc-select fdoc-size" value={SIZES.includes(Number(st.size)) ? st.size : ''} aria-label="Размер шрифта" onChange={(e) => {
-          const v = e.target.value;
-          run((c) => (v ? c.setFontSize(`${v}pt`) : c.unsetFontSize()));
-        }}>
-          <option value="">{st.size && !SIZES.includes(Number(st.size)) ? st.size : '11'}</option>
-          {SIZES.map((n) => <option key={n} value={String(n)}>{n}</option>)}
-        </select>
-        <span className="fdoc-sep" />
-        {btn('b', 'Жирный (Ctrl+B)', st.bold, <Bold size={16} />, () => run((c) => c.toggleBold()))}
-        {btn('i', 'Курсив (Ctrl+I)', st.italic, <Italic size={16} />, () => run((c) => c.toggleItalic()))}
-        {btn('u', 'Подчёркнутый (Ctrl+U)', st.underline, <UnderlineIcon size={16} />, () => run((c) => c.toggleUnderline()))}
-        {btn('s', 'Зачёркнутый', st.strike, <Strikethrough size={16} />, () => run((c) => c.toggleStrike()))}
-        <label className="fdoc-btn fdoc-color" title="Цвет текста" onMouseDown={(e) => e.preventDefault()}>
-          <Baseline size={16} />
-          <span className="fdoc-swatch" style={{ background: st.color }} aria-hidden="true" />
-          <input type="color" value={/^#[0-9a-f]{6}$/i.test(st.color) ? st.color : '#000000'} aria-label="Цвет текста"
-            onChange={(e) => run((c) => c.setColor(e.target.value))} />
-        </label>
-        <label className="fdoc-btn fdoc-color" title="Цвет выделения" onMouseDown={(e) => e.preventDefault()}>
-          <Highlighter size={16} />
-          <input type="color" defaultValue="#fff59d" aria-label="Цвет выделения" onChange={(e) => run((c) => c.setBackgroundColor(e.target.value))} />
-        </label>
-        {btn('clear', 'Очистить оформление (Ctrl+\\)', false, <RemoveFormatting size={16} />, () => run((c) => c.unsetAllMarks()))}
-        <span className="fdoc-sep" />
-        {btn('al', 'По левому краю', st.align === 'left', <AlignLeft size={16} />, () => run((c) => c.setTextAlign('left')))}
-        {btn('ac', 'По центру', st.align === 'center', <AlignCenter size={16} />, () => run((c) => c.setTextAlign('center')))}
-        {btn('ar', 'По правому краю', st.align === 'right', <AlignRight size={16} />, () => run((c) => c.setTextAlign('right')))}
-        {btn('aj', 'По ширине', st.align === 'justify', <AlignJustify size={16} />, () => run((c) => c.setTextAlign('justify')))}
-        <span className="fdoc-sep" />
-        {btn('ul', 'Маркированный список', st.bullet, <List size={16} />, () => run((c) => c.toggleBulletList()))}
-        {btn('ol', 'Нумерованный список', st.ordered, <ListOrdered size={16} />, () => run((c) => c.toggleOrderedList()))}
-        {btn('tl', 'Чек-лист', st.task, <ListChecks size={16} />, () => run((c) => c.toggleTaskList()))}
-        <span className="fdoc-sep" />
-        {btn('link', 'Ссылка (Ctrl+клик — открыть)', st.link, <LinkIcon size={16} />, setLink)}
-        {btn('img', 'Картинка', false, <ImagePlus size={16} />, onPicture)}
-        {btn('emoji', 'Эмодзи', false, <Smile size={16} />, (e) => onPick('emoji', below(e)))}
-        {btn('sym', 'Специальные символы', false, <Omega size={16} />, (e) => onPick('symbol', below(e)))}
-      </div>
-    </div>
-  );
-}

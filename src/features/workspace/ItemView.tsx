@@ -213,8 +213,11 @@ export function ItemView({ source, kindHint, onBack, onChanged, onDeleted, onOpe
       event.stopPropagation();
       printRef.current();
     };
+    // Кнопка «Печать» на панели своего редактора документов.
+    const onPrint = () => printRef.current?.();
     window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
+    window.addEventListener('nx:print-item', onPrint);
+    return () => { window.removeEventListener('keydown', onKey, true); window.removeEventListener('nx:print-item', onPrint); };
   }, []);
 
   // Пока материал грузится — скелетон, а не спиннер: следом Univer рисует такой же, и подмена не заметна.
