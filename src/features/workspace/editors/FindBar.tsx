@@ -34,6 +34,7 @@ export function FindBar({ query, onQuery, count, index, onNext, onPrev, onClose,
         spellCheck={false}
         onChange={(e) => onQuery(e.target.value)}
         onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing) return;
           if (e.key === 'Enter') { e.preventDefault(); if (e.shiftKey) onPrev(); else onNext(); }
           else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); }
           // F3 / Ctrl+G — следующее совпадение, как в привычных редакторах; по клавише, а не по символу — работает в любой раскладке.
@@ -53,11 +54,12 @@ export function FindBar({ query, onQuery, count, index, onNext, onPrev, onClose,
         <div className="nws-find-replace">
           <input value={to} placeholder="Заменить на" aria-label="Заменить на" spellCheck={false} onChange={(e) => setTo(e.target.value)}
             onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing) return;
               if (e.key === 'Enter') { e.preventDefault(); if (count) replace.one(to); }
               else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); }
             }} />
           <button type="button" className="nx-ghost nws-find-btn" disabled={!count} onClick={() => replace.one(to)}>Заменить</button>
-          <button type="button" className="nx-ghost nws-find-btn" disabled={!count} onClick={() => replace.all(to)}>Все</button>
+          <button type="button" className="nx-ghost nws-find-btn" disabled={!count} onClick={() => replace.all(to)}>Заменить все</button>
         </div>
       )}
     </div>

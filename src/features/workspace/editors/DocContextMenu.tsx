@@ -12,8 +12,8 @@ const key = (k: string) => (mac ? `⌘${k}` : `Ctrl+${k}`);
  * Контекстное меню документа — то же меню Шара, что везде (shared/ui/overlay), а не меню браузера: вырезать, копировать,
  * вставить, оформление, ссылка, комментарий. Shift+ПКМ по-прежнему открывает системное меню (там подсказки орфографии).
  */
-export function DocContextMenu({ editor, at, readOnly, onClose, onAddComment }: {
-  editor: Editor; at: { x: number; y: number }; readOnly: boolean; onClose: () => void; onAddComment?: () => void;
+export function DocContextMenu({ editor, at, readOnly, onClose, onAddComment, onLink }: {
+  editor: Editor; at: { x: number; y: number }; readOnly: boolean; onClose: () => void; onAddComment?: () => void; onLink: () => void;
 }) {
   const { empty } = editor.state.selection;
   const run = (fn: () => void) => () => { onClose(); fn(); };
@@ -25,15 +25,10 @@ export function DocContextMenu({ editor, at, readOnly, onClose, onAddComment }: 
     if (document.execCommand('paste')) return;
     try {
       const text = await navigator.clipboard.readText();
-      if (text) editor.chain().focus().insertContent(text.replace(/\r\n/g, '\n')).run();
+      if (text) editor.chain().focus().insertContent(text.replace(/\r\n?/g, '\n').split('\n').map((line) => ({
+        type: 'paragraph', content: line ? [{ type: 'text', text: line }] : [],
+      }))).run();
     } catch { showToast(`Браузер не дал прочитать буфер — нажмите ${key('V')}`, 'info'); }
-  };
-  const link = () => {
-    const prev = String(editor.getAttributes('link').href || '');
-    const url = window.prompt('Адрес ссылки (пусто — убрать)', prev || 'https://');
-    if (url === null) return;
-    if (!url.trim() || url.trim() === 'https://') editor.chain().focus().extendMarkRange('link').unsetLink().run();
-    else editor.chain().focus().extendMarkRange('link').setLink({ href: url.trim() }).run();
   };
 
   return (
@@ -48,7 +43,7 @@ export function DocContextMenu({ editor, at, readOnly, onClose, onAddComment }: 
           <MenuItem icon={<Bold size={16} />} onSelect={run(() => editor.chain().focus().toggleBold().run())}>Жирный <kbd className="nx-menu-kbd">{key('B')}</kbd></MenuItem>
           <MenuItem icon={<Italic size={16} />} onSelect={run(() => editor.chain().focus().toggleItalic().run())}>Курсив <kbd className="nx-menu-kbd">{key('I')}</kbd></MenuItem>
           <MenuItem icon={<UnderlineIcon size={16} />} onSelect={run(() => editor.chain().focus().toggleUnderline().run())}>Подчёркнутый <kbd className="nx-menu-kbd">{key('U')}</kbd></MenuItem>
-          <MenuItem icon={<LinkIcon size={16} />} onSelect={run(link)}>{editor.isActive('link') ? 'Изменить ссылку…' : 'Ссылка…'}</MenuItem>
+          <MenuItem icon={<LinkIcon size={16} />} onSelect={run(onLink)}>{editor.isActive('link') ? 'Изменить ссылку…' : 'Ссылка…'}</MenuItem>
           <MenuItem icon={<RemoveFormatting size={16} />} disabled={empty} onSelect={run(() => editor.chain().focus().unsetAllMarks().run())}>Очистить оформление</MenuItem>
         </>
       )}

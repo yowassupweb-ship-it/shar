@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Workbook as ExcelWorkbook } from 'exceljs';
 import { SHEET_TOOLBAR } from '../lib/toolbarLayout';
 import { createUniver, ICommandService, LocaleType, mergeLocales, type ICellData, type IWorkbookData } from '@univerjs/presets';
@@ -446,6 +446,12 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
   const marksRef = useRef(commentCells);
   marksRef.current = commentCells;
   const hasMarks = commentCells.length > 0;
+  const parsedMarks = useMemo(() => commentCells.flatMap((m) => {
+    const at = a1Index(m.cell);
+    return at ? [{ ...at, cell: m.cell, sheet: m.sheet }] : [];
+  }), [commentCells]);
+  const parsedMarksRef = useRef(parsedMarks);
+  parsedMarksRef.current = parsedMarks;
   const kickOverlay = useRef<() => void>(() => undefined);
   useEffect(() => {
     if (!hasCursors && !hasMarks) { kickOverlay.current = () => undefined; setOverlay(null); return undefined; }
@@ -458,19 +464,20 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
         let next: ReturnType<typeof measureCells> = null;
         try {
           const { sheetId, sheetName, freeze } = engine.current.active();
-          const marked = marksRef.current.filter((m) => !m.sheet || m.sheet === sheetName).flatMap((m) => { const at = a1Index(m.cell); return at ? [{ ...at, cell: m.cell }] : []; });
+          const marked = parsedMarksRef.current.filter((m) => !m.sheet || m.sheet === sheetName);
           next = measureCells(engine.current.injector, engine.current.unitId, sheetId, freeze, host.current, cursorsRef.current, marked);
         } catch { next = null; /* редактор пересоздаётся — сервисов между dispose и новым экземпляром нет */ }
         const key = JSON.stringify(next);
         if (key !== last) { last = key; setOverlay(next); }
       }
-      if (performance.now() < until) raf = requestAnimationFrame(tick);
+      if (!document.hidden && performance.now() < until) raf = requestAnimationFrame(tick);
     };
     const kick = () => { until = performance.now() + 300; if (!raf) raf = requestAnimationFrame(tick); };
     kickOverlay.current = kick;
     kick();
     window.addEventListener('resize', kick);
-    return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', kick); kickOverlay.current = () => undefined; };
+    document.addEventListener('visibilitychange', kick);
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', kick); document.removeEventListener('visibilitychange', kick); kickOverlay.current = () => undefined; };
   }, [hasCursors, hasMarks]);
   // Пришли новые курсоры или комментарии — пересчитать.
   useEffect(() => { kickOverlay.current(); }, [cursors, commentCells]);

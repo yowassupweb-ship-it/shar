@@ -22,7 +22,7 @@ interface Para {
   startIndex: number;
   paragraphId?: string;
   paragraphStyle?: { namedStyleType?: number; horizontalAlign?: number; headingId?: string } & Record<string, unknown>;
-  bullet?: { listId: string; listType?: string; nestingLevel?: number };
+  bullet?: { listId: string; listType?: string; nestingLevel?: number; startNumber?: number };
 }
 interface Range { startIndex: number; endIndex: number; rangeType: number; properties?: { url?: string } }
 interface Block { startIndex: number; blockId: string }
@@ -41,7 +41,7 @@ const safeUrl = (u: string) => (/^(https?:|mailto:|tel:|\/)/i.test(u.trim()) ? u
 const color = (c?: string | null) => (c && /^(#[0-9a-f]{3,8}|rgba?\([\d\s.,%]+\))$/i.test(c.trim()) ? c.trim() : '');
 
 function listKind(snapshot: Snapshot, b: NonNullable<Para['bullet']>): 'ul' | 'ol' | 'task' {
-  const type = String(snapshot.lists?.[b.listId]?.listType || b.listType || b.listId || '').toUpperCase();
+  const type = String(b.listType || snapshot.lists?.[b.listId]?.listType || b.listId || '').toUpperCase();
   if (type.includes('CHECK')) return 'task';
   return type.includes('ORDER') ? 'ol' : 'ul';
 }
@@ -95,7 +95,7 @@ function convert(snapshot: Snapshot, options: UniverHtmlOptions): string {
   const linkAt = (i: number) => links.find((r) => r.startIndex <= i && i <= r.endIndex);
 
   // Строим абзацы и таблицы; списки сворачиваем после.
-  type Item = { kind: 'para'; tag: string; align: string; html: string; ps?: string; bullet?: { kind: 'ul' | 'ol' | 'task'; level: number; checked?: boolean } }
+  type Item = { kind: 'para'; tag: string; align: string; html: string; ps?: string; bullet?: { kind: 'ul' | 'ol' | 'task'; level: number; id?: string; start?: number; checked?: boolean } }
     | { kind: 'raw'; html: string };
   const out: Item[] = [];
   // Стек таблиц: каждая — строки → ячейки → HTML абзацев внутри.
@@ -119,7 +119,7 @@ function convert(snapshot: Snapshot, options: UniverHtmlOptions): string {
     const tag = NAMED_TAG[p?.paragraphStyle?.namedStyleType ?? 0] ?? 'p';
     const align = ALIGN[p?.paragraphStyle?.horizontalAlign ?? 0] ?? '';
     const bullet = p?.bullet ? {
-      kind: listKind(snapshot, p.bullet), level: Math.max(0, Math.min(8, p.bullet.nestingLevel ?? 0)),
+      id: p.bullet.listId, start: p.bullet.startNumber, kind: listKind(snapshot, p.bullet), level: Math.max(0, Math.min(8, p.bullet.nestingLevel ?? 0)),
       checked: String(p.bullet.listType || '').toUpperCase() === 'CHECK_LIST_CHECKED',
     } : undefined;
     const ps = options.editor && p ? esc(JSON.stringify({ ...(p.paragraphStyle || {}), __id: p.paragraphId, __list: p.bullet?.listId })) : undefined;
@@ -141,7 +141,8 @@ function convert(snapshot: Snapshot, options: UniverHtmlOptions): string {
         const src = typeof drawing?.source === 'string' ? imageOf(drawing.source) : null;
         if (src) {
           const w = drawing?.transform?.width;
-          inline += `<img src="${esc(src)}" alt="${esc(String(drawing?.description || drawing?.title || ''))}"${w ? ` width="${Math.round(w)}"` : ''}${options.editor ? ` data-block-id="${esc(id!)}"` : ''}>`;
+          const h = drawing?.transform?.height;
+          inline += `<img src="${esc(src)}" alt="${esc(String(drawing?.description || drawing?.title || ''))}"${w ? ` width="${Math.round(w)}"` : ''}${h ? ` height="${Math.round(h)}"` : ''}${options.editor ? ` data-block-id="${esc(id!)}"` : ''}>`;
         }
         continue;
       }
@@ -177,9 +178,9 @@ function convert(snapshot: Snapshot, options: UniverHtmlOptions): string {
 }
 
 /** Абзацы → HTML, подряд идущие пункты списка — в ul/ol с вложенностью по nestingLevel. */
-function renderBlocks(items: Array<{ kind: 'para'; tag: string; align: string; html: string; ps?: string; bullet?: { kind: 'ul' | 'ol' | 'task'; level: number; checked?: boolean } } | { kind: 'raw'; html: string }>): string {
+function renderBlocks(items: Array<{ kind: 'para'; tag: string; align: string; html: string; ps?: string; bullet?: { kind: 'ul' | 'ol' | 'task'; level: number; id?: string; start?: number; checked?: boolean } } | { kind: 'raw'; html: string }>): string {
   let html = '';
-  const open: Array<{ kind: 'ul' | 'ol' | 'task'; level: number }> = [];
+  const open: Array<{ kind: 'ul' | 'ol' | 'task'; level: number; id?: string }> = [];
   const closeTo = (level: number) => {
     while (open.length && open[open.length - 1].level > level) html += `</li></${tagOf(open.pop()!.kind)}>`;
   };
@@ -189,14 +190,14 @@ function renderBlocks(items: Array<{ kind: 'para'; tag: string; align: string; h
   const attrs = (item: { align: string; ps?: string }) => `${item.align ? ` style="text-align:${item.align}"` : ''}${item.ps ? ` data-ps="${item.ps}"` : ''}`;
   for (const item of items) {
     if (item.kind === 'para' && item.bullet) {
-      const { kind, level } = item.bullet;
+      const { kind, level, id, start } = item.bullet;
       closeTo(level);
       const top = open[open.length - 1];
-      if (top && top.level === level && top.kind !== kind) { html += `</li></${tagOf(open.pop()!.kind)}>`; }
+      if (top && top.level === level && (top.kind !== kind || top.id !== id)) { html += `</li></${tagOf(open.pop()!.kind)}>`; }
       const cur = open[open.length - 1];
       if (!cur || cur.level < level) {
-        html += openTag(kind);
-        open.push({ kind, level });
+        html += kind === 'ol' && Number.isInteger(start) ? `<ol start="${start}">` : openTag(kind);
+        open.push({ kind, level, id });
       } else {
         html += '</li>';
       }

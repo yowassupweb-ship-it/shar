@@ -4,6 +4,7 @@ import Image from '@tiptap/extension-image';
 import { TaskItem, TaskList } from '@tiptap/extension-list';
 import { TextStyleKit } from '@tiptap/extension-text-style';
 import TextAlign from '@tiptap/extension-text-align';
+import { docImageView } from './docImageView';
 
 /**
  * Возможности нового редактора документов (TipTap/ProseMirror) — ровно то, что есть в документах Шара (опрос всех
@@ -101,6 +102,7 @@ const InkMark = Extension.create({
 
 /** Картинка Univer: id блока и рисунка — чтобы при сохранении вернуть тот же рисунок (размер, обтекание). */
 const SharImage = Image.extend({
+  addNodeView() { return docImageView; },
   addAttributes() {
     return {
       ...this.parent?.(),

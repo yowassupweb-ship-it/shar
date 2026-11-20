@@ -91,6 +91,7 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
   const [broken, setBroken] = useState(() => !parseSnapshot(content) && Boolean(content.trim()));
   const [docStyle, setDocStyle] = useState<DocStyle>(() => (base.current.documentStyle || {}) as DocStyle);
   const lastSaved = useRef(content);
+  const serialized = useRef<{ doc: Editor['state']['doc']; base: DocSnapshot } | null>(null);
   const timer = useRef(0);
   const onContentRef = useRef(onContent);
   onContentRef.current = onContent;
@@ -98,7 +99,9 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
   const flush = useCallback((ed: Editor | null) => {
     window.clearTimeout(timer.current);
     if (!ed || ed.isDestroyed) return;
+    if (serialized.current?.doc === ed.state.doc && serialized.current.base === base.current) return;
     const next = JSON.stringify(pmToUniver(ed.getJSON() as never, base.current as never));
+    serialized.current = { doc: ed.state.doc, base: base.current };
     if (next === lastSaved.current) return;
     lastSaved.current = next;
     onContentRef.current(next);
@@ -134,7 +137,7 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
     // Перерисовка React на каждую букву не нужна: панель читает состояние сама (useEditorState).
     shouldRerenderOnTransaction: false,
     editorProps: {
-      attributes: { class: 'fdoc-content', 'aria-label': 'Текст документа', spellcheck: 'true' },
+      attributes: { class: 'fdoc-content', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'Текст документа', spellcheck: 'true' },
       handlePaste: (_view, event) => {
         const files = [...(event.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'));
         if (!files.length || readOnly) return false;
@@ -156,6 +159,17 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
         return false;
       },
       handleKeyDown: (_view, event) => {
+        // Physical digit keys also work with Russian layout and shifted symbols.
+        if ((event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey && !readOnly) {
+          const ed = editor;
+          if (ed && ['Digit7', 'Digit8', 'Digit9'].includes(event.code)) {
+            event.preventDefault();
+            if (event.code === 'Digit7') ed.commands.toggleOrderedList();
+            else if (event.code === 'Digit8') ed.commands.toggleBulletList();
+            else ed.commands.toggleTaskList();
+            return true;
+          }
+        }
         if ((event.ctrlKey || event.metaKey) && !event.altKey && event.code === 'KeyK' && !readOnly) {
           event.preventDefault();
           setLinkEdit({ initial: String(_view.state.selection.$from.marks().find((mark) => mark.type.name === 'link')?.attrs.href || ''), from: _view.state.selection.from, to: _view.state.selection.to });
@@ -360,8 +374,9 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
     if (!editor) return undefined;
     let t = 0;
     let raf = 0;
-    const run = () => { if (editor.isDestroyed) return; try { pagesRelayout(editor.view, geometry.current); } catch { /* вид ещё не готов */ } };
-    const soon = (ms = 250) => { window.clearTimeout(t); t = window.setTimeout(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(run); }, ms); };
+    let disposed = false;
+    const run = () => { if (disposed || editor.isDestroyed) return; try { pagesRelayout(editor.view, geometry.current); } catch { /* вид ещё не готов */ } };
+    const soon = (ms = 250) => { if (disposed) return; window.clearTimeout(t); t = window.setTimeout(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(run); }, ms); };
     relayout.current = () => soon(0);
     const onUpdate = () => soon();
     editor.on('update', onUpdate);
@@ -377,6 +392,7 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
     attach();
     void document.fonts?.ready.then(() => soon(0));
     return () => {
+      disposed = true;
       window.clearTimeout(t); cancelAnimationFrame(raf); cancelAnimationFrame(wait);
       editor.off('update', onUpdate); dom?.removeEventListener('load', onImg, true); relayout.current = () => undefined;
     };
@@ -592,7 +608,8 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
             </div>
           </div>
         </div>
-        {menuAt && editor && <DocContextMenu editor={editor} at={menuAt} readOnly={readOnly} onClose={() => setMenuAt(null)} onAddComment={onAddComment} />}
+        {menuAt && editor && <DocContextMenu editor={editor} at={menuAt} readOnly={readOnly} onClose={() => setMenuAt(null)} onAddComment={onAddComment}
+          onLink={() => commands['doc.operation.show-hyper-link-edit-popup']?.()} />}
       </div>
       {/* Структура, страницы, слова, поиск — полосой под листом (внизу окна), чтобы верх был одной панелью. */}
       {editor && <DocNavigation editor={editor} pages={pages} onFind={() => openFind.current()} />}

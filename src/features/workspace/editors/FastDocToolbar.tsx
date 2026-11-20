@@ -65,7 +65,7 @@ function patchPs(editor: Editor, patch: (ps: Ps) => Ps) {
 }
 
 /** Всплывающая панель у кнопки (палитра, списки выбора). Закрывается кликом мимо и Esc. */
-function Pop({ anchor, onClose, children, className }: { anchor: DOMRect; onClose: () => void; children: ReactNode; className?: string }) {
+function Pop({ anchor, trigger, onClose, children, className }: { anchor: DOMRect; trigger: HTMLElement; onClose: () => void; children: ReactNode; className?: string }) {
   const box = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const el = box.current;
@@ -80,22 +80,26 @@ function Pop({ anchor, onClose, children, className }: { anchor: DOMRect; onClos
     return () => window.removeEventListener('resize', place);
   }, [anchor]);
   useEffect(() => {
-    const down = (e: PointerEvent) => { if (box.current && !box.current.contains(e.target as Node)) onClose(); };
+    const down = (e: PointerEvent) => { if (box.current && !box.current.contains(e.target as Node) && !trigger.contains(e.target as Node)) onClose(); };
     const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); }
-      if (!['ArrowDown', 'ArrowUp'].includes(e.key) || (e.target as HTMLElement).tagName === 'INPUT') return;
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); trigger.focus({ preventScroll: true }); return; }
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key) || (e.target as HTMLElement).tagName === 'INPUT') return;
       if (!box.current?.contains(e.target as Node) && !(e.target as HTMLElement).closest('.fdoc-bar')) return;
       const buttons = Array.from(box.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? []);
       if (!buttons.length) return;
       e.preventDefault(); e.stopPropagation();
       const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
-      const next = index < 0 ? (e.key === 'ArrowDown' ? 0 : buttons.length - 1) : (index + (e.key === 'ArrowDown' ? 1 : buttons.length - 1)) % buttons.length;
+      const next = e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length - 1 : index < 0 ? (e.key === 'ArrowDown' ? 0 : buttons.length - 1) : (index + (e.key === 'ArrowDown' ? 1 : buttons.length - 1)) % buttons.length;
       buttons[next].focus();
+    };
+    const focus = (e: FocusEvent) => {
+      if (!box.current?.contains(e.target as Node) && !trigger.contains(e.target as Node)) onClose();
     };
     document.addEventListener('pointerdown', down, true);
     document.addEventListener('keydown', key, true);
-    return () => { document.removeEventListener('pointerdown', down, true); document.removeEventListener('keydown', key, true); };
-  }, [onClose]);
+    document.addEventListener('focusin', focus);
+    return () => { document.removeEventListener('pointerdown', down, true); document.removeEventListener('keydown', key, true); document.removeEventListener('focusin', focus); };
+  }, [onClose, trigger]);
   const left = Math.max(8, Math.min(anchor.left, window.innerWidth - 300));
   return createPortal(
     <div ref={box} role="dialog" aria-label="Настройки оформления" className={`fdoc-pop ${className || ''}`} style={{ left, top: anchor.bottom + 6 }} onMouseDown={(e) => { if ((e.target as HTMLElement).tagName !== 'INPUT') e.preventDefault(); }}>
@@ -160,7 +164,7 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink, zoom }: {
       };
     },
   });
-  const [pop, setPop] = useState<{ kind: string; at: DOMRect } | null>(null);
+  const [pop, setPop] = useState<{ kind: string; at: DOMRect; trigger: HTMLElement } | null>(null);
   const bar = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = bar.current;
@@ -180,7 +184,7 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink, zoom }: {
   const [sizeDraft, setSizeDraft] = useState<string | null>(null);
   const skipSizeBlur = useRef(false);
   const run = (fn: (c: Chain) => Chain) => fn(editor.chain().focus()).run();
-  const open = (kind: string) => (e: React.MouseEvent<HTMLElement>) => { const at = e.currentTarget.getBoundingClientRect(); setPop((p) => (p?.kind === kind ? null : { kind, at })); };
+  const open = (kind: string) => (e: React.MouseEvent<HTMLElement>) => { const trigger = e.currentTarget; const at = trigger.getBoundingClientRect(); setPop((p) => (p?.kind === kind ? null : { kind, at, trigger })); };
   const close = () => setPop(null);
 
   // Копировать формат: запомнили оформление у курсора, следующее выделение получает его (Esc — отмена).
@@ -276,7 +280,7 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink, zoom }: {
               if (!skipSizeBlur.current && Number.isFinite(n) && n > 0 && n !== size) setSize(n);
               setSizeDraft(null);
             }}
-            onClick={(e) => setPop({ kind: 'size', at: e.currentTarget.getBoundingClientRect() })} />
+            onClick={(e) => setPop({ kind: 'size', at: e.currentTarget.getBoundingClientRect(), trigger: e.currentTarget })} />
           {btn('sz+', 'Увеличить размер шрифта', false, <OFontSizePlus size={14} />, () => stepSize(1))}
         </span>
         <span className="fdoc-sep" />
@@ -316,14 +320,14 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink, zoom }: {
       </div>
 
       {pop?.kind === 'style' && (
-        <Pop anchor={pop.at} onClose={close} className="fdoc-pop-list">
+        <Pop anchor={pop.at} trigger={pop.trigger} onClose={close} className="fdoc-pop-list">
           {STYLES.map((s) => (
             <button key={s.id} type="button" className="fdoc-pop-item" data-style={s.id} aria-selected={st.style === s.id} onClick={() => setStyle(s.id)}>{s.label}</button>
           ))}
         </Pop>
       )}
       {pop?.kind === 'zoom' && (
-        <Pop anchor={pop.at} onClose={close} className="fdoc-pop-list fdoc-pop-sizes">
+        <Pop anchor={pop.at} trigger={pop.trigger} onClose={close} className="fdoc-pop-list fdoc-pop-sizes">
           <button type="button" className="fdoc-pop-item" aria-selected={zoom.fit} onClick={() => { zoom.pick('fit'); close(); }}>По ширине</button>
           <div className="fdoc-pop-sep" />
           {zoom.options.map((z) => (
@@ -332,29 +336,29 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink, zoom }: {
         </Pop>
       )}
       {pop?.kind === 'font' && (
-        <Pop anchor={pop.at} onClose={close} className="fdoc-pop-list">
+        <Pop anchor={pop.at} trigger={pop.trigger} onClose={close} className="fdoc-pop-list">
           {FONTS.map((f) => (
             <button key={f} type="button" className="fdoc-pop-item" aria-selected={st.font === f} style={{ fontFamily: f }} onClick={() => { run((c) => c.setFontFamily(f)); close(); }}>{f}</button>
           ))}
         </Pop>
       )}
       {pop?.kind === 'size' && (
-        <Pop anchor={pop.at} onClose={close} className="fdoc-pop-list fdoc-pop-sizes">
+        <Pop anchor={pop.at} trigger={pop.trigger} onClose={close} className="fdoc-pop-list fdoc-pop-sizes">
           {SIZES.map((n) => <button key={n} type="button" className="fdoc-pop-item" aria-selected={size === n} onClick={() => { setSize(n); close(); }}>{String(n).replace('.', ',')}</button>)}
         </Pop>
       )}
       {pop?.kind === 'color' && (
-        <Pop anchor={pop.at} onClose={close}>
+        <Pop anchor={pop.at} trigger={pop.trigger} onClose={close}>
           <Palette current={st.color} resetLabel="Цвет по умолчанию" ResetIcon={OTextColor} onReset={() => { run((c) => c.unsetColor()); close(); }} onPick={(c) => { run((ch) => ch.setColor(c)); close(); }} />
         </Pop>
       )}
       {pop?.kind === 'bg' && (
-        <Pop anchor={pop.at} onClose={close}>
+        <Pop anchor={pop.at} trigger={pop.trigger} onClose={close}>
           <Palette current={st.bg} resetLabel="Без выделения" ResetIcon={OClearFormat} onReset={() => { run((c) => c.unsetBackgroundColor()); close(); }} onPick={(c) => { run((ch) => ch.setBackgroundColor(c)); close(); }} />
         </Pop>
       )}
       {pop?.kind === 'align' && (
-        <Pop anchor={pop.at} onClose={close} className="fdoc-pop-row">
+        <Pop anchor={pop.at} trigger={pop.trigger} onClose={close} className="fdoc-pop-row">
           {btn('al', 'По левому краю (Ctrl+Shift+L)', st.align === 'left', <OAlignLeft size={18} />, () => { run((c) => c.setTextAlign('left')); close(); })}
           {btn('ac', 'По центру (Ctrl+Shift+E)', st.align === 'center', <OAlignCenter size={18} />, () => { run((c) => c.setTextAlign('center')); close(); })}
           {btn('ar', 'По правому краю (Ctrl+Shift+R)', st.align === 'right', <OAlignRight size={18} />, () => { run((c) => c.setTextAlign('right')); close(); })}
@@ -362,7 +366,7 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink, zoom }: {
         </Pop>
       )}
       {pop?.kind === 'spacing' && (
-        <Pop anchor={pop.at} onClose={close} className="fdoc-pop-list">
+        <Pop anchor={pop.at} trigger={pop.trigger} onClose={close} className="fdoc-pop-list">
           {SPACINGS.map((s) => (
             <button key={s.v} type="button" className="fdoc-pop-item" aria-selected={Math.abs(st.spacing - s.v) < 0.01}
               onClick={() => { patchPs(editor, (ps) => ({ ...ps, lineSpacing: s.v })); close(); }}>{s.label}</button>

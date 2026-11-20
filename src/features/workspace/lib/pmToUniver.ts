@@ -64,6 +64,7 @@ export function pmToUniver(doc: Json, base: Snapshot): Snapshot {
   const drawings: Record<string, Record<string, unknown>> = {};
   const unitId = String(base.id || '');
   let listCounter = 0;
+  const paragraphIds = new Set<string>();
 
   const pushRun = (st: number, ed: number, ts: Ts) => {
     if (ed <= st || !Object.keys(ts).length) return;
@@ -94,11 +95,19 @@ export function pmToUniver(doc: Json, base: Snapshot): Snapshot {
         const a = node.attrs || {};
         let id = typeof a.blockId === 'string' && a.blockId ? a.blockId : '';
         if (id && baseDrawings[id]) {
-          drawings[id] = baseDrawings[id];
+          const old = baseDrawings[id];
+          const transform = (old.transform || {}) as Record<string, unknown>;
+          const docTransform = (old.docTransform || {}) as Record<string, unknown>;
+          const oldSize = (docTransform.size || {}) as Record<string, unknown>;
+          const oldWidth = Number(transform.width || oldSize.width) || 400;
+          const oldHeight = Number(transform.height || oldSize.height) || oldWidth * 0.66;
+          const width = Number(a.width) > 0 ? Number(a.width) : oldWidth;
+          const height = Number(a.height) > 0 ? Number(a.height) : Math.round(width * oldHeight / oldWidth);
+          drawings[id] = { ...old, transform: { ...transform, width, height }, docTransform: { ...docTransform, size: { ...oldSize, width, height } } };
         } else {
           id = id || rid('img').slice(0, 10);
           const width = Number(a.width) || 400;
-          const height = Math.round(width * 0.66);
+          const height = Number(a.height) > 0 ? Number(a.height) : Math.round(width * 0.66);
           drawings[id] = {
             drawingId: id, title: String(a.title || ''), description: String(a.alt || ''), imageSourceType: 'URL', source: String(a.src || ''),
             transform: { width, height, left: 0 },
@@ -112,10 +121,12 @@ export function pmToUniver(doc: Json, base: Snapshot): Snapshot {
     }
   };
 
-  const paragraph = (node: Json, bullet?: { listId: string; listType: string; nestingLevel: number }) => {
+  const paragraph = (node: Json, bullet?: { listId: string; listType: string; nestingLevel: number; startNumber?: number }) => {
     inline(node.content);
     const raw = { ...((node.attrs?.ps as Record<string, unknown> | null) || {}) };
-    const paragraphId = String(raw.__id || rid('para'));
+    const previousId = String(raw.__id || '');
+    const paragraphId = previousId && !paragraphIds.has(previousId) ? previousId : rid('para');
+    paragraphIds.add(paragraphId);
     delete raw.__id;
     delete raw.__list;
     const style: Record<string, unknown> = raw;
@@ -138,14 +149,19 @@ export function pmToUniver(doc: Json, base: Snapshot): Snapshot {
 
   const list = (node: Json, level: number, listId: string) => {
     const kind = node.type === 'orderedList' ? 'ORDER_LIST' : node.type === 'taskList' ? 'CHECK_LIST' : 'BULLET_LIST';
+    let first = true;
     for (const item of node.content || []) {
       const listType = kind === 'CHECK_LIST' && item.attrs?.checked ? 'CHECK_LIST_CHECKED' : kind;
       for (const child of item.content || []) {
         if (child.type === 'paragraph' || child.type === 'heading') {
-          const ps = (child.attrs?.ps as Record<string, unknown> | null) || {};
-          paragraph(child, { listId: String(ps.__list || listId), listType, nestingLevel: level });
+          // Identity belongs to the current list, not the paragraph's imported list.
+          paragraph(child, { listId, listType, nestingLevel: level,
+            ...(first && kind === 'ORDER_LIST' ? { startNumber: Number(node.attrs?.start) || 1 } : {}),
+          });
+          first = false;
         } else if (child.type === 'bulletList' || child.type === 'orderedList' || child.type === 'taskList') {
-          list(child, level + 1, listId);
+          listCounter += 1;
+          list(child, level + 1, `shar-list-${listCounter}`);
         } else {
           block(child);
         }
@@ -156,7 +172,7 @@ export function pmToUniver(doc: Json, base: Snapshot): Snapshot {
   const block = (node: Json) => {
     switch (node.type) {
       case 'paragraph': case 'heading': paragraph(node); break;
-      case 'bulletList': case 'orderedList': case 'taskList': listCounter += 1; list(node, 0, `l${listCounter}`); break;
+      case 'bulletList': case 'orderedList': case 'taskList': listCounter += 1; list(node, 0, `shar-list-${listCounter}`); break;
       case 'horizontalRule': stream += '\f'; paragraph({ type: 'paragraph' }); break;
       default: if (node.content) node.content.forEach(block);
     }
