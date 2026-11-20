@@ -124,6 +124,11 @@ html:not([data-theme="graphite"], [data-theme="black"]) .nws-item[data-layout="g
   min-width: 0;
   max-width: 100%;
 }
+/* В таблицах инструменты начинаются у левого края, как в документах. */
+.nws-item[data-layout="gdocs"] .nws-univer-sheet [data-u-comp="ribbon-toolbar"] { justify-content: flex-start !important; }
+.nws-univer-sheet [data-u-comp="ribbon-toolbar"] :is(button, [tabindex="0"]):focus-visible {
+  outline: 2px solid var(--accent-fill); outline-offset: -2px;
+}
 .nws-item[data-layout="gdocs"] .nws-univer [data-u-comp="ribbon-toolbar"] > * {
   display: flex !important;
   align-items: center;

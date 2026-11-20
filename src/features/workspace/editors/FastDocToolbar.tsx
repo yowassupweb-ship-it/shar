@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useEditorState, type Editor } from '@tiptap/react';
 import { redoDepth, undoDepth } from '@tiptap/pm/history';
@@ -67,16 +67,38 @@ function patchPs(editor: Editor, patch: (ps: Ps) => Ps) {
 /** Всплывающая панель у кнопки (палитра, списки выбора). Закрывается кликом мимо и Esc. */
 function Pop({ anchor, onClose, children, className }: { anchor: DOMRect; onClose: () => void; children: ReactNode; className?: string }) {
   const box = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const place = () => {
+      const { width, height } = el.getBoundingClientRect();
+      el.style.left = `${Math.max(8, Math.min(anchor.left, window.innerWidth - width - 8))}px`;
+      el.style.top = `${Math.max(8, Math.min(anchor.bottom + 6, window.innerHeight - height - 8))}px`;
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
+  }, [anchor]);
   useEffect(() => {
     const down = (e: PointerEvent) => { if (box.current && !box.current.contains(e.target as Node)) onClose(); };
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); }
+      if (!['ArrowDown', 'ArrowUp'].includes(e.key) || (e.target as HTMLElement).tagName === 'INPUT') return;
+      if (!box.current?.contains(e.target as Node) && !(e.target as HTMLElement).closest('.fdoc-bar')) return;
+      const buttons = Array.from(box.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? []);
+      if (!buttons.length) return;
+      e.preventDefault(); e.stopPropagation();
+      const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      const next = index < 0 ? (e.key === 'ArrowDown' ? 0 : buttons.length - 1) : (index + (e.key === 'ArrowDown' ? 1 : buttons.length - 1)) % buttons.length;
+      buttons[next].focus();
+    };
     document.addEventListener('pointerdown', down, true);
     document.addEventListener('keydown', key, true);
     return () => { document.removeEventListener('pointerdown', down, true); document.removeEventListener('keydown', key, true); };
   }, [onClose]);
   const left = Math.max(8, Math.min(anchor.left, window.innerWidth - 300));
   return createPortal(
-    <div ref={box} className={`fdoc-pop ${className || ''}`} style={{ left, top: anchor.bottom + 6 }} onMouseDown={(e) => { if ((e.target as HTMLElement).tagName !== 'INPUT') e.preventDefault(); }}>
+    <div ref={box} role="dialog" aria-label="Настройки оформления" className={`fdoc-pop ${className || ''}`} style={{ left, top: anchor.bottom + 6 }} onMouseDown={(e) => { if ((e.target as HTMLElement).tagName !== 'INPUT') e.preventDefault(); }}>
       {children}
     </div>,
     // В корень Шара (.nx), а не в body: там заданы цвета темы — иначе фон окна был прозрачным.
@@ -139,8 +161,24 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink, zoom }: {
     },
   });
   const [pop, setPop] = useState<{ kind: string; at: DOMRect } | null>(null);
+  const bar = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = bar.current;
+    if (!el) return;
+    const wheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey || el.scrollWidth <= el.clientWidth + 1) return;
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      if (!delta) return;
+      event.preventDefault();
+      const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? el.clientWidth : 1;
+      el.scrollLeft += delta * unit;
+    };
+    el.addEventListener('wheel', wheel, { passive: false });
+    return () => el.removeEventListener('wheel', wheel);
+  }, []);
   const [painter, setPainter] = useState<null | { marks: ReturnType<Editor['state']['selection']['$from']['marks']>; align: string | null; ps: Ps | null }>(null);
-  const [sizeDraft, setSizeDraft] = useState('');
+  const [sizeDraft, setSizeDraft] = useState<string | null>(null);
+  const skipSizeBlur = useRef(false);
   const run = (fn: (c: Chain) => Chain) => fn(editor.chain().focus()).run();
   const open = (kind: string) => (e: React.MouseEvent<HTMLElement>) => { const at = e.currentTarget.getBoundingClientRect(); setPop((p) => (p?.kind === kind ? null : { kind, at })); };
   const close = () => setPop(null);
@@ -200,7 +238,7 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink, zoom }: {
 
   return (
     <div className="fdoc-bar-wrap">
-      <div className="fdoc-bar" role="toolbar" aria-label="Оформление">
+      <div ref={bar} className="fdoc-bar" role="toolbar" aria-label="Оформление" onScroll={() => setPop(null)}>
         {btn('undo', 'Отменить (Ctrl+Z)', false, <OUndo size={18} />, () => run((c) => c.undo()), !st.canUndo)}
         {btn('redo', 'Повторить (Ctrl+Y)', false, <ORedo size={18} />, () => run((c) => c.redo()), !st.canRedo)}
         {btn('print', 'Печать (Ctrl+P)', false, <OPrint size={18} />, () => window.dispatchEvent(new Event('nx:print-item')))}
@@ -209,25 +247,35 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink, zoom }: {
           const { $from } = editor.state.selection;
           setPainter({ marks: editor.state.storedMarks || $from.marks(), align: ($from.parent.attrs.textAlign as string) || null, ps: ($from.parent.attrs.ps as Ps) || null });
         })}
-        <button type="button" className="fdoc-drop fdoc-drop-zoom" onMouseDown={(e) => e.preventDefault()} onClick={open('zoom')} aria-haspopup="listbox" title="Масштаб (Ctrl+колесо)">
+        <button type="button" className="fdoc-drop fdoc-drop-zoom" onMouseDown={(e) => e.preventDefault()} onClick={open('zoom')} aria-expanded={pop?.kind === 'zoom'} aria-haspopup="dialog" title="Масштаб (Ctrl+колесо)">
           <span>{Math.round(zoom.value * 100)}%</span><OChevronDown size={14} aria-hidden="true" />
         </button>
         <span className="fdoc-sep" />
-        <button type="button" className="fdoc-drop fdoc-drop-style" onMouseDown={(e) => e.preventDefault()} onClick={open('style')} aria-haspopup="listbox" title="Стиль абзаца">
+        <button type="button" className="fdoc-drop fdoc-drop-style" onMouseDown={(e) => e.preventDefault()} onClick={open('style')} aria-expanded={pop?.kind === 'style'} aria-haspopup="dialog" title="Стиль абзаца">
           <span>{styleLabel}</span><OChevronDown size={14} aria-hidden="true" />
         </button>
         <span className="fdoc-sep" />
-        <button type="button" className="fdoc-drop fdoc-drop-font" onMouseDown={(e) => e.preventDefault()} onClick={open('font')} aria-haspopup="listbox" title="Шрифт">
+        <button type="button" className="fdoc-drop fdoc-drop-font" onMouseDown={(e) => e.preventDefault()} onClick={open('font')} aria-expanded={pop?.kind === 'font'} aria-haspopup="dialog" title="Шрифт">
           <span style={{ fontFamily: st.font }}>{st.font}</span><OChevronDown size={14} aria-hidden="true" />
         </button>
         <span className="fdoc-sep" />
         <span className="fdoc-size" role="group" aria-label="Размер шрифта">
           {btn('sz-', 'Уменьшить размер шрифта', false, <OFontSizeMinus size={14} />, () => stepSize(-1))}
-          <input className="fdoc-size-input" value={sizeDraft || String(size)} aria-label="Размер шрифта" inputMode="decimal"
-            onFocus={(e) => { setSizeDraft(String(size)); e.currentTarget.select(); }}
+          <input className="fdoc-size-input" value={sizeDraft ?? String(size)} aria-label="Размер шрифта" inputMode="decimal"
+            onFocus={(e) => { skipSizeBlur.current = false; setSizeDraft(String(size)); e.currentTarget.select(); }}
             onChange={(e) => setSizeDraft(e.target.value.replace(/[^\d.,]/g, ''))}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const n = Number(sizeDraft.replace(',', '.')); if (n > 0) setSize(n); setSizeDraft(''); editor.commands.focus(); } if (e.key === 'Escape') { setSizeDraft(''); editor.commands.focus(); } }}
-            onBlur={() => setSizeDraft('')}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' && e.key !== 'Escape') return;
+              e.preventDefault(); e.stopPropagation(); skipSizeBlur.current = true;
+              const n = Number((sizeDraft ?? '').replace(',', '.'));
+              if (e.key === 'Enter' && Number.isFinite(n) && n > 0) setSize(n);
+              setSizeDraft(null); close(); editor.commands.focus();
+            }}
+            onBlur={(e) => {
+              const n = Number(e.currentTarget.value.replace(',', '.'));
+              if (!skipSizeBlur.current && Number.isFinite(n) && n > 0 && n !== size) setSize(n);
+              setSizeDraft(null);
+            }}
             onClick={(e) => setPop({ kind: 'size', at: e.currentTarget.getBoundingClientRect() })} />
           {btn('sz+', 'Увеличить размер шрифта', false, <OFontSizePlus size={14} />, () => stepSize(1))}
         </span>
@@ -235,20 +283,20 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink, zoom }: {
         {btn('b', 'Полужирный (Ctrl+B)', st.bold, <OBold size={18} />, () => run((c) => c.toggleBold()))}
         {btn('i', 'Курсив (Ctrl+I)', st.italic, <OItalic size={18} />, () => run((c) => c.toggleItalic()))}
         {btn('u', 'Подчёркнутый (Ctrl+U)', st.underline, <OUnderline size={18} />, () => run((c) => c.toggleUnderline()))}
-        <button type="button" className="fdoc-btn fdoc-color" title="Цвет текста" aria-label="Цвет текста" onMouseDown={(e) => e.preventDefault()} onClick={open('color')}>
+        <button type="button" className="fdoc-btn fdoc-color" title="Цвет текста" aria-label="Цвет текста" onMouseDown={(e) => e.preventDefault()} onClick={open('color')} aria-expanded={pop?.kind === 'color'}>
           <OTextColor size={18} style={{ '--swatch': st.color || 'currentColor' } as React.CSSProperties} />
         </button>
-        <button type="button" className="fdoc-btn fdoc-color" title="Цвет выделения" aria-label="Цвет выделения" onMouseDown={(e) => e.preventDefault()} onClick={open('bg')}>
+        <button type="button" className="fdoc-btn fdoc-color" title="Цвет выделения" aria-label="Цвет выделения" onMouseDown={(e) => e.preventDefault()} onClick={open('bg')} aria-expanded={pop?.kind === 'bg'}>
           <OHighlightColor size={18} style={{ '--swatch': st.bg || 'transparent' } as React.CSSProperties} />
         </button>
         <span className="fdoc-sep" />
         {btn('link', 'Вставить ссылку (Ctrl+K)', st.link, <OInsertLink size={18} />, onLink)}
         {btn('img', 'Вставить изображение', false, <OInsertImage size={18} />, onPicture)}
         <span className="fdoc-sep" />
-        <button type="button" className="fdoc-btn fdoc-btn-drop" title="Выравнивание" aria-label="Выравнивание" onMouseDown={(e) => e.preventDefault()} onClick={open('align')}>
+        <button type="button" className="fdoc-btn fdoc-btn-drop" title="Выравнивание" aria-label="Выравнивание" onMouseDown={(e) => e.preventDefault()} onClick={open('align')} aria-expanded={pop?.kind === 'align'}>
           <AlignIcon size={16} /><OChevronDown size={12} aria-hidden="true" />
         </button>
-        <button type="button" className="fdoc-btn fdoc-btn-drop" title="Межстрочный интервал и интервал между абзацами" aria-label="Интервал" onMouseDown={(e) => e.preventDefault()} onClick={open('spacing')}>
+        <button type="button" className="fdoc-btn fdoc-btn-drop" title="Межстрочный интервал и интервал между абзацами" aria-label="Интервал" onMouseDown={(e) => e.preventDefault()} onClick={open('spacing')} aria-expanded={pop?.kind === 'spacing'}>
           <OLineSpacing size={18} /><OChevronDown size={12} aria-hidden="true" />
         </button>
         <span className="fdoc-sep" />

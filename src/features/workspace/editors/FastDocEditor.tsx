@@ -17,6 +17,8 @@ import { FindBar } from './FindBar';
 import { HorizontalRuler, VerticalRuler, type IndentKey, type Indents, type MarginKey, type PageBox } from './DocRulers';
 import { PageSetupSheet } from './PageSetupSheet';
 import { FastDocToolbar } from './FastDocToolbar';
+import { DocNavigation } from './DocNavigation';
+import { DocLinkSheet } from './DocLinkSheet';
 import { buildSegment, fillFields, newSegmentId, PAGE_TOKEN, PAGES_TOKEN, readSegment, segmentStyled, type SegKind } from './docHeaderFooter';
 import type { EditorProps } from './types';
 import './fastDoc.css';
@@ -154,6 +156,11 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
         return false;
       },
       handleKeyDown: (_view, event) => {
+        if ((event.ctrlKey || event.metaKey) && !event.altKey && event.code === 'KeyK' && !readOnly) {
+          event.preventDefault();
+          setLinkEdit({ initial: String(_view.state.selection.$from.marks().find((mark) => mark.type.name === 'link')?.attrs.href || ''), from: _view.state.selection.from, to: _view.state.selection.to });
+          return true;
+        }
         // Ctrl+F — свой поиск по документу (по физической клавише: работает в любой раскладке).
         if ((event.ctrlKey || event.metaKey) && !event.altKey && event.code === 'KeyF') { event.preventDefault(); openFind.current(); return true; }
         if ((event.ctrlKey || event.metaKey) && !event.altKey && event.code === 'KeyH') { event.preventDefault(); openFind.current(true); return true; }
@@ -303,6 +310,16 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
     editor.commands.focus();
   }, [editor, readOnly]);
   const [pageSetup, setPageSetup] = useState(false);
+  const [linkEdit, setLinkEdit] = useState<{ initial: string; from: number; to: number } | null>(null);
+  const linkOpen = linkEdit !== null;
+  useEffect(() => {
+    if (!editor || !linkOpen) return;
+    const mapSelection = ({ transaction }: { transaction: import('@tiptap/pm/state').Transaction }) => {
+      if (transaction.docChanged) setLinkEdit((current) => current ? { ...current, from: transaction.mapping.map(current.from), to: transaction.mapping.map(current.to) } : null);
+    };
+    editor.on('transaction', mapSelection);
+    return () => { editor.off('transaction', mapSelection); };
+  }, [editor, linkOpen]);
 
   // ── Масштаб и строка состояния ──────────────────────────────────────────────
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -333,7 +350,7 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Листы: пересчёт разбивки после паузы в наборе, смены полей, масштаба, ширины окна, шрифтов и картинок ─────
   const geometry = useRef({ pageHeight: 1124, marginTop: 72, marginBottom: 72, gap: PAGE_GAP, zoom: 1 });
@@ -409,10 +426,8 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
     const clip = (cmd: 'cut' | 'copy' | 'paste') => () => { editor.commands.focus(); if (!document.execCommand(cmd)) showToast(`Нажмите Ctrl+${cmd === 'cut' ? 'X' : cmd === 'copy' ? 'C' : 'V'}`, 'info'); };
     const link = () => {
       const prev = String(editor.getAttributes('link').href || '');
-      const url = window.prompt('Адрес ссылки (пусто — убрать)', prev || 'https://');
-      if (url === null) return;
-      if (!url.trim() || url.trim() === 'https://') editor.chain().focus().extendMarkRange('link').unsetLink().run();
-      else editor.chain().focus().extendMarkRange('link').setLink({ href: url.trim() }).run();
+      const { from, to } = editor.state.selection;
+      setLinkEdit({ initial: prev, from, to });
     };
     const pickAt = (kind: 'emoji' | 'symbol') => () => {
       const r = document.querySelector('.nws-bar')?.getBoundingClientRect();
@@ -482,6 +497,7 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
   useEffect(() => {
     if (firstLoad.current) { firstLoad.current = false; return; }
     const next = parseSnapshot(content);
+    setLinkEdit(null);
     setBroken(!next && Boolean(content.trim()));
     if (!next || !editor || editor.isDestroyed) return;
     base.current = next;
@@ -578,7 +594,17 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
         </div>
         {menuAt && editor && <DocContextMenu editor={editor} at={menuAt} readOnly={readOnly} onClose={() => setMenuAt(null)} onAddComment={onAddComment} />}
       </div>
+      {/* Структура, страницы, слова, поиск — полосой под листом (внизу окна), чтобы верх был одной панелью. */}
+      {editor && <DocNavigation editor={editor} pages={pages} onFind={() => openFind.current()} />}
       {picker && <DocInsertPicker kind={picker.kind} at={picker.at} onPick={(v) => insertText(v)} onClose={() => setPicker(null)} />}
+      {linkEdit && editor && <DocLinkSheet initial={linkEdit.initial} onClose={() => setLinkEdit(null)} onApply={(url) => {
+        if (!readOnly && !editor.isDestroyed) {
+          const chain = editor.chain().focus().setTextSelection({ from: Math.min(linkEdit.from, editor.state.doc.content.size), to: Math.min(linkEdit.to, editor.state.doc.content.size) }).extendMarkRange('link');
+          if (url && !linkEdit.initial && linkEdit.from === linkEdit.to) chain.insertContent({ type: 'text', text: url, marks: [{ type: 'link', attrs: { href: url } }] }).run();
+          else if (url) chain.setLink({ href: url }).run(); else chain.unsetLink().run();
+        }
+        setLinkEdit(null);
+      }} />}
       {pageSetup && <PageSetupSheet page={page} onClose={() => setPageSetup(false)}
         onApply={(next) => applyStyle({ pageSize: { width: next.width, height: next.height }, marginTop: next.marginTop, marginBottom: next.marginBottom,
           marginLeft: next.marginLeft, marginRight: next.marginRight, marginHeader: next.marginHeader, marginFooter: next.marginFooter }, true)} />}

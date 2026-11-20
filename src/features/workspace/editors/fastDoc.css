@@ -1,9 +1,11 @@
-/* Быстрый редактор документов: лист A4, панель оформления сверху. Страницы — линии фоном, без перекладки текста. */
+/* Редактор документов: отдельные листы и панель оформления. */
 /* Цвета листа: светлая тема — белый лист; графитовая и чёрная — тёмный лист со светлым текстом (как было у Univer). */
 .fdoc {
   --page-bg: #fff; --page-text: #1f1f1f; --page-line: rgba(0, 0, 0, .14); --page-shadow: 0 0 0 1px #c7c7c7;
   --doc-desk: #f9fbfd; --ruler-paper: #fff; --ruler-margin: #e8ebee; --ruler-line: #dadce0; --ruler-tick: #80868b; --ruler-text: #5f6368;
-  --bar-bg: #edf2fa;
+  --bar-bg: var(--surface-panel, #edf2fa);
+  --doc-sheet-radius: var(--radius-xs);
+  --doc-sheet-shadow: 0 3px 12px color-mix(in srgb, var(--page-text) 7%, transparent);
   --ruler-bg: var(--surface-panel, var(--bg-color)); --ruler-margin: color-mix(in srgb, var(--text-main) 8%, transparent); --ruler-tick: color-mix(in srgb, var(--text-main) 45%, transparent);
   display: flex; flex-direction: column; height: 100%; min-height: 0; position: relative;
   background: var(--doc-desk);
@@ -20,7 +22,8 @@ html[data-theme="black"] .fdoc {
 .fdoc-bar-wrap { flex: none; padding: 6px 12px 8px; }
 .fdoc-bar {
   display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-height: 40px; padding: 3px 8px; box-sizing: border-box;
-  border-radius: 24px; background: var(--bar-bg);
+  border-radius: var(--radius-lg); background: var(--bar-bg);
+  box-shadow: inset 0 0 0 1px var(--border-color);
 }
 .fdoc-btn {
   position: relative; display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px;
@@ -29,6 +32,16 @@ html[data-theme="black"] .fdoc {
 .fdoc-btn:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-main); }
 .fdoc-btn[aria-pressed="true"] { background: var(--surface-selected); color: var(--accent-fill); }
 .fdoc-btn:disabled { opacity: .35; cursor: default; }
+.fdoc-btn, .fdoc-drop, .fdoc-pop-item, .fdoc-pal-reset {
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+.fdoc-btn:focus-visible, .fdoc-drop:focus-visible, .fdoc-pop button:focus-visible, .fdoc-hf-bar button:focus-visible {
+  outline: 2px solid var(--accent-fill); outline-offset: -2px;
+}
+.fdoc-btn[aria-expanded="true"], .fdoc-drop[aria-expanded="true"] {
+  background: var(--surface-selected); color: var(--accent-color);
+}
+.fdoc-btn:active:not(:disabled), .fdoc-drop:active { background: var(--surface-selected); }
 .fdoc-color input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .fdoc-sep { width: 1px; height: 20px; margin: 0 5px; background: var(--border-color); }
 .fdoc-select {
@@ -47,7 +60,7 @@ html[data-theme="black"] .fdoc {
   color: var(--page-text);
 }
 /* Лист — отдельная подложка с тенью; между листами промежуток (PAGE_GAP), текст переносят распорки docPages.ts. */
-.fdoc-sheet { position: absolute; left: 0; right: 0; background: var(--page-bg); box-shadow: var(--page-shadow); pointer-events: none; }
+.fdoc-sheet { position: absolute; left: 0; right: 0; border-radius: var(--doc-sheet-radius); background: var(--page-bg); box-shadow: var(--page-shadow), var(--doc-sheet-shadow); pointer-events: none; }
 .fdoc-flow { position: relative; z-index: 1; }
 .fdoc-pgap { display: block; pointer-events: none; user-select: none; }
 span.fdoc-pgap { width: 100%; }
@@ -106,7 +119,11 @@ span.fdoc-pgap { width: 100%; }
 .fdoc-hf { position: absolute; overflow: hidden; max-height: 3.6em; white-space: pre-wrap; font: 9pt/1.3 Arial, Inter, system-ui, sans-serif; color: color-mix(in srgb, var(--page-text) 55%, transparent); pointer-events: none; }
 
 /* Поиск по документу (Ctrl+F) */
-.fdoc-find-bar { position: absolute; top: 56px; right: 24px; z-index: 6; }
+.fdoc-find-bar { flex: none; padding: var(--space-2) var(--space-3); z-index: 6; }
+.fdoc-find-bar .nws-find { position: static; width: fit-content; max-width: 100%; box-sizing: border-box; margin-left: auto; border-radius: var(--radius-md); }
+.fdoc-find-bar .nws-find > input { flex: 1; min-width: 80px; }
+.fdoc-find-bar .nws-find-replace { flex-wrap: wrap; }
+.fdoc-find-bar .nws-find-replace input { flex: 1; min-width: 80px; }
 .fdoc-find { background: rgb(255 214 10 / .35); border-radius: 2px; }
 .fdoc-find-now { background: rgb(255 149 0 / .65); box-shadow: 0 0 0 1px rgb(255 149 0); }
 .fdoc-ps-cm { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); }
@@ -188,7 +205,7 @@ span.fdoc-pgap { width: 100%; }
 .fdoc-drop-style { width: 132px; }
 .fdoc-drop-font { width: 116px; }
 .fdoc-drop svg { flex: none; color: var(--text-muted); }
-.fdoc-size { display: inline-flex; align-items: center; gap: 1px; }
+.fdoc-size { display: inline-flex; align-items: center; gap: 1px; width: auto; }
 .fdoc-size .fdoc-btn { width: 24px; height: 28px; }
 .fdoc-size-input {
   width: 38px; height: 26px; padding: 0; border: 1px solid var(--border-color); border-radius: 5px; background: transparent;
@@ -200,6 +217,7 @@ span.fdoc-pgap { width: 100%; }
 
 .fdoc-pop {
   position: fixed; z-index: 1300; padding: 8px; border-radius: 10px; background: var(--surface-panel, var(--bg-color));
+  box-sizing: border-box; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow: auto;
   box-shadow: 0 0 0 1px var(--border-color), 0 8px 28px rgb(0 0 0 / .18), 0 2px 6px rgb(0 0 0 / .08);
   animation: nx-pop var(--duration-base) var(--ease-spring);
 }
@@ -279,3 +297,35 @@ html:not([data-theme="graphite"]):not([data-theme="black"]) .fdoc-content [data-
 .fdoc-hf-bar .fdoc-hf-done { background: var(--accent-fill); color: #fff; }
 .fdoc-hf-bar .fdoc-hf-done:hover { background: color-mix(in srgb, var(--accent-fill) 88%, #000); }
 .fdoc-hf-input:focus, .fdoc-hf-input:focus-visible { outline: none !important; box-shadow: none !important; }
+
+.fdoc-navigation { display: flex; align-items: center; gap: var(--space-3); flex: none; min-height: 32px; padding: 0 var(--space-4) var(--space-1); color: var(--text-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.fdoc-outline { position: relative; }
+.fdoc-outline summary, .fdoc-find-trigger { display: flex; align-items: center; gap: var(--space-2); min-height: 28px; border: 0; border-radius: var(--radius-xs); padding: 0 var(--space-2); background: transparent; color: var(--text-2); font: inherit; cursor: pointer; }
+.fdoc-outline summary { list-style: none; }
+.fdoc-outline summary::-webkit-details-marker { display: none; }
+.fdoc-outline summary:hover, .fdoc-find-trigger:hover { background: var(--surface-hover); color: var(--text-main); }
+.fdoc-find-trigger { margin-left: auto; }
+.fdoc-outline-list { position: absolute; top: 100%; left: 0; z-index: 8; width: min(300px, calc(100vw - 48px)); max-height: min(400px, 55dvh); overflow: auto; padding: var(--space-2); border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--surface-panel); box-shadow: var(--float); }
+.fdoc-outline-list strong { display: block; padding: var(--space-2) var(--space-3); color: var(--text-main); }
+.fdoc-outline-list p { padding: 0 var(--space-3); line-height: 1.5; }
+.fdoc-outline-list button { display: block; width: 100%; border: 0; border-radius: var(--radius-xs); padding: var(--space-2) var(--space-3); background: transparent; color: var(--text-main); font: inherit; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.fdoc-outline-list button:hover { background: var(--surface-hover); }
+.fdoc-navigation :is(button, summary):focus-visible { outline: 2px solid var(--accent-fill); outline-offset: -2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fdoc-btn, .fdoc-drop, .fdoc-pop-item, .fdoc-pal-reset, .fdoc-sw { transition: none; }
+  .fdoc-pop { animation: none; }
+}
+
+/* ── Одна верхняя панель: шапка документа (название, меню), панель оформления и линейка — на одном фоне, без полос
+   между ними; линейка прижата к панели. Полоса «Структура / страницы / слова / найти» — внизу, под листом. ─────── */
+.nws-item[data-layout="gdocs"]:has(.fdoc) > .nws-head { border-bottom: 0; }
+.nws-item[data-layout="gdocs"] .fdoc { --top-panel: var(--ap-canvas, var(--surface-panel)); }
+.fdoc-bar-wrap { padding: 2px var(--space-4) 6px; background: var(--top-panel, var(--surface-panel)); }
+.fdoc-hruler-row { background: var(--top-panel, var(--doc-desk)); border-bottom: 1px solid var(--ruler-line); box-shadow: 0 1px 0 color-mix(in srgb, var(--page-text) 4%, transparent); }
+.fdoc-navigation { order: 10; padding: 0 var(--space-4); border-top: 1px solid var(--border-color); background: var(--top-panel, var(--surface-panel)); }
+.fdoc-navigation .fdoc-outline-list { top: auto; bottom: 100%; margin-bottom: 4px; }
+/* Панель оформления — от края до края (без «пилюли»), линейка — вплотную под ней. */
+.fdoc-bar-wrap { padding: 0; }
+.fdoc-bar { width: 100%; min-height: 42px; padding: 3px var(--space-4); border-radius: 0; box-shadow: none; border-top: 1px solid var(--border-color); border-bottom: 1px solid var(--ruler-line); background: var(--bar-bg); }
+.fdoc-hruler-row { box-shadow: none; }

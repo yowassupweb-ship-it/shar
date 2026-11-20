@@ -968,6 +968,22 @@ button.nws-cm-anchor { cursor: pointer; }
 /* ── Строка меню под названием, как в Google Документах и Таблицах ───────────────────────────────── */
 .nws-bar { display: flex; flex: none; align-items: center; gap: 1px; padding: 0 var(--space-3) var(--space-1); background: var(--surface-panel); border-bottom: 1px solid var(--border-color); overflow-x: auto; scrollbar-width: none; }
 .nws-bar::-webkit-scrollbar { display: none; }
+.office-sheet-editor { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; }
+.office-sheet-editor > .nws-univer { flex: 1; height: auto; min-height: 0; }
+.office-sheet-tools { display: flex; align-items: center; gap: var(--space-3); flex: none; padding: var(--space-1) var(--space-3); color: var(--text-muted); background: var(--surface-panel); font-size: var(--text-xs); border-bottom: 1px solid var(--border-color); }
+.office-sheet-tools button { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 28px; border: 0; border-radius: var(--radius-xs); padding: 0 var(--space-2); background: transparent; color: var(--text-2); font: inherit; white-space: nowrap; cursor: pointer; }
+.office-sheet-tools button:last-child { margin-left: auto; }
+.office-sheet-tools button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-main); }
+.office-sheet-tools button:disabled { opacity: .45; cursor: default; }
+.office-sheet-tools button:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: -2px; }
+.office-input-form { display: grid; gap: var(--space-2); }
+.office-input-form label { color: var(--text-main); font-size: var(--text-sm); }
+.office-input-form input { box-sizing: border-box; width: 100%; min-width: 0; padding: var(--space-3); border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--surface-panel); color: var(--text-main); font: inherit; }
+.office-input-form input:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 2px; }
+.office-input-form input[aria-invalid="true"] { border-color: var(--danger-fill); }
+.office-input-form p { margin: 0; color: var(--text-muted); font-size: var(--text-sm); line-height: 1.5; }
+@media (max-width: 700px) { .office-sheet-tools > span { display: none; } }
+.nws-bar-btn:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: -2px; }
 .nws-bar-btn { flex: none; height: 26px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text-main); font: inherit; font-size: var(--text-sm); cursor: default; white-space: nowrap; }
 @media (hover: hover) { .nws-bar-btn:hover { background: var(--surface-hover); } }
 .nws-bar-btn[aria-expanded="true"] { background: color-mix(in srgb, var(--accent-color) 14%, transparent); }

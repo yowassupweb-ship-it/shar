@@ -56,6 +56,21 @@ export function MenuBar({ menus: build, onDownloadAnchor }: { menus: () => BarMe
     return () => { document.removeEventListener('pointermove', onMove); window.clearTimeout(closeTimer); };
   }, [open]);
   useEffect(() => () => window.clearTimeout(openTimer.current), []);
+  useEffect(() => {
+    const el = bar.current;
+    if (!el) return;
+    const wheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey || el.scrollWidth <= el.clientWidth + 1) return;
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      if (!delta) return;
+      event.preventDefault();
+      window.clearTimeout(openTimer.current);
+      setOpen(null);
+      el.scrollLeft += delta * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? el.clientWidth : 1);
+    };
+    el.addEventListener('wheel', wheel, { passive: false });
+    return () => el.removeEventListener('wheel', wheel);
+  }, []);
 
   return (
     <nav ref={bar} className="nws-bar" aria-label="Меню материала" role="menubar">
@@ -68,6 +83,17 @@ export function MenuBar({ menus: build, onDownloadAnchor }: { menus: () => BarMe
           className="nws-bar-btn"
           aria-haspopup="menu"
           aria-expanded={open?.id === menu.id}
+          onKeyDown={(e) => {
+            if (['ArrowDown', 'ArrowUp'].includes(e.key)) { e.preventDefault(); window.clearTimeout(openTimer.current); show(menu.id); }
+            if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+              e.preventDefault();
+              window.clearTimeout(openTimer.current);
+              const index = menus.findIndex((m) => m.id === menu.id);
+              const next = e.key === 'Home' ? 0 : e.key === 'End' ? menus.length - 1 : (index + (e.key === 'ArrowRight' ? 1 : menus.length - 1)) % menus.length;
+              buttons.current.get(menus[next].id)?.focus();
+              if (open) show(menus[next].id);
+            }
+          }}
           onClick={() => { window.clearTimeout(openTimer.current); if (open?.id === menu.id) setOpen(null); else show(menu.id); }}
           onPointerEnter={(e) => {
             if (e.pointerType === 'touch') return;

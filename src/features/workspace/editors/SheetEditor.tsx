@@ -29,6 +29,8 @@ import type { EditorProps } from './types';
 import type { CursorPos, RemoteCursor } from '../useCursors';
 import { bindSheet, isSharedSheetMutation } from '../live/sheetOps';
 import { Spinner } from '@/shared/ui/Spinner';
+import { SheetNavigation } from './SheetNavigation';
+import { parseSheetRange } from './officeInput';
 
 
 /** Курсор в таблице: лист и выделенный диапазон (строки и столбцы с нуля). */
@@ -149,6 +151,10 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
   const theme = useUniverTheme();
   const [book, setBook] = useState<ExcelWorkbook | null>(null);
   const [error, setError] = useState('');
+  const [retry, setRetry] = useState(0);
+  const [readyForNavigation, setReadyForNavigation] = useState(false);
+  const navigate = useRef<(range: string) => string | null>(() => 'Таблица ещё открывается');
+  const find = useRef<() => void>(() => undefined);
   const sheetName = useRef('');
   /** Лист и прокрутка перед пересборкой редактора. */
   const lastView = useRef<{ sheet: string; row: number; column: number } | null>(null);
@@ -170,7 +176,7 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
       .then((loaded) => { if (alive) setBook(loaded); })
       .catch(() => { if (alive) setError('Не удалось прочитать файл таблицы'); });
     return () => { alive = false; };
-  }, [loadKey]);
+  }, [loadKey, retry]);
 
   useEffect(() => {
     const el = host.current;
@@ -198,6 +204,19 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
     // Линии сетки в тёмной теме Univer рисует почти цветом полотна — границ ячеек не видно; берём заметнее (в файл не пишется).
     if (isDarkTheme(theme)) Object.values(data.sheets ?? {}).forEach((sheet) => { (sheet as { gridlinesColor?: string }).gridlinesColor = DARK_GRIDLINES; });
     const workbook = univerAPI.createWorkbook(data);
+    navigate.current = (value) => {
+      const range = parseSheetRange(value);
+      if (!range) return 'Укажите ячейку или диапазон, например A1 или B2:D20.';
+      const sheet = workbook.getActiveSheet();
+      if (range.row + range.rows > sheet.getMaxRows() || range.col + range.cols > sheet.getMaxColumns()) return 'Диапазон выходит за границы текущего листа.';
+      try {
+        sheet.getRange(range.row, range.col, range.rows, range.cols).activate();
+        sheet.scrollToCell(range.row, range.col, 0);
+        return null;
+      } catch { return 'Не удалось перейти к диапазону. Попробуйте ещё раз.'; }
+    };
+    find.current = () => { void univerAPI.executeCommand('ui.operation.open-find-dialog'); };
+    setReadyForNavigation(true);
     addWebFonts(univerAPI);
     hideMissingFonts(univer);
     const untagFind = tagFindDialog();
@@ -365,6 +384,9 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
     }, 350);
     const stopTakeOver = takeOverWhenRendered(univerAPI, el, mount);
     return () => {
+      setReadyForNavigation(false);
+      navigate.current = () => 'Таблица ещё открывается';
+      find.current = () => undefined;
       window.clearTimeout(restoreView);
       try {
         const sheet = workbook.getActiveSheet();
@@ -403,7 +425,7 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
       stopTakeOver();
       retireMount(mount, () => univer.dispose());
     };
-  }, [book, readOnly, theme, live]);
+  }, [book, readOnly, theme, live, commentsBridge]);
 
   useEffect(() => { if (visible) window.dispatchEvent(new Event('resize')); }, [visible]);
   // Размер контейнера изменился без события окна (окно развернули, свернули боковую панель, отдельное окно растянули):
@@ -453,8 +475,10 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
   // Пришли новые курсоры или комментарии — пересчитать.
   useEffect(() => { kickOverlay.current(); }, [cursors, commentCells]);
 
-  if (error) return <div className="nws-missing" role="alert">{error}</div>;
+  if (error) return <div className="nws-missing" role="alert"><p>{error}</p><button type="button" className="nx-ghost" onClick={() => setRetry((n) => n + 1)}>Попробовать снова</button></div>;
   return (
+    <div className="office-sheet-editor">
+      <SheetNavigation ready={readyForNavigation} readOnly={readOnly} onGo={(range) => navigate.current(range)} onFind={() => find.current()} />
     <div className="nws-univer nws-univer-sheet" ref={host} aria-label="Редактор таблицы">
       {!book && <div className="nws-loading"><Spinner size={24} label="Открываю таблицу" /></div>}
       {overlay && (overlay.shapes.length > 0 || overlay.marks.length > 0) && (
@@ -467,6 +491,7 @@ export default function SheetEditor({ content, onContent, readOnly, loadKey, vis
           ))}
         </div>
       )}
+    </div>
     </div>
   );
 }
