@@ -587,3 +587,48 @@ button.nf-crumb[data-drop="true"] { background: color-mix(in srgb, var(--accent-
 /* Шапка меню файла или папки: полное имя отдельной плашкой, переносится, а не обрезается. */
 .nf-menu-name { margin: 0 0 6px; padding: 8px 10px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--text-main, var(--text-color)) 6%, transparent);
   font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text-main, var(--text-color)); line-height: 1.35; overflow-wrap: anywhere; white-space: normal; }
+
+/* ── Шапка «Файлов»: круглые кнопки со своими контурными значками (как в макете conture-icons/preview.png) ── */
+.nf-tools-round { gap: 10px; }
+.nf-rbtn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: none;
+  width: 44px; height: 44px; padding: 0; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border-color); background: var(--surface-panel, var(--bg-color)); color: var(--text-main);
+  transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
+}
+.nf-rbtn-wide { width: auto; padding: 0 14px 0 13px; gap: 10px; }
+.nf-rbtn-wide svg:last-child { opacity: .75; }
+.nf-rbtn-label { font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+.nf-rbtn[data-on] { border-color: color-mix(in srgb, var(--accent-fill) 55%, var(--border-color)); color: var(--accent-color); }
+.nf-rbtn[data-primary] { border-color: transparent; background: var(--accent-fill); color: #fff; }
+@media (hover: hover) {
+  .nf-rbtn:hover:not(:disabled) { background: var(--surface-hover); }
+  .nf-rbtn[data-primary]:hover { background: color-mix(in srgb, var(--accent-fill) 88%, #000); }
+}
+.nf-rbtn:disabled { opacity: .5; cursor: default; }
+.nf-rbtn:focus-visible, .nf-rseg button:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 2px; }
+.nf-rseg { display: inline-flex; flex: none; gap: 2px; padding: 3px; border-radius: 999px; background: var(--surface-hover); }
+.nf-rseg button {
+  display: grid; place-items: center; width: 54px; height: 38px; padding: 0; border: 1px solid transparent; border-radius: 999px;
+  background: transparent; color: var(--text-muted); cursor: pointer;
+}
+.nf-rseg button[aria-pressed="true"] { background: var(--surface-panel, var(--bg-color)); border-color: var(--border-color); color: var(--text-main); box-shadow: 0 1px 2px rgb(0 0 0 / .06); }
+@media (max-width: 640px) {
+  .nf-tools-round { gap: 6px; flex-wrap: nowrap; }
+  .nf-rbtn { width: 36px; height: 36px; }
+  .nf-rbtn svg { width: 18px; height: 18px; }
+  .nf-rbtn-wide { width: 36px; padding: 0; }
+  .nf-rbtn-wide svg:last-child, .nf-rbtn-label { display: none; }
+  .nf-rseg { padding: 2px; }
+  .nf-rseg button { width: 38px; height: 30px; }
+  .nf-rseg button svg { width: 18px; height: 18px; }
+  /* Телефон: кнопки — в одну строку с «Мои файлы» (шапка раскладывается через display: contents). Вид — одной кнопкой:
+     показываем только невыбранный вариант, нажатие переключает. */
+  .nf-bar:has(.nf-tools-round) { gap: 5px; }
+  .nf-rbtn, .nf-rseg { order: 2; }
+  .nf-rbtn { width: 34px; height: 34px; }
+  .nf-rbtn-wide { width: 34px; }
+  .nf-rseg { padding: 0; background: none; }
+  .nf-rseg button[aria-pressed="true"] { display: none; }
+  .nf-rseg button { width: 34px; height: 34px; border-color: var(--border-color); background: var(--surface-panel, var(--bg-color)); color: var(--text-main); }
+}

@@ -3,8 +3,9 @@ import { HiddenMark } from '@/shared/core/HiddenMark';
 import { realtime } from '@/shared/realtime/realtime';
 import { lazyComponent } from '@/shared/ui/lazy';
 import {
-  AlertCircle, ArrowUpDown, Check, Archive, ChevronDown, ChevronRight, ClipboardPaste, Copy, Download, Files, ExternalLink, Folder, FolderInput, FolderPlus, LayoutGrid, Link2, List,
+  AlertCircle, Check, Archive, ChevronDown, ChevronRight, ClipboardPaste, Copy, Download, Files, ExternalLink, Folder, FolderInput, FolderPlus, Link2,
   FileUp, Filter, FolderTree, History, Info, Mail, MoreHorizontal, Pencil, Pin, PinOff, RotateCw, Send, Trash2, Upload, Users, PenLine, X } from 'lucide-react';
+import { CChevronDown, CFilter, CFolderPlus, CGrid, CList, CSort, CUpload } from '@/shared/ui/ContourIcons';
 import { showToast } from '@/shared/ui/Toast';
 import { AgentMenuItems } from '@/shared/core/AgentMenuItems';
 import { SearchField } from '@/shared/ui/SearchField';
@@ -839,19 +840,22 @@ ${url}` });
         {trail.length === 0 && lead}
         </div>
         <SearchField className="nf-search" value={query} onChange={setQuery} placeholder="Поиск в папке" />
-        <div className="nf-tools">
-          <button type="button" className="nx-ghost nf-act" aria-haspopup="menu" aria-expanded={Boolean(filterMenu)} title={`Показать: ${FILTERS[filter]}`} aria-label={`Тип файлов: ${FILTERS[filter]}`}
+        {/* Шапка — круглые кнопки со своими контурными значками (ContourIcons), подписи — в подсказках. Выбранный фильтр
+            подсвечивает кнопку, чтобы было видно, что показано не всё. */}
+        <div className="nf-tools nf-tools-round">
+          <button type="button" className="nf-rbtn nf-rbtn-wide" aria-haspopup="menu" aria-expanded={Boolean(filterMenu)} data-on={filter !== 'all' || undefined}
+            title={`Показать: ${FILTERS[filter]}`} aria-label={`Тип файлов: ${FILTERS[filter]}`}
             onClick={(e) => setFilterMenu({ element: e.currentTarget, align: 'end' })}>
-            <Filter size={15} aria-hidden="true" /><span className="nf-btn-label">{FILTERS[filter]}</span><ChevronDown size={13} aria-hidden="true" />
+            <CFilter size={20} />{filter !== 'all' && <span className="nf-rbtn-label">{FILTERS[filter]}</span>}<CChevronDown size={14} />
           </button>
-          <button type="button" className="nx-ghost nf-act" aria-haspopup="menu" aria-expanded={Boolean(sortMenu)} title={`Сортировка: ${SORTS[sort].label}`} aria-label={`Сортировка: ${SORTS[sort].label}`}
-            onClick={(e) => setSortMenu({ element: e.currentTarget, align: 'end' })}><ArrowUpDown size={15} aria-hidden="true" /><span className="nf-btn-label">{SORTS[sort].short}</span></button>
-          <div className="nx-segment" role="group" aria-label="Вид">
-            <button type="button" aria-pressed={mode === 'grid'} onClick={() => setMode('grid')} aria-label="Сеткой"><LayoutGrid size={14} /></button>
-            <button type="button" aria-pressed={mode === 'list'} onClick={() => setMode('list')} aria-label="Списком"><List size={14} /></button>
+          <button type="button" className="nf-rbtn" aria-haspopup="menu" aria-expanded={Boolean(sortMenu)} title={`Сортировка: ${SORTS[sort].label}`} aria-label={`Сортировка: ${SORTS[sort].label}`}
+            onClick={(e) => setSortMenu({ element: e.currentTarget, align: 'end' })}><CSort size={20} /></button>
+          <div className="nf-rseg" role="group" aria-label="Вид">
+            <button type="button" aria-pressed={mode === 'grid'} onClick={() => setMode('grid')} aria-label="Сеткой" title="Сеткой"><CGrid size={20} /></button>
+            <button type="button" aria-pressed={mode === 'list'} onClick={() => setMode('list')} aria-label="Списком" title="Списком"><CList size={20} /></button>
           </div>
-          <button type="button" className="nx-ghost nf-act" onClick={() => setCreating(true)} disabled={creating} aria-label="Новая папка"><FolderPlus size={15} aria-hidden="true" /><span className="nf-btn-label">Новая папка</span></button>
-          <button type="button" className="nx-primary nf-act" onClick={() => fileInput.current?.click()} aria-label="Загрузить"><Upload size={15} aria-hidden="true" /><span className="nf-btn-label">Загрузить</span></button>
+          <button type="button" className="nf-rbtn" onClick={() => setCreating(true)} disabled={creating} aria-label="Новая папка" title="Новая папка"><CFolderPlus size={20} /></button>
+          <button type="button" className="nf-rbtn" data-primary="" onClick={() => fileInput.current?.click()} aria-label="Загрузить" title="Загрузить файлы"><CUpload size={20} /></button>
         </div>
         <input ref={fileInput} type="file" multiple hidden onChange={(e) => { if (e.target.files) void upload(e.target.files); e.target.value = ''; }} />
       </header>
