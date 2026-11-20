@@ -1226,3 +1226,7 @@ section.univer-popup .univerjs-icon { --univer-primary-600: currentColor; }
   font-size: 17px; cursor: pointer;
 }
 .nws-symbols button:hover, .nws-symbols button:focus-visible { background: var(--hover-bg, color-mix(in srgb, var(--text-color) 8%, transparent)); outline: none; }
+
+/* Univer держит у каретки скрытое поле ввода (рамка 1×1 px): на тёмной странице оно светилось точкой над курсором.
+   Прозрачность его не выключает — фокус, набор и IME работают как прежде. */
+[id^="univer-doc-selection-container"] { opacity: 0 !important; }
