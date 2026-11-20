@@ -61,6 +61,44 @@ const ParagraphStyle = Extension.create({
   },
 });
 
+/** Яркость цвета 0…1 (#rgb, #rrggbb, rgb()). Неизвестный — null. */
+function lightness(color: string): number | null {
+  const c = color.trim().toLowerCase();
+  let r: number; let g: number; let b: number;
+  const hex = c.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/);
+  const rgb = c.match(/^rgba?\((\d+)[ ,]+(\d+)[ ,]+(\d+)/);
+  if (hex) {
+    const h = hex[1].length === 3 ? hex[1].split('').map((x) => x + x).join('') : hex[1];
+    [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+  } else if (rgb) [r, g, b] = [rgb[1], rgb[2], rgb[3]].map(Number);
+  else return null;
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+}
+
+/**
+ * Тёмный текст на тёмном листе: Univer в тёмной теме сам осветлял цвета холста, а здесь цвет пишется как есть —
+ * чёрное оставалось на графитовом. Помечаем цвет яркостью (data-ink), а тема (fastDoc.css) подменяет тёмные
+ * цвета цветом текста листа. Сам цвет в документе не меняется.
+ */
+const InkMark = Extension.create({
+  name: 'sharInk',
+  addGlobalAttributes() {
+    return [{
+      types: ['textStyle'],
+      attributes: {
+        ink: {
+          default: null,
+          parseHTML: () => null,
+          renderHTML: (attrs) => {
+            const l = attrs.color ? lightness(String(attrs.color)) : null;
+            return l === null ? {} : { 'data-ink': l < 0.35 ? 'dark' : l > 0.85 ? 'light' : 'mid' };
+          },
+        },
+      },
+    }];
+  },
+});
+
 /** Картинка Univer: id блока и рисунка — чтобы при сохранении вернуть тот же рисунок (размер, обтекание). */
 const SharImage = Image.extend({
   addAttributes() {
@@ -136,5 +174,6 @@ export function docExtensions(): AnyExtension[] {
     Superscript,
     ParagraphStyle,
     GoogleKeys,
+    InkMark,
   ];
 }

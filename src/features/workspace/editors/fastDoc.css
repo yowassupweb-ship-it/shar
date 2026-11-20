@@ -58,28 +58,29 @@ span.fdoc-pgap { width: 100%; }
 
 /* ── Линейки (DocRulers.tsx), как в Google Документах ───────────────────────────────────────────────── */
 .fdoc-hruler-row {
-  position: sticky; top: 0; z-index: 3; display: flex; justify-content: center; height: 24px; margin: 0 -16px 0 -40px; padding: 0 16px 0 40px;
+  position: sticky; top: 0; z-index: 3; display: flex; justify-content: center; height: 20px; margin: 0 -16px 0 -40px; padding: 0 16px 0 40px;
   background: var(--doc-desk); border-bottom: 1px solid var(--ruler-line);
 }
 .fdoc-hruler-track { flex: none; }
 .fdoc-hruler, .fdoc-vruler { position: relative; user-select: none; font: 400 10px/1 Roboto, Arial, system-ui, sans-serif; color: var(--ruler-text); }
-.fdoc-hruler { height: 24px; background: var(--ruler-paper); }
+.fdoc-hruler { height: 20px; background: var(--ruler-paper); }
 .fdoc-body { position: relative; }
 .fdoc-vcol { position: sticky; left: 0; z-index: 2; float: left; width: 0; height: 0; }
-.fdoc-vslot { position: absolute; left: -40px; }
-.fdoc-vruler { width: 18px; background: var(--ruler-paper); }
+.fdoc-vslot { position: absolute; left: -38px; }
+.fdoc-vruler { width: 15px; background: var(--ruler-paper); }
 .fdoc-ruler-margin { position: absolute; background: var(--ruler-margin); pointer-events: none; }
 .fdoc-hruler .fdoc-ruler-margin { top: 0; bottom: 0; }
 .fdoc-vruler .fdoc-ruler-margin { left: 0; right: 0; }
 .fdoc-tick { position: absolute; pointer-events: none; }
-.fdoc-hruler .fdoc-tick { top: 10px; width: 1px; height: 3px; background: var(--ruler-tick); }
-.fdoc-hruler .fdoc-tick[data-kind="half"] { top: 9px; height: 5px; }
+.fdoc-hruler .fdoc-tick { top: 9px; width: 1px; height: 3px; background: var(--ruler-tick); }
+.fdoc-hruler .fdoc-tick[data-kind="half"] { top: 8px; height: 5px; }
 .fdoc-hruler .fdoc-tick[data-kind="cm"] { height: 0; background: none; }
-.fdoc-hruler .fdoc-tick b { position: absolute; top: -3px; left: 0; transform: translateX(-50%); font-weight: 400; }
-.fdoc-vruler .fdoc-tick { left: 6px; height: 1px; width: 4px; background: var(--ruler-tick); }
-.fdoc-vruler .fdoc-tick[data-kind="half"] { left: 5px; width: 6px; }
+.fdoc-hruler .fdoc-tick b { position: absolute; top: -4px; left: 0; transform: translateX(-50%); font-weight: 400; }
+.fdoc-vruler .fdoc-tick { left: 5px; height: 1px; width: 4px; background: var(--ruler-tick); }
+.fdoc-vruler .fdoc-tick[data-kind="half"] { left: 4px; width: 6px; }
 .fdoc-vruler .fdoc-tick[data-kind="cm"] { width: 0; background: none; }
-.fdoc-vruler .fdoc-tick b { position: absolute; left: 4px; top: 0; transform: translateY(-50%) rotate(-90deg); font-weight: 400; }
+/* Цифра — по центру полосы, повёрнута, как у Google; центр поворота — сама цифра (не уезжает вбок). */
+.fdoc-vruler .fdoc-tick b { position: absolute; left: 2px; top: 0; display: block; line-height: 1; transform: translate(-50%, -50%) rotate(-90deg); transform-origin: center; font-weight: 400; white-space: nowrap; }
 /* Граница поля — тянется (курсор «раздвинуть»). */
 .fdoc-mgrip { position: absolute; z-index: 1; top: 0; bottom: 0; width: 8px; margin-left: -4px; cursor: col-resize; touch-action: none; }
 .fdoc-mgrip[data-axis="y"] { top: auto; left: 0; right: 0; width: auto; height: 8px; margin: -4px 0 0; cursor: row-resize; }
@@ -94,9 +95,9 @@ span.fdoc-pgap { width: 100%; }
 .fdoc-ind-first::before { content: ""; position: absolute; left: 1px; top: 0; width: 10px; height: 4px; border-radius: 1px; background: #4285f4; }
 .fdoc-ind:hover::before { filter: brightness(1.15); }
 .fdoc-guide { position: absolute; z-index: 4; pointer-events: none; }
-.fdoc-guide[data-axis="x"] { top: 24px; width: 0; height: 100vh; border-left: 1px dashed #4285f4; }
+.fdoc-guide[data-axis="x"] { top: 20px; width: 0; height: 100vh; border-left: 1px dashed #4285f4; }
 .fdoc-ruler-tip {
-  position: absolute; z-index: 5; top: 28px; transform: translateX(-50%); padding: 4px 8px; border-radius: 4px; white-space: nowrap; pointer-events: none;
+  position: absolute; z-index: 5; top: 24px; transform: translateX(-50%); padding: 4px 8px; border-radius: 4px; white-space: nowrap; pointer-events: none;
   background: #3c4043; color: #fff; font: 400 12px/1.3 Roboto, Arial, system-ui, sans-serif;
 }
 .fdoc-ruler-tip[data-axis="y"] { top: auto; left: 22px; transform: translateY(-50%); }
@@ -249,3 +250,31 @@ span.fdoc-pgap { width: 100%; }
 .fdoc-content h5 { font-size: 11pt; color: color-mix(in srgb, var(--page-text) 70%, transparent); }
 /* Копирование формата: курсор-валик над текстом. */
 .fdoc-painting { cursor: copy; }
+
+/* Тёмная тема: явно заданный тёмный цвет текста — цветом листа (как осветлял Univer), светлый на белом листе — тоже читаемым. */
+html[data-theme="graphite"] .fdoc-content [data-ink="dark"], html[data-theme="black"] .fdoc-content [data-ink="dark"] { color: var(--page-text) !important; }
+html:not([data-theme="graphite"]):not([data-theme="black"]) .fdoc-content [data-ink="light"] { color: #5f6368 !important; }
+
+/* ── Колонтитулы: поле листа сверху/снизу — двойной щелчок; правка прямо на листе ───────────────────────── */
+.fdoc-hf-zone { position: absolute; left: 0; right: 0; z-index: 2; pointer-events: auto; }
+.fdoc-hf { z-index: 1; }
+.fdoc-hf-edit { position: absolute; z-index: 3; pointer-events: auto; }
+.fdoc-hf-input {
+  display: block; width: 100%; box-sizing: border-box; min-height: 22px; padding: 2px 0; resize: none; overflow: hidden;
+  border: 0; outline: 0; background: transparent; color: var(--page-text); font: 9pt/1.3 Arial, Inter, system-ui, sans-serif;
+}
+.fdoc-hf-edit::after { content: ""; position: absolute; left: -12px; right: -12px; height: 0; border-top: 1px dashed #4285f4; pointer-events: none; }
+.fdoc-hf-edit[data-kind="header"]::after { top: calc(100% + 6px); }
+.fdoc-hf-edit[data-kind="footer"]::after { bottom: calc(100% + 6px); }
+.fdoc-hf-bar {
+  position: absolute; left: -12px; display: flex; align-items: center; gap: 4px; padding: 4px 6px; white-space: nowrap;
+  border-radius: 6px; background: var(--surface-panel, var(--bg-color)); box-shadow: 0 0 0 1px var(--border-color), 0 4px 14px rgb(0 0 0 / .12);
+  font: 12px/1 Roboto, Inter, system-ui, sans-serif;
+}
+.fdoc-hf-bar[data-kind="header"] { top: calc(100% + 12px); }
+.fdoc-hf-bar[data-kind="footer"] { bottom: calc(100% + 12px); }
+.fdoc-hf-label { padding: 0 6px; color: var(--text-muted); }
+.fdoc-hf-bar button { height: 24px; padding: 0 8px; border: 0; border-radius: 5px; background: transparent; color: var(--text-main); font: inherit; cursor: pointer; }
+.fdoc-hf-bar button:hover { background: var(--surface-hover); }
+.fdoc-hf-bar .fdoc-hf-done { background: var(--accent-fill); color: #fff; }
+.fdoc-hf-bar .fdoc-hf-done:hover { background: color-mix(in srgb, var(--accent-fill) 88%, #000); }

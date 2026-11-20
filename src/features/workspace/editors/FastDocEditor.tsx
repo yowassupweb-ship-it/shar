@@ -17,6 +17,7 @@ import { FindBar } from './FindBar';
 import { HorizontalRuler, VerticalRuler, type IndentKey, type Indents, type MarginKey, type PageBox } from './DocRulers';
 import { PageSetupSheet } from './PageSetupSheet';
 import { FastDocToolbar } from './FastDocToolbar';
+import { buildSegment, fillFields, newSegmentId, PAGE_TOKEN, PAGES_TOKEN, readSegment, segmentStyled, type SegKind } from './docHeaderFooter';
 import type { EditorProps } from './types';
 import './fastDoc.css';
 
@@ -42,14 +43,6 @@ type DocStyle = {
 
 function htmlOf(snapshot: DocSnapshot): string {
   return univerToHtml(snapshot as never, { editor: true });
-}
-
-/** Текст колонтитула из снимка (показываем его на листе как в Google Документах; правка — в следующей версии). */
-function segmentText(snapshot: DocSnapshot, kind: 'headers' | 'footers', id?: string): string {
-  if (!id) return '';
-  const seg = (snapshot as unknown as Record<string, Record<string, { body?: { dataStream?: string } }>>)[kind]?.[id];
-  // eslint-disable-next-line no-control-regex
-  return String(seg?.body?.dataStream || '').replace(/\r\n?$/, '').replace(/\r/g, '\n').replace(/[\x00-\x08\x0b-\x1f]/g, '').trim();
 }
 
 function pageOf(style: DocStyle): PageBox {
@@ -116,6 +109,8 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
   // один раз вместе с редактором (registerPlugin в эффекте добавлял их дважды — «different instances of a keyed plugin»).
   const blockedAt = useRef(0);
   const [pages, setPages] = useState(1);
+  const pagesRef = useRef(1);
+  pagesRef.current = pages;
   const extensions = useMemo(() => [...docExtensions(), Extension.create({
     name: 'sharDocLayers',
     addProseMirrorPlugins: () => [
@@ -235,12 +230,21 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
 
   // ── Страница: поля, колонтитулы, размер ─────────────────────────────────────
   const page = useMemo(() => pageOf(docStyle), [docStyle]);
-  const headerText = segmentText(base.current, 'headers', docStyle.defaultHeaderId);
-  const footerText = segmentText(base.current, 'footers', docStyle.defaultFooterId);
+  const [segTick, setSegTick] = useState(0);
+  const headerText = useMemo(() => readSegment(base.current as never, 'headers', docStyle.defaultHeaderId), [docStyle.defaultHeaderId, segTick]); // eslint-disable-line react-hooks/exhaustive-deps
+  const footerText = useMemo(() => readSegment(base.current as never, 'footers', docStyle.defaultFooterId), [docStyle.defaultFooterId, segTick]); // eslint-disable-line react-hooks/exhaustive-deps
   const liveRef = useRef(live);
   liveRef.current = live;
-  const applyStyle = useCallback((patch: Partial<DocStyle>, done: boolean) => {
-    const next = { ...(base.current.documentStyle || {}), ...patch } as DocStyle;
+  // __seg в правке страницы — колонтитул целиком (pm.page): у коллег он меняется сразу, как и поля.
+  const applyStyle = useCallback((patch: Partial<DocStyle> & { __seg?: { kind: SegKind; id: string; segment: unknown } }, done: boolean) => {
+    const { __seg, ...style } = patch;
+    if (__seg) {
+      const segs = { ...((base.current as unknown as Record<string, Record<string, unknown>>)[__seg.kind] || {}) };
+      segs[__seg.id] = __seg.segment;
+      base.current = { ...base.current, [__seg.kind]: segs } as DocSnapshot;
+      setSegTick((n) => n + 1);
+    }
+    const next = { ...(base.current.documentStyle || {}), ...style } as DocStyle;
     base.current = { ...base.current, documentStyle: next } as DocSnapshot;
     setDocStyle(next);
     if (!done) return;
@@ -250,6 +254,29 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
     else flush(editor);
   }, [editor, flush]);
   const onMargin = useCallback((key: MarginKey, value: number, done: boolean) => applyStyle({ [key]: value }, done), [applyStyle]);
+
+  // ── Колонтитулы: двойной щелчок по полю листа сверху/снизу (как в Google) — правка; номер страницы — полем Univer.
+  const startHfRef = useRef<(kind: SegKind, page?: number) => void>(() => undefined);
+  const [hfEdit, setHfEdit] = useState<{ kind: SegKind; page: number; text: string } | null>(null);
+  const startHf = useCallback((kind: SegKind, pageIndex = 0) => {
+    if (readOnly) return;
+    const id = kind === 'headers' ? docStyle.defaultHeaderId : docStyle.defaultFooterId;
+    if (segmentStyled(base.current as never, kind, id)) showToast('У колонтитула было оформление — после правки здесь он станет обычным текстом', 'info');
+    setHfEdit({ kind, page: pageIndex, text: readSegment(base.current as never, kind, id) });
+  }, [readOnly, docStyle.defaultHeaderId, docStyle.defaultFooterId]);
+  startHfRef.current = startHf;
+  const saveHf = useCallback((kind: SegKind, text: string) => {
+    const idKey = kind === 'headers' ? 'defaultHeaderId' : 'defaultFooterId';
+    const cur = (base.current.documentStyle as DocStyle | undefined)?.[idKey];
+    const clean = text.replace(/\s+$/, '');
+    if (!clean) {
+      // Пустой колонтитул — убираем совсем (как «Удалить колонтитул» в Google).
+      if (cur) applyStyle({ [idKey]: '' }, true);
+      return;
+    }
+    const id = cur || newSegmentId(kind);
+    applyStyle({ [idKey]: id, __seg: { kind, id, segment: buildSegment(kind, id, clean, pagesRef.current) } }, true);
+  }, [applyStyle]);
 
   // Отступы абзаца, где курсор (pt) — для синих маркеров на линейке; перетаскивание меняет стиль абзацев выделения.
   const indents = useEditorState({
@@ -421,6 +448,7 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
         ]).setTextSelection(at + 3).run();
       },
       'docs.operation.open-page-setting': () => setPageSetup(true),
+      'doc.command.open-header-footer-panel': () => startHfRef.current('headers'),
       'shar.insert.emoji': pickAt('emoji'),
       'shar.insert.symbol': pickAt('symbol'),
     } as Record<string, () => void>;
@@ -513,15 +541,15 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
       <div ref={scrollRef} className="fdoc-scroll nx-scroll-y">
         {/* Линейка сверху — полоса на всю ширину (как в Google Документах), дорожка — шириной с лист, по центру. */}
         <div className="fdoc-hruler-row">
-          <div className="fdoc-hruler-track" style={{ width: page.width, zoom }}>
+          <div className="fdoc-hruler-track" style={{ width: page.width * zoom }}>
             <HorizontalRuler page={page} zoom={zoom} readOnly={readOnly} indents={readOnly ? null : indents ?? null} onMargin={onMargin} onIndent={onIndent} />
           </div>
         </div>
         <div className="fdoc-body">
           {/* Вертикальные линейки — у левого края окна, по одной на лист; едут вместе с листами. */}
-          <div className="fdoc-vcol" style={{ zoom }} aria-hidden="true">
+          <div className="fdoc-vcol" aria-hidden="true">
             {Array.from({ length: pages }, (_, i) => (
-              <div key={i} className="fdoc-vslot" style={{ top: i * (page.height + PAGE_GAP) }}>
+              <div key={i} className="fdoc-vslot" style={{ top: i * (page.height + PAGE_GAP) * zoom }}>
                 <VerticalRuler page={page} zoom={zoom} readOnly={readOnly} onMargin={onMargin} />
               </div>
             ))}
@@ -530,9 +558,18 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
             <div className="fdoc-page" style={pageStyle} onContextMenu={(e) => { if (e.shiftKey || !editor) return; e.preventDefault(); setMenuAt({ x: e.clientX, y: e.clientY }); }}>
               {/* Листы — подложки с промежутком; текст идёт поверх, распорки (docPages.ts) переносят его на следующий лист. */}
               {Array.from({ length: pages }, (_, i) => (
-                <div key={i} className="fdoc-sheet" style={{ top: i * (page.height + PAGE_GAP), height: page.height }} aria-hidden="true">
-                  {headerText && <div className="fdoc-hf" data-kind="header" style={{ top: page.marginHeader, left: page.marginLeft, right: page.marginRight }}>{headerText}</div>}
-                  {footerText && <div className="fdoc-hf" data-kind="footer" style={{ bottom: page.marginFooter, left: page.marginLeft, right: page.marginRight }}>{footerText}</div>}
+                <div key={i} className="fdoc-sheet" style={{ top: i * (page.height + PAGE_GAP), height: page.height }}>
+                  {/* Поле сверху и снизу — двойной щелчок открывает правку колонтитула. */}
+                  <div className="fdoc-hf-zone" style={{ top: 0, height: page.marginTop }} onDoubleClick={() => startHf('headers', i)} title={readOnly ? undefined : 'Двойной щелчок — верхний колонтитул'} />
+                  <div className="fdoc-hf-zone" style={{ bottom: 0, height: page.marginBottom }} onDoubleClick={() => startHf('footers', i)} title={readOnly ? undefined : 'Двойной щелчок — нижний колонтитул'} />
+                  {headerText && !(hfEdit?.kind === 'headers' && hfEdit.page === i) && <div className="fdoc-hf" data-kind="header" style={{ top: page.marginHeader, left: page.marginLeft, right: page.marginRight }}>{fillFields(headerText, i + 1, pages)}</div>}
+                  {footerText && !(hfEdit?.kind === 'footers' && hfEdit.page === i) && <div className="fdoc-hf" data-kind="footer" style={{ bottom: page.marginFooter, left: page.marginLeft, right: page.marginRight }}>{fillFields(footerText, i + 1, pages)}</div>}
+                  {hfEdit && hfEdit.page === i && (
+                    <HfEditor kind={hfEdit.kind} text={hfEdit.text} page={page}
+                      onChange={(text) => setHfEdit((h) => (h ? { ...h, text } : h))}
+                      onDone={(text) => { saveHf(hfEdit.kind, text); setHfEdit(null); editor?.commands.focus(); }}
+                      onRemove={() => { saveHf(hfEdit.kind, ''); setHfEdit(null); }} />
+                  )}
                 </div>
               ))}
               <EditorContent editor={editor} className="fdoc-flow" />
@@ -549,3 +586,38 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
   );
 }
 
+/** Правка колонтитула прямо на листе (как в Google Документах): текст, номер страницы, число страниц. */
+function HfEditor({ kind, text, page, onChange, onDone, onRemove }: {
+  kind: SegKind; text: string; page: PageBox; onChange: (text: string) => void; onDone: (text: string) => void; onRemove: () => void;
+}) {
+  const area = useRef<HTMLTextAreaElement>(null);
+  const [value, setValue] = useState(text);
+  useEffect(() => { area.current?.focus(); area.current?.setSelectionRange(value.length, value.length); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const insert = (token: string) => {
+    const el = area.current;
+    if (!el) return;
+    const a = el.selectionStart;
+    const b = el.selectionEnd;
+    const next = value.slice(0, a) + token + value.slice(b);
+    setValue(next);
+    onChange(next);
+    requestAnimationFrame(() => { el.focus(); el.setSelectionRange(a + token.length, a + token.length); });
+  };
+  const header = kind === 'headers';
+  const pos = header ? { top: page.marginHeader } : { bottom: page.marginFooter };
+  return (
+    <div className="fdoc-hf-edit" data-kind={header ? 'header' : 'footer'} style={{ ...pos, left: page.marginLeft, right: page.marginRight }}
+      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) onDone(value); }}>
+      <textarea ref={area} className="fdoc-hf-input" value={value} rows={Math.max(1, value.split('\n').length)} placeholder={header ? 'Верхний колонтитул' : 'Нижний колонтитул'}
+        onChange={(e) => { setValue(e.target.value); onChange(e.target.value); }}
+        onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); onDone(value); } }} />
+      <div className="fdoc-hf-bar" data-kind={header ? 'header' : 'footer'}>
+        <span className="fdoc-hf-label">{header ? 'Верхний колонтитул' : 'Нижний колонтитул'}</span>
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insert(PAGE_TOKEN)}>Номер страницы</button>
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => insert(PAGES_TOKEN)}>Число страниц</button>
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={onRemove}>Удалить</button>
+        <button type="button" className="fdoc-hf-done" onMouseDown={(e) => e.preventDefault()} onClick={() => onDone(value)}>Готово</button>
+      </div>
+    </div>
+  );
+}

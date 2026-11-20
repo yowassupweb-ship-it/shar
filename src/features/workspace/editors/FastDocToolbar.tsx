@@ -3,10 +3,10 @@ import { createPortal } from 'react-dom';
 import { useEditorState, type Editor } from '@tiptap/react';
 import { redoDepth, undoDepth } from '@tiptap/pm/history';
 import {
-  AlignCenter, AlignJustify, AlignLeft, AlignRight, Baseline, Bold, ChevronDown, Highlighter, ImagePlus, IndentDecrease, IndentIncrease, Italic,
-  Link as LinkIcon, List, ListChecks, ListOrdered, Minus, Omega, PaintRoller, Plus, Printer, Redo2, RemoveFormatting, Smile,
-  Strikethrough, Subscript as SubIcon, Superscript as SupIcon, Underline as UnderlineIcon, Undo2, UnfoldVertical,
-} from 'lucide-react';
+  OAlignCenter, OAlignJustify, OAlignLeft, OAlignRight, OBold, OBulletedList, OChecklist, OChevronDown, OClearFormat, ODecreaseIndent, OEmoji,
+  OFontSizeMinus, OFontSizePlus, OHighlightColor, OIncreaseIndent, OInsertImage, OInsertLink, OItalic, OLineSpacing, ONumberedList, OPaintFormat, OPrint,
+  ORedo, OSpecialCharacter, OStrikethrough, OSubscript, OSuperscript, OTextColor, OUnderline, OUndo,
+} from '@/shared/ui/OfficeIcons';
 
 /**
  * Панель оформления своего редактора — в порядке и с набором Google Документов (и прежнего Univer):
@@ -84,7 +84,7 @@ function Pop({ anchor, onClose, children, className }: { anchor: DOMRect; onClos
   );
 }
 
-function Palette({ current, onPick, onReset, resetLabel, ResetIcon }: { current: string; onPick: (c: string) => void; onReset: () => void; resetLabel: string; ResetIcon: typeof RemoveFormatting }) {
+function Palette({ current, onPick, onReset, resetLabel, ResetIcon }: { current: string; onPick: (c: string) => void; onReset: () => void; resetLabel: string; ResetIcon: typeof OClearFormat }) {
   const cur = current.toLowerCase();
   const sw = (c: string) => (
     <button key={c} type="button" className="fdoc-sw" style={{ background: c }} data-light={GRAYS.indexOf(c) >= 6 || undefined}
@@ -99,7 +99,7 @@ function Palette({ current, onPick, onReset, resetLabel, ResetIcon }: { current:
       <div className="fdoc-pal-foot">
         <span>Свой</span>
         <label className="fdoc-sw fdoc-sw-custom" title="Выбрать свой цвет" aria-label="Выбрать свой цвет">
-          <Plus size={12} aria-hidden="true" />
+          <OFontSizePlus size={12} aria-hidden="true" />
           <input type="color" defaultValue={/^#[0-9a-f]{6}$/i.test(cur) ? cur : '#1a73e8'} onChange={(e) => onPick(e.target.value)} />
         </label>
       </div>
@@ -196,75 +196,75 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink, zoom }: {
       onMouseDown={(e) => e.preventDefault()} onClick={action}>{icon}</button>
   );
   const styleLabel = STYLES.find((s) => s.id === st.style)?.label ?? 'Обычный текст';
-  const AlignIcon = st.align === 'center' ? AlignCenter : st.align === 'right' ? AlignRight : st.align === 'justify' ? AlignJustify : AlignLeft;
+  const AlignIcon = st.align === 'center' ? OAlignCenter : st.align === 'right' ? OAlignRight : st.align === 'justify' ? OAlignJustify : OAlignLeft;
 
   return (
     <div className="fdoc-bar-wrap">
       <div className="fdoc-bar" role="toolbar" aria-label="Оформление">
-        {btn('undo', 'Отменить (Ctrl+Z)', false, <Undo2 size={16} />, () => run((c) => c.undo()), !st.canUndo)}
-        {btn('redo', 'Повторить (Ctrl+Y)', false, <Redo2 size={16} />, () => run((c) => c.redo()), !st.canRedo)}
-        {btn('print', 'Печать (Ctrl+P)', false, <Printer size={16} />, () => window.dispatchEvent(new Event('nx:print-item')))}
-        {btn('paint', painter ? 'Копирование формата: выделите текст (Esc — отмена)' : 'Копировать форматирование', Boolean(painter), <PaintRoller size={16} />, () => {
+        {btn('undo', 'Отменить (Ctrl+Z)', false, <OUndo size={18} />, () => run((c) => c.undo()), !st.canUndo)}
+        {btn('redo', 'Повторить (Ctrl+Y)', false, <ORedo size={18} />, () => run((c) => c.redo()), !st.canRedo)}
+        {btn('print', 'Печать (Ctrl+P)', false, <OPrint size={18} />, () => window.dispatchEvent(new Event('nx:print-item')))}
+        {btn('paint', painter ? 'Копирование формата: выделите текст (Esc — отмена)' : 'Копировать форматирование', Boolean(painter), <OPaintFormat size={18} />, () => {
           if (painter) { setPainter(null); return; }
           const { $from } = editor.state.selection;
           setPainter({ marks: editor.state.storedMarks || $from.marks(), align: ($from.parent.attrs.textAlign as string) || null, ps: ($from.parent.attrs.ps as Ps) || null });
         })}
         <button type="button" className="fdoc-drop fdoc-drop-zoom" onMouseDown={(e) => e.preventDefault()} onClick={open('zoom')} aria-haspopup="listbox" title="Масштаб (Ctrl+колесо)">
-          <span>{Math.round(zoom.value * 100)}%</span><ChevronDown size={14} aria-hidden="true" />
+          <span>{Math.round(zoom.value * 100)}%</span><OChevronDown size={14} aria-hidden="true" />
         </button>
         <span className="fdoc-sep" />
         <button type="button" className="fdoc-drop fdoc-drop-style" onMouseDown={(e) => e.preventDefault()} onClick={open('style')} aria-haspopup="listbox" title="Стиль абзаца">
-          <span>{styleLabel}</span><ChevronDown size={14} aria-hidden="true" />
+          <span>{styleLabel}</span><OChevronDown size={14} aria-hidden="true" />
         </button>
         <span className="fdoc-sep" />
         <button type="button" className="fdoc-drop fdoc-drop-font" onMouseDown={(e) => e.preventDefault()} onClick={open('font')} aria-haspopup="listbox" title="Шрифт">
-          <span style={{ fontFamily: st.font }}>{st.font}</span><ChevronDown size={14} aria-hidden="true" />
+          <span style={{ fontFamily: st.font }}>{st.font}</span><OChevronDown size={14} aria-hidden="true" />
         </button>
         <span className="fdoc-sep" />
         <span className="fdoc-size" role="group" aria-label="Размер шрифта">
-          {btn('sz-', 'Уменьшить размер шрифта', false, <Minus size={14} />, () => stepSize(-1))}
+          {btn('sz-', 'Уменьшить размер шрифта', false, <OFontSizeMinus size={14} />, () => stepSize(-1))}
           <input className="fdoc-size-input" value={sizeDraft || String(size)} aria-label="Размер шрифта" inputMode="decimal"
             onFocus={(e) => { setSizeDraft(String(size)); e.currentTarget.select(); }}
             onChange={(e) => setSizeDraft(e.target.value.replace(/[^\d.,]/g, ''))}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const n = Number(sizeDraft.replace(',', '.')); if (n > 0) setSize(n); setSizeDraft(''); editor.commands.focus(); } if (e.key === 'Escape') { setSizeDraft(''); editor.commands.focus(); } }}
             onBlur={() => setSizeDraft('')}
             onClick={(e) => setPop({ kind: 'size', at: e.currentTarget.getBoundingClientRect() })} />
-          {btn('sz+', 'Увеличить размер шрифта', false, <Plus size={14} />, () => stepSize(1))}
+          {btn('sz+', 'Увеличить размер шрифта', false, <OFontSizePlus size={14} />, () => stepSize(1))}
         </span>
         <span className="fdoc-sep" />
-        {btn('b', 'Полужирный (Ctrl+B)', st.bold, <Bold size={16} />, () => run((c) => c.toggleBold()))}
-        {btn('i', 'Курсив (Ctrl+I)', st.italic, <Italic size={16} />, () => run((c) => c.toggleItalic()))}
-        {btn('u', 'Подчёркнутый (Ctrl+U)', st.underline, <UnderlineIcon size={16} />, () => run((c) => c.toggleUnderline()))}
+        {btn('b', 'Полужирный (Ctrl+B)', st.bold, <OBold size={18} />, () => run((c) => c.toggleBold()))}
+        {btn('i', 'Курсив (Ctrl+I)', st.italic, <OItalic size={18} />, () => run((c) => c.toggleItalic()))}
+        {btn('u', 'Подчёркнутый (Ctrl+U)', st.underline, <OUnderline size={18} />, () => run((c) => c.toggleUnderline()))}
         <button type="button" className="fdoc-btn fdoc-color" title="Цвет текста" aria-label="Цвет текста" onMouseDown={(e) => e.preventDefault()} onClick={open('color')}>
-          <Baseline size={16} /><span className="fdoc-swatch" style={{ background: st.color || 'var(--page-text, currentColor)' }} aria-hidden="true" />
+          <OTextColor size={18} style={{ '--swatch': st.color || 'currentColor' } as React.CSSProperties} />
         </button>
         <button type="button" className="fdoc-btn fdoc-color" title="Цвет выделения" aria-label="Цвет выделения" onMouseDown={(e) => e.preventDefault()} onClick={open('bg')}>
-          <Highlighter size={16} /><span className="fdoc-swatch" style={{ background: st.bg || 'transparent' }} aria-hidden="true" />
+          <OHighlightColor size={18} style={{ '--swatch': st.bg || 'transparent' } as React.CSSProperties} />
         </button>
         <span className="fdoc-sep" />
-        {btn('link', 'Вставить ссылку (Ctrl+K)', st.link, <LinkIcon size={16} />, onLink)}
-        {btn('img', 'Вставить изображение', false, <ImagePlus size={16} />, onPicture)}
+        {btn('link', 'Вставить ссылку (Ctrl+K)', st.link, <OInsertLink size={18} />, onLink)}
+        {btn('img', 'Вставить изображение', false, <OInsertImage size={18} />, onPicture)}
         <span className="fdoc-sep" />
         <button type="button" className="fdoc-btn fdoc-btn-drop" title="Выравнивание" aria-label="Выравнивание" onMouseDown={(e) => e.preventDefault()} onClick={open('align')}>
-          <AlignIcon size={16} /><ChevronDown size={12} aria-hidden="true" />
+          <AlignIcon size={16} /><OChevronDown size={12} aria-hidden="true" />
         </button>
         <button type="button" className="fdoc-btn fdoc-btn-drop" title="Межстрочный интервал и интервал между абзацами" aria-label="Интервал" onMouseDown={(e) => e.preventDefault()} onClick={open('spacing')}>
-          <UnfoldVertical size={16} /><ChevronDown size={12} aria-hidden="true" />
+          <OLineSpacing size={18} /><OChevronDown size={12} aria-hidden="true" />
         </button>
         <span className="fdoc-sep" />
-        {btn('tl', 'Чек-лист (Ctrl+Shift+9)', st.task, <ListChecks size={16} />, () => run((c) => c.toggleTaskList()))}
-        {btn('ul', 'Маркированный список (Ctrl+Shift+8)', st.bullet, <List size={16} />, () => run((c) => c.toggleBulletList()))}
-        {btn('ol', 'Нумерованный список (Ctrl+Shift+7)', st.ordered, <ListOrdered size={16} />, () => run((c) => c.toggleOrderedList()))}
+        {btn('tl', 'Чек-лист (Ctrl+Shift+9)', st.task, <OChecklist size={18} />, () => run((c) => c.toggleTaskList()))}
+        {btn('ul', 'Маркированный список (Ctrl+Shift+8)', st.bullet, <OBulletedList size={18} />, () => run((c) => c.toggleBulletList()))}
+        {btn('ol', 'Нумерованный список (Ctrl+Shift+7)', st.ordered, <ONumberedList size={18} />, () => run((c) => c.toggleOrderedList()))}
         <span className="fdoc-sep" />
-        {btn('out', 'Уменьшить отступ (Ctrl+[)', false, <IndentDecrease size={16} />, () => indent(-1))}
-        {btn('in', 'Увеличить отступ (Ctrl+])', false, <IndentIncrease size={16} />, () => indent(1))}
-        {btn('clear', 'Очистить форматирование (Ctrl+\\)', false, <RemoveFormatting size={16} />, () => run((c) => c.unsetAllMarks()))}
+        {btn('out', 'Уменьшить отступ (Ctrl+[)', false, <ODecreaseIndent size={18} />, () => indent(-1))}
+        {btn('in', 'Увеличить отступ (Ctrl+])', false, <OIncreaseIndent size={18} />, () => indent(1))}
+        {btn('clear', 'Очистить форматирование (Ctrl+\\)', false, <OClearFormat size={18} />, () => run((c) => c.unsetAllMarks()))}
         <span className="fdoc-sep" />
-        {btn('s', 'Зачёркнутый (Alt+Shift+5)', st.strike, <Strikethrough size={16} />, () => run((c) => c.toggleStrike()))}
-        {btn('sup', 'Надстрочный (Ctrl+.)', st.sup, <SupIcon size={16} />, () => run((c) => c.toggleMark('superscript')))}
-        {btn('sub', 'Подстрочный (Ctrl+,)', st.sub, <SubIcon size={16} />, () => run((c) => c.toggleMark('subscript')))}
-        {btn('emoji', 'Эмодзи', false, <Smile size={16} />, (e) => { const r = e.currentTarget.getBoundingClientRect(); onPick('emoji', { x: r.left, y: r.bottom + 6 }); })}
-        {btn('sym', 'Специальные символы', false, <Omega size={16} />, (e) => { const r = e.currentTarget.getBoundingClientRect(); onPick('symbol', { x: r.left, y: r.bottom + 6 }); })}
+        {btn('s', 'Зачёркнутый (Alt+Shift+5)', st.strike, <OStrikethrough size={18} />, () => run((c) => c.toggleStrike()))}
+        {btn('sup', 'Надстрочный (Ctrl+.)', st.sup, <OSuperscript size={18} />, () => run((c) => c.toggleMark('superscript')))}
+        {btn('sub', 'Подстрочный (Ctrl+,)', st.sub, <OSubscript size={18} />, () => run((c) => c.toggleMark('subscript')))}
+        {btn('emoji', 'Эмодзи', false, <OEmoji size={18} />, (e) => { const r = e.currentTarget.getBoundingClientRect(); onPick('emoji', { x: r.left, y: r.bottom + 6 }); })}
+        {btn('sym', 'Специальные символы', false, <OSpecialCharacter size={18} />, (e) => { const r = e.currentTarget.getBoundingClientRect(); onPick('symbol', { x: r.left, y: r.bottom + 6 }); })}
       </div>
 
       {pop?.kind === 'style' && (
@@ -297,20 +297,20 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink, zoom }: {
       )}
       {pop?.kind === 'color' && (
         <Pop anchor={pop.at} onClose={close}>
-          <Palette current={st.color} resetLabel="Цвет по умолчанию" ResetIcon={Baseline} onReset={() => { run((c) => c.unsetColor()); close(); }} onPick={(c) => { run((ch) => ch.setColor(c)); close(); }} />
+          <Palette current={st.color} resetLabel="Цвет по умолчанию" ResetIcon={OTextColor} onReset={() => { run((c) => c.unsetColor()); close(); }} onPick={(c) => { run((ch) => ch.setColor(c)); close(); }} />
         </Pop>
       )}
       {pop?.kind === 'bg' && (
         <Pop anchor={pop.at} onClose={close}>
-          <Palette current={st.bg} resetLabel="Без выделения" ResetIcon={RemoveFormatting} onReset={() => { run((c) => c.unsetBackgroundColor()); close(); }} onPick={(c) => { run((ch) => ch.setBackgroundColor(c)); close(); }} />
+          <Palette current={st.bg} resetLabel="Без выделения" ResetIcon={OClearFormat} onReset={() => { run((c) => c.unsetBackgroundColor()); close(); }} onPick={(c) => { run((ch) => ch.setBackgroundColor(c)); close(); }} />
         </Pop>
       )}
       {pop?.kind === 'align' && (
         <Pop anchor={pop.at} onClose={close} className="fdoc-pop-row">
-          {btn('al', 'По левому краю (Ctrl+Shift+L)', st.align === 'left', <AlignLeft size={16} />, () => { run((c) => c.setTextAlign('left')); close(); })}
-          {btn('ac', 'По центру (Ctrl+Shift+E)', st.align === 'center', <AlignCenter size={16} />, () => { run((c) => c.setTextAlign('center')); close(); })}
-          {btn('ar', 'По правому краю (Ctrl+Shift+R)', st.align === 'right', <AlignRight size={16} />, () => { run((c) => c.setTextAlign('right')); close(); })}
-          {btn('aj', 'По ширине (Ctrl+Shift+J)', st.align === 'justify', <AlignJustify size={16} />, () => { run((c) => c.setTextAlign('justify')); close(); })}
+          {btn('al', 'По левому краю (Ctrl+Shift+L)', st.align === 'left', <OAlignLeft size={18} />, () => { run((c) => c.setTextAlign('left')); close(); })}
+          {btn('ac', 'По центру (Ctrl+Shift+E)', st.align === 'center', <OAlignCenter size={18} />, () => { run((c) => c.setTextAlign('center')); close(); })}
+          {btn('ar', 'По правому краю (Ctrl+Shift+R)', st.align === 'right', <OAlignRight size={18} />, () => { run((c) => c.setTextAlign('right')); close(); })}
+          {btn('aj', 'По ширине (Ctrl+Shift+J)', st.align === 'justify', <OAlignJustify size={18} />, () => { run((c) => c.setTextAlign('justify')); close(); })}
         </Pop>
       )}
       {pop?.kind === 'spacing' && (

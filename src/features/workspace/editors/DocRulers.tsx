@@ -1,4 +1,4 @@
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useState, type PointerEvent as ReactPointerEvent } from 'react';
 
 /**
  * Линейки как в Google Документах.
@@ -121,30 +121,32 @@ export function HorizontalRuler({ page, zoom = 1, readOnly, indents, onMargin, o
   const tipAt = live ? (live.key === 'marginLeft' ? left : live.key === 'marginRight' ? right : at ? at[live.key as IndentKey] : 0) : 0;
   const tipVal = live ? (live.key.startsWith('margin') ? live.value : live.value * PX_PER_PT) : 0;
 
+  // Масштаб — только по ширине (расстояния × zoom): высота полосы и цифры постоянные, как в Google.
+  const z = zoom;
   return (
-    <div className="fdoc-hruler" style={{ width: page.width }} aria-label="Линейка">
-      <div className="fdoc-ruler-margin" style={{ left: 0, width: left }} />
-      <div className="fdoc-ruler-margin" style={{ right: 0, width: shown.marginRight }} />
-      {ticks(page.width, left).map((t) => (
-        <span key={t.at} className="fdoc-tick" data-kind={t.kind} style={{ left: t.at }}>{t.label !== undefined && <b>{t.label}</b>}</span>
+    <div className="fdoc-hruler" style={{ width: page.width * z }} aria-label="Линейка">
+      <div className="fdoc-ruler-margin" style={{ left: 0, width: left * z }} />
+      <div className="fdoc-ruler-margin" style={{ right: 0, width: shown.marginRight * z }} />
+      {ticks(page.width, left).filter((t) => z >= 0.7 || t.kind !== 'quarter').map((t) => (
+        <span key={t.at} className="fdoc-tick" data-kind={t.kind} style={{ left: t.at * z }}>{t.label !== undefined && <b>{t.label}</b>}</span>
       ))}
       {!readOnly && (
         <>
-          <span className="fdoc-mgrip" style={{ left }} title={`${LABEL.marginLeft}: ${cm(left)} см`} onPointerDown={margin('marginLeft')} />
-          <span className="fdoc-mgrip" style={{ left: right }} title={`${LABEL.marginRight}: ${cm(shown.marginRight)} см`} onPointerDown={margin('marginRight')} />
+          <span className="fdoc-mgrip" style={{ left: left * z }} title={`${LABEL.marginLeft}: ${cm(left)} см`} onPointerDown={margin('marginLeft')} />
+          <span className="fdoc-mgrip" style={{ left: right * z }} title={`${LABEL.marginRight}: ${cm(shown.marginRight)} см`} onPointerDown={margin('marginRight')} />
         </>
       )}
       {at && !readOnly && (
         <>
-          <span className="fdoc-ind fdoc-ind-first" style={{ left: at.firstLine }} title={LABEL.firstLine} onPointerDown={indent('firstLine')} />
-          <span className="fdoc-ind fdoc-ind-start" style={{ left: at.start }} title={LABEL.start} onPointerDown={indent('start')} />
-          <span className="fdoc-ind fdoc-ind-end" style={{ left: at.end }} title={LABEL.end} onPointerDown={indent('end')} />
+          <span className="fdoc-ind fdoc-ind-first" style={{ left: at.firstLine * z }} title={LABEL.firstLine} onPointerDown={indent('firstLine')} />
+          <span className="fdoc-ind fdoc-ind-start" style={{ left: at.start * z }} title={LABEL.start} onPointerDown={indent('start')} />
+          <span className="fdoc-ind fdoc-ind-end" style={{ left: at.end * z }} title={LABEL.end} onPointerDown={indent('end')} />
         </>
       )}
       {live && (
         <>
-          <span className="fdoc-guide" data-axis="x" style={{ left: tipAt }} />
-          <span className="fdoc-ruler-tip" style={{ left: tipAt }}>{LABEL[live.key]}: {cm(tipVal)} см</span>
+          <span className="fdoc-guide" data-axis="x" style={{ left: tipAt * z }} />
+          <span className="fdoc-ruler-tip" style={{ left: tipAt * z }}>{LABEL[live.key]}: {cm(tipVal)} см</span>
         </>
       )}
     </div>
@@ -161,21 +163,22 @@ export function VerticalRuler({ page, zoom = 1, readOnly, onMargin }: {
   const bottom = page.height - shown.marginBottom;
   const grip = (key: 'marginTop' | 'marginBottom') => (e: ReactPointerEvent<HTMLElement>) => drag(e, 'y', key === 'marginTop' ? zoom : -zoom, page[key], STEP,
     (raw) => clampMargin(page, key, raw), (v) => { setLive({ key, value: v }); onMargin(key, v, false); }, (v) => { setLive(null); onMargin(key, v, true); });
-  const ref = useRef<HTMLDivElement>(null);
+  // Масштаб — только по высоте (расстояния умножаем на zoom): ширина линейки и цифры остаются прежними, как в Google.
+  const z = zoom;
   return (
-    <div ref={ref} className="fdoc-vruler" style={{ height: page.height }} aria-hidden="true">
-      <div className="fdoc-ruler-margin" style={{ top: 0, height: top }} />
-      <div className="fdoc-ruler-margin" style={{ bottom: 0, height: shown.marginBottom }} />
-      {ticks(page.height, top).map((t) => (
-        <span key={t.at} className="fdoc-tick" data-kind={t.kind} style={{ top: t.at }}>{t.label !== undefined && <b>{t.label}</b>}</span>
+    <div className="fdoc-vruler" style={{ height: page.height * z }} aria-hidden="true">
+      <div className="fdoc-ruler-margin" style={{ top: 0, height: top * z }} />
+      <div className="fdoc-ruler-margin" style={{ bottom: 0, height: shown.marginBottom * z }} />
+      {ticks(page.height, top).filter((t) => z >= 0.7 || t.kind !== 'quarter').map((t) => (
+        <span key={t.at} className="fdoc-tick" data-kind={t.kind} style={{ top: t.at * z }}>{t.label !== undefined && <b>{t.label}</b>}</span>
       ))}
       {!readOnly && (
         <>
-          <span className="fdoc-mgrip" data-axis="y" style={{ top }} title={`${LABEL.marginTop}: ${cm(top)} см`} onPointerDown={grip('marginTop')} />
-          <span className="fdoc-mgrip" data-axis="y" style={{ top: bottom }} title={`${LABEL.marginBottom}: ${cm(shown.marginBottom)} см`} onPointerDown={grip('marginBottom')} />
+          <span className="fdoc-mgrip" data-axis="y" style={{ top: top * z }} title={`${LABEL.marginTop}: ${cm(top)} см`} onPointerDown={grip('marginTop')} />
+          <span className="fdoc-mgrip" data-axis="y" style={{ top: bottom * z }} title={`${LABEL.marginBottom}: ${cm(shown.marginBottom)} см`} onPointerDown={grip('marginBottom')} />
         </>
       )}
-      {live && <span className="fdoc-ruler-tip" data-axis="y" style={{ top: live.key === 'marginTop' ? top : bottom }}>{LABEL[live.key]}: {cm(live.value)} см</span>}
+      {live && <span className="fdoc-ruler-tip" data-axis="y" style={{ top: (live.key === 'marginTop' ? top : bottom) * z }}>{LABEL[live.key]}: {cm(live.value)} см</span>}
     </div>
   );
 }
