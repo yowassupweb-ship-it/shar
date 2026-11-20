@@ -451,6 +451,26 @@ export default function OfficeScreen() {
     try { await workspaceApi.patch(item.id, { title }); } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось переименовать', 'error'); void load(); }
   }, [load]);
 
+  // F2 — переименовать в строке: материал, на котором фокус в списке, иначе открытый (если фокус не в самом редакторе).
+  const itemsNow = useRef(allItems);
+  itemsNow.current = allItems;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'F2' || e.ctrlKey || e.altKey || e.metaKey) return;
+      const el = document.activeElement as HTMLElement | null;
+      const row = el?.closest<HTMLElement>('.nws-row[data-flip^="i"]');
+      if (!row && el?.closest('input, textarea, [contenteditable="true"], .nws-item')) return;
+      const id = row ? row.dataset.flip!.slice(1) : openId;
+      const item = id ? itemsNow.current?.find((i) => i.id === id) : undefined;
+      if (!item) return;
+      e.preventDefault();
+      if (item.isOwner || item.canEdit) setRenamingId(item.id);
+      else showToast('Переименовать может владелец или тот, у кого есть право правки', 'info');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [openId]);
+
   async function togglePin(item: Item) {
     try { await workspaceApi.patch(item.id, { pinned: !item.pinned }); void load(); } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не получилось', 'error'); }
   }

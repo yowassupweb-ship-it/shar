@@ -1,11 +1,11 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { ChevronRight, Folder, FolderOpen, HardDrive, MoreHorizontal, Users } from 'lucide-react';
 import { displayName, useChatStore } from '@/features/chat';
 import { realtime } from '@/shared/realtime/realtime';
 import { SearchField } from '@/shared/ui/SearchField';
 import type { MenuAnchor } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
-import { cachedFolder, folderChain, loadFolder, moveFile, moveFolder, prefetchFolder, sharedPeople, type CloudFolder } from './api';
+import { cachedFolder, folderChain, loadFolder, moveFile, moveFolder, prefetchFolder, renameItem, sharedPeople, type CloudFolder } from './api';
 
 /**
  * Дерево папок «Файлов» сбоку — как дерево в «Офисе»: корень «Мои файлы», папки раскрываются стрелкой (значок открытой и
@@ -41,6 +41,7 @@ export function FolderTree({ trail, onOpen, onMoved, onMenu }: {
   });
   const [dropOn, setDropOn] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [renamingId, setRenamingId] = useState<string | null>(null);
 
   const load = useCallback(async (id: string | null) => {
     try {
@@ -102,7 +103,20 @@ export function FolderTree({ trail, onOpen, onMoved, onMenu }: {
     onDrop: (e: React.DragEvent) => void drop(e, dest),
   });
 
+  const renameApi = useMemo(() => ({
+    id: renamingId,
+    start: setRenamingId,
+    commit: (folder: CloudFolder, name: string | null) => {
+      setRenamingId(null);
+      if (!name) return;
+      const apply = (n: string) => setChildren((cur) => Object.fromEntries(Object.entries(cur).map(([k, list]) => [k, list.map((f) => (f.id === folder.id ? { ...f, name: n } : f))])));
+      apply(name);
+      renameItem('folder', folder.id, name).catch(() => { apply(folder.name); showToast('Не переименовал — нет связи с сервером.', 'error'); });
+    },
+  }), [renamingId]);
+
   return (
+    <RenameCtx.Provider value={renameApi}>
     <nav className="nftr" aria-label="Папки">
       <SearchField className="nftr-search" value={query} onChange={setQuery} placeholder="Найти папку" />
       {query.trim().length >= 2 ? (
@@ -126,6 +140,33 @@ export function FolderTree({ trail, onOpen, onMoved, onMenu }: {
         </>
       )}
     </nav>
+    </RenameCtx.Provider>
+  );
+}
+
+/** Переименование в дереве (F2 на строке): какая папка сейчас в поле ввода и что делать с новым именем. */
+const RenameCtx = createContext<{ id: string | null; start: (id: string) => void; commit: (folder: CloudFolder, name: string | null) => void }>({
+  id: null, start: () => undefined, commit: () => undefined,
+});
+
+function TreeRename({ folder }: { folder: CloudFolder }) {
+  const { commit } = useContext(RenameCtx);
+  return (
+    <input
+      className="nftr-rename"
+      defaultValue={folder.name}
+      autoFocus
+      maxLength={200}
+      aria-label="Новое имя папки"
+      onFocus={(e) => e.currentTarget.select()}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'Escape') { e.currentTarget.value = folder.name; e.currentTarget.blur(); }
+      }}
+      onBlur={(e) => { const v = e.currentTarget.value.trim(); commit(folder, v && v !== folder.name ? v : null); }}
+    />
   );
 }
 
@@ -148,6 +189,8 @@ function Row({ folder, path, depth, isOpen, leaf, current, dropOn, onToggle, onO
 }) {
   const shared = [...new Set([...sharedPeople(folder), ...(folder.editAccess || []).map(String)])].filter((id) => !id.startsWith('dept:') && id !== String(folder.ownerId));
   const Icon = isOpen ? FolderOpen : Folder;
+  const rename = useContext(RenameCtx);
+  const renaming = rename.id === folder.id;
   return (
     <div
       className="nftr-row"
@@ -157,11 +200,13 @@ function Row({ folder, path, depth, isOpen, leaf, current, dropOn, onToggle, onO
       aria-expanded={leaf || !onToggle ? undefined : isOpen}
       data-drop={dropOn === `f:${folder.id}` ? 'true' : undefined}
       style={{ '--depth': depth, '--folder': folder.color || undefined } as React.CSSProperties}
-      onClick={() => onOpen(path)}
+      onClick={() => { if (!renaming) onOpen(path); }}
       onMouseEnter={() => prefetchFolder(folder.id)}
       onContextMenu={(e) => { if (!onMenu) return; e.preventDefault(); onMenu(folder, { x: e.clientX, y: e.clientY }, path); }}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') onOpen(path);
+        if (renaming) return;
+        if (e.key === 'F2') { e.preventDefault(); rename.start(folder.id); }
+        else if (e.key === 'Enter') onOpen(path);
         else if (e.key === 'ArrowRight' && !isOpen) onToggle?.(folder.id);
         else if (e.key === 'ArrowLeft' && isOpen) onToggle?.(folder.id);
       }}
@@ -174,7 +219,7 @@ function Row({ folder, path, depth, isOpen, leaf, current, dropOn, onToggle, onO
         </button>
       ) : <span className="nftr-twist" aria-hidden="true" />}
       <Icon size={16} aria-hidden="true" className="nftr-ico" />
-      <span className="nftr-label" title={folder.name}>{folder.name}</span>
+      {renaming ? <TreeRename folder={folder} /> : <span className="nftr-label" title={folder.name}>{folder.name}</span>}
       <Faces ids={shared} />
       {onMenu && (
         <button type="button" className="nftr-menu" aria-label={`Действия с папкой «${folder.name}»`} aria-haspopup="menu"
@@ -192,7 +237,8 @@ const Level = memo(function Level({ parent, path, depth, childrenOf, open, curre
   dropProps: (dest: CloudFolder | null, key: string) => Record<string, unknown>;
 }) {
   const list = childrenOf[parent];
-  if (!list) return parent ? <div className="nftr-loading" style={{ '--depth': depth } as React.CSSProperties}>…</div> : null;
+  // Пока подпапки грузятся — ничего: строка «…» под каждой раскрытой папкой дёргала дерево при каждой загрузке.
+  if (!list) return null;
   if (!list.length) return null;
   return (
     <>

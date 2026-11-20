@@ -384,6 +384,18 @@ ${url}` });
       const el = e.target as HTMLElement | null;
       if (el?.closest('input, textarea, select, [contenteditable="true"]')) return;
       if (e.key === 'Escape' && Object.keys(selectedRef.current).length) { setSelected({}); return; }
+      // F2 — переименовать: выбранный элемент (если он один) или тот, на котором фокус. Как в Проводнике.
+      if (e.key === 'F2' && !e.ctrlKey && !e.altKey && !live.current.busy) {
+        const picked = Object.keys(selectedRef.current);
+        const id = picked.length === 1 ? picked[0] : (document.activeElement as HTMLElement | null)?.closest<HTMLElement>('[data-nf-id]')?.dataset.nfId;
+        const item = id ? [...itemsRef.current.folders, ...itemsRef.current.files].find((x) => x.id === id) : undefined;
+        if (item) {
+          e.preventDefault();
+          if (canEdit(item)) setRenaming(item.id);
+          else showToast('Переименовать может владелец или тот, у кого есть право правки', 'info');
+        }
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.code === 'KeyA' && !live.current.busy) {
         e.preventDefault();
         setSelected(Object.fromEntries(orderedRef.current.map((x) => [x.id, x.kind])));
@@ -396,6 +408,8 @@ ${url}` });
   selectedRef.current = selected;
   const orderedRef = useRef(ordered);
   orderedRef.current = ordered;
+  const itemsRef = useRef({ folders, files });
+  itemsRef.current = { folders, files };
 
   // ── Буфер обмена ──────────────────────────────────────────────────────────
   // Копировать: файл уходит в системный буфер (в приложении — как файл) и запоминается в разделе. Вставить: Ctrl+V,
@@ -593,6 +607,7 @@ ${url}` });
   // Меню: ⋯, правый клик, долгое нажатие.
   const press = useRef({ timer: 0, fired: false, x: 0, y: 0 });
   const itemHandlers = (t: Target) => ({
+    'data-nf-id': t.item.id,
     onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); setMenu({ target: t, anchor: { x: e.clientX, y: e.clientY } }); },
     onTouchStart: (e: React.TouchEvent) => {
       const touch = e.touches[0];

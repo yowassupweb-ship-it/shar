@@ -581,3 +581,5 @@ button.nf-crumb[data-drop="true"] { background: color-mix(in srgb, var(--accent-
 .nftr-empty { margin: var(--space-2) var(--space-2); color: var(--text-muted); font-size: var(--text-sm); }
 
 .nf-side { overflow-x: hidden; }
+
+.nftr-rename { flex: 1; min-width: 0; height: 24px; padding: 0 6px; border: 1px solid var(--accent-color); border-radius: 6px; background: var(--element-bg, var(--bg-color)); color: var(--text-main); font: inherit; outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 22%, transparent); }
