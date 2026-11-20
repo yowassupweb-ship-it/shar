@@ -45,11 +45,16 @@ export function FolderTree({ trail, onOpen, onMoved, onMenu }: {
   const [query, setQuery] = useState('');
   const [renamingId, setRenamingId] = useState<string | null>(null);
 
+  const asked = useRef(new Set<string>());
+  const [retryTick, setRetryTick] = useState(0);
   const load = useCallback(async (id: string | null) => {
     try {
       const d = await loadFolder(id);
       setChildren((cur) => ({ ...cur, [id || '']: d.folders }));
-    } catch { /* нет связи — оставим, что было */ }
+    } catch {
+      // Нет связи — оставим, что было, и попробуем ещё раз через несколько секунд (а не по кругу без паузы).
+      window.setTimeout(() => { if (id) asked.current.delete(id); setRetryTick((n) => n + 1); }, 4000);
+    }
   }, []);
 
   useEffect(() => { void load(null); }, [load]);
@@ -59,11 +64,10 @@ export function FolderTree({ trail, onOpen, onMoved, onMenu }: {
     trail.slice(0, -1).forEach((f) => { if (!collapsed.has(f.id)) next.add(f.id); });
     return next;
   }, [userOpen, collapsed, trail]);
-  // Подпапки раскрытого — по одному разу: не загрузилось (нет связи) — не долбим сервер по кругу, ждём события или клика.
-  const asked = useRef(new Set<string>());
+  // Подпапки раскрытого — по одному запросу; не загрузилось — повтор через паузу (load), а не шквал запросов.
   useEffect(() => {
     open.forEach((id) => { if (!(id in children) && !asked.current.has(id)) { asked.current.add(id); void load(id); } });
-  }, [open, children, load]);
+  }, [open, children, load, retryTick]);
   useEffect(() => {
     try { localStorage.setItem(OPEN_KEY, JSON.stringify([...userOpen].slice(-200))); } catch { /* без памяти */ }
   }, [userOpen]);
