@@ -21,6 +21,7 @@ import {
   useChatStore, type Msg,
 } from './store';
 import TypingLine from './TypingLine';
+import { requestJump } from './jump';
 import VoiceRecorder from './VoiceRecorder';
 
 const MAX_FILES = 10;
@@ -247,10 +248,11 @@ ${d.text}` : d.text));
   ) : replyTo ? (
     <div className="cxc-bar" data-kind="reply">
       <span className="cxc-bar-icon"><CornerUpLeft size={14} aria-hidden="true" /></span>
-      <span className="cxc-bar-text">
+      {/* Нажатие на плашку — к самому сообщению в ленте (догружает историю и подсвечивает), как в Telegram. */}
+      <button type="button" className="cxc-bar-text cxc-bar-jump" onClick={() => requestJump(String(chatId), String(replyTo.id))} title="Показать сообщение">
         <b>{displayName(users[String(replyTo.authorId)]) || replyTo.authorName}: </b>
         {previewText(replyTo) || 'Сообщение'}
-      </span>
+      </button>
       <button type="button" className="nx-icon-btn" onClick={cancel} aria-label="Отменить ответ"><X size={14} /></button>
     </div>
   ) : null;

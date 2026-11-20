@@ -738,6 +738,10 @@ button.cxm-status { cursor: pointer; }
   color: var(--text-2);
 }
 .cxc-bar-text b { font-weight: var(--weight-semibold); color: var(--accent-color); }
+/* Плашка ответа — кнопка: ведёт к сообщению. */
+.cxc-bar-jump { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+@media (hover: hover) { .cxc-bar-jump:hover { color: var(--text-main, var(--text-color)); } }
+.cxc-bar-jump:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 2px; border-radius: 4px; }
 .cxc-bar .nx-icon-btn { width: 26px; height: 26px; }
 
 /* Пересылаемые сообщения — вложением над полем ввода. */
