@@ -19,6 +19,12 @@ import type { LiveChannel, LiveOp, Transform } from './channel';
  */
 
 export const PM_STEP = 'pm.step';
+/**
+ * Настройки страницы (поля, колонтитулы, размер): не шаг текста, а замена части documentStyle. С текстом не
+ * конфликтует — при переносе проходит как есть; одновременные правки одного поля — побеждает последняя по порядку.
+ */
+export const PM_PAGE = 'pm.page';
+const isPage = (op: LiveOp) => op.id === PM_PAGE;
 
 let schemaCache: ReturnType<typeof getSchema> | null = null;
 const schema = () => (schemaCache ??= getSchema(docExtensions()));
@@ -47,6 +53,11 @@ const stepJson = (op: LiveOp): Json[] => {
 };
 
 export const pmTransform: Transform = (local, remote) => {
+  // Настройки страницы с текстом не пересекаются: переносим только шаги, страницу — как есть.
+  if (local.some(isPage) || remote.some(isPage)) {
+    const [l, r] = pmTransform(local.filter((op) => !isPage(op)), remote.filter((op) => !isPage(op)));
+    return [[...l, ...local.filter(isPage)], [...r, ...remote.filter(isPage)]];
+  }
   if (!local.length || !remote.length) return [local, remote];
   // Чужой вид (Univer) — не сводим: apply бросит, и канал откроет документ заново.
   if (local.some((op) => op.id !== PM_STEP) || remote.some((op) => op.id !== PM_STEP)) return [local, remote];
@@ -100,8 +111,10 @@ export const pmTransform: Transform = (local, remote) => {
 const REMOTE = 'sharRemote';
 
 /** Применить в редакторе чужие правки (или перебазирование). Бросает, если правка не ложится — канал откроет заново. */
-export function applyRemote(editor: Editor, ops: LiveOp[]): void {
+export function applyRemote(editor: Editor, ops: LiveOp[], onPage?: (style: Record<string, unknown>) => void): void {
   if (editor.isDestroyed) return;
+  for (const op of ops) if (isPage(op)) onPage?.((op.params as { style?: Record<string, unknown> }).style || {});
+  ops = ops.filter((op) => !isPage(op));
   const tr = editor.state.tr;
   let rebased = 0;
   const mirrors: Array<[number, number]> = [];
@@ -147,12 +160,17 @@ export function localOps(transaction: { steps: Step[]; docs: Array<import('@tipt
 }
 
 /** Подключить редактор к каналу: свои шаги — в канал, чужие — на место. */
-export function bindPm(editor: Editor, channel: LiveChannel, serialize: () => Promise<string>): () => void {
+/** Своя правка настроек страницы — в канал (коллеги увидят новые поля сразу). */
+export function pageOp(style: Record<string, unknown>): LiveOp {
+  return { id: PM_PAGE, params: { style } };
+}
+
+export function bindPm(editor: Editor, channel: LiveChannel, serialize: () => Promise<string>, onPage?: (style: Record<string, unknown>) => void): () => void {
   const onTransaction = ({ transaction }: { transaction: { docChanged: boolean; steps: Step[]; docs: Array<import('@tiptap/pm/model').Node>; getMeta: (key: string) => unknown } }) => {
     if (!transaction.docChanged || transaction.getMeta(REMOTE)) return;
     channel.local(localOps(transaction));
   };
   editor.on('transaction', onTransaction as never);
-  const detach = channel.attach({ apply: (ops) => applyRemote(editor, ops), serialize });
+  const detach = channel.attach({ apply: (ops) => applyRemote(editor, ops, onPage), serialize });
   return () => { editor.off('transaction', onTransaction as never); detach(); };
 }

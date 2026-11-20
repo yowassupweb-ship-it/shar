@@ -513,8 +513,9 @@ ${absolute(links.office(item!.kind, item!.id))}` });
     menus.push({ id: 'help', label: 'Справка', items: [
       { label: 'Инструкция по Шару', onSelect: () => navigate(paths.guide), icon: <BookOpen size={15} /> },
     ] });
-    // Быстрый редактор документов: оформление — на его панели; команды Univer («Правка», «Формат»…) тут не работают.
-    if (isDoc && fastDocs) return menus.filter((m) => m.id === 'file' || m.id === 'help');
+    // Свой редактор документов понимает те же команды (FastDocEditor → commentsBridge), недоступное в нём — серое.
+    // «Инструменты» — функции Univer (поиск по функциям, панель клавиш): в своём редакторе их нет.
+    if (isDoc && fastDocs) return menus.filter((m) => m.id !== 'tools');
     return menus;
   };
 
