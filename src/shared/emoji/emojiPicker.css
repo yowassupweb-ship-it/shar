@@ -19,3 +19,6 @@
 
 /* Панель эмодзи внутри меню (реакция на сообщение): меню по умолчанию не шире 320 px и срезало её край. */
 .nx-menu:has(.nem) { max-width: calc(100vw - 2 * var(--space-4)); min-width: 0; }
+/* Рамка фокуса — у всей «пилюли» поиска, а не прямоугольником у поля внутри (его давало общее правило :focus-visible). */
+.nem-search input:focus, .nem-search input:focus-visible { outline: none !important; box-shadow: none !important; }
+.nem-search:focus-within { border-color: color-mix(in srgb, var(--accent-fill) 60%, var(--border-color)); }
