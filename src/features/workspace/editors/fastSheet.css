@@ -89,13 +89,21 @@ html[data-theme="graphite"] .fsh, html[data-theme="black"] .fsh { --sh-border-au
 /* Поле правки ячейки — поверх ячейки, растёт по тексту. Размер задаёт подложка (зеркало текста), поле — поверх неё.
    В формуле текст поля прозрачный, видна подложка с цветными ссылками; каретка и выделение — от поля. */
 .fsh-editbox {
-  position: absolute; z-index: 40; box-sizing: border-box; display: inline-block; max-width: 600px; border: 2px solid var(--sh-sel);
-  background: var(--sh-bg); color: var(--sh-text); font-family: Arial, sans-serif; font-size: 10pt; line-height: 1.25; box-shadow: 0 2px 8px rgba(0, 0, 0, .2);
+  position: absolute; z-index: 40; box-sizing: border-box; display: inline-block; width: max-content; border-radius: 1px;
+  background: var(--sh-bg); color: var(--sh-text); font-family: Arial, sans-serif; font-size: 10pt; line-height: var(--edit-line, 17px);
+  box-shadow: 0 0 0 2px var(--sh-sel), 0 2px 10px rgba(0, 0, 0, .25);
 }
-.fsh-editmirror { padding: 2px 4px; white-space: pre-wrap; overflow-wrap: anywhere; min-height: inherit; visibility: hidden; user-select: none; }
+.fsh-edit-ref {
+  position: absolute; left: -2px; bottom: calc(100% + 2px); padding: 1px 6px; border-radius: 3px 3px 0 0;
+  background: var(--sh-sel); color: #fff; font: 600 11px/16px Inter, Arial, sans-serif; white-space: nowrap; pointer-events: none;
+}
+.fsh-editmirror {
+  box-sizing: border-box; min-height: inherit; padding: var(--edit-pad-top, 2px) 4px 2px; white-space: pre-wrap; overflow-wrap: anywhere;
+  visibility: hidden; user-select: none;
+}
 .fsh-editbox[data-formula] .fsh-editmirror { visibility: visible; }
 .fsh-editor {
-  position: absolute; inset: 0; box-sizing: border-box; width: 100%; height: 100%; margin: 0; padding: 2px 4px; resize: none; overflow: hidden;
+  position: absolute; inset: 0; box-sizing: border-box; width: 100%; height: 100%; margin: 0; padding: var(--edit-pad-top, 2px) 4px 2px; resize: none; overflow: hidden;
   border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; line-height: inherit; text-align: inherit; outline: none; user-select: text;
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
@@ -134,8 +142,9 @@ html[data-theme="graphite"] .fsh, html[data-theme="black"] .fsh { --sh-border-au
 /* Холст (sheet/draw.ts): прилипает к краю области прокрутки, распорка под ним даёт полосы прокрутки нужной длины. */
 .fsh-gridwrap { position: relative; flex: 1; min-height: 0; display: flex; }
 .fsh-gridwrap > .fsh-grid { flex: 1; }
-.fsh-canvas { position: sticky; top: 0; left: 0; display: block; z-index: 1; pointer-events: none; }
+.fsh-canvas { position: absolute; top: 0; left: 0; display: block; z-index: 1; pointer-events: none; }
 .fsh-gridwrap .fsh-sizer { position: relative; z-index: 0; pointer-events: none; }
+.fsh-gridwrap > .fsh-grid { position: relative; }
 .fsh-guide { position: absolute; z-index: 35; pointer-events: none; background: var(--sh-sel); }
 .fsh-guide[data-axis="x"] { top: 0; bottom: 0; width: 2px; margin-left: -1px; }
 .fsh-guide[data-axis="y"] { left: 0; right: 0; height: 2px; margin-top: -1px; }
@@ -153,6 +162,9 @@ html[data-theme="graphite"] .fsh, html[data-theme="black"] .fsh { --sh-border-au
 .fsh-fmenu-link { padding: 0; border: 0; background: transparent; color: var(--accent-color); font: inherit; font-size: var(--text-xs); cursor: pointer; }
 .fsh-fmenu-search { display: flex; align-items: center; gap: 6px; margin: 4px; padding: 0 8px; height: 30px; border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-muted); }
 .fsh-fmenu-search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text-main); font: inherit; outline: none; }
+/* Рамка фокуса — у всего поля поиска, а не у самого input (общие стили фокуса давали вторую, квадратную). */
+.fsh-fmenu-search input:focus, .fsh-fmenu-search input:focus-visible { outline: none; border: 0; box-shadow: none; }
+.fsh-fmenu-search:focus-within { border-color: var(--sh-sel, var(--accent-color)); }
 .fsh-fmenu-list { flex: 1; min-height: 60px; overflow: auto; padding: 2px 4px; }
 .fsh-fmenu-check { display: flex; align-items: center; gap: 8px; padding: 4px; border-radius: 6px; cursor: pointer; }
 .fsh-fmenu-check:hover { background: var(--surface-hover); }

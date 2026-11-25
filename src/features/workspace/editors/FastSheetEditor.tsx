@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   AlignVerticalJustifyCenter, ArrowDownAZ, ArrowUpZA, ChartColumn, CopyPlus, Eye, EyeOff, Filter, ImagePlus, Link2, ListChecks, Lock, MoveDiagonal, NotebookPen, Paintbrush,
   SquareCheck, Ungroup, Group as GroupIcon, Palette as PaletteIcon, ChevronsDownUp, Rows3, Columns3, PanelTop, PanelBottom, PanelLeft, PanelRight, Plus as PlusIcon,
@@ -20,7 +20,7 @@ import {
   rangeA1, rowHeight, styleOf, Styles, usedBounds, type Book, type Cell, type Pos, type Range, type Sheet, type Style,
 } from '../sheet/model';
 import { applyOp, inverseOf, OP, wireCell } from '../sheet/ops';
-import { cellFont, drawSheet, readTheme, screenX, screenY } from '../sheet/draw';
+import { cellFont, drawSheet, FILTER_BTN, readTheme, screenX, screenX2, screenY, screenY2, type BaseLayer } from '../sheet/draw';
 import { canInsertRef, enclosingFunction, formulaRefs, refEndingAt, signatureOf, suggestFunctions, typingName } from '../sheet/formulaEdit';
 import { dataRegion, filteredRows, readFilters, type FilterColumn } from '../sheet/filter';
 import { FONTS, Palette, Pop } from './FastDocToolbar';
@@ -135,6 +135,16 @@ function parseTsv(text: string): string[][] {
 const tsvCell = (s: string) => (/[\t\n"]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+/** Номер объекта по его тождеству — для ключа кэша холста. */
+const objIds = new WeakMap<object, number>();
+let objSeq = 0;
+function objId(o: object | null | undefined): number {
+  if (!o) return 0;
+  let n = objIds.get(o);
+  if (!n) { objSeq += 1; n = objSeq; objIds.set(o, n); }
+  return n;
+}
+
 export default function FastSheetEditor({ content, onContent, readOnly, loadKey, cursors = [], onCursor, live, commentsBridge, commentCells = NO_CELLS, onAddComment, onCommentCell }: EditorProps) {
   const [version, bump] = useReducer((n: number) => n + 1, 0);
   const book = useRef<Book | null>(null);
@@ -144,7 +154,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   const [sheetId, setSheetId] = useState('');
   const [sel, setSel] = useState<Sel>({ anchor: { row: 0, col: 0 }, focus: { row: 0, col: 0 } });
   const [edit, setEdit] = useState<Edit | null>(null);
-  const [scroll, setScroll] = useState({ x: 0, y: 0 });
+  const [, setScroll] = useState({ x: 0, y: 0 });
   const [view, setView] = useState({ w: 800, h: 600 });
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [pop, setPop] = useState<{ kind: string; at: DOMRect; trigger: HTMLElement } | null>(null);
@@ -530,6 +540,25 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     setSel({ anchor: { row: at.startRow, col: at.startColumn }, focus: { row: at.startRow + rows.length - 1, col: at.startColumn + Math.max(...rows.map((r) => r.length)) - 1 } });
   }, [b, sheet, selRange, sheetId, commit, setCells]);
 
+  /**
+   * Перенести ячейки (перетаскиванием рамки): значения, формулы и оформление уезжают на новое место, старое
+   * очищается. Формулы внутри не сдвигаются — как в Google при переносе. Одна правка — один шаг отмены.
+   */
+  const moveCells = useCallback((from: Range, to: Range) => {
+    if (!b || !sheet) return;
+    const cells: Record<number, Record<number, Cell | null>> = {};
+    for (let r = from.startRow; r <= from.endRow; r += 1) for (let c = from.startColumn; c <= from.endColumn; c += 1) {
+      const cell = cellAt(sheet, r, c);
+      (cells[to.startRow + r - from.startRow] ||= {})[to.startColumn + c - from.startColumn] = cell ? wireCell(b, cell) : null;
+    }
+    for (let r = from.startRow; r <= from.endRow; r += 1) for (let c = from.startColumn; c <= from.endColumn; c += 1) {
+      if (cells[r]?.[c] === undefined) (cells[r] ||= {})[c] = null;
+    }
+    commit([{ id: OP.VALUES, params: { subUnitId: sheetId, cellValue: cells } }]);
+    const dr = to.startRow - from.startRow; const dc = to.startColumn - from.startColumn;
+    setSel((x) => ({ anchor: { row: x.anchor.row + dr, col: x.anchor.col + dc }, focus: { row: x.focus.row + dr, col: x.focus.col + dc } }));
+  }, [b, sheet, sheetId, commit]);
+
   useEffect(() => {
     const focused = () => document.activeElement === grid.current;
     const onCopy = (e: ClipboardEvent) => { if (!focused()) return; e.preventDefault(); copy(false, e.clipboardData); };
@@ -689,15 +718,44 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   insertRefNow.current = insertRef;
 
   // ── Мышь: всё по координатам холста — ручки размера на границах заголовков, квадратик автозаполнения, стрелки фильтра ──
-  type Drag = { kind: 'cells' | 'rows' | 'cols' | 'resize-col' | 'resize-row' | 'fill' | 'ref' | 'object'; index?: number; start?: number; size?: number; from?: Pos;
+  type Drag = { kind: 'cells' | 'rows' | 'cols' | 'resize-col' | 'resize-row' | 'fill' | 'ref' | 'object' | 'move'; index?: number; start?: number; size?: number; from?: Pos;
     obj?: SheetObject; part?: 'move' | 'nw' | 'ne' | 'sw' | 'se'; cx?: number; cy?: number };
   const drag = useRef<Drag | null>(null);
+  /**
+   * Автопрокрутка при протягивании, как в Google: пока кнопка зажата за краем сетки, лист едет каждый кадр, даже
+   * если мышь стоит; скорость растёт с расстоянием за край и со временем удержания. move — свежий обработчик
+   * движения (эффект с ним пересоздаётся при каждом шаге выделения), им выделение догоняет прокрутку.
+   */
+  const auto = useRef<{ ptr: { x: number; y: number; shift: boolean } | null; raf: number; since: number; synthetic: boolean; move: ((e: MouseEvent) => void) | null }>({ ptr: null, raf: 0, since: 0, synthetic: false, move: null });
+  const autoStep = useCallback((t: number) => {
+    const a = auto.current; const el = grid.current; const d = drag.current; const p = a.ptr;
+    const stop = () => { a.raf = 0; a.since = 0; };
+    if (!el || !d || !p || d.kind === 'resize-col' || d.kind === 'resize-row' || d.kind === 'object') { stop(); return; }
+    const z = zoomRef.current;
+    const box = el.getBoundingClientRect();
+    const top = box.top + HEAD_H * z + 2; const left = box.left + HEAD_W * z + 2; const bottom = box.bottom - 6; const right = box.right - 6;
+    const oy = p.y > bottom ? p.y - bottom : p.y < top ? p.y - top : 0;
+    const ox = p.x > right ? p.x - right : p.x < left ? p.x - left : 0;
+    if (!ox && !oy) { stop(); return; }
+    if (!a.since) a.since = t;
+    const held = Math.min(3, (t - a.since) / 1000);
+    const speed = (o: number) => Math.sign(o) * Math.min(300, (1 + Math.abs(o) * 0.15) * (1 + held * 2));
+    if (oy) el.scrollTop += speed(oy);
+    if (ox) el.scrollLeft += speed(ox);
+    a.synthetic = true;
+    try { a.move?.({ clientX: Math.min(Math.max(p.x, left), right), clientY: Math.min(Math.max(p.y, top), bottom), shiftKey: p.shift } as MouseEvent); } finally { a.synthetic = false; }
+    a.raf = window.requestAnimationFrame(autoStep);
+  }, []);
+  const startAuto = useCallback(() => { if (!auto.current.raf) auto.current.raf = window.requestAnimationFrame(autoStep); }, [autoStep]);
+  useEffect(() => () => { if (auto.current.raf) window.cancelAnimationFrame(auto.current.raf); }, []);
   const [guide, setGuide] = useState<{ axis: 'x' | 'y'; at: number } | null>(null);
   const [fillTo, setFillTo] = useState<Range | null>(null);
+  // Куда переносим выделение, пока тянем его за рамку.
+  const [moveTo, setMoveTo] = useState<Range | null>(null);
   const [filterMenu, setFilterMenu] = useState<{ col: number; x: number; y: number } | null>(null);
 
   /** Что под курсором: граница столбца/строки в заголовке (для изменения размера), квадратик заполнения, стрелка фильтра. */
-  const handleAt = useCallback((clientX: number, clientY: number): { kind: 'resize-col' | 'resize-row' | 'fill' | 'filter' | 'unhide-col' | 'unhide-row' | 'group-row' | 'group-col'; index: number; end?: number } | null => {
+  const handleAt = useCallback((clientX: number, clientY: number): { kind: 'resize-col' | 'resize-row' | 'fill' | 'filter' | 'unhide-col' | 'unhide-row' | 'group-row' | 'group-col' | 'move'; index: number; end?: number } | null => {
     const el = grid.current;
     if (!el || !geo) return null;
     const box = el.getBoundingClientRect();
@@ -706,11 +764,11 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     const sx = el.scrollLeft / z; const sy = el.scrollTop / z;
     // Кнопки групп («−»/«+») — за концом группы в заголовке.
     if (lx >= 0 && lx < 14 && ly > HEAD_H) {
-      const i = (xs.groups?.rows || []).findIndex((g0) => { const y2 = screenY(geo, Math.min(g0.end + 1, geo.rows), sy); return ly >= y2 && ly <= y2 + 13; });
+      const i = (xs.groups?.rows || []).findIndex((g0) => { const y2 = screenY2(geo, Math.min(g0.end, geo.rows - 1), sy); return ly >= y2 && ly <= y2 + 13; });
       if (i >= 0) return { kind: 'group-row', index: i };
     }
     if (ly >= 0 && ly < 14 && lx > HEAD_W) {
-      const i = (xs.groups?.cols || []).findIndex((g0) => { const x2 = screenX(geo, Math.min(g0.end + 1, geo.cols), sx); return lx >= x2 && lx <= x2 + 13; });
+      const i = (xs.groups?.cols || []).findIndex((g0) => { const x2 = screenX2(geo, Math.min(g0.end, geo.cols - 1), sx); return lx >= x2 && lx <= x2 + 13; });
       if (i >= 0) return { kind: 'group-col', index: i };
     }
     const hiddenCol = (c: number) => c >= 0 && c < geo.cols && Boolean(sheet?.columnData?.[c]?.hd);
@@ -719,36 +777,50 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       const h0 = hit(clientX, clientY);
       if (h0 && h0.col >= 0) {
         // Граница со скрытыми столбцами: справа от этого или слева (скрытые — подряд).
-        for (const [edge, first] of [[screenX(geo, h0.col + 1, sx), h0.col + 1], [screenX(geo, h0.col, sx), -1]] as Array<[number, number]>) {
+        for (const [edge, first] of [[screenX2(geo, h0.col, sx), h0.col + 1], [screenX(geo, h0.col, sx), -1]] as Array<[number, number]>) {
           if (Math.abs(lx - edge) > 6) continue;
           if (first >= 0 && hiddenCol(first)) { let end = first; while (hiddenCol(end + 1)) end += 1; return { kind: 'unhide-col', index: first, end }; }
           if (first < 0 && hiddenCol(h0.col - 1)) { let start = h0.col - 1; while (hiddenCol(start - 1)) start -= 1; return { kind: 'unhide-col', index: start, end: h0.col - 1 }; }
         }
-        const right = screenX(geo, h0.col + 1, sx); const left = screenX(geo, h0.col, sx);
+        const right = screenX2(geo, h0.col, sx); const left = screenX(geo, h0.col, sx);
         if (Math.abs(lx - right) <= 4) return { kind: 'resize-col', index: h0.col };
         if (Math.abs(lx - left) <= 4 && h0.col > 0) return { kind: 'resize-col', index: h0.col - 1 };
-        const f = b ? readFilters(b)[sheetId] : undefined;
-        if (f && h0.col >= f.ref.startColumn && h0.col <= f.ref.endColumn && lx > right - 24) return { kind: 'filter', index: h0.col };
       }
       return null;
     }
     if (lx >= 0 && lx < HEAD_W && ly > HEAD_H) {
       const h0 = hit(clientX, clientY);
       if (h0 && h0.row >= 0) {
-        for (const [edge, first] of [[screenY(geo, h0.row + 1, sy), h0.row + 1], [screenY(geo, h0.row, sy), -1]] as Array<[number, number]>) {
+        for (const [edge, first] of [[screenY2(geo, h0.row, sy), h0.row + 1], [screenY(geo, h0.row, sy), -1]] as Array<[number, number]>) {
           if (Math.abs(ly - edge) > 5) continue;
           if (first >= 0 && hiddenRow(first)) { let end = first; while (hiddenRow(end + 1)) end += 1; return { kind: 'unhide-row', index: first, end }; }
           if (first < 0 && hiddenRow(h0.row - 1)) { let start = h0.row - 1; while (hiddenRow(start - 1)) start -= 1; return { kind: 'unhide-row', index: start, end: h0.row - 1 }; }
         }
-        const bottom = screenY(geo, h0.row + 1, sy); const top = screenY(geo, h0.row, sy);
+        const bottom = screenY2(geo, h0.row, sy); const top = screenY(geo, h0.row, sy);
         if (Math.abs(ly - bottom) <= 3) return { kind: 'resize-row', index: h0.row };
         if (Math.abs(ly - top) <= 3 && h0.row > 0) return { kind: 'resize-row', index: h0.row - 1 };
       }
       return null;
     }
+    // Кнопка фильтра — в ячейке первой строки диапазона фильтра, у правого края (её рисует draw.ts).
+    const f = b ? readFilters(b)[sheetId] : undefined;
+    if (f) {
+      const h0 = hit(clientX, clientY);
+      if (h0 && h0.row === f.ref.startRow && h0.col >= f.ref.startColumn && h0.col <= f.ref.endColumn) {
+        const right = screenX2(geo, h0.col, sx); const top = screenY(geo, h0.row, sy); const bottom = screenY2(geo, h0.row, sy);
+        const by = top + Math.round((bottom - top - FILTER_BTN) / 2);
+        if (lx >= right - FILTER_BTN - 4 && lx <= right - 2 && ly >= by - 1 && ly <= by + FILTER_BTN + 1) return { kind: 'filter', index: h0.col };
+      }
+    }
     if (!readOnly && !edit) {
-      const fx = screenX(geo, selRange.endColumn + 1, sx); const fy = screenY(geo, selRange.endRow + 1, sy);
+      const fx = screenX2(geo, selRange.endColumn, sx); const fy = screenY2(geo, selRange.endRow, sy);
       if (Math.abs(lx - fx) <= 5 && Math.abs(ly - fy) <= 5) return { kind: 'fill', index: 0 };
+      // Рамка выделения — за неё выделение можно перетащить (как в Google).
+      const x1 = screenX(geo, selRange.startColumn, sx); const x2 = screenX2(geo, selRange.endColumn, sx);
+      const y1 = screenY(geo, selRange.startRow, sy); const y2 = screenY2(geo, selRange.endRow, sy);
+      const nearX = Math.abs(lx - x1) <= 3 || Math.abs(lx - x2) <= 3; const nearY = Math.abs(ly - y1) <= 3 || Math.abs(ly - y2) <= 3;
+      const inX = lx >= x1 - 3 && lx <= x2 + 3; const inY = ly >= y1 - 3 && ly <= y2 + 3;
+      if ((nearX && inY) || (nearY && inX)) return { kind: 'move', index: 0 };
     }
     return null;
   }, [geo, hit, b, sheet, sheetId, readOnly, edit, selRange, xs]);
@@ -782,13 +854,13 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       if (key && xs.notes[key] && !noteEdit) {
         if (noteTip?.key !== key) {
           const box = grid.current!.getBoundingClientRect(); const z = zoomRef.current;
-          setNoteTip({ key, x: box.left + screenX(geo, h0!.col + 1, grid.current!.scrollLeft / z) * z + 4, y: box.top + screenY(geo, h0!.row, grid.current!.scrollTop / z) * z });
+          setNoteTip({ key, x: box.left + screenX2(geo, h0!.col, grid.current!.scrollLeft / z) * z + 4, y: box.top + screenY(geo, h0!.row, grid.current!.scrollTop / z) * z });
         }
       } else if (noteTip) setNoteTip(null);
     }
     if (drag.current) return;
     const h = handleAt(e.clientX, e.clientY);
-    const cursor = h?.kind === 'resize-col' ? 'col-resize' : h?.kind === 'resize-row' ? 'row-resize' : h?.kind === 'fill' ? 'crosshair'
+    const cursor = h?.kind === 'resize-col' ? 'col-resize' : h?.kind === 'resize-row' ? 'row-resize' : h?.kind === 'fill' ? 'crosshair' : h?.kind === 'move' ? 'grab'
       : h?.kind === 'filter' || h?.kind === 'unhide-col' || h?.kind === 'unhide-row' ? 'pointer' : painter ? 'copy' : '';
     if (grid.current && grid.current.style.cursor !== cursor) grid.current.style.cursor = cursor;
   };
@@ -828,6 +900,16 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       return;
     }
     if (handle?.kind === 'fill') { e.preventDefault(); drag.current = { kind: 'fill' }; return; }
+    if (handle?.kind === 'move') {
+      e.preventDefault();
+      const h0 = hit(e.clientX, e.clientY);
+      // Точка захвата — внутри выделения (у самой рамки щелчок может попасть в соседнюю ячейку).
+      const from = { row: Math.min(selRange.endRow, Math.max(selRange.startRow, h0?.row ?? selRange.startRow)), col: Math.min(selRange.endColumn, Math.max(selRange.startColumn, h0?.col ?? selRange.startColumn)) };
+      drag.current = { kind: 'move', from };
+      setMoveTo(selRange);
+      if (grid.current) grid.current.style.cursor = 'grabbing';
+      return;
+    }
     if (edit && h.row >= 0 && h.col >= 0 && canInsertRef(edit.text, caretNow())) {
       e.preventDefault();
       insertRef(a1(h.row, h.col));
@@ -857,7 +939,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     // Флажок — щелчок переключает; список — щелчок по стрелке открывает варианты (как в Google).
     const dvRule = (xs.dv || []).find((x) => x.ranges.some((g0) => h.row >= g0.startRow && h.row <= g0.endRow && h.col >= g0.startColumn && h.col <= g0.endColumn));
     if (dvRule && !readOnly && !e.shiftKey) {
-      const cellRight = screenX(geo, h.col + 1, grid.current!.scrollLeft / zoom);
+      const cellRight = screenX2(geo, h.col, grid.current!.scrollLeft / zoom);
       if (dvRule.kind === 'checkbox') {
         e.preventDefault();
         setSel({ anchor: { row: h.row, col: h.col }, focus: { row: h.row, col: h.col } });
@@ -961,7 +1043,12 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       }
       const h = hit(e.clientX, e.clientY);
       if (!h) return;
-      if (d.kind === 'fill') {
+      if (d.kind === 'move' && d.from) {
+        const h1 = selRange.endRow - selRange.startRow; const w1 = selRange.endColumn - selRange.startColumn;
+        const r = Math.max(0, Math.min(geo.rows - 1 - h1, selRange.startRow + Math.max(0, h.row) - d.from.row));
+        const c = Math.max(0, Math.min(geo.cols - 1 - w1, selRange.startColumn + Math.max(0, h.col) - d.from.col));
+        setMoveTo((m) => (m && m.startRow === r && m.startColumn === c ? m : { startRow: r, startColumn: c, endRow: r + h1, endColumn: c + w1 }));
+      } else if (d.kind === 'fill') {
         // Тянем вниз/вверх или вбок — по тому, куда курсор ушёл дальше от выделения.
         const r = Math.max(0, h.row); const c = Math.max(0, h.col);
         const dr = r > selRange.endRow ? r - selRange.endRow : r < selRange.startRow ? r - selRange.startRow : 0;
@@ -973,17 +1060,15 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
         const r = Math.max(0, h.row); const c = Math.max(0, h.col);
         const ref = r === d.from.row && c === d.from.col ? a1(r, c) : rangeA1(norm({ startRow: d.from.row, startColumn: d.from.col, endRow: r, endColumn: c }));
         insertRefNow.current(ref);
-      } else if (d.kind === 'cols') setSel((s) => ({ anchor: s.anchor, focus: { row: geo.rows - 1, col: Math.max(0, h.col) } }));
-      else if (d.kind === 'rows') setSel((s) => ({ anchor: s.anchor, focus: { row: Math.max(0, h.row), col: geo.cols - 1 } }));
-      else setSel((s) => ({ anchor: s.anchor, focus: { row: Math.max(0, h.row), col: Math.max(0, h.col) } }));
-      // Автопрокрутка у края.
-      const el = grid.current;
-      if (el) {
-        const box = el.getBoundingClientRect();
-        if (e.clientY > box.bottom - 20) el.scrollTop += 20; else if (e.clientY < box.top + HEAD_H + 10 && el.scrollTop > 0) el.scrollTop -= 20;
-        if (e.clientX > box.right - 20) el.scrollLeft += 20; else if (e.clientX < box.left + HEAD_W + 10 && el.scrollLeft > 0) el.scrollLeft -= 20;
+      } else {
+        // Тот же угол — тот же объект: иначе весь редактор перерисовывался на каждый пиксель движения мыши.
+        const focus = d.kind === 'cols' ? { row: geo.rows - 1, col: Math.max(0, h.col) } : d.kind === 'rows' ? { row: Math.max(0, h.row), col: geo.cols - 1 } : { row: Math.max(0, h.row), col: Math.max(0, h.col) };
+        setSel((s) => (s.focus.row === focus.row && s.focus.col === focus.col ? s : { anchor: s.anchor, focus }));
       }
+      // Автопрокрутка у края — своим циклом по кадрам (см. autoStep), а не только на движение мыши.
+      if (!auto.current.synthetic) { auto.current.ptr = { x: e.clientX, y: e.clientY, shift: e.shiftKey }; startAuto(); }
     };
+    auto.current.move = onMove;
     const onUp = (e: MouseEvent) => {
       const d = drag.current;
       drag.current = null;
@@ -995,6 +1080,12 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
         return;
       }
       if (d.kind === 'fill') { const to = fillTo; setFillTo(null); if (to) fill(selRange, to); return; }
+      if (d.kind === 'move') {
+        const to = moveTo; setMoveTo(null);
+        if (grid.current) grid.current.style.cursor = '';
+        if (to && (to.startRow !== selRange.startRow || to.startColumn !== selRange.startColumn)) moveCells(selRange, to);
+        return;
+      }
       if (d.kind === 'cells' && painter) { const st = painter; setPainter(null); restyle(() => ({ ...st })); return; }
       if (!(d.kind === 'resize-col' || d.kind === 'resize-row')) return;
       setGuide(null);
@@ -1011,7 +1102,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
-  }, [geo, hit, commit, sheetId, selRange, fillTo, fill, painter, restyle, xs, setExtra]);
+  }, [geo, hit, commit, sheetId, selRange, fillTo, moveTo, moveCells, fill, painter, restyle, xs, setExtra, startAuto]);
 
   // ── Сортировка и фильтр ──
   /** Сортировать по столбцу активной ячейки: выделение (несколько строк) или блок данных вокруг; заголовок остаётся. */
@@ -1351,7 +1442,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     if (dvHere?.kind === 'list' && e.altKey && e.key === 'ArrowDown' && grid.current) {
       e.preventDefault();
       const box = grid.current.getBoundingClientRect();
-      setListMenu({ r: sel.anchor.row, c: sel.anchor.col, x: box.left + screenX(geo, sel.anchor.col, grid.current.scrollLeft / zoom) * zoom, y: box.top + screenY(geo, sel.anchor.row + 1, grid.current.scrollTop / zoom) * zoom, values: dvHere.values || [] });
+      setListMenu({ r: sel.anchor.row, c: sel.anchor.col, x: box.left + screenX(geo, sel.anchor.col, grid.current.scrollLeft / zoom) * zoom, y: box.top + screenY2(geo, sel.anchor.row, grid.current.scrollTop / zoom) * zoom, values: dvHere.values || [] });
       return;
     }
     if (e.key === 'F2' && e.shiftKey && !readOnly) { e.preventDefault(); setNoteEdit({ r: sel.anchor.row, c: sel.anchor.col, text: xs.notes?.[`${sel.anchor.row}:${sel.anchor.col}`] || '' }); return; }
@@ -1588,6 +1679,12 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   // ── Отрисовка на холсте (sheet/draw.ts): холст размером с окно прилипает к краю прокрутки, на каждый кадр
   // рисуются только видимые ячейки — без перестройки элементов страницы (DOM-сетка лагала на больших таблицах). ──
   const canvas = useRef<HTMLCanvasElement>(null);
+  const editBoxEl = useRef<HTMLDivElement>(null);
+  const editAt = useRef({ key: '', x: 0, y: 0 });
+  // Кэш слоя ячеек: пока меняется только выделение, текст и заливки не перерисовываются (см. drawSheet).
+  const baseLayer = useRef<BaseLayer | null>(null);
+  const baseKey = useRef('');
+  const assetTick = useRef(0);
   const root = useRef<HTMLDivElement>(null);
   const drawState = useRef<() => void>(() => undefined);
   drawState.current = () => {
@@ -1595,9 +1692,11 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     if (!el || !cv || !geo || !sheet || !b || !root.current) return;
     const dpr = window.devicePixelRatio || 1;
     const W = el.clientWidth; const H = el.clientHeight;
-    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
-      cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
-      cv.style.width = `${W}px`; cv.style.height = `${H}px`;
+    // Размер холста — целым числом пикселей экрана, а на странице — ровно столько же (W·dpr / dpr): без растягивания.
+    const bw = Math.round(W * dpr); const bh = Math.round(H * dpr);
+    if (cv.width !== bw || cv.height !== bh) {
+      cv.width = bw; cv.height = bh;
+      cv.style.width = `${bw / dpr}px`; cv.style.height = `${bh / dpr}px`;
     }
     const ctx = cv.getContext('2d');
     if (!ctx) return;
@@ -1606,19 +1705,28 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     const anchorM = geo.merges.get(`${sel.anchor.row}:${sel.anchor.col}`);
     const z = zoomRef.current;
     const objects = (xs.objects || []).map((o) => (objDraft && objDraft.id === o.id ? objDraft : o));
+    const theme = readTheme(root.current);
+    // Всё, от чего зависят ячейки на холсте. Выделение, коллеги и подсветка ссылок формулы сюда не входят.
+    const key = [objId(b), objId(sheet), objId(geo), objId(xs), objId(cfLookup), version, sheetId, el.scrollLeft, el.scrollTop, bw, bh, z, dpr,
+      JSON.stringify(theme), objDraft ? JSON.stringify(objDraft) : '', selectedObject ?? '', assetTick.current].join('|');
+    if (!baseLayer.current) baseLayer.current = { canvas: document.createElement('canvas'), fresh: false };
+    baseLayer.current.fresh = key === baseKey.current;
+    baseKey.current = key;
     drawSheet(ctx, {
-      book: b, sheet, geo, theme: readTheme(root.current), scrollX: el.scrollLeft / z, scrollY: el.scrollTop / z, width: W / z, height: H / z, dpr, zoom: z,
+      book: b, sheet, geo, theme, scrollX: el.scrollLeft / z, scrollY: el.scrollTop / z, width: W / z, height: H / z, dpr, zoom: z,
       cf: cfLookup, cfBlank: (xs.cf || []).filter((x) => x.kind === 'blank').flatMap((x) => x.ranges),
-      dv: xs.dv, notes: xs.notes, objects, selectedObject, groups: xs.groups, banding: xs.banding, onAsset: () => redraw(),
-      sel: fillTo ?? selRange, active: anchorM ?? { startRow: sel.anchor.row, endRow: sel.anchor.row, startColumn: sel.anchor.col, endColumn: sel.anchor.col },
+      dv: xs.dv, notes: xs.notes, objects, selectedObject, groups: xs.groups, banding: xs.banding, onAsset: () => { assetTick.current += 1; redraw(); },
+      sel: fillTo ?? selRange, ghost: moveTo, active: anchorM ?? { startRow: sel.anchor.row, endRow: sel.anchor.row, startColumn: sel.anchor.col, endColumn: sel.anchor.col },
       clip: clipMark, marks: new Set(commentCells.filter((m) => !m.sheet || m.sheet === sheet.name).map((m) => m.cell)),
       peers: cursors.flatMap((cur) => {
         const p = cur.pos as SheetCursor | null;
         return p && p.sh === sheetId ? [{ name: cur.name, color: cur.color, range: norm({ startRow: p.r1, startColumn: p.c1, endRow: p.r2, endColumn: p.c2 }) }] : [];
       }),
-      filter: f?.ref ?? null, filtered: new Set(f?.cachedFilteredOut || []),
+      filter: f?.ref ?? null, filtered: new Set(f?.cachedFilteredOut || []), filterOn: new Set((f?.filterColumns || []).map((x) => x.colId)),
+      // Во время правки рамку ячейки рисует само поле — двойная рамка давала торчащие уголки.
+      hideActive: Boolean(edit && !edit.bar),
       refs: editRefs.map((r) => ({ range: r.range!, color: r.color })),
-    });
+    }, baseLayer.current);
   };
   const frame = useRef(0);
   const redraw = useCallback(() => {
@@ -1646,14 +1754,29 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   }, [redraw]);
 
   // Сводка выделения (как в углу Google Таблиц): сумма, среднее, количество — только при смене выделения и правках.
+  // Сумма выделения считается с отставанием (useDeferredValue) и только по заполненным ячейкам: при протягивании
+  // по целым столбцам обход каждой ячейки на каждое движение мыши и давал лаг.
+  const sumKey = useDeferredValue(`${selRange.startRow}:${selRange.startColumn}:${selRange.endRow}:${selRange.endColumn}`);
   const summaryText = useMemo(() => {
-    if (!sheet || (selRange.startRow === selRange.endRow && selRange.startColumn === selRange.endColumn)) return null;
+    const [sr, sc, er, ec] = sumKey.split(':').map(Number);
+    if (!sheet || (sr === er && sc === ec)) return null;
     let sum = 0; let n = 0; let count = 0;
-    eachSelected((r, c) => { const v = cellAt(sheet, r, c)?.v; if (v !== null && v !== undefined && v !== '') count += 1; if (typeof v === 'number') { sum += v; n += 1; } });
+    const data = sheet.cellData || {};
+    for (const rk of Object.keys(data)) {
+      const r = Number(rk);
+      if (r < sr || r > er || !data[r]) continue;
+      for (const ck of Object.keys(data[r])) {
+        const c = Number(ck);
+        if (c < sc || c > ec) continue;
+        const v = data[r][c]?.v;
+        if (v !== null && v !== undefined && v !== '') count += 1;
+        if (typeof v === 'number') { sum += v; n += 1; }
+      }
+    }
     if (!count) return null;
     const f = (x: number) => String(Number(x.toPrecision(12))).replace('.', ',');
     return n ? `Сумма: ${f(sum)} · Среднее: ${f(sum / n)} · Количество: ${count}` : `Количество: ${count}`;
-  }, [sheet, version, selRange.startRow, selRange.endRow, selRange.startColumn, selRange.endColumn]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sheet, version, sumKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) return <div className="nws-missing" role="alert">{error}</div>;
   if (!b || !sheet || !geo) return <div className="fsh-loading" aria-busy="true">Открываю таблицу…</div>;
@@ -1664,12 +1787,42 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   const editCell = edit ? cellAt(sheet, edit.row, edit.col) : undefined;
   const editLook = edit ? cellCss(styleOf(b, editCell)) : null;
   // Поле правки — в экранных координатах поверх холста (с учётом прокрутки и закрепления).
-  const editBox = edit ? (() => {
+  // Поле правки стоит на месте экрана, где правку начали, — при прокрутке оно не едет с ячейками (как в Google);
+  // над ним тогда появляется адрес ячейки. Прокрутку запоминаем в момент открытия правки этой ячейки.
+  const editKey = edit ? `${sheetId}:${edit.row}:${edit.col}` : '';
+  if (editKey !== editAt.current.key) editAt.current = { key: editKey, x: grid.current?.scrollLeft ?? 0, y: grid.current?.scrollTop ?? 0 };
+  const editMoved = Boolean(edit) && (Math.abs((grid.current?.scrollLeft ?? 0) - editAt.current.x) > 1 || Math.abs((grid.current?.scrollTop ?? 0) - editAt.current.y) > 1);
+  const editBoxRaw = edit ? (() => {
     const m = geo.merges.get(`${edit.row}:${edit.col}`);
     const r0 = m?.startRow ?? edit.row; const c0 = m?.startColumn ?? edit.col; const r1 = m?.endRow ?? edit.row; const c1 = m?.endColumn ?? edit.col;
-    const x = screenX(geo, c0, scroll.x / zoom); const y = screenY(geo, r0, scroll.y / zoom);
-    return { x, y, w: screenX(geo, c1 + 1, scroll.x / zoom) - x, h: screenY(geo, r1 + 1, scroll.y / zoom) - y };
+    const sx0 = editAt.current.x / zoom; const sy0 = editAt.current.y / zoom;
+    const x = screenX(geo, c0, sx0); const y = screenY(geo, r0, sy0);
+    return { x, y, w: screenX2(geo, c1, sx0) - x, h: screenY2(geo, r1, sy0) - y };
   })() : null;
+  /**
+   * Поле правки как в Google: ровно поверх ячейки (рамка — тенью снаружи, размер не меняет), текст на том же месте,
+   * что и в ячейке (шрифт, кегль, отступы, вертикальное выравнивание); длинный текст растит поле вправо до края окна,
+   * дальше — переносом вниз.
+   */
+  const editBoxStyle: CSSProperties | undefined = (() => {
+    if (!edit) return undefined;
+    const st = styleOf(b, editCell);
+    const pt = typeof st?.fs === 'number' ? st.fs : 10;
+    const lineH = Math.round(pt * (96 / 72) * 1.25);
+    const vt = Number(st?.vt) || 3;
+    const h = Math.max(12, (editBoxRaw?.h ?? 24) - 1);
+    const padTop = vt === 1 ? 2 : vt === 2 ? Math.max(0, Math.floor((h - lineH) / 2)) : Math.max(0, h - lineH - 3);
+    const css = editLook?.css || {};
+    const viewW = (grid.current?.clientWidth ?? 800) / zoom;
+    return {
+      zoom, left: editBoxRaw?.x, top: editBoxRaw?.y,
+      minWidth: (editBoxRaw?.w ?? 88) - 1, minHeight: h,
+      maxWidth: Math.max((editBoxRaw?.w ?? 88) - 1, viewW - (editBoxRaw?.x ?? 0) - 4),
+      fontFamily: css.fontFamily, fontSize: css.fontSize, fontWeight: css.fontWeight, fontStyle: css.fontStyle, textDecoration: css.textDecoration, color: css.color,
+      background: css.background || undefined, textAlign: (editLook?.h as CSSProperties['textAlign']) || undefined,
+      '--edit-line': `${lineH}px`, '--edit-pad-top': `${padTop}px`,
+    } as CSSProperties;
+  })();
 
   const btn = (key: string, title: string, active: boolean, icon: ReactNode, action: (e: React.MouseEvent<HTMLButtonElement>) => void, disabled = false) => (
     <button key={key} type="button" className="fdoc-btn" title={title} aria-label={title} aria-pressed={active} disabled={disabled}
@@ -1803,13 +1956,15 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
           onScroll={(e) => { redraw(); if (edit) { const el = e.currentTarget; setScroll({ x: el.scrollLeft, y: el.scrollTop }); } }}
           onMouseDown={onMouseDown} onMouseMove={onHover} onDoubleClick={onDoubleClick} onKeyDown={onKeyDown}
           onContextMenu={(e) => { if (e.shiftKey) return; e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }); }}>
-          <canvas ref={canvas} className="fsh-canvas" aria-hidden="true" />
-          <div className="fsh-sizer" style={{ width: (HEAD_W + colOffs[cols]) * zoom, height: (HEAD_H + rowOffs[rows]) * zoom, marginTop: -view.h }} />
+          <div className="fsh-sizer" style={{ width: (HEAD_W + colOffs[cols]) * zoom, height: (HEAD_H + rowOffs[rows]) * zoom }} />
         </div>
+        {/* Холст — неподвижно поверх области прокрутки (не внутри неё): так он стоит ровно на пикселях экрана и не мылится. */}
+        <canvas ref={canvas} className="fsh-canvas" aria-hidden="true" />
         {guide && <div className="fsh-guide" data-axis={guide.axis} style={guide.axis === 'x' ? { left: guide.at } : { top: guide.at }} />}
-        {edit && !edit.bar && editBox && (
-          <div className="fsh-editbox" data-formula={edit.text.startsWith('=') || undefined}
-            style={{ zoom, left: editBox.x, top: editBox.y, minWidth: editBox.w, minHeight: editBox.h, ...editLook?.css, background: editLook?.css.background || undefined, textAlign: (editLook?.h as CSSProperties['textAlign']) || undefined }}>
+        {edit && !edit.bar && editBoxRaw && (
+          <div ref={editBoxEl} className="fsh-editbox" data-formula={edit.text.startsWith('=') || undefined}
+            style={editBoxStyle}>
+            {editMoved && <span className="fsh-edit-ref">{a1(edit.row, edit.col)}</span>}
             <div className="fsh-editmirror" aria-hidden="true">{renderColored(edit.text, editRefs)}{'\u200b'}</div>
             <textarea ref={editor} className="fsh-editor" value={edit.text} spellCheck={false}
               onChange={(e) => { setEdit((x) => (x ? { ...x, text: e.target.value } : x)); setCaret(e.target.selectionStart); setSuggestOff(false); setSuggestAt(0); }}
@@ -1838,7 +1993,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
         )}
         {noteEdit && geo && grid.current && (() => {
           const box = grid.current.getBoundingClientRect();
-          const x = box.left + screenX(geo, noteEdit.c + 1, grid.current.scrollLeft / zoom) * zoom + 4;
+          const x = box.left + screenX2(geo, noteEdit.c, grid.current.scrollLeft / zoom) * zoom + 4;
           const y = box.top + screenY(geo, noteEdit.r, grid.current.scrollTop / zoom) * zoom;
           return (
             <textarea className="fsh-note fsh-note-edit" style={{ position: 'fixed', left: x, top: y }} autoFocus value={noteEdit.text} placeholder="Заметка"

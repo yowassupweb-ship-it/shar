@@ -24,6 +24,10 @@ export interface DrawState {
   scrollX: number; scrollY: number; width: number; height: number; dpr: number;
   sel: Range; active: Range; clip: Range | null; peers: Peer[]; marks: Set<string>;
   filter: Range | null; filtered: Set<number>; hideActive?: boolean;
+  /** Куда переносится выделение при перетаскивании за рамку. */
+  ghost?: Range | null;
+  /** Столбцы фильтра с заданным условием — их кнопка залита. */
+  filterOn?: Set<number>;
   /** Ссылки правимой формулы — цветные рамки на листе (как в Google Таблицах). */
   refs?: Array<{ range: Range; color: string }>;
   /** Условное форматирование листа (sheet/cf.ts). */
@@ -65,6 +69,12 @@ export function readTheme(el: Element): Theme {
 /** Экранная x начала столбца c (и аналогично строки). */
 export const screenX = (g: Geo, c: number, scrollX: number) => HEAD_W + g.colOffs[c] - (c >= g.fc ? scrollX : 0);
 export const screenY = (g: Geo, r: number, scrollY: number) => HEAD_H + g.rowOffs[r] - (r >= g.fr ? scrollY : 0);
+/**
+ * Правый край столбца и нижний край строки. Нельзя брать «левый край следующего»: у последней закреплённой строки
+ * следующая уже прокручивается, и высота ячейки уходит в минус — закреплённая строка пропадала при прокрутке.
+ */
+export const screenX2 = (g: Geo, c: number, scrollX: number) => HEAD_W + g.colOffs[c + 1] - (c >= g.fc ? scrollX : 0);
+export const screenY2 = (g: Geo, r: number, scrollY: number) => HEAD_H + g.rowOffs[r + 1] - (r >= g.fr ? scrollY : 0);
 
 export function cellFont(style: Style | null): string {
   const size = typeof style?.fs === 'number' ? style.fs : 10;
@@ -117,6 +127,19 @@ function imageOf(src: string, onLoad?: () => void): HTMLImageElement | null {
   return img.complete && img.naturalWidth ? img : null;
 }
 
+/**
+ * Прямоугольник по пикселям экрана: при дробном масштабе (например, 125% Windows × масштаб окна) линии в 1 px и края
+ * заливок иначе ложатся между пикселями и мылятся. Сетка — ровно 1 пиксель экрана, как у Google Таблиц.
+ */
+function snapRect(ctx: CanvasRenderingContext2D, k: number, x: number, y: number, w: number, h: number) {
+  const x0 = Math.round(x * k); const y0 = Math.round(y * k);
+  const x1 = Math.round((x + w) * k); const y1 = Math.round((y + h) * k);
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillRect(x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0));
+  ctx.restore();
+}
+
 /** Перенос строк по словам под ширину. */
 function wrapLines(ctx: CanvasRenderingContext2D, text: string, width: number): string[] {
   const out: string[] = [];
@@ -134,15 +157,19 @@ function wrapLines(ctx: CanvasRenderingContext2D, text: string, width: number): 
 /** Нарисовать область листа: строки r0..r1, столбцы c0..c1, обрезанную прямоугольником clip. */
 function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1: number, c0: number, c1: number, clip: [number, number, number, number]) {
   const { geo: g, sheet, book, theme } = s;
+  const k = s.dpr * (s.zoom || 1);
+  const fr = (x: number, y: number, w: number, h: number) => snapRect(ctx, k, x, y, w, h);
   if (r1 < r0 || c1 < c0 || clip[2] <= 0 || clip[3] <= 0) return;
   ctx.save();
   ctx.beginPath();
   ctx.rect(clip[0], clip[1], clip[2], clip[3]);
   ctx.clip();
   ctx.fillStyle = theme.bg;
-  ctx.fillRect(clip[0], clip[1], clip[2], clip[3]);
+  fr(clip[0], clip[1], clip[2], clip[3]);
   const X = (c: number) => screenX(g, c, s.scrollX);
   const Y = (r: number) => screenY(g, r, s.scrollY);
+  const X2 = (c: number) => screenX2(g, c, s.scrollX);
+  const Y2 = (r: number) => screenY2(g, r, s.scrollY);
 
   // Заливки (под сеткой нет — сетку заливка закрывает, как в Excel).
   const drawn: Array<{ r: number; c: number; x: number; y: number; w: number; h: number; cell: NonNullable<Sheet['cellData'][number][number]>; style: Style | null }> = [];
@@ -157,7 +184,7 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
     const cell = sheet.cellData?.[rr]?.[cc] ?? (force ? {} : undefined);
     if (!cell) return;
     const x = X(cc); const y = Y(rr);
-    const w = X(c2 + 1) - x; const h = Y(r2 + 1) - y;
+    const w = X2(c2) - x; const h = Y2(r2) - y;
     if (w <= 0 || h <= 0) return;
     let style = styleOf(book, cell);
     // Условное форматирование — поверх своего оформления ячейки.
@@ -198,7 +225,7 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
   for (const m of seenMerge) {
     const x = X(m.startColumn); const y = Y(m.startRow);
     ctx.fillStyle = theme.bg;
-    ctx.fillRect(x, y, X(m.endColumn + 1) - x, Y(m.endRow + 1) - y);
+    fr(x, y, X2(m.endColumn) - x, Y2(m.endRow) - y);
   }
 
   // Чередование цветов — под сеткой и под своей заливкой ячеек.
@@ -206,30 +233,30 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
     const rr0 = Math.max(r0, bd.range.startRow); const rr1 = Math.min(r1, bd.range.endRow);
     const cc0 = Math.max(c0, bd.range.startColumn); const cc1 = Math.min(c1, bd.range.endColumn);
     if (rr1 < rr0 || cc1 < cc0) continue;
-    const x0 = X(cc0); const x1 = X(cc1 + 1);
+    const x0 = X(cc0); const x1 = X2(cc1);
     for (let r = rr0; r <= rr1; r += 1) {
       const rel = r - bd.range.startRow;
       const color = bd.header && rel === 0 ? bd.header : bd.footer && r === bd.range.endRow ? bd.footer : (rel - (bd.header ? 1 : 0)) % 2 === 0 ? bd.odd : bd.even;
       ctx.fillStyle = color;
-      ctx.fillRect(x0, Y(r), x1 - x0, Y(r + 1) - Y(r));
+      fr(x0, Y(r), x1 - x0, Y2(r) - Y(r));
     }
   }
 
   // Сетка (у листа её можно выключить — «Вид → Сетка», как в Google).
   if ((sheet as { showGridlines?: number }).showGridlines !== 0) {
     ctx.fillStyle = theme.grid;
-    const top = Y(r0); const bottom = Y(r1 + 1); const left = X(c0); const right = X(c1 + 1);
-    for (let r = r0; r <= r1 + 1; r += 1) { if (r <= r1 && g.rowOffs[r + 1] === g.rowOffs[r]) continue; ctx.fillRect(left, Y(r) - 1, right - left, 1); }
-    for (let c = c0; c <= c1 + 1; c += 1) { if (c <= c1 && g.colOffs[c + 1] === g.colOffs[c]) continue; ctx.fillRect(X(c) - 1, top, 1, bottom - top); }
+    const top = Y(r0); const bottom = Y2(r1); const left = X(c0); const right = X2(c1);
+    for (let r = r0; r <= r1 + 1; r += 1) { if (r <= r1 && g.rowOffs[r + 1] === g.rowOffs[r]) continue; fr(left, (r <= r1 ? Y(r) : bottom) - 1, right - left, 1); }
+    for (let c = c0; c <= c1 + 1; c += 1) { if (c <= c1 && g.colOffs[c + 1] === g.colOffs[c]) continue; fr((c <= c1 ? X(c) : right) - 1, top, 1, bottom - top); }
   }
   for (const m of seenMerge) {
     const x = X(m.startColumn); const y = Y(m.startRow);
     ctx.fillStyle = theme.bg;
-    ctx.fillRect(x, y, X(m.endColumn + 1) - x - 1, Y(m.endRow + 1) - y - 1);
+    fr(x, y, X2(m.endColumn) - x - 1, Y2(m.endRow) - y - 1);
   }
   for (const d of drawn) {
     const bg = (d.style?.bg as { rgb?: string } | undefined)?.rgb;
-    if (bg) { ctx.fillStyle = bg; ctx.fillRect(d.x - 1, d.y - 1, d.w + 1, d.h + 1); }
+    if (bg) { ctx.fillStyle = bg; fr(d.x - 1, d.y - 1, d.w + 1, d.h + 1); }
   }
 
   // Текст.
@@ -314,8 +341,8 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
     ctx.beginPath();
     ctx.rect(d.x, d.y, clipW, d.h);
     ctx.clip();
-    if (bg) { ctx.fillStyle = bg; ctx.fillRect(d.x, d.y, d.w, d.h); ctx.fillStyle = color; }
-    else if (clipW > d.w) { ctx.fillStyle = theme.bg; ctx.fillRect(d.x + d.w, d.y, clipW - d.w - 1, d.h - 1); ctx.fillStyle = color; }
+    if (bg) { ctx.fillStyle = bg; fr(d.x, d.y, d.w, d.h); ctx.fillStyle = color; }
+    else if (clipW > d.w) { ctx.fillStyle = theme.bg; fr(d.x + d.w, d.y, clipW - d.w - 1, d.h - 1); ctx.fillStyle = color; }
     ctx.textAlign = h;
     const x = h === 'left' ? d.x + pad : h === 'center' ? d.x + d.w / 2 : d.x + d.w - pad;
     const under = (st?.ul as { s?: number } | undefined)?.s || Boolean(link);
@@ -333,8 +360,8 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
         const pc = (part.ts.cl as { rgb?: string } | undefined)?.rgb;
         ctx.fillStyle = pc ? (theme.dark && !bg && (lightness(pc) ?? 1) < 0.35 ? theme.text : pc) : color;
         ctx.fillText(part.text, px, y);
-        if ((ts.ul as { s?: number } | undefined)?.s) ctx.fillRect(px, y + 2, widths[i], 1);
-        if ((ts.st as { s?: number } | undefined)?.s) ctx.fillRect(px, y - size * 0.32, widths[i], 1);
+        if ((ts.ul as { s?: number } | undefined)?.s) fr(px, y + 2, widths[i], 1);
+        if ((ts.st as { s?: number } | undefined)?.s) fr(px, y - size * 0.32, widths[i], 1);
         px += widths[i];
       });
       ctx.restore();
@@ -345,8 +372,8 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
       if (under || strike) {
         const wpx = ctx.measureText(line).width;
         const lx = h === 'left' ? x : h === 'center' ? x - wpx / 2 : x - wpx;
-        if (under) ctx.fillRect(lx, y + 2, wpx, 1);
-        if (strike) ctx.fillRect(lx, y - size * 0.32, wpx, 1);
+        if (under) fr(lx, y + 2, wpx, 1);
+        if (strike) fr(lx, y - size * 0.32, wpx, 1);
       }
       y += lineH;
     }
@@ -382,7 +409,7 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
     for (const key of Object.keys(s.notes)) {
       const [r, c] = key.split(':').map(Number);
       if (r < r0 || r > r1 || c < c0 || c > c1) continue;
-      const xr = X(c + 1) - 1; const y = Y(r);
+      const xr = X2(c) - 1; const y = Y(r);
       ctx.beginPath(); ctx.moveTo(xr - 6, y); ctx.lineTo(xr, y); ctx.lineTo(xr, y + 6); ctx.closePath(); ctx.fill();
     }
   }
@@ -391,30 +418,89 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
     ctx.fillStyle = '#ff9f0a';
     for (let r = r0; r <= r1; r += 1) for (let c = c0; c <= c1; c += 1) {
       if (!s.marks.has(a1(r, c))) continue;
-      const xr = X(c + 1) - 1; const y = Y(r);
+      const xr = X2(c) - 1; const y = Y(r);
       ctx.beginPath(); ctx.moveTo(xr - 8, y); ctx.lineTo(xr, y); ctx.lineTo(xr, y + 8); ctx.closePath(); ctx.fill();
     }
   }
   ctx.restore();
 }
 
-/** Прямоугольник диапазона на экране. */
-function rangeRect(s: DrawState, r: Range): [number, number, number, number] {
-  const x = screenX(s.geo, r.startColumn, s.scrollX); const y = screenY(s.geo, r.startRow, s.scrollY);
-  const x2 = screenX(s.geo, Math.min(r.endColumn + 1, s.geo.cols), s.scrollX); const y2 = screenY(s.geo, Math.min(r.endRow + 1, s.geo.rows), s.scrollY);
-  return [x, y, Math.max(0, x2 - x), Math.max(0, y2 - y)];
+type PanePart = { x: number; y: number; w: number; h: number; clip: [number, number, number, number]; first: boolean; last: boolean };
+
+/**
+ * Куски диапазона по областям закрепления (до 4), каждый — со своей областью обрезки. Край на разрезе уводится за
+ * область, чтобы рамки посередине выделения не было (как в Google).
+ */
+function paneParts(s: DrawState, r: Range): PanePart[] {
+  const g = s.geo;
+  const bodyX = HEAD_W + g.fw; const bodyY = HEAD_H + g.fh;
+  const rowPanes: Array<[number, number, number, number]> = [[0, g.fr - 1, HEAD_H, g.fh], [g.fr, g.rows - 1, bodyY, s.height - bodyY]];
+  const colPanes: Array<[number, number, number, number]> = [[0, g.fc - 1, HEAD_W, g.fw], [g.fc, g.cols - 1, bodyX, s.width - bodyX]];
+  const out: PanePart[] = [];
+  for (const [ra, rb, py, ph] of rowPanes) {
+    const r0 = Math.max(ra, r.startRow); const r1 = Math.min(rb, r.endRow);
+    if (r1 < r0 || ph <= 0) continue;
+    for (const [ca, cb, px, pw] of colPanes) {
+      const c0 = Math.max(ca, r.startColumn); const c1 = Math.min(cb, r.endColumn);
+      if (c1 < c0 || pw <= 0) continue;
+      let x = screenX(g, c0, s.scrollX); let y = screenY(g, r0, s.scrollY);
+      let x2 = screenX2(g, c1, s.scrollX); let y2 = screenY2(g, r1, s.scrollY);
+      if (r0 > r.startRow) y -= 4;
+      if (r1 < r.endRow) y2 += 4;
+      if (c0 > r.startColumn) x -= 4;
+      if (c1 < r.endColumn) x2 += 4;
+      if (x2 <= x || y2 <= y) continue;
+      out.push({ x, y, w: x2 - x, h: y2 - y, clip: [px, py, pw, ph], first: r0 === r.startRow && c0 === r.startColumn, last: r1 === r.endRow && c1 === r.endColumn });
+    }
+  }
+  return out;
 }
 
-export function drawSheet(ctx: CanvasRenderingContext2D, s: DrawState) {
-  const { geo: g, theme, width: W, height: H } = s;
+/** Размер кнопки фильтра в ячейке (по нему же щелчок в редакторе). */
+export const FILTER_BTN = 14;
+
+/** Слой ячеек, который можно не перерисовывать, пока меняется только выделение (см. drawSheet). */
+export type BaseLayer = { canvas: HTMLCanvasElement; fresh: boolean };
+
+/**
+ * Нарисовать лист. С base ячейки, картинки и черта закрепления рисуются в отдельный холст; если он ещё свеж
+ * (поменялось только выделение, коллеги или подсветка ссылок), он просто копируется — текст ячеек не перерисовывается.
+ * Это и убирает лаг при протягивании выделения по большой таблице.
+ */
+export function drawSheet(ctx: CanvasRenderingContext2D, s: DrawState, base?: BaseLayer) {
+  const { geo: g, width: W, height: H } = s;
   const z = s.zoom || 1;
-  ctx.setTransform(s.dpr * z, 0, 0, s.dpr * z, 0, 0);
-  ctx.clearRect(0, 0, W, H);
+  const k = s.dpr * z;
+  const fr = (x: number, y: number, w: number, h: number) => snapRect(ctx, k, x, y, w, h);
   // Видимые строки и столбцы тела.
   const r0 = Math.max(g.fr, indexAt(g.rowOffs, s.scrollY + g.fh));
   const r1 = Math.min(g.rows - 1, indexAt(g.rowOffs, s.scrollY + H - HEAD_H) + 1);
   const c0 = Math.max(g.fc, indexAt(g.colOffs, s.scrollX + g.fw));
   const c1 = Math.min(g.cols - 1, indexAt(g.colOffs, s.scrollX + W - HEAD_W) + 1);
+  if (base) {
+    const bctx = base.canvas.getContext('2d');
+    if (bctx && !base.fresh) {
+      if (base.canvas.width !== ctx.canvas.width || base.canvas.height !== ctx.canvas.height) { base.canvas.width = ctx.canvas.width; base.canvas.height = ctx.canvas.height; }
+      drawCells(bctx, s, r0, r1, c0, c1);
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    if (bctx) ctx.drawImage(base.canvas, 0, 0);
+    ctx.setTransform(s.dpr * z, 0, 0, s.dpr * z, 0, 0);
+  } else {
+    drawCells(ctx, s, r0, r1, c0, c1);
+  }
+  drawOverlay(ctx, s, r0, r1, c0, c1, fr);
+}
+
+/** Ячейки всех областей закрепления, черта закрепления, картинки и диаграммы. */
+function drawCells(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1: number, c0: number, c1: number) {
+  const { geo: g, theme, width: W, height: H } = s;
+  const z = s.zoom || 1;
+  const k = s.dpr * z;
+  const fr = (x: number, y: number, w: number, h: number) => snapRect(ctx, k, x, y, w, h);
+  ctx.setTransform(s.dpr * z, 0, 0, s.dpr * z, 0, 0);
+  ctx.clearRect(0, 0, W, H);
   const bodyX = HEAD_W + g.fw; const bodyY = HEAD_H + g.fh;
   drawRegion(ctx, s, r0, r1, c0, c1, [bodyX, bodyY, W - bodyX, H - bodyY]);
   if (g.fr) drawRegion(ctx, s, 0, g.fr - 1, c0, c1, [bodyX, HEAD_H, W - bodyX, g.fh]);
@@ -422,8 +508,8 @@ export function drawSheet(ctx: CanvasRenderingContext2D, s: DrawState) {
   if (g.fr && g.fc) drawRegion(ctx, s, 0, g.fr - 1, 0, g.fc - 1, [HEAD_W, HEAD_H, g.fw, g.fh]);
   // Черта закрепления.
   ctx.fillStyle = theme.frozenLine;
-  if (g.fr) ctx.fillRect(HEAD_W, bodyY - 1, W - HEAD_W, 2);
-  if (g.fc) ctx.fillRect(bodyX - 1, HEAD_H, 2, H - HEAD_H);
+  if (g.fr) fr(HEAD_W, bodyY - 1, W - HEAD_W, 2);
+  if (g.fc) fr(bodyX - 1, HEAD_H, 2, H - HEAD_H);
 
   // Картинки и диаграммы — поверх ячеек.
   if (s.objects?.length) {
@@ -435,54 +521,102 @@ export function drawSheet(ctx: CanvasRenderingContext2D, s: DrawState) {
       if (o.kind === 'image' && o.src) {
         const img = imageOf(o.src, s.onAsset);
         if (img) ctx.drawImage(img, ox, oy, o.w, o.h);
-        else { ctx.fillStyle = theme.grid; ctx.fillRect(ox, oy, o.w, o.h); }
+        else { ctx.fillStyle = theme.grid; fr(ox, oy, o.w, o.h); }
       } else if (o.kind === 'chart' && o.chart) {
         drawChart(ctx, ox, oy, o.w, o.h, o.chart, chartData(s.book, s.sheet, o.chart), theme);
       }
       if (s.selectedObject === o.id) {
         ctx.strokeStyle = theme.sel; ctx.lineWidth = 2; ctx.strokeRect(ox - 1, oy - 1, o.w + 2, o.h + 2);
         ctx.fillStyle = theme.bg;
-        for (const [hx, hy] of [[ox, oy], [ox + o.w, oy], [ox, oy + o.h], [ox + o.w, oy + o.h]]) { ctx.fillRect(hx - 4, hy - 4, 8, 8); ctx.strokeRect(hx - 4, hy - 4, 8, 8); }
+        for (const [hx, hy] of [[ox, oy], [ox + o.w, oy], [ox, oy + o.h], [ox + o.w, oy + o.h]]) { fr(hx - 4, hy - 4, 8, 8); ctx.strokeRect(hx - 4, hy - 4, 8, 8); }
       }
     }
     ctx.restore();
   }
+}
 
-  // Выделение, коллеги, буфер — поверх ячеек, под заголовками.
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(HEAD_W, HEAD_H, W - HEAD_W, H - HEAD_H);
-  ctx.clip();
-  for (const p of s.peers) {
-    const [x, y, w, h] = rangeRect(s, p.range);
-    ctx.strokeStyle = p.color; ctx.lineWidth = 2; ctx.strokeRect(x, y, w - 1, h - 1);
-    ctx.font = '600 10px Inter, Arial, sans-serif';
-    const tw = ctx.measureText(p.name).width + 10;
-    ctx.fillStyle = p.color; ctx.fillRect(x - 1, y - 15, tw, 14);
-    ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.fillText(p.name, x + 4, y - 4);
+/** Выделение, коллеги, значки фильтра и заголовки — дёшево, рисуется на каждый кадр. */
+function drawOverlay(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1: number, c0: number, c1: number, fr: (x: number, y: number, w: number, h: number) => void) {
+  const { geo: g, theme, width: W, height: H } = s;
+  const bodyX = HEAD_W + g.fw; const bodyY = HEAD_H + g.fh;
+  // Выделение, коллеги, буфер — поверх ячеек, под заголовками. Рисуются по областям закрепления: строка, уехавшая
+  // под закреплённую, не должна вылезать поверх неё.
+  const round = (rx: number, ry: number, rw: number, rh: number, r: number) => { ctx.beginPath(); ctx.roundRect(rx, ry, rw, rh, r); };
+  /**
+   * Рамка вокруг ячеек x..x+w: кольцо толщиной t снаружи ячейки, скруглён только внешний край. Внутренний край прямой
+   * и совпадает с ячейкой — иначе из-под скругления торчали квадратные углы ячейки и сетки.
+   */
+  const ring = (x: number, y: number, w: number, h: number, t: number, color: string) => {
+    ctx.beginPath();
+    ctx.roundRect(x - t, y - t, w + t * 2 - 1, h + t * 2 - 1, t + 1);
+    ctx.rect(x, y, w - 1, h - 1);
+    ctx.fillStyle = color; ctx.fill('evenodd');
+  };
+  const inPanes = (range: Range, fn: (p: PanePart) => void) => {
+    for (const p of paneParts(s, range)) { ctx.save(); ctx.beginPath(); ctx.rect(p.clip[0], p.clip[1], p.clip[2], p.clip[3]); ctx.clip(); fn(p); ctx.restore(); }
+  };
+  for (const peer of s.peers) {
+    inPanes(peer.range, ({ x, y, w, h, first }) => {
+      ctx.strokeStyle = peer.color; ctx.lineWidth = 2; ctx.strokeRect(x, y, w - 1, h - 1);
+      if (!first) return;
+      ctx.font = '600 10px Inter, Arial, sans-serif';
+      const tw = ctx.measureText(peer.name).width + 10;
+      ctx.fillStyle = peer.color; fr(x - 1, y - 15, tw, 14);
+      ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.fillText(peer.name, x + 4, y - 4);
+    });
   }
   if (s.clip) {
-    const [x, y, w, h] = rangeRect(s, s.clip);
-    ctx.strokeStyle = theme.sel; ctx.lineWidth = 2; ctx.setLineDash([5, 3]); ctx.strokeRect(x, y, w - 1, h - 1); ctx.setLineDash([]);
+    inPanes(s.clip, ({ x, y, w, h }) => { ctx.strokeStyle = theme.sel; ctx.lineWidth = 2; ctx.setLineDash([5, 3]); ctx.strokeRect(x, y, w - 1, h - 1); ctx.setLineDash([]); });
   }
-  {
-    const [x, y, w, h] = rangeRect(s, s.sel);
-    ctx.fillStyle = theme.selFill; ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = theme.sel; ctx.lineWidth = 1; ctx.strokeRect(x - 0.5, y - 0.5, w, h);
-    if (!s.hideActive) {
-      const [ax, ay, aw, ah] = rangeRect(s, s.active);
-      ctx.lineWidth = 2; ctx.strokeRect(ax - 1, ay - 1, aw + 1, ah + 1);
-      // Квадратик автозаполнения — в правом нижнем углу выделения.
-      ctx.fillStyle = theme.sel; ctx.fillRect(x + w - 4, y + h - 4, 7, 7);
-      ctx.fillStyle = theme.bg; ctx.fillRect(x + w - 4, y + h - 5, 7, 1); ctx.fillRect(x + w - 5, y + h - 4, 1, 7);
+  // Углы рамки чуть скруглены (2px): острые углы выглядят грубо.
+  const single = s.sel.startRow === s.sel.endRow && s.sel.startColumn === s.sel.endColumn;
+  inPanes(s.sel, ({ x, y, w, h }) => {
+    if (!single) {
+      // Активная ячейка внутри выделения не подкрашивается — как в Google.
+      const a = s.active;
+      const ax = screenX(g, a.startColumn, s.scrollX); const ay = screenY(g, a.startRow, s.scrollY);
+      ctx.beginPath(); ctx.rect(x, y, w - 1, h - 1);
+      if (!s.hideActive) ctx.rect(ax, ay, screenX2(g, a.endColumn, s.scrollX) - ax - 1, screenY2(g, a.endRow, s.scrollY) - ay - 1);
+      ctx.fillStyle = theme.selFill; ctx.fill('evenodd');
     }
+    ring(x, y, w, h, 1, theme.sel);
+  });
+  if (!s.hideActive) {
+    inPanes(s.active, ({ x, y, w, h }) => ring(x, y, w, h, 2, theme.sel));
+    // Квадратик автозаполнения — в правом нижнем углу выделения, поверх рамки активной ячейки.
+    inPanes(s.sel, ({ x, y, w, h, last }) => {
+      if (!last) return;
+      ctx.fillStyle = theme.sel; ctx.strokeStyle = theme.bg; ctx.lineWidth = 1;
+      round(x + w - 4.5, y + h - 4.5, 7, 7, 1.5); ctx.fill(); ctx.stroke();
+    });
+  }
+  if (s.ghost) {
+    // Место, куда встанут перетаскиваемые ячейки, — толстая полупрозрачная рамка.
+    inPanes(s.ghost, ({ x, y, w, h }) => { ctx.globalAlpha = 0.6; ring(x, y, w, h, 3, theme.sel); ctx.globalAlpha = 1; });
   }
   for (const ref of s.refs || []) {
-    const [x, y, w, h] = rangeRect(s, ref.range);
-    ctx.globalAlpha = 0.12; ctx.fillStyle = ref.color; ctx.fillRect(x, y, w, h); ctx.globalAlpha = 1;
-    ctx.strokeStyle = ref.color; ctx.lineWidth = 2; ctx.setLineDash([]); ctx.strokeRect(x - 1, y - 1, w + 1, h + 1);
+    inPanes(ref.range, ({ x, y, w, h }) => {
+      ctx.globalAlpha = 0.12; ctx.fillStyle = ref.color; fr(x, y, w, h); ctx.globalAlpha = 1;
+      ctx.strokeStyle = ref.color; ctx.lineWidth = 2; ctx.setLineDash([]); ctx.strokeRect(x - 1, y - 1, w + 1, h + 1);
+    });
   }
-  ctx.restore();
+
+  // Кнопки фильтра — в ячейках первой строки диапазона фильтра, у правого края (как в Google Таблицах).
+  if (s.filter) {
+    const row = s.filter.startRow;
+    for (let c = s.filter.startColumn; c <= s.filter.endColumn; c += 1) {
+      if (g.colOffs[c + 1] === g.colOffs[c]) continue;
+      const on = s.filterOn?.has(c);
+      inPanes({ startRow: row, endRow: row, startColumn: c, endColumn: c }, ({ x, y, w, h }) => {
+        const bx = x + w - FILTER_BTN - 4; const by = y + Math.round((h - FILTER_BTN) / 2);
+        // Без рамки, как в Google: серые полоски; если по столбцу задано условие — залитый кружок-подложка.
+        if (on) { ctx.fillStyle = theme.sel; round(bx, by, FILTER_BTN, FILTER_BTN, FILTER_BTN / 2); ctx.fill(); }
+        ctx.fillStyle = on ? '#fff' : theme.headText;
+        const cx = bx + FILTER_BTN / 2; const cy = by + FILTER_BTN / 2;
+        for (const [dy, len] of [[-3, 8], [0, 5], [3, 2]] as const) fr(cx - len / 2, cy + dy - 0.5, len, 1);
+      });
+    }
+  }
 
   // Заголовки столбцов.
   const full = { cols: s.sel.startRow === 0 && s.sel.endRow >= g.rows - 1, rows: s.sel.startColumn === 0 && s.sel.endColumn >= g.cols - 1 };
@@ -490,19 +624,14 @@ export function drawSheet(ctx: CanvasRenderingContext2D, s: DrawState) {
     const x = screenX(g, c, s.scrollX); const w = g.colOffs[c + 1] - g.colOffs[c];
     if (!w) return;
     const on = c >= s.sel.startColumn && c <= s.sel.endColumn;
-    ctx.fillStyle = on ? (full.cols ? theme.headFull : theme.headOn) : theme.head; ctx.fillRect(x, 0, w, HEAD_H);
-    ctx.fillStyle = theme.grid; ctx.fillRect(x + w - 1, 0, 1, HEAD_H);
+    ctx.fillStyle = on ? (full.cols ? theme.headFull : theme.headOn) : theme.head; fr(x, 0, w, HEAD_H);
+    ctx.fillStyle = theme.grid; fr(x + w - 1, 0, 1, HEAD_H);
     ctx.fillStyle = on && full.cols ? '#fff' : on ? theme.text : theme.headText;
     ctx.font = `${on ? '600 ' : ''}11px Inter, Arial, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(colName(c), x + w / 2, HEAD_H / 2 + 1);
-    if (s.filter && c >= s.filter.startColumn && c <= s.filter.endColumn) {
-      // Стрелка фильтра — в заголовке столбца (щелчок открывает список).
-      const fx = x + w - 14; const fy = HEAD_H / 2;
-      ctx.fillStyle = theme.sel; ctx.beginPath(); ctx.moveTo(fx - 4, fy - 2); ctx.lineTo(fx + 4, fy - 2); ctx.lineTo(fx, fy + 3); ctx.closePath(); ctx.fill();
-    }
   };
   ctx.save(); ctx.beginPath(); ctx.rect(bodyX, 0, W - bodyX, HEAD_H); ctx.clip();
-  ctx.fillStyle = theme.head; ctx.fillRect(bodyX, 0, W - bodyX, HEAD_H);
+  ctx.fillStyle = theme.head; fr(bodyX, 0, W - bodyX, HEAD_H);
   for (let c = c0; c <= c1; c += 1) colHead(c);
   ctx.restore();
   for (let c = 0; c < g.fc; c += 1) colHead(c);
@@ -511,14 +640,14 @@ export function drawSheet(ctx: CanvasRenderingContext2D, s: DrawState) {
     const y = screenY(g, r, s.scrollY); const h = g.rowOffs[r + 1] - g.rowOffs[r];
     if (!h) return;
     const on = r >= s.sel.startRow && r <= s.sel.endRow;
-    ctx.fillStyle = on ? (full.rows ? theme.headFull : theme.headOn) : theme.head; ctx.fillRect(0, y, HEAD_W, h);
-    ctx.fillStyle = theme.grid; ctx.fillRect(0, y + h - 1, HEAD_W, 1);
+    ctx.fillStyle = on ? (full.rows ? theme.headFull : theme.headOn) : theme.head; fr(0, y, HEAD_W, h);
+    ctx.fillStyle = theme.grid; fr(0, y + h - 1, HEAD_W, 1);
     ctx.fillStyle = on && full.rows ? '#fff' : on ? theme.text : s.filtered.size && s.filter && r > s.filter.startRow && r <= s.filter.endRow ? theme.sel : theme.headText;
     ctx.font = `${on ? '600 ' : ''}11px Inter, Arial, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(String(r + 1), HEAD_W / 2, y + h / 2 + 1);
   };
   ctx.save(); ctx.beginPath(); ctx.rect(0, bodyY, HEAD_W, H - bodyY); ctx.clip();
-  ctx.fillStyle = theme.head; ctx.fillRect(0, bodyY, HEAD_W, H - bodyY);
+  ctx.fillStyle = theme.head; fr(0, bodyY, HEAD_W, H - bodyY);
   for (let r = r0; r <= r1; r += 1) rowHead(r);
   ctx.restore();
   for (let r = 0; r < g.fr; r += 1) rowHead(r);
@@ -543,24 +672,24 @@ export function drawSheet(ctx: CanvasRenderingContext2D, s: DrawState) {
   // Группы строк/столбцов: скобка вдоль заголовка и кнопка «−»/«+» за концом группы (как в Google).
   ctx.strokeStyle = theme.headText; ctx.lineWidth = 1;
   const box = (bx: number, by: number, plus: boolean) => {
-    ctx.fillStyle = theme.head; ctx.fillRect(bx, by, 10, 10); ctx.strokeRect(bx + 0.5, by + 0.5, 9, 9);
+    ctx.fillStyle = theme.head; fr(bx, by, 10, 10); ctx.strokeRect(bx + 0.5, by + 0.5, 9, 9);
     ctx.beginPath(); ctx.moveTo(bx + 2.5, by + 5); ctx.lineTo(bx + 7.5, by + 5); if (plus) { ctx.moveTo(bx + 5, by + 2.5); ctx.lineTo(bx + 5, by + 7.5); } ctx.stroke();
   };
   for (const gr of s.groups?.rows || []) {
-    const y1 = screenY(g, gr.start, s.scrollY); const y2 = screenY(g, Math.min(gr.end + 1, g.rows), s.scrollY);
+    const y1 = screenY(g, gr.start, s.scrollY); const y2 = screenY2(g, Math.min(gr.end, g.rows - 1), s.scrollY);
     if (y2 < HEAD_H || y1 > H) continue;
     if (!gr.collapsed) { ctx.beginPath(); ctx.moveTo(3.5, Math.max(HEAD_H, y1 + 3)); ctx.lineTo(3.5, y2); ctx.lineTo(8, y2); ctx.stroke(); }
     if (y2 >= HEAD_H) box(1, y2 + 2, Boolean(gr.collapsed));
   }
   for (const gr of s.groups?.cols || []) {
-    const x1 = screenX(g, gr.start, s.scrollX); const x2 = screenX(g, Math.min(gr.end + 1, g.cols), s.scrollX);
+    const x1 = screenX(g, gr.start, s.scrollX); const x2 = screenX2(g, Math.min(gr.end, g.cols - 1), s.scrollX);
     if (x2 < HEAD_W || x1 > W) continue;
     if (!gr.collapsed) { ctx.beginPath(); ctx.moveTo(Math.max(HEAD_W, x1 + 3), 3.5); ctx.lineTo(x2, 3.5); ctx.lineTo(x2, 8); ctx.stroke(); }
     if (x2 >= HEAD_W) box(x2 + 2, 1, Boolean(gr.collapsed));
   }
   ctx.fillStyle = theme.grid;
-  ctx.fillRect(HEAD_W - 1, 0, 1, H);
-  ctx.fillRect(0, HEAD_H - 1, W, 1);
-  ctx.fillStyle = theme.head; ctx.fillRect(0, 0, HEAD_W - 1, HEAD_H - 1);
+  fr(HEAD_W - 1, 0, 1, H);
+  fr(0, HEAD_H - 1, W, 1);
+  ctx.fillStyle = theme.head; fr(0, 0, HEAD_W - 1, HEAD_H - 1);
   ctx.textBaseline = 'alphabetic';
 }

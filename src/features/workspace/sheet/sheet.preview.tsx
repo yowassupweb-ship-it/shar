@@ -96,3 +96,46 @@ export async function mountBig(rows = 3000, cols = 12): Promise<string> {
   root.render(<FastSheetEditor content={content} onContent={() => undefined} readOnly={false} loadKey={0} />);
   return 'ok';
 }
+
+/** Таблица «как у людей» для просмотра интерфейса: шапка, заливки, длинный текст, числа, даты, ссылки. */
+export async function mountDemo(): Promise<string> {
+  const book = await newBook();
+  const ws = book.worksheets[0];
+  ws.columns = [{ width: 6 }, { width: 38 }, { width: 14 }, { width: 12 }, { width: 14 }, { width: 30 }] as never;
+  const head = ['№', 'Тур', 'Цена', 'Дней', 'Старт', 'Ссылка'];
+  head.forEach((h, i) => { const c = ws.getCell(1, i + 1); c.value = h; c.font = { bold: true }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9EAD3' } }; });
+  const tours = ['Астрахань с отдыхом в заповеднике', 'Башкирия Уфа 3 дня', 'Карелия: Кижи и Валаам', 'Алтай. Телецкое озеро', 'Казань и Свияжск', 'Калининград и Куршская коса', 'Байкал зимой'];
+  for (let i = 0; i < 40; i += 1) {
+    const r = i + 2;
+    ws.getCell(r, 1).value = i + 1;
+    ws.getCell(r, 2).value = tours[i % tours.length];
+    ws.getCell(r, 3).value = 15000 + ((i * 3779) % 60000); ws.getCell(r, 3).numFmt = '#,##0 "₽"';
+    ws.getCell(r, 4).value = 2 + (i % 6);
+    ws.getCell(r, 5).value = new Date(Date.UTC(2026, 11, 1 + i)); ws.getCell(r, 5).numFmt = 'dd.mm.yyyy';
+    ws.getCell(r, 6).value = { text: `https://vs-travel.ru/tour?id=${1000 + i}`, hyperlink: `https://vs-travel.ru/tour?id=${1000 + i}` } as never;
+    if (i % 5 === 1) for (let c = 1; c <= 6; c += 1) ws.getCell(r, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } };
+  }
+  ws.views = [{ state: 'frozen', ySplit: 1, xSplit: 0 }];
+  const content = await bookToBase64(book);
+  document.querySelectorAll('#fsh-preview').forEach((el) => el.remove());
+  host = document.createElement('div');
+  host.id = 'fsh-preview';
+  host.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;';
+  host.className = 'nx';
+  document.body.appendChild(host);
+  root = createRoot(host);
+  root.render(<FastSheetEditor content={content} onContent={(next) => { (window as unknown as { __fshSaved?: string }).__fshSaved = next; }} readOnly={false} loadKey={0} />);
+  return 'ok';
+}
+
+/** Открыть готовое содержимое (base64 xlsx) — для замеров на настоящей таблице, без сохранения куда-либо. */
+export async function mountContent(content: string): Promise<string> {
+  unmount();
+  host = document.createElement('div');
+  host.id = 'fsh-preview';
+  host.style.cssText = 'position:fixed;inset:0;z-index:99999;background:var(--sh-bg,#fff);display:flex;flex-direction:column';
+  document.body.appendChild(host);
+  root = createRoot(host);
+  root.render(<FastSheetEditor content={content} onContent={(next) => { (window as unknown as { __fshSaved?: string }).__fshSaved = next; }} readOnly={false} loadKey={0} />);
+  return 'ok';
+}
