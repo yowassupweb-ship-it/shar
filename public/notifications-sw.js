@@ -336,6 +336,10 @@ self.addEventListener('push', (event) => {
   const body = payload.body || ' '; // FCM requires non-empty body to show notification
 
   const isAndroid = /android/i.test((self.navigator && self.navigator.userAgent) || '');
+  // Safari (iPhone, iPad, Mac): каждый пуш обязан показать уведомление. Пуш без него Safari считает «тихим» и после
+  // нескольких таких отзывает подписку — уведомления пропадают насовсем, пока человек не переподпишется.
+  const ua = (self.navigator && self.navigator.userAgent) || '';
+  const mustShow = /Safari/i.test(ua) && !/Chrome|CriOS|Chromium|Edg|Android|Firefox|FxiOS/i.test(ua);
 
   // Android (FCM): use minimal safe options — many advanced fields cause silent drops
   // iOS/Desktop: use richer notification with actions
@@ -410,13 +414,23 @@ self.addEventListener('push', (event) => {
       }
     }
 
+    // Уведомление не нужно (окно в фокусе, чат заглушён, уже прочитано). В Safari всё равно показываем и сразу
+    // убираем — иначе подписку отзовут (см. mustShow).
+    const skip = async () => {
+      if (!mustShow) return;
+      const tag = 'shar-silent';
+      await self.registration.showNotification(title, { body, tag, silent: true, data: { url: '/' } }).catch(() => undefined);
+      const shown = await self.registration.getNotifications({ tag }).catch(() => []);
+      shown.forEach((n) => n.close());
+    };
+
     // If the app is visible, skip OS notification — client-side polling handles it with full context
-    if (hasVisibleClient) return;
+    if (hasVisibleClient) return skip();
 
     // Skip if the user muted this chat — UNLESS the message is marked important with
     // a leading '!', which must reach everyone regardless of mute.
     const isImportant = String(payload.body || '').trimStart().startsWith('!');
-    if (chatId && !isImportant && isChatMutedForAnyUser(chatId)) return;
+    if (chatId && !isImportant && isChatMutedForAnyUser(chatId)) return skip();
 
     // Same 3s grace period as the bottom-nav badge's own "appearing" rule — if a
     // close-notifications message for this chat arrives before the wait is up (the
@@ -428,7 +442,7 @@ self.addEventListener('push', (event) => {
       await new Promise((resolve) => setTimeout(resolve, 3000));
       const cancelled = pendingPushCancel[chatId];
       delete pendingPushCancel[chatId];
-      if (cancelled) return;
+      if (cancelled) return skip();
     }
 
     await self.registration.showNotification(title, options).catch((err) => {
@@ -458,6 +472,12 @@ self.addEventListener('pushsubscriptionchange', (event) => {
       const newSubscription = await self.registration.pushManager.subscribe(
         changeEvent.oldSubscription?.options || { userVisibleOnly: true }
       );
+      // Новую подписку — сразу серверу (вход — по cookie): приложение может быть закрыто, а без этого сервер слал бы
+      // на старую, отозванную, и уведомления не приходили до следующего открытия Шара.
+      await fetch('/api/push/subscriptions', {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscription: newSubscription.toJSON(), userAgent: (self.navigator && self.navigator.userAgent) || '', platform: 'sw' }),
+      }).catch(() => undefined);
       // Notify the app client so it can re-register with the server
       const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       for (const client of clients) {

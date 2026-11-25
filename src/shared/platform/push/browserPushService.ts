@@ -831,8 +831,13 @@ export class BrowserPushService {
 
       let subscription = await registration.pushManager.getSubscription();
 
-      // Force re-subscribe if: no subscription, expired, or key mismatch
-      const needsRefresh = !subscription ||
+      // Переподписка: подписки нет, она истекла или сделана другим ключом сервера. Ключ раньше не сверялся — после
+      // смены VAPID-ключа телефоны держали старую подписку, push-сервис отвечал серверу 403, и уведомления молча
+      // не доходили, хотя в настройках всё «включено».
+      const serverKey = urlBase64ToUint8Array(publicKey);
+      const ownKey = subscription?.options?.applicationServerKey ? new Uint8Array(subscription.options.applicationServerKey) : null;
+      const keyMismatch = Boolean(subscription && (!ownKey || ownKey.length !== serverKey.length || ownKey.some((b, i) => b !== serverKey[i])));
+      const needsRefresh = !subscription || keyMismatch ||
         (subscription.expirationTime !== null && Date.now() > (subscription.expirationTime ?? Infinity));
 
       if (needsRefresh) {

@@ -57,7 +57,10 @@ def _send_one(item: Dict[str, Any], data: str, tag: str) -> bool | None:
     except WebPushException as exc:
         status = getattr(getattr(exc, "response", None), "status_code", 0) or 0
         body = str(getattr(getattr(exc, "response", None), "text", "") or "").lower()
-        expired = status in (404, 410, 401) or (status == 400 and any(w in body for w in ("invalid", "expired", "unregistered", "notregistered")))
+        # 403 — подписка сделана другим VAPID-ключом (после смены ключа): этому серверу она больше не годится, клиент
+        # при следующем открытии переподпишется сам (browserPushService сверяет ключ). Держать её — значит каждый раз
+        # слать в пустоту, а человек думает, что уведомления включены.
+        expired = status in (404, 410, 401, 403) or (status == 400 and any(w in body for w in ("invalid", "expired", "unregistered", "notregistered")))
         if expired:
             store.drop_endpoint(endpoint)
             return None
