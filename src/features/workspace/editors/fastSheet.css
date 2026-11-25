@@ -16,9 +16,10 @@ html[data-theme="black"] .fsh {
 }
 .fsh-loading { display: grid; place-items: center; height: 100%; color: var(--text-muted); font-size: var(--text-sm); }
 .fsh-bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
-.fsh-txt-btn { font-size: 12px; font-weight: 600; letter-spacing: -.02em; }
-.fsh-bar .fdoc-drop { display: inline-flex; align-items: center; gap: 2px; height: 30px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); font: inherit; font-size: 13px; cursor: pointer; }
-.fsh-bar .fdoc-drop:hover { background: var(--surface-hover); color: var(--text-main); }
+.fsh-txt-btn { font-size: 12px; font-weight: 600; letter-spacing: -.02em; white-space: nowrap; }
+.fsh-txt-btn sub { font-size: 9px; vertical-align: -1px; margin-left: 1px; }
+.fsh-size-btn { display: inline-grid; place-items: center; cursor: pointer; }
+.fdoc-pop-row { display: flex; gap: 2px; padding: 4px; }
 
 /* Строка формул: адрес · fx · содержимое. */
 .fsh-formula { display: flex; align-items: center; gap: 0; flex: none; height: 30px; border-top: 1px solid var(--sh-grid); border-bottom: 1px solid var(--sh-grid); background: var(--sh-bg); }

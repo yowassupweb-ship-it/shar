@@ -42,3 +42,23 @@ export const OSuperscript = make(`<g fill="none" stroke="currentColor" stroke-wi
 export const OTextColor = make(`<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5.9 15.7 5.55-12.5q.55-1.15 1.1 0l5.55 12.5M8 11.4h8" /><rect x="2.8" y="19.5" width="18.4" height="2.7" rx="1.15" fill="var(--swatch, currentColor)" class="swatch" stroke="none"/></g>`);
 export const OUnderline = make(`<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.4 3.8v6.7c0 3.54 2.21 5.77 5.6 5.77s5.6-2.23 5.6-5.77V3.8M4.35 20.15h15.3" /></g>`);
 export const OUndo = make(`<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.3 4.9 3.7 9.4l4.6 4.45M4.2 9.4h9.7c3.8 0 6.1 1.95 6.1 5.07s-2.28 5.08-5.85 5.08h-4.1" /></g>`);
+
+// ── Значки панели таблиц — в том же стиле (линия 1,8, сетка 24, скругления), порядок кнопок как у Google Таблиц. ──
+const g = (d: string, extra = '') => `<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${d}" />${extra}</g>`;
+export const OCurrency = make(g('M8.5 20V4.5h5.25a4.1 4.1 0 0 1 0 8.2H5.5M5.5 16.4h8.5'));
+export const OPercent = make(g('M18.6 5.4 5.4 18.6', '<circle cx="7.3" cy="7.3" r="2.3"/><circle cx="16.7" cy="16.7" r="2.3"/>'));
+export const OBorders = make(g('M12 4.2v15.6M4.2 12h15.6', '<rect x="4.2" y="4.2" width="15.6" height="15.6" rx="2"/>'));
+export const OMerge = make(g('M3.6 5v14M20.4 5v14M6.6 12h4m-2.2-2.6L11 12l-2.6 2.6M17.4 12h-4m2.2-2.6L13 12l2.6 2.6'));
+export const OVAlignTop = make(g('M4.5 4.2h15M12 8.2v11.6M8.4 11.6 12 8l3.6 3.6'));
+export const OVAlignMiddle = make(g('M4.5 12h15M12 3.4v5.4M9.3 6.4 12 9l2.7-2.6M12 20.6v-5.4M9.3 17.6 12 15l2.7 2.6'));
+export const OVAlignBottom = make(g('M4.5 19.8h15M12 4.2v11.6M8.4 12.4 12 16l3.6-3.6'));
+export const OWrap = make(g('M4 5.6h16M4 12h12.6a3.2 3.2 0 0 1 0 6.4H12.4m2.2-2.4-2.4 2.4 2.4 2.4M4 18.4h5'));
+export const ORotate = make(g('M4.2 19.8h7M6 15.6l4.6-11.2 4.6 11.2M7.6 11.8h6M18.6 19.6V8.4m-2.6 2.6 2.6-2.6 2.6 2.6'));
+export const OComment = make(g('M5.6 4.4h12.8a1.8 1.8 0 0 1 1.8 1.8v9.2a1.8 1.8 0 0 1-1.8 1.8H9.4l-4.4 3.4V6.2a1.8 1.8 0 0 1 1.8-1.8ZM12 7.8v6M9 10.8h6'));
+export const OChart = make(g('M8 16.4v-4.2M12 16.4V7.6M16 16.4v-6', '<rect x="3.6" y="3.6" width="16.8" height="16.8" rx="2.4"/>'));
+export const OFilter = make(g('M4 6h16M7 12h10M10.4 18h3.2'));
+export const OFunctions = make(g('M17.4 5H6.6l6 7-6 7h10.8'));
+export const OMoreVertical = make(`<g fill="currentColor"><circle cx="12" cy="5.4" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="18.6" r="1.7"/></g>`);
+export const OFillColor = make(g('M4.7 10.1 10 4.8l6.1 6.1-5.4 5.4a1.5 1.5 0 0 1-2.1 0l-3.9-3.9a1.5 1.5 0 0 1 0-2.3ZM8 2.6l2.2 2M4.9 10.9h11.1M19.2 12.4s1.6 1.9 1.6 2.9a1.6 1.6 0 0 1-3.2 0c0-1 1.6-2.9 1.6-2.9Z', '<rect x="2.8" y="19.5" width="18.4" height="2.7" rx="1.15" fill="var(--swatch, currentColor)" class="swatch" stroke="none"/>'));
+export const ODecimalDecrease = make(g('M20 19.4h-7m2.2-2.2L13 19.4l2.2 2.2', '<circle cx="4.4" cy="13.4" r="1.25" fill="currentColor" stroke="none"/><ellipse cx="10" cy="9.6" rx="2.7" ry="3.9"/>'));
+export const ODecimalIncrease = make(g('M12.6 19.4h7.4m-2.2-2.2 2.2 2.2-2.2 2.2', '<circle cx="3.6" cy="13.4" r="1.25" fill="currentColor" stroke="none"/><ellipse cx="8.6" cy="9.6" rx="2.5" ry="3.9"/><ellipse cx="15.6" cy="9.6" rx="2.5" ry="3.9"/>'));
