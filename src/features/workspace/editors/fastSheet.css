@@ -180,6 +180,8 @@ html[data-theme="graphite"] .fsh, html[data-theme="black"] .fsh { --sh-border-au
 .fsh-panel-head h2 { margin: 0; font-size: var(--text-md, 15px); font-weight: var(--weight-semibold); }
 .fsh-panel-body { flex: 1; min-height: 0; overflow: auto; display: grid; align-content: start; gap: 12px; padding: 6px 16px 16px; }
 .fsh-panel-tabs { margin-bottom: 4px; }
+/* Выбранный вариант переключателя должен быть виден (у nx-segment выбор — по aria-pressed, здесь — вкладки). */
+.fsh-panel-tabs > button[aria-selected="true"] { background: var(--sh-card, var(--sh-bg)); color: var(--text-main); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, .12); }
 .fsh-panel-empty { margin: 4px 0; color: var(--text-muted); }
 .fsh-panel-add { justify-self: start; display: inline-flex; align-items: center; gap: 6px; }
 .fsh-panel-foot { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }

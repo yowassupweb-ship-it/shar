@@ -33,11 +33,17 @@ export function chartData(book: Book, sheet: Sheet, spec: ChartSpec): ChartData 
   return out;
 }
 
-const fmt = (x: number) => {
-  const a = Math.abs(x);
-  const s = a >= 1e6 ? `${Number((x / 1e6).toFixed(1))} млн` : a >= 1e4 ? `${Number((x / 1e3).toFixed(1))} тыс.` : String(Number(x.toPrecision(6)));
-  return s.replace('.', ',');
-};
+/** Число на оси, как у Google в русской локали: 50 000, 1,5 млн, 0,25. */
+const num = (x: number, digits = 2) => x.toLocaleString('ru-RU', { maximumFractionDigits: digits });
+const fmt = (x: number) => (Math.abs(x) >= 1e6 ? `${num(x / 1e6, 1)} млн` : num(Number(x.toPrecision(6))));
+
+/** Подпись не шире max — с многоточием (fillText с maxWidth сплющивал буквы). */
+function fit(ctx: CanvasRenderingContext2D, text: string, max: number): string {
+  if (ctx.measureText(text).width <= max) return text;
+  let lo = 0; let hi = text.length;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (ctx.measureText(`${text.slice(0, mid)}…`).width <= max) lo = mid; else hi = mid - 1; }
+  return lo ? `${text.slice(0, lo).trimEnd()}…` : '';
+}
 function niceStep(range: number, ticks: number) {
   const raw = range / Math.max(1, ticks);
   const p = 10 ** Math.floor(Math.log10(raw || 1));
@@ -52,8 +58,11 @@ export function drawChart(ctx: CanvasRenderingContext2D, x: number, y: number, w
   ctx.fillStyle = theme.dark ? '#26272b' : '#ffffff'; ctx.fillRect(x, y, w, h);
   ctx.strokeStyle = theme.grid; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
   const ink = theme.dark ? '#e8eaed' : '#202124'; const soft = theme.dark ? '#9aa0a6' : '#5f6368';
-  let top = y + 12;
-  if (spec.title) { ctx.fillStyle = ink; ctx.font = '600 14px Inter, Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText(spec.title, x + w / 2, top, w - 20); top += 24; }
+  const gridInk = theme.dark ? '#3c4043' : '#e0e3e7'; const axisInk = theme.dark ? '#5f6368' : '#bdc1c6';
+  let top = y + 14;
+  // Без своего названия — как у Google: из имён рядов («Цена и Дней»); пустая строка — без названия.
+  const title = spec.title ?? (data.series.length ? (data.series.length > 1 ? `${data.series.slice(0, -1).map((x0) => x0.name).join(', ')} и ${data.series[data.series.length - 1].name}` : data.series[0].name) : '');
+  if (title) { ctx.fillStyle = ink; ctx.font = '600 14px Inter, Arial, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillText(fit(ctx, title, w - 32), x + 16, top); top += 26; }
   const legend = spec.legend ?? (spec.type === 'pie' || spec.type === 'doughnut' ? 'right' : data.series.length > 1 ? 'bottom' : 'none');
   const pie = spec.type === 'pie' || spec.type === 'doughnut';
   const legendItems = pie ? data.labels : data.series.map((s) => s.name);
@@ -64,7 +73,7 @@ export function drawChart(ctx: CanvasRenderingContext2D, x: number, y: number, w
     legendItems.slice(0, 20).forEach((t, i) => {
       const ly = top + 8 + i * 18;
       ctx.fillStyle = colors[i % colors.length]; ctx.beginPath(); ctx.arc(right - lw + 6, ly, 5, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = soft; ctx.textAlign = 'left'; ctx.fillText(t, right - lw + 16, ly, lw - 18);
+      ctx.fillStyle = soft; ctx.textAlign = 'left'; ctx.fillText(fit(ctx, t, lw - 18), right - lw + 16, ly);
     });
     right -= lw + 8;
   } else if (legend === 'bottom' && legendItems.length) {
@@ -114,29 +123,40 @@ export function drawChart(ctx: CanvasRenderingContext2D, x: number, y: number, w
   const step = niceStep(hi - lo, 5);
   lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
   ctx.font = '11px Inter, Arial, sans-serif';
-  const axisW = horizontal ? Math.min(w * 0.3, Math.max(20, ...data.labels.map((l) => ctx.measureText(l).width)) + 8) : Math.max(...[lo, hi].map((v) => ctx.measureText(fmt(v)).width)) + 10;
-  const left = x + 12 + axisW; const plotTop = top + 6; const plotBottom = bottom - (horizontal ? 18 : 20); const plotRight = right - 8;
+  const axisW = horizontal ? Math.min(w * 0.3, Math.max(20, ...data.labels.map((l) => ctx.measureText(l).width)) + 8) : Math.max(...[lo, hi, (lo + hi) / 2].map((v) => ctx.measureText(fmt(v)).width)) + 10;
+  const left = x + 12 + axisW; const plotRight = right - 10;
+  // Подписи категорий: влезают — прямо; тесно — наклоном (как у Google), длинные — с многоточием.
+  const bandGuess = (plotRight - left) / Math.max(1, data.labels.length);
+  const widest = Math.max(0, ...data.labels.map((l) => ctx.measureText(l).width));
+  const tilt = !horizontal && widest > bandGuess - 6;
+  const tiltMax = Math.min(110, h * 0.28);
+  const labelH = horizontal ? 18 : tilt ? Math.min(tiltMax, widest) * 0.6 + 14 : 20;
+  const plotTop = top + 6; const plotBottom = bottom - labelH;
   const pw = Math.max(10, plotRight - left); const ph = Math.max(10, plotBottom - plotTop);
   const scale = (v: number) => (v - lo) / (hi - lo);
   // Сетка и шкала.
-  ctx.strokeStyle = theme.grid; ctx.lineWidth = 1; ctx.fillStyle = soft;
+  ctx.strokeStyle = gridInk; ctx.lineWidth = 1; ctx.fillStyle = soft;
   for (let v = lo; v <= hi + step / 2; v += step) {
+    ctx.strokeStyle = Math.abs(v) < step / 1e6 ? axisInk : gridInk;
     if (horizontal) { const gx = left + scale(v) * pw; ctx.beginPath(); ctx.moveTo(gx + 0.5, plotTop); ctx.lineTo(gx + 0.5, plotBottom); ctx.stroke(); ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText(fmt(v), gx, plotBottom + 4); }
     else { const gy = plotBottom - scale(v) * ph; ctx.beginPath(); ctx.moveTo(left, gy + 0.5); ctx.lineTo(plotRight, gy + 0.5); ctx.stroke(); ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText(fmt(v), left - 6, gy); }
   }
   // Подписи категорий (через одну, если не влезают).
   const band = (horizontal ? ph : pw) / Math.max(1, n);
-  const every = Math.max(1, Math.ceil((horizontal ? 14 : 48) / Math.max(1, band)));
+  const every = Math.max(1, Math.ceil((horizontal ? 14 : tilt ? 16 : 48) / Math.max(1, band)));
   ctx.fillStyle = soft;
   data.labels.forEach((l, i) => {
     if (i % every) return;
-    if (horizontal) { ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText(l, left - 6, plotTop + band * (i + 0.5), axisW - 6); }
-    else { ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText(l, left + band * (i + 0.5), plotBottom + 5, band * every - 4); }
+    if (horizontal) { ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText(fit(ctx, l, axisW - 6), left - 6, plotTop + band * (i + 0.5)); return; }
+    const cx0 = left + band * (i + 0.5);
+    if (!tilt) { ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText(fit(ctx, l, band * every - 4), cx0, plotBottom + 6); return; }
+    ctx.save(); ctx.translate(cx0, plotBottom + 6); ctx.rotate(-Math.PI / 6);
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText(fit(ctx, l, tiltMax), 0, 0); ctx.restore();
   });
   const zero = scale(Math.max(lo, Math.min(hi, 0)));
   const k = data.series.length || 1;
   if (spec.type === 'column' || spec.type === 'bar') {
-    const inner = band * 0.72;
+    const inner = Math.min(band * 0.7, stacked ? 64 : 40 * k);
     const one = stacked ? inner : inner / k;
     for (let i = 0; i < n; i += 1) {
       let pos = 0; let neg = 0;
@@ -146,8 +166,12 @@ export function drawChart(ctx: CanvasRenderingContext2D, x: number, y: number, w
         if (stacked) { if (v >= 0) { a = scale(pos); pos += v; b = scale(pos); } else { a = scale(neg); neg += v; b = scale(neg); } } else { a = zero; b = scale(v); }
         ctx.fillStyle = colors[si % colors.length];
         const off = (band - inner) / 2 + (stacked ? 0 : si * one);
-        if (horizontal) ctx.fillRect(left + Math.min(a, b) * pw, plotTop + band * i + off, Math.abs(b - a) * pw, one - 1);
-        else ctx.fillRect(left + band * i + off, plotBottom - Math.max(a, b) * ph, one - 1, Math.abs(b - a) * ph);
+        // Столбцы со скруглённым концом (2px), как у Google.
+        const rr = Math.min(2, (one - 1) / 2);
+        ctx.beginPath();
+        if (horizontal) ctx.roundRect(left + Math.min(a, b) * pw, plotTop + band * i + off, Math.abs(b - a) * pw, one - 1, v >= 0 ? [0, rr, rr, 0] : [rr, 0, 0, rr]);
+        else ctx.roundRect(left + band * i + off, plotBottom - Math.max(a, b) * ph, one - 1, Math.abs(b - a) * ph, v >= 0 ? [rr, rr, 0, 0] : [0, 0, rr, rr]);
+        ctx.fill();
       });
     }
   } else {
