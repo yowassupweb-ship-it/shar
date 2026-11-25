@@ -510,7 +510,7 @@
 @media (hover: none) { .ntl-head-btn { display: grid; } }
 /* Режим папок — ветки: задачи с отступом и линией ветки, заголовок — обычной строкой (не капслоком). */
 .ntl-group[data-tree] > .ntl-group-head { font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text-main); }
-.ntl-group[data-tree] > .ntl-group-items { margin-left: 13px; padding-left: 6px; border-left: 1px solid var(--border-color); }
+
 .ntl-folder-empty { margin: 2px 0 6px; padding: 4px 8px; font-size: var(--text-xs); color: var(--text-muted); }
 /* Цель сброса при перетаскивании. */
 .ntl-group[data-drop] > .ntl-group-head { background: color-mix(in srgb, var(--accent-color) 16%, var(--surface-panel)); box-shadow: inset 0 0 0 1.5px var(--accent-color); }
@@ -536,9 +536,22 @@
 .ntd-create { display: inline-flex; align-items: center; gap: 6px; height: 30px; }
 /* Группы любой группировки (люди, статусы) — корневыми ветками: крупно, от левого края, как папки. */
 .ntl-group > .ntl-group-head { font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text-main); padding-left: 4px; gap: 8px; }
-.ntl-group > .ntl-group-items { margin-left: 13px; padding-left: 6px; border-left: 1px solid var(--border-color); }
+
 .ntl-group > .ntl-done-toggle { color: var(--text-2); }
 /* Статус в строке задачи и место вставки при ручной перестановке. */
 .ntl-status { display: inline-flex; align-items: center; gap: 4px; color: var(--text-2); }
 .ntl-status i { width: 6px; height: 6px; border-radius: 50%; background: var(--tone); }
 .ntl-row[data-drop-before] { box-shadow: inset 0 2px 0 var(--accent-color); }
+
+/* ── Дерево: ветка видна сразу. Линия — под стрелкой группы, к каждой задаче — отвод; задачи начинаются под
+   названием группы, группа — крупнее и жирнее задач. */
+.ntl-group > .ntl-group-head { min-height: 36px; font-size: var(--text-md); font-weight: var(--weight-semibold); color: var(--text-main); }
+.ntl-group + .ntl-group { margin-top: 4px; }
+.ntl-group > .ntl-group-items { position: relative; margin: 0 0 6px 11px; padding-left: 30px; }
+.ntl-group > .ntl-group-items::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; border-left: 1.5px solid var(--border-strong, var(--border-color)); }
+.ntl-group-items > .ntl-row { position: relative; }
+.ntl-group-items > .ntl-row::before { content: ''; position: absolute; left: -30px; top: 50%; width: 24px; border-top: 1.5px solid var(--border-strong, var(--border-color)); pointer-events: none; }
+.ntl-group-items > .ntl-row:last-child::after { content: ''; position: absolute; left: -31px; top: calc(50% + 1px); bottom: -8px; width: 4px; background: var(--surface-panel); pointer-events: none; }
+.ntl-group-items .ntl-name { font-weight: var(--weight-regular, 400); }
+.ntl-group-items .ntl-folder-empty { position: relative; }
+.ntl[data-density="compact"] .ntl-group > .ntl-group-head { min-height: 28px; font-size: var(--text-sm); }
