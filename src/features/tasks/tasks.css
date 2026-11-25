@@ -547,10 +547,12 @@
    названием группы, группа — крупнее и жирнее задач. */
 .ntl-group > .ntl-group-head { min-height: 36px; font-size: var(--text-md); font-weight: var(--weight-semibold); color: var(--text-main); }
 .ntl-group + .ntl-group { margin-top: 4px; }
+/* Ветки — непрозрачным серым: полупрозрачная линия на стыке ложилась сама на себя и давала яркую точку. */
+.ntl { --ntl-branch: color-mix(in srgb, var(--text-muted) 40%, var(--surface-panel)); }
 .ntl-group > .ntl-group-items { position: relative; margin: 0 0 6px 11px; padding-left: 30px; }
-.ntl-group > .ntl-group-items::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; border-left: 1.5px solid var(--border-strong, var(--border-color)); }
+.ntl-group > .ntl-group-items::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; border-left: 1.5px solid var(--ntl-branch); }
 .ntl-group-items > .ntl-row { position: relative; }
-.ntl-group-items > .ntl-row::before { content: ''; position: absolute; left: -30px; top: 50%; width: 24px; border-top: 1.5px solid var(--border-strong, var(--border-color)); pointer-events: none; }
+.ntl-group-items > .ntl-row::before { content: ''; position: absolute; left: -28.5px; top: 50%; width: 22.5px; border-top: 1.5px solid var(--ntl-branch); pointer-events: none; }
 .ntl-group-items > .ntl-row:last-child::after { content: ''; position: absolute; left: -31px; top: calc(50% + 1px); bottom: -8px; width: 4px; background: var(--surface-panel); pointer-events: none; }
 .ntl-group-items .ntl-name { font-weight: var(--weight-regular, 400); }
 .ntl-group-items .ntl-folder-empty { position: relative; }
