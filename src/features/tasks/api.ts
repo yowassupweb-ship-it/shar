@@ -33,6 +33,8 @@ export interface Task {
   assignedTo?: string | null;
   assignedToIds?: string[];
   createdAt: string;
+  /** Ручной порядок в списке (task_order); 0 — не расставлена, порядок по важности и сроку. */
+  taskOrder?: number;
   updatedAt?: string;
   metadata?: Record<string, unknown>;
   chatId?: string;
@@ -139,6 +141,8 @@ export function loadTasks(): Promise<void> {
       const d = (await res.json()) as { todos?: Task[]; lists?: TaskList[] };
       const tasks: Record<string, Task> = {};
       for (const t of d.todos || []) if (t && t.id && !t.archived) tasks[String(t.id)] = { ...t, id: String(t.id) };
+      // Черновики живут только здесь — сервер о них не знает, переносим как есть.
+      for (const t of Object.values(useTasks.getState().tasks)) if (isDraft(t.id)) tasks[t.id] = t;
       useTasks.setState({ tasks, lists: d.lists || [], phase: 'ready' });
       writeCacheSoon();
     } catch {
@@ -190,6 +194,7 @@ async function send(method: 'POST' | 'PUT', body: Record<string, unknown>): Prom
 export async function createTask(init: Partial<Task> & { md?: string }): Promise<Task> {
   const me = myId();
   const md = init.md ?? '';
+  const assignees = init.assignedToIds?.length ? init.assignedToIds : [init.assignedToId || me];
   const saved = await send('POST', {
     type: 'todo',
     title: init.title || '',
@@ -197,16 +202,48 @@ export async function createTask(init: Partial<Task> & { md?: string }): Promise
     status: init.status || 'pending',
     priority: init.priority || 'medium',
     authorId: me,
-    assignedById: me,
-    assignedToId: init.assignedToId || me,
-    assignedToIds: init.assignedToIds || [init.assignedToId || me],
+    assignedById: init.assignedById ?? me,
+    ...(init.assignedBy ? { assignedBy: init.assignedBy } : {}),
+    assignedToId: assignees[0],
+    assignedToIds: assignees,
     // Без явной папки — вне папок (раньше задача молча попадала в первый список).
     listId: init.listId ?? null,
     dueDate: init.dueDate || null,
-    metadata: { md },
+    metadata: { ...(init.metadata || {}), md },
   });
   const t = { ...saved, id: String(saved.id) };
   put(t);
+  return t;
+}
+
+// ── Черновик новой задачи ───────────────────────────────────────────────────
+// Новая задача сначала — черновик: только у автора, на сервер не уходит, исполнители её не видят и уведомлений не
+// получают. Можно спокойно написать текст, выбрать исполнителей и срок, а потом «Создать» — задача появится у всех
+// сразу целиком. Черновик лежит в кэше задач (localStorage) и переживает перезагрузку. После создания — обычная
+// совместная задача с автосохранением.
+
+export const isDraft = (id: string | null | undefined) => Boolean(id && String(id).startsWith('draft-'));
+
+export function newDraft(init: Partial<Task> = {}): Task {
+  const me = myId();
+  const now = new Date().toISOString();
+  const t: Task = {
+    id: `draft-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+    title: '', status: 'pending', priority: 'medium', authorId: me, assignedById: me, assignedToId: me, assignedToIds: [me],
+    listId: null, dueDate: null, createdAt: now, updatedAt: now, metadata: { md: '' }, ...init,
+  };
+  put(t);
+  return t;
+}
+
+/** Создать задачу из черновика: одним запросом со всем, что в нём выбрано. Черновик убирается. */
+export async function publishDraft(id: string): Promise<Task> {
+  const d = useTasks.getState().tasks[id];
+  if (!d) throw new Error('draft gone');
+  const md = taskMarkdown(d);
+  const t = await createTask({ ...d, md, metadata: { ...(d.metadata || {}) } });
+  useTasks.setState((s) => { const next = { ...s.tasks }; delete next[id]; return { tasks: next }; });
+  writeCacheSoon();
   return t;
 }
 
@@ -214,6 +251,7 @@ export async function createTask(init: Partial<Task> & { md?: string }): Promise
 export async function updateTask(id: string, patch: Partial<Task>): Promise<void> {
   const before = useTasks.getState().tasks[id];
   if (!before) return;
+  if (isDraft(id)) { put({ ...before, ...patch, updatedAt: new Date().toISOString() }); return; }
   put({ ...before, ...patch, updatedAt: new Date().toISOString() });
   dirty.add(id);
   try {
@@ -240,6 +278,7 @@ export function saveText(id: string, title: string, md: string): Promise<void> {
 export async function deleteTask(id: string): Promise<void> {
   const before = useTasks.getState().tasks[id];
   useTasks.setState((s) => { const next = { ...s.tasks }; delete next[id]; return { tasks: next }; });
+  if (isDraft(id)) { writeCacheSoon(); return; }
   const res = await fetch(`/api/todos?id=${encodeURIComponent(id)}&type=todo`, { method: 'DELETE' });
   if (!res.ok) {
     if (before) put(before);

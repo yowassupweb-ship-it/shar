@@ -37,6 +37,11 @@ def test_next_run_follows_due_and_repeat():
     assert ta.compute_next(_task_dict(due_date="2026-01-31", metadata=meta("monthly")), "09:00", datetime(2026, 2, 1, 0, 0, tzinfo=MSK)) == datetime(2026, 2, 28, 9, 0, tzinfo=MSK)
     # повтор без срока — со следующего дня в run_time
     assert ta.compute_next(_task_dict(metadata=meta("daily")), "07:15", after) == datetime(2026, 11, 9, 7, 15, tzinfo=MSK)
+    # по дням недели (вт и чт) и со своим временем повтора — оно важнее времени срока
+    days = {"repeat": "days:TU,TH", "repeatTime": "18:30"}
+    assert ta.compute_next(_task_dict(due_date="2026-11-02T08:00:00", metadata=days), "09:00", after) == datetime(2026, 11, 10, 18, 30, tzinfo=MSK)  # вт
+    assert ta.compute_next(_task_dict(metadata=days), "09:00", datetime(2026, 11, 10, 19, 0, tzinfo=MSK)) == datetime(2026, 11, 12, 18, 30, tzinfo=MSK)  # чт
+    assert ta._repeat_label("days:TU") == "по вторникам"
 
 
 def _connect_agent(admin, client, uid):

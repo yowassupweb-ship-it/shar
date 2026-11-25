@@ -1,6 +1,7 @@
+import { createPortal } from 'react-dom';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import {
-  AlertCircle, ArrowLeft, Bot, CalendarDays, Check, Code2, ChevronDown, Cloud, Eye, FileText, Flag, FolderClosed, History, Link2, MoreHorizontal, Paperclip, Pencil,
+  AlertCircle, ArrowLeft, Bot, CalendarDays, Check, ChevronDown, Cloud, Eye, FileText, Flag, FolderClosed, FolderPlus, History, Link2, MoreHorizontal, Paperclip, Pencil,
   Repeat, Search, Trash2, UserPlus,
 } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
@@ -8,20 +9,20 @@ import { displayName, useChatStore } from '@/features/chat';
 import { Avatar } from '@/shared/ui/Avatar';
 import { askConfirm, Menu, MenuItem, Sheet, type MenuAnchor } from '@/shared/ui/overlay';
 import {
-  assigneesOf, canAddToFolder, deleteTask, relevantLists, isDone, myId, PRIORITIES, saveText, STATUSES, statusOf, taskMarkdown, updateTask, useTasks,
+  assigneesOf, canAddToFolder, deleteTask, isDraft, publishDraft, relevantLists, isDone, myId, PRIORITIES, saveText, STATUSES, statusOf, taskMarkdown, updateTask, useTasks,
   type Priority, type Status, type Task,
 } from './api';
 import { renderMarkdown, toggleTaskLine } from './markdown';
-import { repeatIdOf, repeatLabel, syncTaskRepeat, TASK_REPEATS } from './repeat';
+import { daysId, daysOf, repeatIdOf, repeatLabel, repeatTimeOf, syncTaskRepeat, TASK_REPEATS, WEEKDAYS } from './repeat';
 import { DatePicker } from '@/shared/ui/DatePicker';
 import { parseDue } from './due';
 import { TaskVersionsSheet } from './VersionsSheet';
+import { FolderSheet } from './Folders';
 // Визуальный редактор (TipTap) — отдельным куском: список задач открывается без него.
 const VisualEditor = lazy(() => import('@/shared/markdown/VisualEditor').then((m) => ({ default: m.VisualEditor })));
 import { AgentReports, AgentSheet } from './AgentTask';
 import { taskAgent, type TaskAgent } from './api';
 import { useAgentBridge } from '@/shared/core/agentBridge';
-import { continueList, MarkdownToolbar, markdownShortcut, replaceRange } from './MarkdownToolbar';
 import { Spinner } from '@/shared/ui/Spinner';
 import { AttachmentList, AttachPicker, attachmentsOf, LinkSheet, newId, type Attachment } from './attachments';
 
@@ -50,11 +51,15 @@ export function dueLabel(iso?: string | null): { text: string; late: boolean } |
   return { text: due.time ? `${date}, ${due.time}` : date, late };
 }
 
-export default function TaskDocument({ task, onBack, onGone }: {
+export default function TaskDocument({ task, onBack, onGone, onCreated }: {
   task: Task;
   onBack: () => void;
   onGone: () => void;
+  /** Черновик стал задачей: новый id (адрес и выбор в списке переезжают на него). */
+  onCreated?: (id: string) => void;
 }) {
+  const draft = isDraft(task.id);
+  const [publishing, setPublishing] = useState(false);
   const initial = useMemo(() => {
     const md = taskMarkdown(task);
     return { title: task.title || '', md };
@@ -62,27 +67,26 @@ export default function TaskDocument({ task, onBack, onGone }: {
   }, [task.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const [title, setTitle] = useState(initial.title);
   const [md, setMd] = useState(initial.md);
-  // Три режима: просмотр, «Правка» (визуальный редактор — без разметки) и «Код» (исходный markdown). Выбор правки помним.
-  const [editPref, setEditPref] = useState<'visual' | 'code'>(() => { try { return localStorage.getItem('nx:md-edit-mode') === 'code' ? 'code' : 'visual'; } catch { return 'visual'; } });
-  const [mode, setMode] = useState<'preview' | 'visual' | 'code'>(() => (initial.title || initial.md.trim() ? 'preview' : editPref));
+  // Два режима: просмотр и «Правка» (визуальный редактор, без разметки). Хранится по-прежнему markdown.
+  const [mode, setMode] = useState<'preview' | 'visual'>(() => (initial.title || initial.md.trim() ? 'preview' : 'visual'));
   const editing = mode !== 'preview';
-  const switchMode = (next: 'preview' | 'visual' | 'code') => {
+  const switchMode = (next: 'preview' | 'visual') => {
     if (next === mode) return;
     if (editing) void save();
-    if (next !== 'preview') { setEditPref(next); try { localStorage.setItem('nx:md-edit-mode', next); } catch { /* без памяти */ } }
     setMode(next);
   };
   const [state, setState] = useState<SaveState>('saved');
   const saved = useRef(initial);
   const latest = useRef(initial);
   const titleRef = useRef<HTMLTextAreaElement>(null);
-  const bodyRef = useRef<HTMLTextAreaElement>(null);
   const [menu, setMenu] = useState<{ kind: 'status' | 'priority' | 'list' | 'more' | 'date' | 'repeat' | 'attach'; anchor: MenuAnchor } | null>(null);
   const [attachSheet, setAttachSheet] = useState<'office' | 'cloud' | 'link' | null>(null);
   const [uploading, setUploading] = useState(0);
   const filePick = useRef<HTMLInputElement>(null);
   const [people, setPeople] = useState<'assignees' | 'customer' | null>(null);
   const [versions, setVersions] = useState(false);
+  const [newFolder, setNewFolder] = useState(false);
+  const assigneeHover = useHoverCard();
   // Поручение агенту «Ядра»: чип показываем, если «Ядро» человеку включено.
   const agentOn = useAgentBridge((s) => s.available);
   const [agentSheet, setAgentSheet] = useState<TaskAgent | null>(null);
@@ -142,30 +146,49 @@ export default function TaskDocument({ task, onBack, onGone }: {
 
   const finishEditing = useCallback(() => { void save(); setMode('preview'); }, [save]);
 
+  // «Создать»: черновик уходит на сервер одним запросом — исполнители получают задачу сразу целиком.
+  const publish = useCallback(async () => {
+    if (!draft || publishing) return;
+    const cur = latest.current;
+    if (!cur.title.trim() && !cur.md.trim()) { showToast('Напишите, что нужно сделать', 'info'); titleRef.current?.focus(); return; }
+    setPublishing(true);
+    try {
+      await saveText(task.id, cur.title.trim(), cur.md);
+      saved.current = cur;
+      const created = await publishDraft(task.id);
+      const rep = repeatIdOf(created);
+      if (rep !== 'none') syncTaskRepeat(created, rep).catch(() => showToast('Календарь не обновился — нет связи с сервером.', 'error'));
+      onCreated?.(created.id);
+    } catch {
+      showToast('Задача не создалась — нет связи с сервером. Черновик сохранён.', 'error');
+      setPublishing(false);
+    }
+  }, [draft, publishing, task.id, onCreated]);
+
   // Ctrl+S — сохранить сейчас; Esc в правке — «Готово» (если не открыт лист или меню).
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); void save(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && draft) { e.preventDefault(); void publish(); }
       if (e.key === 'Escape' && mode !== 'preview' && !document.querySelector('.nx-scrim, .nx-menu')) { e.preventDefault(); finishEditing(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [save, mode, finishEditing]);
+  }, [save, mode, finishEditing, draft, publish]);
 
-  // В правке — фокус в заголовок (пустой) или в текст.
+  // В правке — фокус в заголовок.
   useEffect(() => {
     if (mode === 'preview') return;
-    (latest.current.title && mode === 'code' ? bodyRef.current : titleRef.current)?.focus();
+    titleRef.current?.focus();
   }, [mode, task.id]);
 
-  // Высота полей по содержимому — страница прокручивается целиком, как документ.
+  // Высота заголовка по содержимому — страница прокручивается целиком, как документ.
   useEffect(() => {
-    for (const el of [titleRef.current, bodyRef.current]) {
-      if (!el) continue;
-      el.style.height = 'auto';
-      el.style.height = `${el.scrollHeight}px`;
-    }
-  }, [title, md, mode]);
+    const el = titleRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [title, mode]);
 
   // Успех видно по самой задаче — всплывашки только об ошибках, иначе их сыпалось по штуке на клик.
   const patch = async (p: Partial<Task>) => {
@@ -183,50 +206,18 @@ export default function TaskDocument({ task, onBack, onGone }: {
   };
 
   const remove = async () => {
-    if ((title.trim() || md.trim()) && !(await askConfirm({ title: 'Удалить задачу?', text: 'Она пропадёт у всех исполнителей. Вернуть не получится.', confirm: 'Удалить', tone: 'danger' }))) return;
+    if ((title.trim() || md.trim()) && !(await askConfirm(draft
+      ? { title: 'Удалить черновик?', text: 'Задача ещё не создана — никто, кроме вас, её не видел.', confirm: 'Удалить', tone: 'danger' }
+      : { title: 'Удалить задачу?', text: 'Она пропадёт у всех исполнителей. Вернуть не получится.', confirm: 'Удалить', tone: 'danger' }))) return;
     try { await deleteTask(task.id); onGone(); } catch { showToast('Не удалил — нет прав или нет связи с сервером.', 'error'); }
   };
 
-  // Картинка из буфера или выбором → загрузка → ![имя](адрес).
-  const insertImages = async (files: File[]) => {
-    const el = bodyRef.current;
-    const images = files.filter((f) => f.type.startsWith('image/'));
-    if (!el || !images.length) return;
-    const { uploadFileWithProgress } = await import('@/shared/api/uploadFile');
-    for (const file of images) {
-      const name = (file.name && file.name !== 'image.png' ? file.name : `картинка.${(file.type.split('/')[1] || 'png').replace('jpeg', 'jpg')}`);
-      const placeholder = `![Загрузка ${name}…]()`;
-      const at = el.selectionStart;
-      replaceRange(el, at, el.selectionEnd, `${placeholder}\n`, at + placeholder.length + 1, at + placeholder.length + 1);
-      try {
-        const res = await uploadFileWithProgress(file, () => {});
-        const i = el.value.indexOf(placeholder);
-        const mdImg = `![${name.replace(/\.[a-z0-9]+$/i, '')}](${res.url})`;
-        if (i >= 0) replaceRange(el, i, i + placeholder.length, mdImg, i + mdImg.length, i + mdImg.length);
-      } catch {
-        const i = el.value.indexOf(placeholder);
-        if (i >= 0) replaceRange(el, i, i + placeholder.length + 1, '', i, i);
-        showToast('Картинка не загрузилась — проверьте связь.', 'error');
-      }
-    }
-  };
-
+  // Enter или ↓ в заголовке — в начало текста.
   const onTitleKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.key === 'Enter' && !e.nativeEvent.isComposing) || e.key === 'ArrowDown') {
       e.preventDefault();
-      const el = bodyRef.current;
+      const el = e.currentTarget.closest('.ntd-page')?.querySelector<HTMLElement>('.nve-content');
       el?.focus();
-      el?.setSelectionRange(0, 0);
-    }
-  };
-  const onBodyKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (markdownShortcut(e) || continueList(e)) return;
-    const el = e.currentTarget;
-    if ((e.key === 'Backspace' || e.key === 'ArrowUp') && el.selectionStart === 0 && el.selectionEnd === 0) {
-      e.preventDefault();
-      const t = titleRef.current;
-      t?.focus();
-      t?.setSelectionRange(t.value.length, t.value.length);
     }
   };
 
@@ -274,11 +265,13 @@ export default function TaskDocument({ task, onBack, onGone }: {
   ];
 
   const repeat = repeatIdOf(task);
-  // Повтор: пометка в задаче + серия сроков в календаре на месяц вперёд.
-  const setRepeat = async (id: string) => {
+  const repeatTime = repeatTimeOf(task);
+  // Повтор: пометка в задаче (правило и своё время) + серия сроков в календаре на месяц вперёд.
+  const setRepeat = async (id: string, time: string = repeatTime) => {
+    const metadata = { ...(useTasks.getState().tasks[task.id]?.metadata || task.metadata || {}), repeat: id === 'none' ? null : id, repeatTime: id === 'none' || !time ? null : time };
     try {
-      await patch({ metadata: { ...(task.metadata || {}), repeat: id === 'none' ? null : id } });
-      await syncTaskRepeat({ ...task, metadata: { ...(task.metadata || {}), repeat: id } }, id);
+      await patch({ metadata });
+      if (!draft) await syncTaskRepeat({ ...task, metadata }, id);
     } catch {
       showToast('Повтор не сохранился — нет связи с сервером.', 'error');
     }
@@ -298,17 +291,25 @@ export default function TaskDocument({ task, onBack, onGone }: {
     <section className="ntd" aria-label={title || 'Задача'}>
       <header className="ntd-bar">
         <button type="button" className="nx-icon-btn ntd-back" onClick={onBack} aria-label="К списку задач"><ArrowLeft size={20} aria-hidden="true" /></button>
-        {/* Три режима: просмотр · правка (визуально, без разметки) · код (исходный markdown). Esc в правке — назад к просмотру. */}
+        {/* Два режима: просмотр · правка (визуально, без разметки). Esc в правке — назад к просмотру. */}
         <div className="nx-segment ntd-modes" role="group" aria-label="Режим">
           <button type="button" aria-pressed={mode === 'preview'} onClick={() => switchMode('preview')}><Eye size={14} aria-hidden="true" /> Просмотр</button>
           <button type="button" aria-pressed={mode === 'visual'} disabled={viewOnly} title={viewOnly ? 'Папка открыта вам только на просмотр' : 'Правка как в обычном редакторе'} onClick={() => switchMode('visual')}><Pencil size={14} aria-hidden="true" /> Правка</button>
-          <button type="button" aria-pressed={mode === 'code'} disabled={viewOnly} title={viewOnly ? 'Папка открыта вам только на просмотр' : 'Исходный текст в markdown'} onClick={() => switchMode('code')}><Code2 size={14} aria-hidden="true" /> Код</button>
         </div>
+        {draft ? (
+          <span className="ntd-draft-bar">
+            <span className="ntd-draft-note" title="Исполнители увидят задачу и получат уведомление только после «Создать»">Черновик — видите только вы</span>
+            <button type="button" className="nx-primary ntd-create" onClick={() => void publish()} disabled={publishing} title="Создать задачу (Ctrl+Enter)">
+              {publishing ? <Spinner size={14} /> : <Check size={15} aria-hidden="true" />} Создать
+            </button>
+          </span>
+        ) : (
         <span className="ntd-save" aria-live="polite">
           {state === 'error' ? <span data-tone="danger"><AlertCircle size={13} aria-hidden="true" /> Не сохранилось — Ctrl+S</span>
             : state === 'saving' || state === 'pending' ? <span><Spinner size={13} /> Сохраняю</span>
               : <span><Check size={13} aria-hidden="true" /> Сохранено</span>}
         </span>
+        )}
         <button type="button" className="nx-icon-btn" onClick={open('more')} aria-label="Ещё действия" aria-haspopup="menu"><MoreHorizontal size={18} /></button>
       </header>
 
@@ -323,33 +324,33 @@ export default function TaskDocument({ task, onBack, onGone }: {
         <button type="button" className="ntd-chip" onClick={() => setPeople('customer')} aria-label="Заказчик">
           {customer ? <Avatar name={displayName(customer)} seed={String(customer.id)} src={customer.avatar} person size={20} /> : <UserPlus size={14} aria-hidden="true" />}
           <span className="ntd-chip-label">Заказчик</span>
-          {customer ? (String(customer.id) === myId() ? 'я' : displayName(customer)) : 'не указан'}
+          {customer ? (String(customer.id) === myId() ? 'Я' : displayName(customer)) : 'не указан'}
         </button>
-        <button type="button" className="ntd-chip" onClick={() => setPeople('assignees')} aria-label="Исполнители">
+        <button type="button" className="ntd-chip" onClick={() => setPeople('assignees')} aria-label="Исполнители" {...assigneeHover.bind}>
           <span className="ntd-chip-label">Исполнитель</span>
           {assignees.length ? (
             <span className="ntd-faces">
               {assignees.slice(0, 3).map((id) => { const u = users[id]; return <Avatar key={id} name={displayName(u) || '?'} seed={id} src={u?.avatar} person size={20} />; })}
             </span>
           ) : <UserPlus size={14} aria-hidden="true" />}
-          {assignees.length === 1 ? (assignees[0] === myId() ? 'Мне' : displayName(users[assignees[0]]) || 'Исполнитель') : assignees.length ? `${assignees.length} исполнителя` : 'Исполнитель'}
+          {assignees.length === 1 ? (assignees[0] === myId() ? 'Я' : displayName(users[assignees[0]]) || 'Исполнитель') : assignees.length ? `${assignees.length} исполнителя` : 'Исполнитель'}
         </button>
         <button type="button" className="ntd-chip" data-tone={due?.late && !done ? 'danger' : undefined} onClick={open('date')} aria-haspopup="menu">
           <CalendarDays size={14} aria-hidden="true" />
           {due ? due.text : 'Срок'}
         </button>
         <button type="button" className="ntd-chip" data-on={repeat !== 'none' ? 'true' : undefined} onClick={open('repeat')} aria-haspopup="menu" title="Повторять задачу — сроки на месяц вперёд в календаре">
-          <Repeat size={14} aria-hidden="true" />{repeat !== 'none' ? repeatLabel(repeat) : 'Повтор'}
+          <Repeat size={14} aria-hidden="true" />{repeat !== 'none' ? repeatLabel(repeat, repeatTime) : 'Повтор'}
         </button>
         <button type="button" className="ntd-chip" data-priority={task.priority || 'medium'} onClick={open('priority')} aria-haspopup="menu">
           <Flag size={14} aria-hidden="true" />{priority.label}
         </button>
-        {lists.length > 0 && (
+        {(
           <button type="button" className="ntd-chip" onClick={open('list')} aria-haspopup="menu" style={list?.color ? ({ '--tone': list.color } as CSSProperties) : undefined}>
             <FolderClosed size={14} aria-hidden="true" />{list?.name || 'Без папки'}
           </button>
         )}
-        {agentOn && (
+        {agentOn && !draft && (
           <button type="button" className="ntd-chip" onClick={openAgent} title="Поручить задачу агенту: проснётся по сроку, выполнит и отчитается здесь">
             <Bot size={14} aria-hidden="true" />Агент
           </button>
@@ -360,10 +361,8 @@ export default function TaskDocument({ task, onBack, onGone }: {
       </div>
 
       <AttachmentList items={attachments} onRemove={detach} />
-      {agentOn && <AgentReports task={task} version={agentVersion} onOpen={openAgent} />}
+      {agentOn && !draft && <AgentReports task={task} version={agentVersion} onOpen={openAgent} />}
       <input ref={filePick} type="file" multiple hidden onChange={(e) => { void uploadFiles([...(e.target.files ?? [])]); e.target.value = ''; }} />
-
-      {mode === 'code' && <MarkdownToolbar targetRef={bodyRef} onPickImages={(f) => void insertImages(f)} extra={attachTools} />}
 
       <div className="ntd-scroll nx-scroll-y">
         {editing ? (
@@ -379,8 +378,7 @@ export default function TaskDocument({ task, onBack, onGone }: {
               placeholder="Что нужно сделать"
               aria-label="Заголовок задачи"
             />
-            {mode === 'visual' ? (
-              <Suspense fallback={<div className="nx-state"><Spinner size={20} label="Загружаю редактор" /></div>}>
+            <Suspense fallback={<div className="nx-state"><Spinner size={20} label="Загружаю редактор" /></div>}>
               <VisualEditor
                 value={md}
                 onChange={setMd}
@@ -389,24 +387,10 @@ export default function TaskDocument({ task, onBack, onGone }: {
                 uploadImage={async (file) => (await (await import('@/shared/api/uploadFile')).uploadFileWithProgress(file, () => {})).url}
                 extraTools={attachTools}
               />
-              </Suspense>
-            ) : (
-              <textarea
-                ref={bodyRef}
-                className="ntd-body"
-                value={md}
-                onChange={(e) => setMd(e.target.value)}
-                onKeyDown={onBodyKey}
-                onBlur={() => void save()}
-                onPaste={(e) => { const files = [...e.clipboardData.files]; if (files.some((f) => f.type.startsWith('image/'))) { e.preventDefault(); void insertImages(files); } }}
-                onDrop={(e) => { const files = [...e.dataTransfer.files]; if (files.some((f) => f.type.startsWith('image/'))) { e.preventDefault(); void insertImages(files); } }}
-                placeholder={'Подробности, чек-лист, ссылки. Панель сверху или Ctrl+B, Ctrl+Shift+9 — чек-лист. Картинку можно вставить из буфера. Сохраняется само.'}
-                aria-label="Текст задачи"
-              />
-            )}
+            </Suspense>
           </div>
         ) : (
-          <article className="ntd-page ntd-read" onDoubleClick={() => { if (!viewOnly) setMode(editPref); }}>
+          <article className="ntd-page ntd-read" onDoubleClick={() => { if (!viewOnly) setMode('visual'); }}>
             <h1 className="ntd-title-view" data-done={done ? 'true' : undefined}>{title || 'Без названия'}</h1>
             {md.trim()
               ? <div className="ntd-md">{renderMarkdown(md, { onToggleTask: (line) => setMd((cur) => toggleTaskLine(cur, line)) })}</div>
@@ -434,13 +418,30 @@ export default function TaskDocument({ task, onBack, onGone }: {
           {TASK_REPEATS.map((r) => (
             <MenuItem key={r.id} icon={r.id === repeat ? <Check size={16} /> : <span className="ntd-menu-gap" />} onSelect={() => { setMenu(null); void setRepeat(r.id); }}>{r.label}</MenuItem>
           ))}
+          <div className="nx-menu-sep" />
+          {/* По дням недели: щелчок по дню включает/выключает его, меню не закрывается. */}
+          <div className="nx-menu-label">По дням недели</div>
+          <div className="ntd-weekdays" role="group" aria-label="Дни недели">
+            {WEEKDAYS.map((d) => {
+              const on = daysOf(repeat).includes(d.code);
+              return (
+                <button key={d.code} type="button" className="ntd-weekday" aria-pressed={on} title={`По ${d.plural}`}
+                  onClick={() => { const cur = daysOf(repeat); void setRepeat(daysId(on ? cur.filter((c) => c !== d.code) : [...cur, d.code])); }}>{d.short}</button>
+              );
+            })}
+          </div>
+          <label className="ntd-repeat-time">
+            <span>Время</span>
+            <input type="time" value={repeatTime} disabled={repeat === 'none'} onChange={(e) => { if (repeat !== 'none') void setRepeat(repeat, e.target.value); }} />
+            {repeatTime && <button type="button" className="nx-ghost" onClick={() => void setRepeat(repeat, '')}>Убрать</button>}
+          </label>
         </Menu>
       )}
       {menu?.kind === 'date' && (
         <DatePicker withTime anchor={menu.anchor} value={task.dueDate ? String(task.dueDate) : null} onPick={(iso) => {
           void patch({ dueDate: iso }).then(() => {
             // Повторяющаяся задача: серия в календаре идёт от нового срока.
-            if (repeat !== 'none') syncTaskRepeat({ ...task, dueDate: iso }, repeat).catch(() => showToast('Календарь не обновился — нет связи с сервером.', 'error'));
+            if (repeat !== 'none' && !draft) syncTaskRepeat({ ...task, dueDate: iso }, repeat).catch(() => showToast('Календарь не обновился — нет связи с сервером.', 'error'));
           });
         }} onClose={() => setMenu(null)} />
       )}
@@ -450,6 +451,8 @@ export default function TaskDocument({ task, onBack, onGone }: {
           {lists.filter((l) => canAddToFolder(l) || l.id === task.listId).map((l) => (
             <MenuItem key={l.id} icon={l.id === task.listId ? <Check size={16} /> : <i className="ntd-dot" style={{ '--tone': l.color || 'var(--note-gray)' } as CSSProperties} />} onSelect={() => { setMenu(null); void patch({ listId: l.id }); }}>{l.name}</MenuItem>
           ))}
+          <div className="nx-menu-sep" />
+          <MenuItem icon={<FolderPlus size={16} />} onSelect={() => { setMenu(null); setNewFolder(true); }}>Новая папка…</MenuItem>
         </Menu>
       )}
       {menu?.kind === 'attach' && (
@@ -465,11 +468,13 @@ export default function TaskDocument({ task, onBack, onGone }: {
       {attachSheet === 'link' && <LinkSheet onClose={() => setAttachSheet(null)} onAdd={(a) => { setAttachSheet(null); attach(a); }} />}
       {menu?.kind === 'more' && (
         <Menu anchor={menu.anchor} label="Задача" onClose={() => setMenu(null)}>
-          <MenuItem icon={<History size={16} />} onSelect={() => { setMenu(null); void save(); setVersions(true); }}>История версий…</MenuItem>
-          <div className="nx-menu-sep" />
-          <MenuItem icon={<Trash2 size={16} />} tone="danger" onSelect={() => { setMenu(null); void remove(); }}>Удалить задачу</MenuItem>
+          {!draft && <MenuItem icon={<History size={16} />} onSelect={() => { setMenu(null); void save(); setVersions(true); }}>История версий…</MenuItem>}
+          {!draft && <div className="nx-menu-sep" />}
+          <MenuItem icon={<Trash2 size={16} />} tone="danger" onSelect={() => { setMenu(null); void remove(); }}>{draft ? 'Удалить черновик' : 'Удалить задачу'}</MenuItem>
         </Menu>
       )}
+      {assigneeHover.at && assignees.length > 0 && <PeopleHoverCard ids={assignees} at={assigneeHover.at} />}
+      {newFolder && <FolderSheet onClose={() => setNewFolder(false)} onSaved={(l) => { setNewFolder(false); void patch({ listId: l.id }); }} />}
       {agentSheet && <AgentSheet task={task} state={agentSheet} onClose={() => setAgentSheet(null)} onChanged={() => setAgentVersion((v) => v + 1)} />}
       {versions && <TaskVersionsSheet taskId={task.id} canRestore={!viewOnly} onClose={() => setVersions(false)} onRestore={restoreVersion} />}
       {people === 'assignees' && <PeopleSheet title="Исполнители" selected={assignees} onClose={() => setPeople(null)} onSave={(ids) => { setPeople(null); void patch({ assignedToIds: ids, assignedToId: ids[0] || null }); }} />}
@@ -496,8 +501,10 @@ function PeopleSheet({ title, single, selected, onClose, onSave }: { title: stri
     const q = query.trim().toLowerCase();
     return Object.values(users)
       .filter((u) => !q || displayName(u).toLowerCase().includes(q))
-      .sort((a, b) => Number(String(b.id) === me) - Number(String(a.id) === me) || displayName(a).localeCompare(displayName(b), 'ru'));
-  }, [users, query, me]);
+      // Уже выбранные — наверху (по выбору на момент открытия: список не прыгает, пока человек щёлкает), потом я, потом по имени.
+      .sort((a, b) => Number(selected.includes(String(b.id))) - Number(selected.includes(String(a.id)))
+        || Number(String(b.id) === me) - Number(String(a.id) === me) || displayName(a).localeCompare(displayName(b), 'ru'));
+  }, [users, query, me, selected]);
   const toggle = (id: string) => {
     if (single) { onSave([id]); return; }
     setPick((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
@@ -531,5 +538,44 @@ function PeopleSheet({ title, single, selected, onClose, onSave }: { title: stri
         })}
       </div>
     </Sheet>
+  );
+}
+
+/** Подсказка по наведению: через секунду под кнопкой — карточка; уходит, когда курсор ушёл. */
+function useHoverCard(delay = 1000) {
+  const [at, setAt] = useState<DOMRect | null>(null);
+  const timer = useRef(0);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const bind = {
+    onMouseEnter: (e: React.MouseEvent<HTMLElement>) => {
+      const el = e.currentTarget;
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => setAt(el.getBoundingClientRect()), delay);
+    },
+    onMouseLeave: () => { window.clearTimeout(timer.current); setAt(null); },
+    onMouseDown: () => { window.clearTimeout(timer.current); setAt(null); },
+  };
+  return { at, bind };
+}
+
+/** Все исполнители задачи: аватар и имя (на кнопке помещаются только три лица). */
+function PeopleHoverCard({ ids, at }: { ids: string[]; at: DOMRect }) {
+  const users = useChatStore((s) => s.users);
+  const me = myId();
+  return createPortal(
+    <div className="ntd-hovercard" role="tooltip" style={{ left: Math.max(8, Math.min(at.left, window.innerWidth - 268)), top: at.bottom + 6 }}>
+      <div className="ntd-hovercard-head">Исполнители · {ids.length}</div>
+      {ids.map((id) => {
+        const u = users[id];
+        const name = displayName(u) || 'Сотрудник';
+        return (
+          <div key={id} className="ntd-hovercard-row">
+            <Avatar name={name} seed={id} src={u?.avatar} person size={24} />
+            <span>{id === me ? `${name} (я)` : name}</span>
+          </div>
+        );
+      })}
+    </div>,
+    document.querySelector('.nx') || document.body,
   );
 }

@@ -48,12 +48,13 @@ export function FolderBar({ lists, counts, selected, onSelect, onNew, onAction }
 
   return (
     <div className="ntf" role="tablist" aria-label="Папки задач" ref={bar}>
+      {/* Новая папка — первой, слева: на виду, сколько бы папок ни было. */}
+      <button type="button" className="ntf-add" onClick={onNew} aria-label="Новая папка" title="Новая папка"><FolderPlus size={15} aria-hidden="true" /></button>
       <button type="button" role="tab" className="ntf-chip" aria-selected={selected === 'all'} onClick={() => onSelect('all')}>Все<span>{counts.all || 0}</span></button>
       {lists.map((l) => <FolderChip key={l.id} list={l} count={counts[l.id] || 0} selected={selected === l.id} onSelect={onSelect} onAction={onAction} />)}
       {(counts.none || 0) > 0 && lists.length > 0 && (
         <button type="button" role="tab" className="ntf-chip" aria-selected={selected === 'none'} onClick={() => onSelect('none')}>Без папки<span>{counts.none}</span></button>
       )}
-      <button type="button" className="ntf-add" onClick={onNew} aria-label="Новая папка" title="Новая папка"><FolderPlus size={15} aria-hidden="true" /></button>
     </div>
   );
 }

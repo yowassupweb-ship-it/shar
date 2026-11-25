@@ -9,6 +9,8 @@
 .nve-bar .nx-icon-btn:disabled { opacity: 0.35; }
 .nve-sep { width: 1px; height: 18px; margin: 0 4px; background: var(--border-color); }
 .nve-page { width: min(100%, 720px); margin: 0 auto; }
+/* Без кольца фокуса: поле правки — сам лист, общий .nx :focus-visible рисовал рамку вокруг всего текста. */
+.nve-content:focus-visible { box-shadow: none; }
 .nve-content { outline: none; min-height: 180px; padding-bottom: var(--space-6, 32px); font-size: var(--text-md, 15px); line-height: 1.6; color: var(--text-main); overflow-wrap: anywhere; }
 .nve-content > :first-child { margin-top: 0; }
 .nve-content p { margin: 0 0 0.6em; }

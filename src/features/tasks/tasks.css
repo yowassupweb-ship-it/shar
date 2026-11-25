@@ -54,7 +54,8 @@
   text-align: left;
 }
 .ntl-group-head i { flex: none; width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--tone); }
-.ntl-group-head > span { margin-left: auto; font-size: var(--text-2xs); font-weight: var(--weight-medium); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.ntl-group-head > .ntl-group-name { flex: 1; min-width: 0; text-align: left; }
+.ntl-group-head > .nx-avatar { flex: none; }
 .ntl-done-toggle { cursor: pointer; }
 .ntl-done-toggle svg { transition: transform var(--duration-fast) var(--ease-out); }
 .ntl-done-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
@@ -459,3 +460,85 @@
 .nta-list li[data-status="ok"] summary svg { color: var(--state-ok); }
 .nta-list li[data-status="failed"] summary svg, .nta-list li[data-status="failed"] summary b { color: var(--state-danger); }
 .nta-list pre { margin: 4px 0 8px 22px; padding: var(--space-3); border-radius: var(--radius-sm); background: var(--surface-hover); font: inherit; font-size: var(--text-xs); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; }
+
+/* Карточка по наведению (исполнители): появляется через секунду, не ловит курсор. */
+.ntd-hovercard {
+  position: fixed; z-index: 300; width: 260px; max-height: 320px; overflow: auto; padding: 6px;
+  border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-raised);
+  box-shadow: var(--shadow-lg, 0 12px 32px rgb(0 0 0 / 0.25)); pointer-events: none;
+  animation: ntd-hover-in var(--duration-fast, 120ms) var(--ease-out, ease-out);
+}
+.ntd-hovercard-head { padding: 4px 8px 6px; font-size: var(--text-xs); color: var(--text-muted); }
+.ntd-hovercard-row { display: flex; align-items: center; gap: 10px; padding: 5px 8px; font-size: var(--text-sm); color: var(--text-main); }
+.ntd-hovercard-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@keyframes ntd-hover-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
+
+/* Повтор по дням недели и время — внутри меню «Повтор». */
+.ntd-weekdays { display: flex; gap: 4px; padding: 4px 10px 8px; }
+.ntd-weekday {
+  flex: 1; min-width: 32px; height: 32px; padding: 0; border: 1px solid var(--border-color); border-radius: var(--radius-sm, 8px);
+  background: transparent; color: var(--text-2); font: inherit; font-size: var(--text-xs); cursor: pointer;
+}
+.ntd-weekday:hover { background: var(--surface-hover); }
+.ntd-weekday[aria-pressed="true"] { border-color: var(--accent-color); background: color-mix(in srgb, var(--accent-color) 18%, transparent); color: var(--text-main); }
+.ntd-repeat-time { display: flex; align-items: center; gap: 8px; padding: 4px 10px 8px; font-size: var(--text-sm); color: var(--text-2); }
+.ntd-repeat-time input { flex: 1; min-width: 0; height: 32px; padding: 0 8px; border: 1px solid var(--border-color); border-radius: var(--radius-sm, 8px); background: var(--bg-sunken, transparent); color: var(--text-main); font: inherit; color-scheme: light dark; }
+.ntd-repeat-time input:disabled { opacity: 0.5; }
+.ntd-repeat-time .nx-ghost { height: 28px; padding: 0 8px; font-size: var(--text-xs); }
+
+/* ── Список деревом (как «Документы»): папки — ветки, задачи внутри; группы сворачиваются ─────────────── */
+.ntl-tools { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.ntl-tools > .nx-search, .ntl-tools > label, .ntl-tools > div:not(.ntl-tool) { flex: 1; min-width: 0; }
+.ntl-tool { display: grid; place-items: center; flex: none; width: 32px; height: 32px; padding: 0; border-radius: var(--radius-md); }
+.ntl-tool[aria-pressed="true"] { background: var(--surface-selected); color: var(--accent-color); }
+
+.ntl-group-head { cursor: pointer; border-radius: var(--radius-sm, 6px); user-select: none; }
+.ntl-group-head:focus-visible { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent-color) 45%, transparent); }
+@media (hover: hover) { .ntl-group-head:hover { background: color-mix(in srgb, var(--surface-hover) 70%, var(--surface-panel)); } }
+.ntl-group-static { cursor: default; }
+.ntl-caret { flex: none; color: var(--text-muted); transition: transform var(--duration-fast) var(--ease-out); }
+.ntl-group-head[aria-expanded="true"] .ntl-caret, .ntl-done-toggle[aria-expanded="true"] .ntl-caret { transform: rotate(90deg); }
+.ntl-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ntl-count { flex: none; font-size: var(--text-2xs); font-weight: var(--weight-medium); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.ntl-group-head > .ntl-count + .ntl-head-btn { margin-left: 2px; }
+.ntl-shared { flex: none; color: var(--text-muted); }
+.ntl-folder-icon { flex: none; color: var(--tone, var(--text-muted)); }
+/* Кнопки на строке папки (+ и ⋯) — справа, при наведении, как у папок «Документов». */
+.ntl-head-btn { display: none; place-items: center; flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; }
+.ntl-head-btn:hover { background: var(--surface-hover); color: var(--text-main); }
+@media (hover: hover) { .ntl-group-head:hover .ntl-head-btn, .ntl-group-head:focus-within .ntl-head-btn { display: grid; } }
+@media (hover: none) { .ntl-head-btn { display: grid; } }
+/* Режим папок — ветки: задачи с отступом и линией ветки, заголовок — обычной строкой (не капслоком). */
+.ntl-group[data-tree] > .ntl-group-head { font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text-main); }
+.ntl-group[data-tree] > .ntl-group-items { margin-left: 13px; padding-left: 6px; border-left: 1px solid var(--border-color); }
+.ntl-folder-empty { margin: 2px 0 6px; padding: 4px 8px; font-size: var(--text-xs); color: var(--text-muted); }
+/* Цель сброса при перетаскивании. */
+.ntl-group[data-drop] > .ntl-group-head { background: color-mix(in srgb, var(--accent-color) 16%, var(--surface-panel)); box-shadow: inset 0 0 0 1.5px var(--accent-color); }
+.ntl-row[draggable="true"] { cursor: default; }
+.ntl-row:active[draggable="true"] { cursor: grabbing; }
+.ntl-draft { color: var(--note-orange); font-weight: var(--weight-semibold); }
+.ntl-row[data-draft] .ntl-name { font-style: italic; }
+
+/* Компактный: одна строка на задачу, без описания — дерево видно целиком. */
+.ntl[data-density="compact"] .ntl-row { min-height: 28px; padding-top: 2px; padding-bottom: 2px; gap: 8px; }
+.ntl[data-density="compact"] .ntl-snippet { display: none; }
+.ntl[data-density="compact"] .ntl-text { display: flex; align-items: center; gap: 8px; }
+.ntl[data-density="compact"] .ntl-name { flex: 1; min-width: 0; font-size: var(--text-sm); font-weight: var(--weight-regular, 400); }
+.ntl[data-density="compact"] .ntl-meta { flex: none; }
+.ntl[data-density="compact"] .ntl-check { width: 16px; height: 16px; }
+.ntl[data-density="compact"] .ntl-faces .nx-avatar { width: 18px !important; height: 18px !important; }
+.ntl[data-density="compact"] .ntl-group-head { min-height: 26px; padding-top: 3px; padding-bottom: 3px; }
+.ntl[data-density="compact"] .ntl-group + .ntl-group { margin-top: 2px; }
+
+/* Черновик в шапке задачи. */
+.ntd-draft-bar { display: inline-flex; align-items: center; gap: var(--space-2); margin-left: auto; min-width: 0; }
+.ntd-draft-note { font-size: var(--text-xs); color: var(--note-orange); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ntd-create { display: inline-flex; align-items: center; gap: 6px; height: 30px; }
+/* Группы любой группировки (люди, статусы) — корневыми ветками: крупно, от левого края, как папки. */
+.ntl-group > .ntl-group-head { font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text-main); padding-left: 4px; gap: 8px; }
+.ntl-group > .ntl-group-items { margin-left: 13px; padding-left: 6px; border-left: 1px solid var(--border-color); }
+.ntl-group > .ntl-done-toggle { color: var(--text-2); }
+/* Статус в строке задачи и место вставки при ручной перестановке. */
+.ntl-status { display: inline-flex; align-items: center; gap: 4px; color: var(--text-2); }
+.ntl-status i { width: 6px; height: 6px; border-radius: 50%; background: var(--tone); }
+.ntl-row[data-drop-before] { box-shadow: inset 0 2px 0 var(--accent-color); }

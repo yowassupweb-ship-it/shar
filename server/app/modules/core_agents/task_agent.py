@@ -103,9 +103,35 @@ def _meta(task: dict) -> dict:
     return meta if isinstance(meta, dict) else {}
 
 
+_WEEKDAY_CODES = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
+_WEEKDAY_PLURAL = ["понедельникам", "вторникам", "средам", "четвергам", "пятницам", "субботам", "воскресеньям"]
+
+
+def _repeat_label(rule: str) -> str:
+    days = _days_of(rule)
+    if days:
+        return "по " + ", ".join(_WEEKDAY_PLURAL[d] for d in days)
+    return REPEAT_LABELS.get(rule, rule)
+
+
+def _days_of(rule: str) -> list[int]:
+    """Повтор «по дням недели» (`days:TU,TH`) → номера дней (пн = 0)."""
+    if not rule.startswith("days:"):
+        return []
+    return sorted({_WEEKDAY_CODES.index(c) for c in rule[5:].split(",") if c in _WEEKDAY_CODES})
+
+
 def _repeat_of(task: dict) -> str:
     rep = str(_meta(task).get("repeat") or "none")
-    return rep if rep in REPEAT_LABELS else "none"
+    return rep if rep in REPEAT_LABELS or _days_of(rep) else "none"
+
+
+def _repeat_time_of(task: dict) -> Optional[tuple[int, int]]:
+    """Своё время повтора «ЧЧ:ММ» (задаётся в задаче вместе с днями недели)."""
+    value = str(_meta(task).get("repeatTime") or "")
+    if len(value) == 5 and value[2] == ":" and value[:2].isdigit() and value[3:].isdigit():
+        return int(value[:2]), int(value[3:])
+    return None
 
 
 def _due_of(task: dict) -> Optional[datetime]:
@@ -127,6 +153,8 @@ def _matches(rule: str, day: date, base: date) -> bool:
         return False
     if rule == "daily":
         return True
+    if rule.startswith("days:"):
+        return day.weekday() in _days_of(rule)
     if rule == "weekdays":
         return day.weekday() < 5
     if rule == "weekly":
@@ -145,6 +173,9 @@ def compute_next(task: dict, run_time: str, after: datetime) -> Optional[datetim
     hour, minute = (int(x) for x in run_time.split(":"))
     if due is not None and (due.hour or due.minute):
         hour, minute = due.hour, due.minute
+    own = _repeat_time_of(task)
+    if own and rule != "none":
+        hour, minute = own
     after_l = _local(after)
     if rule == "none":
         if due is None:
@@ -171,7 +202,7 @@ def _describe(task: dict, row: dict) -> str:
     rule = _repeat_of(task)
     when = _local(nxt).strftime("%d.%m в %H:%M") if nxt else ""
     if rule != "none":
-        return f"Просыпается {REPEAT_LABELS[rule]}, ближайший раз — {when}" if when else f"Просыпается {REPEAT_LABELS[rule]}"
+        return f"Просыпается {_repeat_label(rule)}, ближайший раз — {when}" if when else f"Просыпается {_repeat_label(rule)}"
     return f"Выполнит {when}" if when else "Ждёт запуска"
 
 
@@ -291,7 +322,7 @@ def _prompt(task: dict) -> str:
     meta = _meta(task)
     md = meta.get("md") if isinstance(meta.get("md"), str) else str(task.get("description") or "")
     rule = _repeat_of(task)
-    kind = f"Регулярная задача ({REPEAT_LABELS[rule]}): запуск повторится в следующий срок, а ваши отчёты копятся в самой задаче." if rule != "none" \
+    kind = f"Регулярная задача ({_repeat_label(rule)}): запуск повторится в следующий срок, а ваши отчёты копятся в самой задаче." if rule != "none" \
         else "Разовое поручение: после успешного отчёта задача закроется."
     return (f"Поручение из задачи Шара «{task.get('title') or 'без названия'}» (id {task['id']}). "
             f"Выполните её сейчас сами — инструментами Шара (карточка задачи: task_read по id) и подключёнными интеграциями.\n\n{md.strip()}\n\n"

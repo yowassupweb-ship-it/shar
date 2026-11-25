@@ -29,3 +29,72 @@ export function tightenLists(md: string): string {
   }
   return out.join('\n');
 }
+
+/**
+ * Пустые строки. В Шаре каждая пустая строка — свой зазор (две подряд — двойной), а markdown сводит любую пачку
+ * пустых строк к одной границе абзацев: после правки в визуальном редакторе зазоры схлопывались. Поэтому на входе
+ * каждая «лишняя» пустая строка становится абзацем-меткой (невидимый символ — в редакторе это пустая строка), а на
+ * выходе метки и пустые абзацы, добавленные Enter-ом, превращаются обратно в пустые строки.
+ */
+const MARK = '​';
+/** Метка пустой строки — её пишет пустой абзац редактора (extensions.ts). */
+export const EMPTY_LINE_MARK = MARK;
+
+/** Применить fn к тексту вне блоков кода (```): там пустые строки — часть кода. */
+function outsideFences(md: string, fn: (chunk: string) => string): string {
+  const lines = md.split('\n');
+  const out: string[] = [];
+  let buf: string[] = [];
+  let fence = false;
+  const flush = () => { if (buf.length) out.push(fn(buf.join('\n'))); buf = []; };
+  for (const line of lines) {
+    const toggle = /^\s*(```|~~~)/.test(line);
+    if (!fence && toggle) { flush(); fence = true; out.push(line); continue; }
+    if (fence) { out.push(line); if (toggle) fence = false; continue; }
+    buf.push(line);
+  }
+  flush();
+  return out.join('\n');
+}
+
+/** Пачки пустых строк: [индекс первой непустой до, число пустых]. Работает построчно — без хрупких регулярок. */
+function mapBlankRuns(chunk: string, fn: (blanks: number) => string[]): string {
+  const lines = chunk.split('\n');
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (lines[i].trim() !== '') { out.push(lines[i]); i += 1; continue; }
+    let n = 0;
+    while (i < lines.length && lines[i].trim() === '') { n += 1; i += 1; }
+    // Пустые строки в начале и в конце текста не трогаем.
+    if (out.length === 0 || i >= lines.length) out.push(...Array<string>(n).fill(''));
+    else out.push(...fn(n));
+  }
+  return out.join('\n');
+}
+
+/** Markdown Шара → вход визуального редактора. */
+export function toEditorMarkdown(md: string): string {
+  return outsideFences(md.split(MARK).join(''), (chunk) => mapBlankRuns(chunk, (n) => {
+    const res = [''];
+    for (let k = 1; k < n; k += 1) res.push(MARK, '');
+    return res;
+  }));
+}
+
+/** Выход визуального редактора → markdown Шара. */
+export function fromEditorMarkdown(md: string): string {
+  const out = outsideFences(tightenLists(unescapeBreaks(md)), (chunk) => {
+    // Пустой абзац (Enter на пустой строке) редактор пишет пустым блоком между двумя границами: 3 пустые строки
+    // вместо одной. Каждый такой пустой абзац — одна пустая строка.
+    const lines = mapBlankRuns(chunk, (n) => Array<string>(1 + Math.floor((n - 1) / 2)).fill('')).split('\n');
+    // Абзац-метка вместе с границей перед ней — одна пустая строка.
+    const res: string[] = [];
+    for (const line of lines) {
+      if (line === MARK && res.length && res[res.length - 1] === '') continue;
+      res.push(line);
+    }
+    return res.join('\n');
+  });
+  return out.split(MARK).join('');
+}

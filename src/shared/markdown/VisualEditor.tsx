@@ -1,14 +1,10 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
-import StarterKit from '@tiptap/starter-kit';
-import { TaskItem, TaskList } from '@tiptap/extension-list';
-import Image from '@tiptap/extension-image';
-import { Placeholder } from '@tiptap/extensions';
-import { Markdown } from 'tiptap-markdown';
+import { markdownExtensions } from './extensions';
 import {
   Bold, Code, Heading1, Heading2, Heading3, ImagePlus, Italic, Link as LinkIcon, List, ListChecks, ListOrdered, Pilcrow, Quote, Redo2, Strikethrough, Undo2,
 } from 'lucide-react';
-import { tightenLists, unescapeBreaks } from './paragraphs';
+import { fromEditorMarkdown, toEditorMarkdown } from './paragraphs';
 import './visual.css';
 
 /**
@@ -19,7 +15,8 @@ import './visual.css';
  * Внешнее изменение значения (правка коллеги, возврат версии) подхватывается, пока человек не печатает.
  */
 
-const getMarkdown = (editor: Editor): string => tightenLists(unescapeBreaks((editor.storage as unknown as { markdown: { getMarkdown: () => string } }).markdown.getMarkdown()));
+// Пустые строки Шара (каждая — свой зазор) переживают круг через редактор: см. toEditorMarkdown / fromEditorMarkdown.
+const getMarkdown = (editor: Editor): string => fromEditorMarkdown((editor.storage as unknown as { markdown: { getMarkdown: () => string } }).markdown.getMarkdown());
 
 export function VisualEditor({ value, onChange, placeholder, onBlur, uploadImage, extraTools, autoFocus }: {
   value: string;
@@ -37,15 +34,8 @@ export function VisualEditor({ value, onChange, placeholder, onBlur, uploadImage
   upload.current = uploadImage;
 
   const editor = useEditor({
-    extensions: [
-      StarterKit.configure({ underline: false, link: { openOnClick: false, autolink: true } }),
-      TaskList,
-      TaskItem.configure({ nested: true }),
-      Image,
-      Placeholder.configure({ placeholder: placeholder || '' }),
-      Markdown.configure({ html: false, tightLists: true, bulletListMarker: '-', breaks: true, transformPastedText: true, transformCopiedText: true }),
-    ],
-    content: value,
+    extensions: markdownExtensions(placeholder || ''),
+    content: toEditorMarkdown(value),
     autofocus: autoFocus ? 'end' : false,
     editorProps: {
       attributes: { class: 'nve-content', 'aria-label': 'Текст', role: 'textbox', 'aria-multiline': 'true' },
@@ -88,11 +78,11 @@ export function VisualEditor({ value, onChange, placeholder, onBlur, uploadImage
     if (editor.isFocused && getMarkdown(editor) !== value && document.activeElement?.closest('.nve')) {
       // Печатает прямо сейчас — внешнюю правку применяем, но курсор не теряем.
       const { from, to } = editor.state.selection;
-      editor.commands.setContent(value, { emitUpdate: false });
+      editor.commands.setContent(toEditorMarkdown(value), { emitUpdate: false });
       const max = editor.state.doc.content.size;
       editor.commands.setTextSelection({ from: Math.min(from, max), to: Math.min(to, max) });
     } else {
-      editor.commands.setContent(value, { emitUpdate: false });
+      editor.commands.setContent(toEditorMarkdown(value), { emitUpdate: false });
     }
     emitted.current = value;
   }, [value, editor]);
