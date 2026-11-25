@@ -73,7 +73,9 @@ export function readExtras(book: Book): Record<string, SheetExtras> {
 export function writeExtras(book: Book, all: Record<string, SheetExtras>) {
   const rest = (book.resources || []).filter((r) => r.name !== EXTRAS_RESOURCE);
   const clean = Object.fromEntries(Object.entries(all).filter(([, v]) => v && Object.values(v).some((x) => x !== undefined && (!Array.isArray(x) || x.length) && (typeof x !== 'object' || Object.keys(x).length))));
-  book.resources = Object.keys(clean).length ? [...rest, { name: EXTRAS_RESOURCE, data: JSON.stringify(clean) }] : rest;
+  // Ресурс остаётся и пустым: его наличие говорит сохранению «дополнения ведёт свой редактор». Без него удаление
+  // последней диаграммы (заметки, правила…) не доходило до файла — сохранение возвращало то, что было при открытии.
+  book.resources = [...rest, { name: EXTRAS_RESOURCE, data: JSON.stringify(clean) }];
 }
 export const sheetExtras = (book: Book, sheetId: string): SheetExtras => readExtras(book)[sheetId] || {};
 

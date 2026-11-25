@@ -140,6 +140,8 @@ function parseTsv(text: string): string[][] {
 const tsvCell = (s: string) => (/[\t\n"]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+type StatKind = 'sum' | 'avg' | 'min' | 'max' | 'count' | 'countNum';
+
 /** Номер объекта по его тождеству — для ключа кэша холста. */
 const objIds = new WeakMap<object, number>();
 let objSeq = 0;
@@ -184,6 +186,8 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   const [noteTip, setNoteTip] = useState<{ key: string; x: number; y: number } | null>(null);
   const [noteEdit, setNoteEdit] = useState<{ r: number; c: number; text: string } | null>(null);
   const [linkEdit, setLinkEdit] = useState<{ r: number; c: number; initial: string } | null>(null);
+  // Какой показатель выделения виден в углу (как в Google: выбирается в списке, запоминается).
+  const [statKind, setStatKind] = useState<StatKind>(() => { try { return (localStorage.getItem('fsh:stat') as StatKind) || 'sum'; } catch { return 'sum'; } });
   // Карточку ссылки закрыли (Esc) — для этой ячейки не показываем, пока не выберут другую.
   const [cardClosed, setCardClosed] = useState('');
   // Превью внешней ссылки в карточке (заголовок, описание, картинка сайта) — тот же источник и кэш, что в чате.
@@ -1900,7 +1904,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   const summaryText = useMemo(() => {
     const [sr, sc, er, ec] = sumKey.split(':').map(Number);
     if (!sheet || (sr === er && sc === ec)) return null;
-    let sum = 0; let n = 0; let count = 0;
+    let sum = 0; let n = 0; let count = 0; let min = Infinity; let max = -Infinity;
     const data = sheet.cellData || {};
     for (const rk of Object.keys(data)) {
       const r = Number(rk);
@@ -1910,12 +1914,16 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
         if (c < sc || c > ec) continue;
         const v = data[r][c]?.v;
         if (v !== null && v !== undefined && v !== '') count += 1;
-        if (typeof v === 'number') { sum += v; n += 1; }
+        if (typeof v === 'number') { sum += v; n += 1; if (v < min) min = v; if (v > max) max = v; }
       }
     }
     if (!count) return null;
-    const f = (x: number) => String(Number(x.toPrecision(12))).replace('.', ',');
-    return n ? `Сумма: ${f(sum)} · Среднее: ${f(sum / n)} · Количество: ${count}` : `Количество: ${count}`;
+    // Как в Google: числа с разрядами, без «хвоста» из двенадцати знаков.
+    const f = (x: number) => Number(x.toPrecision(12)).toLocaleString('ru-RU', { maximumFractionDigits: 6 });
+    const all: Array<[StatKind, string, string]> = n
+      ? [['sum', 'Сумма', f(sum)], ['avg', 'Среднее', f(sum / n)], ['min', 'Минимум', f(min)], ['max', 'Максимум', f(max)], ['count', 'Количество', f(count)], ['countNum', 'Количество чисел', f(n)]]
+      : [['count', 'Количество', f(count)]];
+    return all;
   }, [sheet, version, sumKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) return <div className="nws-missing" role="alert">{error}</div>;
@@ -1984,7 +1992,8 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     const px = pt * (96 / 72);
     const rawH = editBoxRaw?.h ?? 24;
     const base = vt === 1 ? 2 + px : vt === 2 ? (rawH - lineH) / 2 + px : rawH - 4;
-    const padTop = Math.max(0, Math.round(base - (lineH - px) / 2 - 0.905 * px));
+    // Не больше, чем помещается: иначе однострочное поле вырастало на пару пикселей вниз за пределы ячейки.
+    const padTop = Math.max(0, Math.min(h - lineH, Math.round(base - (lineH - px) / 2 - 0.905 * px)));
     const css = editLook?.css || {};
     const viewW = (grid.current?.clientWidth ?? 800) / zoom;
     return {
@@ -2261,7 +2270,14 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
             </button>
           )
         ))}
-        {summary && <span className="fsh-summary">{summary}</span>}
+        {summary && (() => {
+          const shown = summary.find(([k]) => k === statKind) ?? summary[0];
+          return (
+            <button type="button" className="fsh-summary" onMouseDown={(e) => e.preventDefault()} onClick={open('stats')} aria-expanded={pop?.kind === 'stats'} title="Показатели выделения">
+              {shown[1]}: {shown[2]}<OChevronDown size={12} aria-hidden="true" />
+            </button>
+          );
+        })()}
       </div>
 
       {menu && (
@@ -2431,6 +2447,16 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
               <option value={4}>Пунктир</option><option value={3}>Точки</option><option value={7}>Двойная</option>
             </select>
           </div>
+        </Pop>
+      )}
+      {pop?.kind === 'stats' && summary && (
+        <Pop anchor={pop.at} trigger={pop.trigger} onClose={close} className="fdoc-pop-list fsh-stats-pop">
+          {summary.map(([k, label, value]) => (
+            <button key={k} type="button" className="fdoc-pop-item fsh-stat" aria-selected={(summary.find(([x]) => x === statKind) ?? summary[0])[0] === k}
+              onClick={() => { setStatKind(k); try { localStorage.setItem('fsh:stat', k); } catch { /* без памяти */ } close(); }}>
+              <span>{label}</span><b>{value}</b>
+            </button>
+          ))}
         </Pop>
       )}
       {pop?.kind === 'halign' && (

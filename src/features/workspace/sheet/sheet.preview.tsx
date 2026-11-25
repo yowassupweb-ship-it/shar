@@ -1,3 +1,4 @@
+import { Profiler } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import FastSheetEditor from '../editors/FastSheetEditor';
 import { bookToBase64, newBook } from '../lib/workbook';
@@ -35,7 +36,14 @@ export async function mount(): Promise<string> {
   host.className = 'nx';
   document.body.appendChild(host);
   root = createRoot(host);
-  root.render(<FastSheetEditor content={content} onContent={(next) => { (window as unknown as { __fshSaved?: string }).__fshSaved = next; }} readOnly={false} loadKey={0} />);
+  // Время рендера (React Profiler) — для замеров: window.__fshRenders.
+  const w = window as unknown as { __fshRenders?: number[] };
+  w.__fshRenders = [];
+  root.render(
+    <Profiler id="fsh" onRender={(_id, _phase, actual) => { w.__fshRenders?.push(actual); }}>
+      <FastSheetEditor content={content} onContent={(next) => { (window as unknown as { __fshSaved?: string }).__fshSaved = next; }} readOnly={false} loadKey={0} />
+    </Profiler>,
+  );
   return 'ok';
 }
 
@@ -124,7 +132,14 @@ export async function mountDemo(): Promise<string> {
   host.className = 'nx';
   document.body.appendChild(host);
   root = createRoot(host);
-  root.render(<FastSheetEditor content={content} onContent={(next) => { (window as unknown as { __fshSaved?: string }).__fshSaved = next; }} readOnly={false} loadKey={0} />);
+  // Время рендера (React Profiler) — для замеров: window.__fshRenders.
+  const w = window as unknown as { __fshRenders?: number[] };
+  w.__fshRenders = [];
+  root.render(
+    <Profiler id="fsh" onRender={(_id, _phase, actual) => { w.__fshRenders?.push(actual); }}>
+      <FastSheetEditor content={content} onContent={(next) => { (window as unknown as { __fshSaved?: string }).__fshSaved = next; }} readOnly={false} loadKey={0} />
+    </Profiler>,
+  );
   return 'ok';
 }
 
@@ -136,6 +151,13 @@ export async function mountContent(content: string): Promise<string> {
   host.style.cssText = 'position:fixed;inset:0;z-index:99999;background:var(--sh-bg,#fff);display:flex;flex-direction:column';
   document.body.appendChild(host);
   root = createRoot(host);
-  root.render(<FastSheetEditor content={content} onContent={(next) => { (window as unknown as { __fshSaved?: string }).__fshSaved = next; }} readOnly={false} loadKey={0} />);
+  // Время рендера (React Profiler) — для замеров: window.__fshRenders.
+  const w = window as unknown as { __fshRenders?: number[] };
+  w.__fshRenders = [];
+  root.render(
+    <Profiler id="fsh" onRender={(_id, _phase, actual) => { w.__fshRenders?.push(actual); }}>
+      <FastSheetEditor content={content} onContent={(next) => { (window as unknown as { __fshSaved?: string }).__fshSaved = next; }} readOnly={false} loadKey={0} />
+    </Profiler>,
+  );
   return 'ok';
 }

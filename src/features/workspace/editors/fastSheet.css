@@ -99,12 +99,12 @@ html[data-theme="graphite"] .fsh, html[data-theme="black"] .fsh { --sh-border-au
   background: var(--sh-sel); color: #fff; font: 600 11px/16px Inter, Arial, sans-serif; white-space: nowrap; pointer-events: none;
 }
 .fsh-editmirror {
-  box-sizing: border-box; min-height: inherit; padding: var(--edit-pad-top, 2px) 4px 2px; white-space: pre-wrap; overflow-wrap: anywhere;
+  box-sizing: border-box; min-height: inherit; padding: var(--edit-pad-top, 2px) 4px 0; white-space: pre-wrap; overflow-wrap: anywhere;
   visibility: hidden; user-select: none;
 }
 .fsh-editbox[data-formula] .fsh-editmirror { visibility: visible; }
 .fsh-editor {
-  position: absolute; inset: 0; box-sizing: border-box; width: 100%; height: 100%; margin: 0; padding: var(--edit-pad-top, 2px) 4px 2px; resize: none; overflow: hidden;
+  position: absolute; inset: 0; box-sizing: border-box; width: 100%; height: 100%; margin: 0; padding: var(--edit-pad-top, 2px) 4px 0; resize: none; overflow: hidden;
   border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; line-height: inherit; text-align: inherit; outline: none; user-select: text;
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
@@ -138,7 +138,15 @@ html[data-theme="graphite"] .fsh, html[data-theme="black"] .fsh { --sh-border-au
 .fsh-tab[aria-selected="true"] { background: var(--sh-head-on); color: var(--sh-text); font-weight: 600; }
 .fsh-tab[style*="--tab"]::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: 2px; height: 3px; border-radius: 2px; background: var(--tab); }
 .fsh-tab-input { flex: none; width: 120px; height: 26px; padding: 0 8px; border: 2px solid var(--sh-sel); border-radius: 6px; background: var(--sh-bg); color: var(--sh-text); font: inherit; font-size: 13px; outline: none; }
-.fsh-summary { margin-left: auto; padding-left: 12px; color: var(--sh-head-text); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.fsh-summary {
+  display: inline-flex; align-items: center; gap: 4px; margin-left: auto; height: 28px; padding: 0 8px 0 12px; border: 1px solid var(--sh-grid); border-radius: 6px;
+  background: transparent; color: var(--sh-text); font: inherit; font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; cursor: pointer;
+}
+.fsh-summary:hover, .fsh-summary[aria-expanded="true"] { background: var(--surface-hover); }
+.fsh-summary svg { color: var(--sh-head-text); }
+.fsh-stats-pop { min-width: 220px; }
+.fsh-stat { display: flex; justify-content: space-between; gap: 16px; }
+.fsh-stat b { font-weight: 600; font-variant-numeric: tabular-nums; }
 
 /* Холст (sheet/draw.ts): прилипает к краю области прокрутки, распорка под ним даёт полосы прокрутки нужной длины. */
 .fsh-gridwrap { position: relative; flex: 1; min-height: 0; display: flex; }
@@ -272,3 +280,9 @@ html[data-theme="graphite"] .fsh, html[data-theme="black"] .fsh { --sh-border-au
 .fsh-linkcard-prev-text b { font-weight: 600; font-size: 14px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .fsh-linkcard-prev-text span { color: var(--sh-head-text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .fsh-linkcard-prev-text small { color: var(--sh-head-text); font-size: 12px; }
+
+/* Полосы прокрутки листа видны всегда, как в Google: общий стиль показывает ползунок только при наведении, и он
+   мигал, когда над сеткой появлялись поле правки или карточка ссылки (сетка на миг теряла :hover). */
+.nx .fsh .fsh-grid::-webkit-scrollbar { width: 12px; height: 12px; }
+.nx .fsh .fsh-grid::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--sh-text) 22%, transparent); border-width: 3px; }
+.nx .fsh .fsh-grid::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--sh-text) 40%, transparent); }
