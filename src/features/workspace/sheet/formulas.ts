@@ -1,5 +1,30 @@
 import FormulaParser from 'fast-formula-parser';
-import { setNumberFormatter, usedBounds, type Book, type Cell, type Sheet } from './model';
+import { parseRange, setNumberFormatter, usedBounds, type Book, type Cell, type Sheet } from './model';
+import { readNames } from './extras';
+
+/** Именованный диапазон → ссылка для движка (1-based), как onVariable в fast-formula-parser. */
+function nameResolver(book: Book) {
+  const names = readNames(book);
+  // Движок понимает только латинские имена — в формуле имя подменяется псевдонимом SHARNAME<n> (вне строк в кавычках).
+  const list = Object.keys(names).sort((a, b) => b.length - a.length);
+  const alias = new Map(list.map((n, i) => [`sharname${i}`, names[n]]));
+  const byName = new Map(Object.entries(names).map(([k, v]) => [k.toLowerCase(), v]));
+  const escape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const patterns = list.map((n, i) => ({ re: new RegExp(`(^|[^\\wА-Яа-яЁё.])(${escape(n)})(?![\\wА-Яа-яЁё.(!])`, 'giu'), to: `SHARNAME${i}` }));
+  const rewrite = (formula: string) => (patterns.length ? formula.split(/("(?:[^"]|"")*")/).map((part, i) => (i % 2 ? part : patterns.reduce((acc, p) => acc.replace(p.re, (_m, pre: string) => `${pre}${p.to}`), part))).join('') : formula);
+  const resolve = (name: string) => {
+    const refText = alias.get(name.toLowerCase()) ?? byName.get(name.toLowerCase());
+    if (!refText) return null;
+    const bang = refText.lastIndexOf('!');
+    const sheet = bang > 0 ? refText.slice(0, bang).replace(/^'(.*)'$/, '$1') : undefined;
+    const r = parseRange(refText.slice(bang + 1).replace(/\$/g, '').toUpperCase());
+    if (!r) return null;
+    return r.startRow === r.endRow && r.startColumn === r.endColumn
+      ? { sheet, row: r.startRow + 1, col: r.startColumn + 1 }
+      : { sheet, from: { row: r.startRow + 1, col: r.startColumn + 1 }, to: { row: r.endRow + 1, col: r.endColumn + 1 } };
+  };
+  return { resolve, rewrite };
+}
 
 /**
  * Формулы своего редактора — движок fast-formula-parser (MIT, ~280 функций Excel). Значения формул считаются у
@@ -75,7 +100,9 @@ export function recalc(book: Book): Set<string> {
   };
   const sheetFor = (name: string | undefined) => (name ? byName.get(name.toLowerCase()) : current) ?? current;
 
+  const resolveName = nameResolver(book);
   const parser = new Parser({
+    onVariable: (name: string) => resolveName.resolve(name),
     onCell: (ref: { sheet?: string; row: number; col: number }) => {
       const s = sheetFor(ref.sheet);
       return s ? valueOf(s, ref.row - 1, ref.col - 1) : undefined;
@@ -106,7 +133,7 @@ export function recalc(book: Book): Set<string> {
     current = sheet;
     let value: unknown;
     try {
-      const text = ruToEn(String(cell.f).replace(/^=/, ''));
+      const text = resolveName.rewrite(ruToEn(String(cell.f).replace(/^=/, '')));
       value = toCellValue(parser.parse(text, { sheet: sheet.name, row: r + 1, col: c + 1 }));
     } catch (e) {
       value = isError(e) ? String((e as { error?: string }).error || e) : '#ERROR!';
@@ -163,7 +190,9 @@ export function formulaEvaluator(book: Book): (sheet: Sheet, formula: string, ro
   let current: Sheet | null = null;
   const sheetFor = (name: string | undefined) => (name ? byName.get(name.toLowerCase()) : current) ?? current;
   const value = (s: Sheet, r: number, c: number) => { const v = s.cellData?.[r]?.[c]?.v; return v === null ? undefined : v; };
+  const resolveName = nameResolver(book);
   const parser = new Parser({
+    onVariable: (name: string) => resolveName.resolve(name),
     onCell: (ref: { sheet?: string; row: number; col: number }) => { const s = sheetFor(ref.sheet); return s ? value(s, ref.row - 1, ref.col - 1) : undefined; },
     onRange: (ref: { sheet?: string; from: { row: number; col: number }; to: { row: number; col: number } }) => {
       const s = sheetFor(ref.sheet);
@@ -180,6 +209,6 @@ export function formulaEvaluator(book: Book): (sheet: Sheet, formula: string, ro
   });
   return (sheet, formula, row, col) => {
     current = sheet;
-    try { return toCellValue(parser.parse(ruToEn(formula.replace(/^=/, '')), { sheet: sheet.name, row: row + 1, col: col + 1 })); } catch { return false; }
+    try { return toCellValue(parser.parse(resolveName.rewrite(ruToEn(formula.replace(/^=/, ''))), { sheet: sheet.name, row: row + 1, col: col + 1 })); } catch { return false; }
   };
 }

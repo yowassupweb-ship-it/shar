@@ -520,6 +520,7 @@ function mergesOf(sheet: Worksheet): Array<{ top: number; left: number; bottom: 
 
 const FILTER_RESOURCE = 'SHEET_FILTER_PLUGIN';
 const EXTRAS_RESOURCE = 'SHAR_SHEET_EXTRAS';
+const NAMES_RESOURCE = 'SHAR_NAMED_RANGES';
 
 export function excelToUniver(book: ExcelWorkbook): Partial<IWorkbookData> {
   const ex = extrasOf(book);
@@ -644,6 +645,16 @@ export function excelToUniver(book: ExcelWorkbook): Partial<IWorkbookData> {
         }
         return Object.keys(out).length ? [{ name: EXTRAS_RESOURCE, data: JSON.stringify(out) }] : [];
       })(),
+      ...(() => {
+        // Именованные диапазоны книги (definedNames xlsx): имя → «Лист!A1:B5».
+        const names: Record<string, string> = {};
+        try {
+          for (const dn of (book.definedNames as unknown as { model: Array<{ name: string; ranges: string[] }> }).model || []) {
+            if (dn.name && dn.ranges?.[0] && !dn.name.startsWith('_xlnm')) names[dn.name] = dn.ranges[0].replace(/\$/g, '');
+          }
+        } catch { /* без имён */ }
+        return Object.keys(names).length ? [{ name: NAMES_RESOURCE, data: JSON.stringify(names) }] : [];
+      })(),
     ],
   };
 }
@@ -710,6 +721,17 @@ export function applySnapshot(book: ExcelWorkbook, snapshot: IWorkbookData) {
   ex.sorts = nextSorts;
   ex.sheetExtras = nextExtras;
   if (extrasData) ex.hasExtras = true;
+  const namesRes = (snapshot.resources || []).find((r) => r.name === NAMES_RESOURCE);
+  if (namesRes || extrasData) {
+    // Свой редактор сохранил книгу — имена берём из него целиком (удалённые убираем из файла).
+    let names: Record<string, string> = {};
+    try { names = namesRes?.data ? JSON.parse(namesRes.data) : {}; } catch { /* как было */ }
+    const abs = (ref: string) => { const bang = ref.lastIndexOf('!'); const sheet = ref.slice(0, bang); const r = ref.slice(bang + 1).replace(/([A-Z]+)(\d+)/g, '$$$1$$$2'); return `${/^[\w.]+$/.test(sheet) ? sheet : `'${sheet.replace(/^'(.*)'$/, '$1')}'`}!${r}`; };
+    try {
+      const keep = ((book.definedNames as unknown as { model: Array<{ name: string; ranges: string[] }> }).model || []).filter((dn) => dn.name.startsWith('_xlnm'));
+      (book.definedNames as unknown as { model: unknown }).model = [...keep, ...Object.entries(names).filter(([, r]) => r.includes('!')).map(([name, r]) => ({ name, ranges: [abs(r)] }))];
+    } catch { /* имена — только для Excel */ }
+  }
 }
 
 /** Текст ячейки rich text (поле `p`): абзацы — переводами строки, служебные знаки Univer убраны. */

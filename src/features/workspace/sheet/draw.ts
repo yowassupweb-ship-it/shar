@@ -1,6 +1,6 @@
 import type { CfLookup } from './cf';
 import { chartData, drawChart } from './chart';
-import type { DvRule, Group, SheetObject } from './extras';
+import type { Banding, DvRule, Group, SheetObject } from './extras';
 import { a1, autoAlign, colName, displayText, HEAD_H, HEAD_W, indexAt, styleOf, type Book, type Range, type Sheet, type Style } from './model';
 
 /**
@@ -33,6 +33,8 @@ export interface DrawState {
   /** Флажки и списки, заметки, объекты (картинки, диаграммы), группы строк/столбцов. */
   dv?: DvRule[]; notes?: Record<string, string>; objects?: SheetObject[]; selectedObject?: string | null;
   groups?: { rows?: Group[]; cols?: Group[] };
+  /** Чередование цветов строк (как в Google). */
+  banding?: Banding[];
   /** Масштаб (1 = 100%): ширина, высота и прокрутка приходят уже в единицах листа. */
   zoom?: number;
   /** Картинка догрузилась — перерисовать. */
@@ -199,6 +201,20 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
     ctx.fillRect(x, y, X(m.endColumn + 1) - x, Y(m.endRow + 1) - y);
   }
 
+  // Чередование цветов — под сеткой и под своей заливкой ячеек.
+  for (const bd of s.banding || []) {
+    const rr0 = Math.max(r0, bd.range.startRow); const rr1 = Math.min(r1, bd.range.endRow);
+    const cc0 = Math.max(c0, bd.range.startColumn); const cc1 = Math.min(c1, bd.range.endColumn);
+    if (rr1 < rr0 || cc1 < cc0) continue;
+    const x0 = X(cc0); const x1 = X(cc1 + 1);
+    for (let r = rr0; r <= rr1; r += 1) {
+      const rel = r - bd.range.startRow;
+      const color = bd.header && rel === 0 ? bd.header : bd.footer && r === bd.range.endRow ? bd.footer : (rel - (bd.header ? 1 : 0)) % 2 === 0 ? bd.odd : bd.even;
+      ctx.fillStyle = color;
+      ctx.fillRect(x0, Y(r), x1 - x0, Y(r + 1) - Y(r));
+    }
+  }
+
   // Сетка (у листа её можно выключить — «Вид → Сетка», как в Google).
   if ((sheet as { showGridlines?: number }).showGridlines !== 0) {
     ctx.fillStyle = theme.grid;
@@ -281,7 +297,7 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
     const pad = 4;
     // Переливание текста вправо в пустые ячейки (без переноса, по левому краю).
     let clipW = d.w;
-    if (!wrap && h === 'left' && !g.merges.has(`${d.r}:${d.c}`)) {
+    if (!wrap && st?.tb !== 2 && h === 'left' && !g.merges.has(`${d.r}:${d.c}`)) {
       const need = ctx.measureText(text).width + pad * 2;
       let cc = d.c + 1;
       while (clipW < need && cc < g.cols) {

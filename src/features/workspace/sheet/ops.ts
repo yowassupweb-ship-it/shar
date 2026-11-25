@@ -2,7 +2,7 @@ import type { LiveOp } from '../live/channel';
 import { styleOf, type Book, type Cell, type Range, type Sheet, type Style, Styles } from './model';
 import { shiftRefs } from './refs';
 import { readFilters, writeFilters, type FilterColumn, type SheetFilter } from './filter';
-import { readExtras, SET_EXTRA, shiftExtras, writeExtras, type ExtraKey, type SheetExtras } from './extras';
+import { readExtras, readNames, SET_EXTRA, SET_NAMES, shiftExtras, writeExtras, writeNames, type ExtraKey, type SheetExtras } from './extras';
 
 /** Дополнения листа (условия, флажки, заметки, объекты, группы, защита) — вслед за вставкой/удалением строк. */
 function shiftSheetExtras(book: Book, sheetId: string, rows: boolean, start: number, delta: number) {
@@ -54,6 +54,10 @@ export const OP = {
   FILTER_REMOVE: 'sheet.mutation.remove-filter',
   GRIDLINES: 'sheet.mutation.toggle-gridlines',
   EXTRA: SET_EXTRA,
+  NAMES: SET_NAMES,
+  TAB_COLOR: 'sheet.mutation.set-tab-color',
+  SHEET_HIDDEN: 'sheet.mutation.set-worksheet-hidden',
+  SHEET_ORDER: 'sheet.mutation.set-worksheet-order',
 } as const;
 
 type Matrix = Record<string, Record<string, Cell | null>>;
@@ -162,6 +166,10 @@ export function inverseOf(book: Book, op: LiveOp): LiveOp[] {
       for (const col of cols) back.push({ id: OP.FILTER_CRITERIA, params: { subUnitId: p.subUnitId, col, criteria: (prev.filterColumns || []).find((c) => c.colId === col) ?? null, filteredOutRows: prev.cachedFilteredOut || [] } });
       return back;
     }
+    case OP.NAMES: return [{ id: OP.NAMES, params: { names: readNames(book) } }];
+    case OP.TAB_COLOR: return sheet ? [{ id: OP.TAB_COLOR, params: { subUnitId: p.subUnitId, color: sheet.tabColor || '' } }] : [];
+    case OP.SHEET_HIDDEN: return sheet ? [{ id: OP.SHEET_HIDDEN, params: { subUnitId: p.subUnitId, hidden: sheet.hidden ? 1 : 0 } }] : [];
+    case OP.SHEET_ORDER: return [{ id: OP.SHEET_ORDER, params: { subUnitId: p.subUnitId, fromOrder: p.toOrder, toOrder: p.fromOrder } }];
     case OP.EXTRA: {
       const prev = readExtras(book)[String(p.subUnitId)]?.[p.key as ExtraKey];
       return [{ id: OP.EXTRA, params: { subUnitId: p.subUnitId, key: p.key, value: prev === undefined ? null : JSON.parse(JSON.stringify(prev)) } }];
@@ -355,6 +363,16 @@ export function applyOp(book: Book, styles: Styles, op: LiveOp): boolean {
       const all = readFilters(book);
       delete all[String(p.subUnitId)];
       writeFilters(book, all);
+      return true;
+    }
+    case OP.NAMES: writeNames(book, (p.names as Record<string, string>) || {}); return true;
+    case OP.TAB_COLOR: if (sheet) { if (p.color) sheet.tabColor = String(p.color); else delete sheet.tabColor; } return true;
+    case OP.SHEET_HIDDEN: if (sheet) { if (Number(p.hidden)) sheet.hidden = 1; else delete sheet.hidden; } return true;
+    case OP.SHEET_ORDER: {
+      const from = Number(p.fromOrder); const to = Number(p.toOrder);
+      const id = book.sheetOrder[from];
+      if (id === undefined || to < 0 || to >= book.sheetOrder.length) return true;
+      book.sheetOrder.splice(from, 1); book.sheetOrder.splice(to, 0, id);
       return true;
     }
     case OP.EXTRA: {

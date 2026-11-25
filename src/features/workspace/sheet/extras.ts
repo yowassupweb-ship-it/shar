@@ -43,6 +43,8 @@ export interface ChartSpec {
   colors?: string[];
 }
 export interface Group { start: number; end: number; collapsed?: boolean }
+/** Чередование цветов (как в Google): строка заголовка, цвета нечётных и чётных строк, иногда — строка итогов. */
+export interface Banding { id: string; range: Range; header?: string; odd: string; even: string; footer?: string }
 export interface Protection { id: string; range: Range; owner: string; editors: string[]; description?: string; warnOnly?: boolean }
 
 export interface SheetExtras {
@@ -52,6 +54,7 @@ export interface SheetExtras {
   objects?: SheetObject[];
   groups?: { rows?: Group[]; cols?: Group[] };
   protect?: Protection[];
+  banding?: Banding[];
   /** Правила условного форматирования из Excel, которых редактор не показывает (значки, гистограммы) — пишутся обратно как были. */
   cfNative?: unknown[];
   /** Масштаб листа у этого файла (как в Google — у каждого листа свой). */
@@ -95,6 +98,7 @@ export function shiftExtras(x: SheetExtras, rows: boolean, start: number, delta:
   const out: SheetExtras = { ...x };
   if (x.cf) out.cf = x.cf.map((r) => ({ ...r, ranges: shiftRanges(r.ranges, rows, start, delta) })).filter((r) => r.ranges.length);
   if (x.dv) out.dv = x.dv.map((r) => ({ ...r, ranges: shiftRanges(r.ranges, rows, start, delta) })).filter((r) => r.ranges.length);
+  if (x.banding) out.banding = x.banding.map((bd) => { const range = shiftRange(bd.range, rows, start, delta); return range ? { ...bd, range } : null; }).filter((bd): bd is Banding => Boolean(bd));
   if (x.protect) out.protect = x.protect.map((p) => { const range = shiftRange(p.range, rows, start, delta); return range ? { ...p, range } : null; }).filter((p): p is Protection => Boolean(p));
   if (x.notes) {
     const notes: Record<string, string> = {};
@@ -124,6 +128,18 @@ export function shiftExtras(x: SheetExtras, rows: boolean, start: number, delta:
     if (list) out.groups = { ...x.groups, [key]: list.map((g) => { const s = shiftSpan(g.start, g.end, start, delta); return s ? { ...g, start: s[0], end: s[1] } : null; }).filter((g): g is Group => Boolean(g)) };
   }
   return out;
+}
+
+// ── Именованные диапазоны (на всю книгу): имя → «Лист!A1:B5» ──────────────────────────────────────────────
+export const NAMES_RESOURCE = 'SHAR_NAMED_RANGES';
+export const SET_NAMES = 'shar.mutation.set-names';
+export function readNames(book: Book): Record<string, string> {
+  const res = book.resources?.find((r) => r.name === NAMES_RESOURCE);
+  try { return res?.data ? JSON.parse(res.data) as Record<string, string> : {}; } catch { return {}; }
+}
+export function writeNames(book: Book, names: Record<string, string>) {
+  const rest = (book.resources || []).filter((r) => r.name !== NAMES_RESOURCE);
+  book.resources = Object.keys(names).length ? [...rest, { name: NAMES_RESOURCE, data: JSON.stringify(names) }] : rest;
 }
 
 export const inAny = (ranges: Range[], r: number, c: number) => ranges.some((x) => r >= x.startRow && r <= x.endRow && c >= x.startColumn && c <= x.endColumn);

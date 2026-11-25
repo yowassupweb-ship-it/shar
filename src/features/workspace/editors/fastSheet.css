@@ -211,3 +211,20 @@ html[data-theme="graphite"] .fsh, html[data-theme="black"] .fsh { --sh-border-au
   background: #fff8c4; color: #202124; box-shadow: 0 2px 8px rgba(0, 0, 0, .2); font: 13px/1.4 Inter, Arial, sans-serif; white-space: pre-wrap; pointer-events: none;
 }
 .fsh-note-edit { width: 240px; min-height: 90px; resize: both; pointer-events: auto; outline: none; }
+
+/* Границы: сетка вариантов, цвет и стиль. */
+.fsh-borders { display: grid; grid-template-columns: repeat(5, 32px); gap: 2px; padding: 6px; }
+.fsh-borders-opts { display: flex; align-items: center; gap: 8px; padding: 4px 6px 8px; }
+.fsh-borders-opts input[type="color"] { width: 32px; height: 26px; padding: 0; border: 1px solid var(--border-color); border-radius: 6px; background: transparent; cursor: pointer; }
+.fsh-borders-opts select { flex: 1; height: 28px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--element-bg, transparent); color: var(--text-main); font: inherit; font-size: 13px; }
+.fsh-fmt-custom { display: grid; gap: 6px; padding: 6px 8px 8px; min-width: 240px; }
+.fsh-fmt-custom input { height: 30px; padding: 0 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--element-bg, transparent); color: var(--text-main); font: inherit; font-size: 13px; }
+.fsh-fmt-preview { min-height: 16px; color: var(--text-muted); font-size: 12px; }
+.fsh-band-presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.fsh-band-preset { display: grid; grid-template-rows: 8px 8px 8px; padding: 4px; border: 1px solid var(--border-color); border-radius: 6px; background: transparent; cursor: pointer; overflow: hidden; }
+.fsh-band-preset i { display: block; }
+.fsh-band-preset:hover { border-color: var(--accent-color); }
+.fsh-tab-colors { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 12px 8px; }
+.fsh-shortcuts { display: grid; gap: 6px; }
+.fsh-shortcut { display: grid; grid-template-columns: minmax(140px, 46%) 1fr; gap: 12px; align-items: center; font-size: var(--text-sm); }
+.fsh-shortcut kbd { justify-self: start; padding: 2px 6px; border: 1px solid var(--border-color); border-radius: 5px; background: var(--surface-hover); font: 12px/1.4 ui-monospace, Consolas, monospace; }

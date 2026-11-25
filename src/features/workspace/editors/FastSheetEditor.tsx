@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   AlignVerticalJustifyCenter, ArrowDownAZ, ArrowUpZA, ChartColumn, CopyPlus, Eye, EyeOff, Filter, ImagePlus, Link2, ListChecks, Lock, MoveDiagonal, NotebookPen, Paintbrush,
-  SquareCheck, Ungroup, Group as GroupIcon, Palette as PaletteIcon, ChevronsDownUp, AlignVerticalJustifyEnd, AlignVerticalJustifyStart, ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine, ArrowUpToLine,
+  SquareCheck, Ungroup, Group as GroupIcon, Palette as PaletteIcon, ChevronsDownUp, Rows3, Columns3, PanelTop, PanelBottom, PanelLeft, PanelRight, Plus as PlusIcon,
+  Shuffle, Scissors as SplitIcon, Space, CopyMinus, Tag, ArrowLeft, ArrowRight, List as ListIcon, Blinds, Brackets, AlignVerticalJustifyEnd, AlignVerticalJustifyStart, ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine, ArrowUpToLine,
   ClipboardPaste, Columns2, Copy, Eraser, Grid2x2, MessageSquarePlus, Percent, Plus, RussianRuble, Scissors, Sigma, Snowflake, Square, TableCellsMerge,
   TableCellsSplit, Trash2, WrapText,
 } from 'lucide-react';
@@ -25,10 +26,11 @@ import { dataRegion, filteredRows, readFilters, type FilterColumn } from '../she
 import { FONTS, Palette, Pop } from './FastDocToolbar';
 import { FindBar } from './FindBar';
 import { FilterMenu } from './SheetFilterMenu';
-import { ChartPanel, CfPanel, DvPanel, ProtectPanel } from './SheetPanels';
+import { BandingPanel, ChartPanel, CfPanel, DvPanel, NamesPanel, ProtectPanel, SHEET_SHORTCUTS } from './SheetPanels';
+import { Sheet as Dialog } from '@/shared/ui/overlay';
 import { DocLinkSheet } from './DocLinkSheet';
 import { buildCf } from '../sheet/cf';
-import { newId, sheetExtras, type ExtraKey, type Group, type SheetExtras, type SheetObject } from '../sheet/extras';
+import { newId, readNames, sheetExtras, type ExtraKey, type Group, type SheetExtras, type SheetObject } from '../sheet/extras';
 import { isChecked } from '../sheet/draw';
 import { myId } from '@/shared/session/session';
 import { uploadFileWithProgress } from '@/shared/api/uploadFile';
@@ -155,7 +157,12 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   const [zoom, setZoom] = useState(1);
   const zoomRef = useRef(1);
   zoomRef.current = zoom;
-  const [panel, setPanel] = useState<null | 'cf' | 'dv' | 'protect' | { chart: string }>(null);
+  const [panel, setPanel] = useState<null | 'cf' | 'dv' | 'protect' | 'banding' | 'names' | { chart: string }>(null);
+  const [shortcuts, setShortcuts] = useState(false);
+  const [customFmt, setCustomFmt] = useState('');
+  const [borderStyle, setBorderStyle] = useState<{ color: string; s: number }>({ color: '#000000', s: 1 });
+  const [sheetsMenu, setSheetsMenu] = useState<{ x: number; y: number } | null>(null);
+  const dragTab = useRef<string | null>(null);
   const [selectedObject, setSelectedObject] = useState<string | null>(null);
   const [objDraft, setObjDraft] = useState<SheetObject | null>(null);
   const [listMenu, setListMenu] = useState<{ r: number; c: number; x: number; y: number; values: string[] } | null>(null);
@@ -470,7 +477,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     if (data) { data.setData('text/plain', tsv); data.setData('text/html', `<table>${html.join('')}</table>`); } else void navigator.clipboard?.writeText(tsv).catch(() => undefined);
   }, [b, sheet, selRange, sheetId]);
 
-  const paste = useCallback((text: string, only?: 'values' | 'format') => {
+  const paste = useCallback((text: string, only?: 'values' | 'format' | 'transpose') => {
     if (!b || !sheet) return;
     const own = clip.current && clip.current.tsv === text.replace(/\r\n?/g, '\n').replace(/\n$/, '') ? clip.current : null;
     const at = selRange;
@@ -481,6 +488,16 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       // Выделение больше скопированного и кратно ему — заполняем повтором (как в Excel).
       const reps = (n: number, k: number) => (n % k === 0 ? n / k : 1);
       const rr = reps(at.endRow - at.startRow + 1, h); const rc = reps(at.endColumn - at.startColumn + 1, w);
+      if (only === 'transpose') {
+        // Транспонировать: строки становятся столбцами (формулы — значениями, как у Google при переносе ссылок).
+        for (let i = 0; i < h; i += 1) for (let j = 0; j < w; j += 1) {
+          const src = own.cells[i]?.[j] ?? null;
+          (cells[at.startRow + j] ||= {})[at.startColumn + i] = src ? { ...src, f: null } : { v: null, f: null, s: null } as Cell;
+        }
+        commit([{ id: OP.VALUES, params: { subUnitId: sheetId, cellValue: cells } }]);
+        setSel({ anchor: { row: at.startRow, col: at.startColumn }, focus: { row: at.startRow + w - 1, col: at.startColumn + h - 1 } });
+        return;
+      }
       for (let i = 0; i < h * rr; i += 1) for (let j = 0; j < w * rc; j += 1) {
         const src = own.cells[i % h]?.[j % w] ?? null;
         let cell: Cell | null = src ? { ...src } : { v: null, f: null, s: null } as Cell;
@@ -503,7 +520,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       setSel({ anchor: { row: at.startRow, col: at.startColumn }, focus: { row: at.startRow + h * rr - 1, col: at.startColumn + w * rc - 1 } });
       return;
     }
-    if (only === 'format') return;
+    if (only === 'format' || only === 'transpose') return;
     const rows = parseTsv(text);
     rows.forEach((line, i) => line.forEach((value, j) => {
       const parsed = parseInput(value);
@@ -1229,6 +1246,75 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   };
   const insertDropdown = () => { setPanel('dv'); };
 
+  /** «Разделить текст на столбцы»: разделитель — запятая, точка с запятой, табуляция или пробел (как «Определять автоматически»). */
+  const splitText = (sep?: string) => {
+    if (!sheet || !b) return;
+    const c0 = selRange.startColumn;
+    const texts: Array<[number, string]> = [];
+    for (let r = selRange.startRow; r <= Math.min(selRange.endRow, usedBounds(sheet).rows); r += 1) {
+      const cell = cellAt(sheet, r, c0);
+      if (typeof cell?.v === 'string' && cell.v) texts.push([r, cell.v]);
+    }
+    if (!texts.length) { showToast('В первом столбце выделения нет текста', 'info'); return; }
+    const pick = sep ?? ([';', ',', '\t', '|'].find((x) => texts.every(([, t]) => t.includes(x))) || ' ');
+    const cells: Record<number, Record<number, Cell | null>> = {};
+    for (const [r, t] of texts) t.split(pick).forEach((part, i) => { const parsed = parseInput(part.trim()); (cells[r] ||= {})[c0 + i] = { v: parsed.v ?? null, f: parsed.f ?? null, t: parsed.t ?? null } as Cell; });
+    setCells(cells);
+  };
+  /** Удалить повторяющиеся строки выделения (по всем столбцам выделения); оставшиеся сдвигаются вверх. */
+  const removeDuplicates = () => {
+    if (!sheet || !b) return;
+    const last = Math.min(selRange.endRow, usedBounds(sheet).rows - 1);
+    const seen = new Set<string>();
+    const keep: number[] = [];
+    for (let r = selRange.startRow; r <= last; r += 1) {
+      const key = Array.from({ length: selRange.endColumn - selRange.startColumn + 1 }, (_, i) => String(cellAt(sheet, r, selRange.startColumn + i)?.v ?? '').trim().toLowerCase()).join('\u0001');
+      if (seen.has(key)) continue;
+      seen.add(key); keep.push(r);
+    }
+    const removed = last - selRange.startRow + 1 - keep.length;
+    if (!removed) { showToast('Повторяющихся строк нет', 'info'); return; }
+    const cells: Record<number, Record<number, Cell | null>> = {};
+    for (let i = 0; i <= last - selRange.startRow; i += 1) {
+      const from = keep[i];
+      for (let c = selRange.startColumn; c <= selRange.endColumn; c += 1) (cells[selRange.startRow + i] ||= {})[c] = from === undefined ? null : (wireCell(b, cellAt(sheet, from, c)) ?? null);
+    }
+    setCells(cells);
+    showToast(`Удалено повторов: ${removed}, осталось строк: ${keep.length}`, 'success');
+  };
+  const trimSpaces = () => {
+    if (!sheet) return;
+    const cells: Record<number, Record<number, Cell | null>> = {};
+    let n = 0;
+    eachSelected((r, c) => { const v = cellAt(sheet, r, c)?.v; if (typeof v === 'string') { const t = v.replace(/\s+/g, ' ').trim(); if (t !== v) { n += 1; (cells[r] ||= {})[c] = { v: t } as Cell; } } });
+    setCells(cells);
+    showToast(n ? `Исправлено ячеек: ${n}` : 'Лишних пробелов нет', n ? 'success' : 'info');
+  };
+  const shuffleRows = () => {
+    if (!sheet || !b) return;
+    const rowsList: number[] = [];
+    for (let r = selRange.startRow; r <= Math.min(selRange.endRow, usedBounds(sheet).rows - 1); r += 1) rowsList.push(r);
+    const order = [...rowsList];
+    for (let i = order.length - 1; i > 0; i -= 1) { const j = Math.floor(Math.random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+    const cells: Record<number, Record<number, Cell | null>> = {};
+    rowsList.forEach((r, i) => { for (let c = selRange.startColumn; c <= selRange.endColumn; c += 1) (cells[r] ||= {})[c] = wireCell(b, cellAt(sheet, order[i], c)) ?? null; });
+    setCells(cells);
+  };
+  const moveSheet = (id: string, dir: -1 | 1) => {
+    if (!b) return;
+    const from = b.sheetOrder.indexOf(id);
+    const to = from + dir;
+    if (from < 0 || to < 0 || to >= b.sheetOrder.length) return;
+    commit([{ id: OP.SHEET_ORDER, params: { subUnitId: id, fromOrder: from, toOrder: to } }]);
+  };
+  const setSheetHidden = (id: string, hidden: boolean) => {
+    if (!b) return;
+    if (hidden && b.sheetOrder.filter((x) => !b.sheets[x]?.hidden).length < 2) { showToast('Нельзя скрыть единственный видимый лист', 'info'); return; }
+    commit([{ id: OP.SHEET_HIDDEN, params: { subUnitId: id, hidden: hidden ? 1 : 0 } }]);
+    if (hidden && id === sheetId) setSheetId(b.sheetOrder.find((x) => x !== id && !b.sheets[x]?.hidden) || sheetId);
+    if (!hidden) setSheetId(id);
+  };
+
   /** Копия листа — рядом с ним, как «Создать копию» в Google. */
   const duplicateSheet = (id: string) => {
     if (!b) return;
@@ -1276,6 +1362,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       setLinkEdit({ r: sel.anchor.row, c: sel.anchor.col, initial: url0 });
       return;
     }
+    if ((e.ctrlKey || e.metaKey) && (e.key === '/' || e.code === 'Slash')) { e.preventDefault(); setShortcuts(true); return; }
     if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+' || e.key === '-')) { e.preventDefault(); setZoom((z) => Math.max(0.5, Math.min(2, Math.round((z + (e.key === '-' ? -0.1 : 0.1)) * 10) / 10))); return; }
     const mod = e.ctrlKey || e.metaKey;
     const k = e.key;
@@ -1449,6 +1536,14 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     'sheet.command.remove-worksheet-merge': () => { if (merged) toggleMerge(); },
     'ui.command.clear-formatting': () => restyle(() => ({} as Style)),
     'shar.sheet.cf': () => setPanel('cf'),
+    'shar.sheet.banding': () => setPanel('banding'),
+    'shar.sheet.names': () => setPanel('names'),
+    'shar.sheet.split': () => splitText(),
+    'shar.sheet.dedupe': () => removeDuplicates(),
+    'shar.sheet.trim': () => trimSpaces(),
+    'shar.sheet.shuffle': () => shuffleRows(),
+    'shar.sheet.shortcuts': () => setShortcuts(true),
+    'shar.sheet.paste-transpose': () => { if (clip.current) paste(clip.current.tsv, 'transpose'); },
     'shar.sheet.dv': () => setPanel('dv'),
     'shar.sheet.chart': () => insertChart(),
     'shar.sheet.image': () => imageInput.current?.click(),
@@ -1514,7 +1609,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     drawSheet(ctx, {
       book: b, sheet, geo, theme: readTheme(root.current), scrollX: el.scrollLeft / z, scrollY: el.scrollTop / z, width: W / z, height: H / z, dpr, zoom: z,
       cf: cfLookup, cfBlank: (xs.cf || []).filter((x) => x.kind === 'blank').flatMap((x) => x.ranges),
-      dv: xs.dv, notes: xs.notes, objects, selectedObject, groups: xs.groups, onAsset: () => redraw(),
+      dv: xs.dv, notes: xs.notes, objects, selectedObject, groups: xs.groups, banding: xs.banding, onAsset: () => redraw(),
       sel: fillTo ?? selRange, active: anchorM ?? { startRow: sel.anchor.row, endRow: sel.anchor.row, startColumn: sel.anchor.col, endColumn: sel.anchor.col },
       clip: clipMark, marks: new Set(commentCells.filter((m) => !m.sheet || m.sheet === sheet.name).map((m) => m.cell)),
       peers: cursors.flatMap((cur) => {
@@ -1591,19 +1686,22 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
 
   const summary = summaryText;
 
-  const borderSet = (kind: 'all' | 'outer' | 'none') => {
-    const line = { s: 1, cl: { rgb: '#000000' } };
+  type BorderKind = 'all' | 'inner' | 'horizontal' | 'vertical' | 'outer' | 'left' | 'top' | 'right' | 'bottom' | 'none';
+  const borderSet = (kind: BorderKind) => {
+    const line = { s: borderStyle.s, cl: { rgb: borderStyle.color } };
     const cells: Record<number, Record<number, Cell | null>> = {};
     eachSelected((r, c) => {
       const prev = { ...(styleOf(b, cellAt(sheet, r, c)) || {}) } as Style;
       const bd: Record<string, unknown> = kind === 'none' ? {} : { ...((prev.bd as object) || {}) };
       if (kind === 'all') Object.assign(bd, { t: line, b: line, l: line, r: line });
-      if (kind === 'outer') {
-        if (r === selRange.startRow) bd.t = line;
-        if (r === selRange.endRow) bd.b = line;
-        if (c === selRange.startColumn) bd.l = line;
-        if (c === selRange.endColumn) bd.r = line;
-      }
+      const top = r === selRange.startRow; const bottom = r === selRange.endRow; const left = c === selRange.startColumn; const right = c === selRange.endColumn;
+      if (kind === 'outer') { if (top) bd.t = line; if (bottom) bd.b = line; if (left) bd.l = line; if (right) bd.r = line; }
+      if (kind === 'inner' || kind === 'horizontal') { if (!top) bd.t = line; if (!bottom) bd.b = line; }
+      if (kind === 'inner' || kind === 'vertical') { if (!left) bd.l = line; if (!right) bd.r = line; }
+      if (kind === 'left' && left) bd.l = line;
+      if (kind === 'right' && right) bd.r = line;
+      if (kind === 'top' && top) bd.t = line;
+      if (kind === 'bottom' && bottom) bd.b = line;
       const next = { ...prev, bd: Object.keys(bd).length ? bd : undefined };
       const clean = Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined));
       (cells[r] ||= {})[c] = { s: (Object.keys(clean).length ? clean : null) as Cell['s'] };
@@ -1651,7 +1749,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
             {btn('vt', 'По верхнему краю', vAlign === 1, <AlignVerticalJustifyStart size={16} strokeWidth={1.75} />, () => restyle((s) => ({ ...s, vt: vAlign === 1 ? undefined : 1 })))}
             {btn('vm', 'По середине', vAlign === 2, <AlignVerticalJustifyCenter size={16} strokeWidth={1.75} />, () => restyle((s) => ({ ...s, vt: vAlign === 2 ? undefined : 2 })))}
             {btn('vb', 'По нижнему краю', vAlign === 3, <AlignVerticalJustifyEnd size={16} strokeWidth={1.75} />, () => restyle((s) => ({ ...s, vt: vAlign === 3 ? undefined : 3 })))}
-            {btn('wrap', 'Переносить по словам', anchorStyle.tb === 3, <WrapText size={16} strokeWidth={1.75} />, () => restyle((s) => ({ ...s, tb: s.tb === 3 ? undefined : 3 })))}
+            {btn('wrap', 'Перенос текста', anchorStyle.tb === 3 || anchorStyle.tb === 2, <WrapText size={16} strokeWidth={1.75} />, open('wrap'))}
             <span className="fdoc-sep" />
             {btn('rot', 'Поворот текста', Boolean((anchorStyle.tr as { a?: number } | undefined)?.a), <MoveDiagonal size={16} strokeWidth={1.75} />, open('rotate'))}
             <span className="fdoc-sep" />
@@ -1659,6 +1757,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
             {btn('chart', 'Вставить диаграмму', false, <ChartColumn size={16} strokeWidth={1.75} />, insertChart)}
             {btn('image', 'Вставить изображение поверх ячеек', false, <ImagePlus size={16} strokeWidth={1.75} />, () => imageInput.current?.click())}
             {btn('cb', 'Флажок', false, <SquareCheck size={16} strokeWidth={1.75} />, insertCheckbox)}
+            {btn('band', 'Чередование цветов', panel === 'banding', <Blinds size={16} strokeWidth={1.75} />, () => setPanel(panel === 'banding' ? null : 'banding'))}
             {btn('cf', 'Условное форматирование', panel === 'cf', <PaletteIcon size={16} strokeWidth={1.75} />, () => setPanel(panel === 'cf' ? null : 'cf'))}
             <span className="fdoc-sep" />
             {btn('sort', 'Сортировать А → Я по столбцу', false, <ArrowDownAZ size={16} strokeWidth={1.75} />, () => sortBy(false))}
@@ -1675,8 +1774,9 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
           onChange={() => undefined}
           onKeyDown={(e) => {
             if (e.key !== 'Enter') return;
-            const r = parseRange(e.currentTarget.value.toUpperCase());
-            if (!r) { showToast('Адрес вида A1 или A1:C5', 'info'); return; }
+            const named = b ? readNames(b)[e.currentTarget.value.trim()] : undefined;
+            const r = parseRange((named ? named.slice(named.lastIndexOf('!') + 1).replace(/\$/g, '') : e.currentTarget.value).toUpperCase());
+            if (!r) { showToast('Адрес вида A1, A1:C5 или имя диапазона', 'info'); return; }
             setSel({ anchor: { row: r.startRow, col: r.startColumn }, focus: { row: r.endRow, col: r.endColumn } });
             reveal(r.startRow, r.startColumn);
             grid.current?.focus();
@@ -1750,6 +1850,10 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
         {filterMenu && b && sheet && <FilterMenu {...filterMenu} book={b} sheet={sheet} onClose={() => setFilterMenu(null)} onApply={(col, criteria) => setFilterCriteria(col, criteria)} onSort={(desc, col) => sortBy(desc, col)} />}
         {panel === 'cf' && <CfPanel rules={xs.cf || []} selection={selRange} onChange={(next) => setExtra('cf', next.length ? next : null)} onClose={() => setPanel(null)} />}
         {panel === 'dv' && <DvPanel rules={xs.dv || []} selection={selRange} onChange={(next) => setExtra('dv', next.length ? next : null)} onClose={() => setPanel(null)} />}
+        {panel === 'banding' && <BandingPanel list={xs.banding || []} selection={selRange} onChange={(next) => setExtra('banding', next.length ? next : null)} onClose={() => setPanel(null)} />}
+        {panel === 'names' && b && sheet && <NamesPanel names={readNames(b)} sheetName={sheet.name} selection={selRange} onClose={() => setPanel(null)}
+          onChange={(next) => commit([{ id: OP.NAMES, params: { names: next } }])}
+          onGo={(ref) => { const bang = ref.lastIndexOf('!'); const nm = ref.slice(0, bang).replace(/^'(.*)'$/, '$1'); const target = Object.values(b.sheets).find((x) => x.name === nm); const r = parseRange(ref.slice(bang + 1).replace(/\$/g, '').toUpperCase()); if (target) setSheetId(target.id); if (r) { setSel({ anchor: { row: r.startRow, col: r.startColumn }, focus: { row: r.endRow, col: r.endColumn } }); window.requestAnimationFrame(() => reveal(r.startRow, r.startColumn)); } }} />}
         {panel === 'protect' && <ProtectPanel list={xs.protect || []} selection={selRange} onChange={(next) => setExtra('protect', next.length ? next : null)} onClose={() => setPanel(null)} />}
         {typeof panel === 'object' && panel?.chart && (() => {
           const o = (xs.objects || []).find((x) => x.id === panel.chart);
@@ -1769,13 +1873,17 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
 
       <div className="fsh-tabs" role="tablist" aria-label="Листы">
         {!readOnly && <button type="button" className="fsh-tab-add" title="Добавить лист" aria-label="Добавить лист" onClick={addSheet}><Plus size={15} /></button>}
+        <button type="button" className="fsh-tab-add" title="Все листы" aria-label="Все листы" onClick={(e) => setSheetsMenu({ x: e.clientX, y: e.clientY - 8 })}><ListIcon size={15} /></button>
         {b.sheetOrder.filter((id) => b.sheets[id] && !b.sheets[id].hidden).map((id) => (
           renaming === id ? (
             <input key={id} className="fsh-tab-input" defaultValue={b.sheets[id].name} autoFocus aria-label="Название листа"
               onBlur={(e) => { renameSheet(id, e.target.value); setRenaming(null); }}
               onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setRenaming(null); }} />
           ) : (
-            <button key={id} type="button" role="tab" className="fsh-tab" aria-selected={id === sheetId}
+            <button key={id} type="button" role="tab" className="fsh-tab" aria-selected={id === sheetId} draggable={!readOnly}
+              onDragStart={(e) => { dragTab.current = id; e.dataTransfer.effectAllowed = 'move'; }}
+              onDragOver={(e) => { if (dragTab.current && dragTab.current !== id) e.preventDefault(); }}
+              onDrop={(e) => { e.preventDefault(); const from = dragTab.current; dragTab.current = null; if (!from || from === id || !b) return; commit([{ id: OP.SHEET_ORDER, params: { subUnitId: from, fromOrder: b.sheetOrder.indexOf(from), toOrder: b.sheetOrder.indexOf(id) } }]); }}
               style={b.sheets[id].tabColor ? ({ '--tab': b.sheets[id].tabColor } as CSSProperties) : undefined}
               onClick={() => { if (edit) finishEdit('stay'); setSheetId(id); setSel({ anchor: { row: 0, col: 0 }, focus: { row: 0, col: 0 } }); grid.current?.scrollTo(0, 0); }}
               onDoubleClick={() => { if (!readOnly) setRenaming(id); }}
@@ -1792,6 +1900,9 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
           {!readOnly && <MenuItem icon={<Scissors size={16} />} onSelect={() => { setMenu(null); copy(true, null); }}>Вырезать <kbd className="nx-menu-kbd">Ctrl+X</kbd></MenuItem>}
           <MenuItem icon={<Copy size={16} />} onSelect={() => { setMenu(null); copy(false, null); }}>Копировать <kbd className="nx-menu-kbd">Ctrl+C</kbd></MenuItem>
           {!readOnly && <MenuItem icon={<ClipboardPaste size={16} />} onSelect={() => { setMenu(null); commands['univer.command.paste'](); }}>Вставить <kbd className="nx-menu-kbd">Ctrl+V</kbd></MenuItem>}
+          {!readOnly && <MenuItem icon={<ClipboardPaste size={16} />} onSelect={() => { setMenu(null); commands['sheet.command.paste-value'](); }}>Вставить только значения <kbd className="nx-menu-kbd">Ctrl+Shift+V</kbd></MenuItem>}
+          {!readOnly && clip.current && <MenuItem icon={<ClipboardPaste size={16} />} onSelect={() => { setMenu(null); commands['sheet.command.paste-format'](); }}>Вставить только формат</MenuItem>}
+          {!readOnly && clip.current && <MenuItem icon={<ClipboardPaste size={16} />} onSelect={() => { setMenu(null); paste(clip.current!.tsv, 'transpose'); }}>Вставить транспонированно</MenuItem>}
           {!readOnly && (
             <>
               <div className="nx-menu-sep" />
@@ -1825,6 +1936,12 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
               <MenuItem icon={<ChevronsDownUp size={16} />} onSelect={() => { setMenu(null); groupSel(false, true); }}>Сгруппировать столбцы {colName(selRange.startColumn)}–{colName(selRange.endColumn)}</MenuItem>
               {(xs.groups?.cols || []).some((g0) => g0.start <= selRange.endColumn && selRange.startColumn <= g0.end) && <MenuItem icon={<Ungroup size={16} />} onSelect={() => { setMenu(null); groupSel(false, false); }}>Разгруппировать столбцы</MenuItem>}
               <MenuItem icon={<Lock size={16} />} onSelect={() => { setMenu(null); setPanel('protect'); }}>Защитить диапазон…</MenuItem>
+              <MenuItem icon={<Brackets size={16} />} onSelect={() => { setMenu(null); setPanel('names'); }}>Именованные диапазоны…</MenuItem>
+              <div className="nx-menu-sep" />
+              <MenuItem icon={<SplitIcon size={16} />} onSelect={() => { setMenu(null); splitText(); }}>Разделить текст на столбцы</MenuItem>
+              <MenuItem icon={<CopyMinus size={16} />} onSelect={() => { setMenu(null); removeDuplicates(); }}>Удалить повторы</MenuItem>
+              <MenuItem icon={<Space size={16} />} onSelect={() => { setMenu(null); trimSpaces(); }}>Удалить лишние пробелы</MenuItem>
+              <MenuItem icon={<Shuffle size={16} />} onSelect={() => { setMenu(null); shuffleRows(); }}>Перемешать строки</MenuItem>
               <MenuItem icon={merged ? <TableCellsSplit size={16} /> : <TableCellsMerge size={16} />} onSelect={() => { setMenu(null); toggleMerge(); }}>{merged ? 'Отменить объединение' : 'Объединить ячейки'}</MenuItem>
             </>
           )}
@@ -1836,10 +1953,37 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
           )}
         </Menu>
       )}
+      {sheetsMenu && b && (
+        <Menu anchor={{ x: sheetsMenu.x, y: sheetsMenu.y }} label="Все листы" onClose={() => setSheetsMenu(null)}>
+          {b.sheetOrder.filter((id) => b.sheets[id]).map((id) => (
+            <MenuItem key={id} icon={b.sheets[id].hidden ? <EyeOff size={16} /> : id === sheetId ? <Eye size={16} /> : <span className="ntd-menu-gap" />}
+              onSelect={() => { setSheetsMenu(null); if (b.sheets[id].hidden) { if (!readOnly) setSheetHidden(id, false); } else { setSheetId(id); grid.current?.scrollTo(0, 0); } }}>
+              {b.sheets[id].name}{b.sheets[id].hidden ? ' (скрыт — показать)' : ''}
+            </MenuItem>
+          ))}
+        </Menu>
+      )}
+      {shortcuts && (
+        <Dialog title="Быстрые клавиши" onClose={() => setShortcuts(false)}>
+          <div className="fsh-shortcuts">
+            {SHEET_SHORTCUTS.map(([k, v]) => <div key={k} className="fsh-shortcut"><kbd>{k}</kbd><span>{v}</span></div>)}
+          </div>
+        </Dialog>
+      )}
       {tabMenu && (
         <Menu anchor={{ x: tabMenu.x, y: tabMenu.y }} label="Лист" onClose={() => setTabMenu(null)}>
           <MenuItem onSelect={() => { setRenaming(tabMenu.id); setTabMenu(null); }}>Переименовать</MenuItem>
           <MenuItem icon={<CopyPlus size={16} />} onSelect={() => { duplicateSheet(tabMenu.id); setTabMenu(null); }}>Создать копию</MenuItem>
+          <MenuItem icon={<ArrowLeft size={16} />} onSelect={() => { moveSheet(tabMenu.id, -1); setTabMenu(null); }}>Переместить влево</MenuItem>
+          <MenuItem icon={<ArrowRight size={16} />} onSelect={() => { moveSheet(tabMenu.id, 1); setTabMenu(null); }}>Переместить вправо</MenuItem>
+          <MenuItem icon={<EyeOff size={16} />} onSelect={() => { setSheetHidden(tabMenu.id, true); setTabMenu(null); }}>Скрыть лист</MenuItem>
+          <div className="nx-menu-label"><Tag size={13} /> Цвет ярлыка</div>
+          <div className="fsh-tab-colors">
+            {['', '#ea4335', '#ff6d01', '#fbbc04', '#34a853', '#46bdc6', '#4285f4', '#9334e6', '#9aa0a6'].map((c) => (
+              <button key={c || 'none'} type="button" className="fsh-swatch" style={{ background: c || 'transparent' }} title={c ? c : 'Без цвета'}
+                onClick={() => { commit([{ id: OP.TAB_COLOR, params: { subUnitId: tabMenu.id, color: c } }]); setTabMenu(null); }} />
+            ))}
+          </div>
           <MenuItem tone="danger" icon={<Trash2 size={16} />} onSelect={() => { removeSheet(tabMenu.id); setTabMenu(null); }}>Удалить лист</MenuItem>
         </Menu>
       )}
@@ -1854,6 +1998,13 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
         <Pop anchor={pop.at} trigger={pop.trigger} onClose={close}>
           <Palette current={(anchorStyle.bg as { rgb?: string } | undefined)?.rgb || ''} resetLabel="Без заливки" ResetIcon={OClearFormat}
             onReset={() => { restyle((s) => ({ ...s, bg: undefined })); close(); }} onPick={(c) => { restyle((s) => ({ ...s, bg: { rgb: c } })); close(); }} />
+        </Pop>
+      )}
+      {pop?.kind === 'wrap' && (
+        <Pop anchor={pop.at} trigger={pop.trigger} onClose={close} className="fdoc-pop-list">
+          {([['Переливать в соседние', undefined], ['Переносить по словам', 3], ['Обрезать', 2]] as Array<[string, number | undefined]>).map(([label, v]) => (
+            <button key={label} type="button" className="fdoc-pop-item" aria-selected={(anchorStyle.tb === 3 || anchorStyle.tb === 2 ? anchorStyle.tb : undefined) === v} onClick={() => { restyle((x) => ({ ...x, tb: v })); close(); }}>{label}</button>
+          ))}
         </Pop>
       )}
       {pop?.kind === 'zoom' && (
@@ -1885,13 +2036,32 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
             ['Дата  25.11.2026', 'dd.mm.yyyy'], ['Дата и время', 'dd.mm.yyyy hh:mm'], ['Время  14:30', 'hh:mm'], ['Дата словами', 'd mmmm yyyy'], ['Текст', '@']] as Array<[string, string | null]>).map(([label, pattern]) => (
             <button key={label} type="button" className="fdoc-pop-item" onClick={() => { setPattern(pattern); close(); }}>{label}</button>
           ))}
+          <div className="fdoc-pop-sep" />
+          <div className="fsh-fmt-custom">
+            <input value={customFmt} placeholder={'Свой формат, например 0.0 "кг"'} aria-label="Свой формат чисел"
+              onChange={(e) => setCustomFmt(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && customFmt.trim()) { setPattern(customFmt.trim()); close(); } }} />
+            <span className="fsh-fmt-preview">{customFmt.trim() ? (() => { try { return displayText({ v: 1234.5678 } as Cell, { n: { pattern: customFmt.trim() } } as Style); } catch { return '—'; } })() : ''}</span>
+            <button type="button" className="nx-primary" disabled={!customFmt.trim()} onClick={() => { setPattern(customFmt.trim()); close(); }}>Применить</button>
+          </div>
         </Pop>
       )}
       {pop?.kind === 'borders' && (
         <Pop anchor={pop.at} trigger={pop.trigger} onClose={close} className="fdoc-pop-list">
-          <button type="button" className="fdoc-pop-item" onClick={() => { borderSet('all'); close(); }}><Grid2x2 size={15} /> Все границы</button>
-          <button type="button" className="fdoc-pop-item" onClick={() => { borderSet('outer'); close(); }}><Square size={15} /> Внешние границы</button>
-          <button type="button" className="fdoc-pop-item" onClick={() => { borderSet('none'); close(); }}><Eraser size={15} /> Без границ</button>
+          <div className="fsh-borders">
+            {([['all', 'Все границы', <Grid2x2 key="a" size={16} />], ['inner', 'Внутренние', <PlusIcon key="b" size={16} />], ['horizontal', 'Горизонтальные внутри', <Rows3 key="c" size={16} />],
+              ['vertical', 'Вертикальные внутри', <Columns3 key="d" size={16} />], ['outer', 'Внешние', <Square key="e" size={16} />], ['left', 'Слева', <PanelLeft key="f" size={16} />],
+              ['top', 'Сверху', <PanelTop key="g" size={16} />], ['right', 'Справа', <PanelRight key="h" size={16} />], ['bottom', 'Снизу', <PanelBottom key="i" size={16} />],
+              ['none', 'Без границ', <Eraser key="j" size={16} />]] as Array<[BorderKind, string, ReactNode]>).map(([k, label, icon]) => (
+              <button key={k} type="button" className="fdoc-btn" title={label} aria-label={label} onClick={() => { borderSet(k); close(); }}>{icon}</button>
+            ))}
+          </div>
+          <div className="fsh-borders-opts">
+            <label title="Цвет границы"><input type="color" value={borderStyle.color} onChange={(e) => setBorderStyle({ ...borderStyle, color: e.target.value })} /></label>
+            <select value={borderStyle.s} aria-label="Стиль границы" onChange={(e) => setBorderStyle({ ...borderStyle, s: Number(e.target.value) })}>
+              <option value={1}>Тонкая</option><option value={8}>Средняя</option><option value={13}>Толстая</option>
+              <option value={4}>Пунктир</option><option value={3}>Точки</option><option value={7}>Двойная</option>
+            </select>
+          </div>
         </Pop>
       )}
       {pop?.kind === 'freeze' && (

@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import {
   AArrowDown, AArrowUp, ArrowDownAZ, ArrowUpDown, ArrowUpZA, Bold, BookOpen, Pencil, ClipboardPaste, Columns2, Eraser, Filter, FilterX, Grid3x3, Hash, Italic, Keyboard, List, ListChecks, ListOrdered, Maximize, Minimize, MessageSquarePlus, Minus, PanelTop, Percent, Redo2, RefreshCw, RussianRuble, Scissors, Search, Settings2, Sigma, Strikethrough, Subscript, Superscript, Table, TableCellsMerge, TableCellsSplit, Underline, Undo2,
   AlertCircle, ArrowLeft, Check, Copy, Download, FilePlus, Globe2, History, Link2, Lock, Mail, MessageSquare, Star, MoreHorizontal, Pin, PinOff, MonitorUp, Printer, Send, Share2, Trash2, Upload, Users, Zap, Image as ImageIcon, Smile, Omega, CalendarDays, SeparatorHorizontal,
-  ChartColumn, ImagePlus, SquareCheck, NotebookPen, Palette, Group as GroupIcon, Ungroup, ZoomIn, ZoomOut, ArrowRightToLine, ArrowDownToLine,
+  Blinds, Brackets, Scissors as SplitIcon, CopyMinus, Space as SpaceIcon, Shuffle, Keyboard as KeyboardIcon, ChartColumn, ImagePlus, SquareCheck, NotebookPen, Palette, Group as GroupIcon, Ungroup, ZoomIn, ZoomOut, ArrowRightToLine, ArrowDownToLine,
 } from 'lucide-react';
 import { useMailConnected, writeMail } from '@/features/mail';
 import { recordVisit } from '@/features/spotlight/history';
@@ -511,6 +511,7 @@ ${absolute(links.office(item!.kind, item!.id))}` });
         cmd('Отменить объединение', 'sheet.command.remove-worksheet-merge', <TableCellsSplit size={15} />),
         'sep',
         cmd('Условное форматирование…', 'shar.sheet.cf', <Palette size={15} />),
+        cmd('Чередование цветов…', 'shar.sheet.banding', <Blinds size={15} />),
         'sep',
         cmd('Очистить форматирование', 'ui.command.clear-formatting', <Eraser size={15} />, `${mod}\\`),
       ] },
@@ -526,6 +527,12 @@ ${absolute(links.office(item!.kind, item!.id))}` });
         cmd('Пересчитать фильтр', 'sheet.command.re-calc-filter', <RefreshCw size={15} />),
         'sep',
         cmd('Проверка данных…', 'shar.sheet.dv', <ListChecks size={15} />),
+        cmd('Именованные диапазоны…', 'shar.sheet.names', <Brackets size={15} />),
+        'sep',
+        cmd('Разделить текст на столбцы', 'shar.sheet.split', <SplitIcon size={15} />),
+        cmd('Удалить повторы', 'shar.sheet.dedupe', <CopyMinus size={15} />),
+        cmd('Удалить лишние пробелы', 'shar.sheet.trim', <SpaceIcon size={15} />),
+        cmd('Перемешать строки', 'shar.sheet.shuffle', <Shuffle size={15} />),
         'sep',
         cmd('Сгруппировать строки', 'shar.sheet.group-rows', <GroupIcon size={15} />),
         cmd('Разгруппировать строки', 'shar.sheet.ungroup-rows', <Ungroup size={15} />),
@@ -540,6 +547,7 @@ ${absolute(links.office(item!.kind, item!.id))}` });
         { ...cmd('Поиск по функциям', 'ui.operation.open-feature-search', <Search size={15} />), disabled: !can('ui.operation.open-feature-search') },
         { ...cmd('Быстрые клавиши', 'base-ui.operation.toggle-shortcut-panel', <Keyboard size={15} />), disabled: !can('base-ui.operation.toggle-shortcut-panel') },
       ]),
+      ...(!isDoc && fastDocs ? [cmd('Быстрые клавиши', 'shar.sheet.shortcuts', <KeyboardIcon size={15} />, `${mod}/`)] : []),
       // Свои редакторы документов и таблиц (бета) — галочкой: включены — материалы открываются в них, выключены — в Univer.
       ...(fastDocs ? [] : ['sep' as const]),
       {

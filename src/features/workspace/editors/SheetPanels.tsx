@@ -4,7 +4,7 @@ import { displayName, useChatStore } from '@/features/chat';
 import { myId } from '@/shared/session/session';
 import { cfSummary } from '../sheet/cf';
 import { CHART_COLORS } from '../sheet/chart';
-import { newId, type CfRule, type CfStyle, type ChartSpec, type DvRule, type Protection } from '../sheet/extras';
+import { newId, type Banding, type CfRule, type CfStyle, type ChartSpec, type DvRule, type Protection } from '../sheet/extras';
 import { parseRange, rangeA1, type Range } from '../sheet/model';
 
 /**
@@ -336,4 +336,99 @@ export function ProtectPanel({ list, selection, onChange, onClose }: { list: Pro
   );
 }
 
+// ── Чередование цветов ────────────────────────────────────────────────────────────────────────────────────
 
+const BAND_PRESETS: Array<{ header: string; odd: string; even: string }> = [
+  { header: '#bdbdbd', odd: '#ffffff', even: '#f3f3f3' }, { header: '#5b95f9', odd: '#ffffff', even: '#e8f0fe' },
+  { header: '#57bb8a', odd: '#ffffff', even: '#e7f9ef' }, { header: '#f7cb4d', odd: '#ffffff', even: '#fef8e3' },
+  { header: '#e67c73', odd: '#ffffff', even: '#fce8e6' }, { header: '#8e7cc3', odd: '#ffffff', even: '#f3eef9' },
+  { header: '#46bdc6', odd: '#ffffff', even: '#e4f7fb' }, { header: '#ff9e6b', odd: '#ffffff', even: '#fff0e8' },
+];
+
+export function BandingPanel({ list, selection, onChange, onClose }: { list: Banding[]; selection: Range; onChange: (next: Banding[]) => void; onClose: () => void }) {
+  const current = list.find((x) => x.range.startRow <= selection.endRow && selection.startRow <= x.range.endRow && x.range.startColumn <= selection.endColumn && selection.startColumn <= x.range.endColumn);
+  const [edit, setEdit] = useState<Banding>(() => (current ? { ...current } : { id: newId('band'), range: selection, header: BAND_PRESETS[1].header, odd: BAND_PRESETS[1].odd, even: BAND_PRESETS[1].even }));
+  const [rangeText, setRangeText] = useState(rangeA1(edit.range));
+  const apply = (next: Banding) => {
+    const r = parseRange(rangeText.toUpperCase()) || next.range;
+    const item = { ...next, range: r };
+    setEdit(item);
+    onChange(list.some((x) => x.id === item.id) ? list.map((x) => (x.id === item.id ? item : x)) : [...list, item]);
+  };
+  return (
+    <Shell title="Чередование цветов" onClose={onClose}>
+      <label className="fsh-field"><span>Применить к диапазону</span><input value={rangeText} onChange={(e) => setRangeText(e.target.value)} onBlur={() => apply(edit)} /></label>
+      <label className="fsh-check"><input type="checkbox" checked={Boolean(edit.header)} onChange={(e) => apply({ ...edit, header: e.target.checked ? BAND_PRESETS[0].header : undefined })} /> Заголовок</label>
+      <label className="fsh-check"><input type="checkbox" checked={Boolean(edit.footer)} onChange={(e) => apply({ ...edit, footer: e.target.checked ? (edit.header || '#bdbdbd') : undefined })} /> Нижний колонтитул</label>
+      <div className="fsh-field"><span>Стили по умолчанию</span>
+        <div className="fsh-band-presets">
+          {BAND_PRESETS.map((p, i) => (
+            <button key={i} type="button" className="fsh-band-preset" onClick={() => apply({ ...edit, header: edit.header ? p.header : undefined, footer: edit.footer ? p.header : undefined, odd: p.odd, even: p.even })}>
+              <i style={{ background: p.header }} /><i style={{ background: p.odd }} /><i style={{ background: p.even }} />
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="fsh-field"><span>Свои цвета</span>
+        <div className="fsh-scale-row">
+          {edit.header && <label title="Заголовок"><input type="color" value={edit.header} onChange={(e) => apply({ ...edit, header: e.target.value })} /></label>}
+          <label title="Цвет 1"><input type="color" value={edit.odd} onChange={(e) => apply({ ...edit, odd: e.target.value })} /></label>
+          <label title="Цвет 2"><input type="color" value={edit.even} onChange={(e) => apply({ ...edit, even: e.target.value })} /></label>
+          {edit.footer && <label title="Колонтитул"><input type="color" value={edit.footer} onChange={(e) => apply({ ...edit, footer: e.target.value })} /></label>}
+        </div>
+      </div>
+      <div className="fsh-panel-foot">
+        {list.some((x) => x.id === edit.id) && <button type="button" className="nx-ghost fsh-danger" onClick={() => { onChange(list.filter((x) => x.id !== edit.id)); onClose(); }}><Trash2 size={15} /> Удалить чередование</button>}
+        <button type="button" className="nx-primary" onClick={() => { apply(edit); onClose(); }}>Готово</button>
+      </div>
+    </Shell>
+  );
+}
+
+// ── Именованные диапазоны ─────────────────────────────────────────────────────────────────────────────────
+
+export function NamesPanel({ names, sheetName, selection, onChange, onClose, onGo }: {
+  names: Record<string, string>; sheetName: string; selection: Range; onChange: (next: Record<string, string>) => void; onClose: () => void; onGo: (ref: string) => void;
+}) {
+  const [draft, setDraft] = useState<{ old?: string; name: string; ref: string } | null>(null);
+  const quoted = (n: string) => (/^[\wА-Яа-яЁё.]+$/.test(n) ? n : `'${n.replace(/'/g, "''")}'`);
+  const valid = (n: string) => /^[A-Za-zА-Яа-яЁё_][\wА-Яа-яЁё.]*$/.test(n) && !/^[A-Z]{1,3}\d+$/i.test(n);
+  if (!draft) {
+    return (
+      <Shell title="Именованные диапазоны" onClose={onClose}>
+        {Object.entries(names).map(([n, ref]) => (
+          <div key={n} className="fsh-cf-item" role="button" tabIndex={0} onClick={() => onGo(ref)}>
+            <span className="fsh-cf-text"><b>{n}</b><span>{ref}</span></span>
+            <button type="button" className="nx-ghost" onClick={(e) => { e.stopPropagation(); setDraft({ old: n, name: n, ref }); }}>Изменить</button>
+            <button type="button" className="nx-icon-btn" aria-label="Удалить" onClick={(e) => { e.stopPropagation(); const next = { ...names }; delete next[n]; onChange(next); }}><Trash2 size={15} /></button>
+          </div>
+        ))}
+        {!Object.keys(names).length && <p className="fsh-panel-empty">Именованных диапазонов нет. Имя можно использовать в формулах: =СУММ(Продажи).</p>}
+        <button type="button" className="nx-ghost fsh-panel-add" onClick={() => setDraft({ name: '', ref: `${quoted(sheetName)}!${rangeA1(selection)}` })}><Plus size={15} /> Добавить диапазон</button>
+      </Shell>
+    );
+  }
+  const refPart = draft.ref.slice(draft.ref.lastIndexOf('!') + 1).replace(/\$/g, '').toUpperCase();
+  const ok = valid(draft.name) && (!names[draft.name] || draft.old === draft.name) && Boolean(parseRange(refPart));
+  return (
+    <Shell title="Именованные диапазоны" onClose={onClose}>
+      <label className="fsh-field"><span>Имя (без пробелов, не как адрес ячейки)</span><input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value.trim() })} placeholder="Продажи" autoFocus /></label>
+      <label className="fsh-field"><span>Диапазон</span><input value={draft.ref} onChange={(e) => setDraft({ ...draft, ref: e.target.value })} /></label>
+      <div className="fsh-panel-foot">
+        <button type="button" className="nx-ghost" onClick={() => setDraft(null)}>Отмена</button>
+        <button type="button" className="nx-primary" disabled={!ok} onClick={() => { const next = { ...names }; if (draft.old) delete next[draft.old]; next[draft.name] = draft.ref; onChange(next); setDraft(null); }}>Готово</button>
+      </div>
+    </Shell>
+  );
+}
+
+/** Справка по клавишам (Ctrl+/), как в Google Таблицах. */
+export const SHEET_SHORTCUTS: Array<[string, string]> = [
+  ['Ctrl+C / Ctrl+X / Ctrl+V', 'Копировать / вырезать / вставить'], ['Ctrl+Shift+V', 'Вставить только значения'], ['Ctrl+Z / Ctrl+Y', 'Отменить / повторить'],
+  ['Ctrl+B / I / U', 'Жирный / курсив / подчёркнутый'], ['Ctrl+\\', 'Очистить форматирование'], ['Ctrl+Shift+L / E / R', 'Выровнять по левому краю / центру / правому'],
+  ['Ctrl+Shift+1 / 3 / 4 / 5', 'Формат: число / дата / рубли / процент'], ['Ctrl+;  /  Ctrl+Shift+;', 'Сегодняшняя дата / текущее время'],
+  ['Ctrl+Пробел / Shift+Пробел', 'Выделить столбец / строку'], ['Ctrl+A', 'Выделить всё'], ['Ctrl+стрелка', 'К краю данных'], ['Ctrl+Home / Ctrl+End', 'В начало / к последней ячейке'],
+  ['Ctrl+D / Ctrl+R', 'Заполнить вниз / вправо'], ['Ctrl+Enter', 'Ввести во всё выделение'], ['Alt+Enter', 'Новая строка в ячейке'], ['F2 / Enter', 'Править ячейку'],
+  ['Shift+F2', 'Заметка'], ['Ctrl+Alt+M', 'Комментарий'], ['Ctrl+K', 'Ссылка'], ['Ctrl+F / Ctrl+H', 'Найти / найти и заменить'],
+  ['Ctrl+колесо, Ctrl+= / Ctrl+−', 'Масштаб'], ['Пробел (на флажке)', 'Переключить флажки'], ['Alt+↓ (на списке)', 'Открыть варианты'], ['Ctrl+/', 'Эта справка'],
+];
