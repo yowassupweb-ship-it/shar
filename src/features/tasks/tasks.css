@@ -578,3 +578,16 @@
   border-radius: 50%; background: var(--bg-raised); color: var(--accent-color); box-shadow: var(--shadow-lg, 0 8px 24px rgb(0 0 0 / .25)); cursor: pointer;
 }
 .ntd-sel-comment:hover { background: var(--surface-hover); }
+
+/* «Выполненные» внутри папки или человека — своей веткой, свёрнуты; линии дерева продолжаются. */
+.ntl-subgroup { position: relative; }
+.ntl-subgroup::before { content: ''; position: absolute; left: -28.5px; top: 16px; width: 22.5px; border-top: 1.5px solid var(--ntl-branch); pointer-events: none; }
+.ntl-group-items > .ntl-subgroup:last-child::after { content: ''; position: absolute; left: -31px; top: 17px; bottom: -8px; width: 4px; background: var(--surface-panel); pointer-events: none; }
+.ntl-sub-head {
+  display: flex; align-items: center; gap: 6px; width: 100%; min-height: 32px; padding: 4px 8px; border: 0; border-radius: var(--radius-sm, 6px);
+  background: transparent; color: var(--text-muted); font: inherit; font-size: var(--text-sm); text-align: left; cursor: pointer;
+}
+@media (hover: hover) { .ntl-sub-head:hover { background: var(--surface-hover); color: var(--text-2); } }
+.ntl-subgroup > .ntl-group-items { position: relative; margin: 0 0 4px 11px; padding-left: 30px; }
+.ntl-subgroup > .ntl-group-items::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; border-left: 1.5px solid var(--ntl-branch); }
+.ntl-group > .ntl-group-items:has(> .ntl-folder-empty:only-child)::before { display: none; }

@@ -130,6 +130,8 @@ const writePref = (key: string, value: string) => { try { localStorage.setItem(k
 /** Группа списка: папка, статус или человек. drop — что сделать с задачей, брошенной на заголовок. */
 interface Group {
   key: string; label: string; tone?: string; items: Task[];
+  /** Выполненные этой группы (по папкам и по людям — у каждой свои, свёрнуты). */
+  done?: Task[];
   folder?: TaskList; person?: string; status?: Status;
   icon?: ReactNode;
 }
@@ -144,6 +146,9 @@ export default function TasksScreen() {
   const [query, setQuery] = useState('');
   const deferred = useDeferredValue(query.trim().toLowerCase());
   const [showDone, setShowDone] = useState(false);
+  // Раскрытые «Выполненные» внутри групп (по умолчанию свёрнуты) — на время сеанса.
+  const [openDone, setOpenDone] = useState<Set<string>>(() => new Set());
+  const toggleDone = (key: string) => setOpenDone((cur) => { const next = new Set(cur); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   const [menu, setMenu] = useState<{ task: Task; anchor: MenuAnchor } | null>(null);
   const onMenu = useCallback((task: Task, anchor: MenuAnchor) => setMenu({ task, anchor }), []);
   const layoutRef = useRef<HTMLDivElement>(null);
@@ -235,31 +240,35 @@ export default function TasksScreen() {
     };
     const drafts = base.filter((t) => isDraft(t.id)).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     const open = base.filter((t) => !isDone(t) && !isDraft(t.id));
+    const done = base.filter((t) => isDone(t) && !isDraft(t.id)).sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)));
     let out: Group[] = [];
     if (grouping === 'status') {
       out = STATUSES.map((s) => ({ key: `status:${s.id}`, label: s.label, tone: s.tone, status: s.id, items: open.filter((t) => statusOf(t) === s.id).sort(byDue) })).filter((g) => g.items.length);
     } else if (grouping === 'people') {
       const ids = new Set<string>();
-      for (const t of open) for (const id of assigneesOf(t)) ids.add(id);
+      for (const t of [...open, ...done]) for (const id of assigneesOf(t)) ids.add(id);
       const name = (id: string) => (id === me ? 'Я' : displayName(users[id]) || 'Сотрудник');
       out = [...ids].sort((a, b) => Number(b === me) - Number(a === me) || name(a).localeCompare(name(b), 'ru')).map((id) => ({
         key: `person:${id}`, label: name(id), person: id,
         icon: <Avatar name={displayName(users[id]) || "?"} seed={id} src={users[id]?.avatar} person size={22} />,
         items: open.filter((t) => assigneesOf(t).includes(id)).sort(byDue),
+        done: done.filter((t) => assigneesOf(t).includes(id)),
       }));
       const nobody = open.filter((t) => !assigneesOf(t).length);
-      if (nobody.length) out.push({ key: 'person:', label: 'Без исполнителя', person: '', items: nobody.sort(byDue) });
+      const nobodyDone = done.filter((t) => !assigneesOf(t).length);
+      if (nobody.length || nobodyDone.length) out.push({ key: 'person:', label: 'Без исполнителя', person: '', items: nobody.sort(byDue), done: nobodyDone });
     } else {
       // Папки деревом: каждая папка — ветка (даже пустая — в неё можно бросить задачу), внутри — этапы по статусам и срокам.
       out = folders.map((l) => ({
         key: `folder:${l.id}`, label: l.name, tone: l.color || 'var(--note-gray)', folder: l,
         items: open.filter((t) => String(t.listId) === l.id).sort(byDue),
-      })).filter((g) => !deferred || g.items.length);
-      const loose = open.filter((t) => !t.listId || !folderIds.has(String(t.listId))).sort(byDue);
-      out.push({ key: 'folder:', label: 'Без папки', items: loose });
+        done: done.filter((t) => String(t.listId) === l.id),
+      })).filter((g) => !deferred || g.items.length || g.done.length);
+      const outside = (t: Task) => !t.listId || !folderIds.has(String(t.listId));
+      out.push({ key: 'folder:', label: 'Без папки', items: open.filter(outside).sort(byDue), done: done.filter(outside) });
     }
-    const done = base.filter((t) => isDone(t) && !isDraft(t.id)).sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)));
-    return { drafts, open: out, done, openCount: open.length };
+    // Общий список выполненных — только по статусам; по папкам и людям они у каждой группы свои.
+    return { drafts, open: out, done: grouping === 'status' ? done : [], openCount: open.length };
   }, [base, grouping, folders, folderIds, users, me, deferred]);
 
   // Брошенная на группу задача: в папку, в статус или к человеку (снимаем с того, у кого была в этой группировке).
@@ -337,7 +346,19 @@ export default function TasksScreen() {
         {!shut && (
           <div className="ntl-group-items">
             {g.items.map((t) => <Row key={t.id} t={t} active={t.id === activeId} onOpen={open} onMenu={onMenu} showStatus={grouping !== 'status'} onDropBefore={(d, b) => reorder(g, d, b)} />)}
-            {!g.items.length && grouping === 'folder' && <p className="ntl-folder-empty">{isFolder ? 'Пусто — перетащите сюда задачу или нажмите +' : 'Все задачи разложены по папкам'}</p>}
+            {Boolean(g.done?.length) && (() => {
+              const doneKey = `${key}:done`;
+              const shown = openDone.has(doneKey);
+              return (
+                <div className="ntl-subgroup">
+                  <button type="button" className="ntl-done-toggle ntl-sub-head" aria-expanded={shown} onClick={() => toggleDone(doneKey)}>
+                    <ChevronRight size={13} className="ntl-caret" aria-hidden="true" /><span className="ntl-group-name">Выполненные</span><span className="ntl-count">{g.done!.length}</span>
+                  </button>
+                  {shown && <div className="ntl-group-items">{g.done!.slice(0, 200).map((t) => <Row key={t.id} t={t} active={t.id === activeId} onOpen={open} onMenu={onMenu} showStatus={false} />)}</div>}
+                </div>
+              );
+            })()}
+            {!g.items.length && !g.done?.length && grouping === 'folder' && <p className="ntl-folder-empty">{isFolder ? 'Пусто — перетащите сюда задачу или нажмите +' : 'Все задачи разложены по папкам'}</p>}
           </div>
         )}
       </section>
