@@ -43,6 +43,7 @@ export const OP = {
   FILTER_RANGE: 'sheet.mutation.set-filter-range',
   FILTER_CRITERIA: 'sheet.mutation.set-filter-criteria',
   FILTER_REMOVE: 'sheet.mutation.remove-filter',
+  GRIDLINES: 'sheet.mutation.toggle-gridlines',
 } as const;
 
 type Matrix = Record<string, Record<string, Cell | null>>;
@@ -149,6 +150,7 @@ export function inverseOf(book: Book, op: LiveOp): LiveOp[] {
       for (const col of cols) back.push({ id: OP.FILTER_CRITERIA, params: { subUnitId: p.subUnitId, col, criteria: (prev.filterColumns || []).find((c) => c.colId === col) ?? null, filteredOutRows: prev.cachedFilteredOut || [] } });
       return back;
     }
+    case OP.GRIDLINES: return sheet ? [{ id: OP.GRIDLINES, params: { subUnitId: p.subUnitId, showGridlines: sheet.showGridlines === 0 ? 0 : 1 } }] : [];
     case OP.FREEZE: return sheet ? [{ id: OP.FREEZE, params: { subUnitId: p.subUnitId, ...(sheet.freeze || { startRow: -1, startColumn: -1, xSplit: 0, ySplit: 0 }) } }] : [];
     default: return [];
   }
@@ -335,6 +337,7 @@ export function applyOp(book: Book, styles: Styles, op: LiveOp): boolean {
       writeFilters(book, all);
       return true;
     }
+    case OP.GRIDLINES: if (sheet) sheet.showGridlines = Number(p.showGridlines) ? 1 : 0; return true;
     case OP.FREEZE: {
       if (!sheet) return true;
       const sr = Number(p.startRow); const sc = Number(p.startColumn);

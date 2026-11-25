@@ -15,10 +15,19 @@ type FP = {
 };
 type FPCtor = (new (config: Record<string, unknown>) => FP) & { SSF: { format: (pattern: string, value: number) => string } };
 const Parser = FormulaParser as unknown as FPCtor;
+
+/** Все функции движка (английские имена) — для подсказки при наборе формулы. */
+let supported: string[] | null = null;
+export function supportedFunctions(): string[] {
+  if (!supported) {
+    try { supported = ((new Parser({}) as unknown as { supportedFunctions: () => string[] }).supportedFunctions() || []).slice().sort(); } catch { supported = []; }
+  }
+  return supported;
+}
 setNumberFormatter(Parser.SSF);
 
 /** Русские названия функций (как в русском Excel) → английские, понятные движку. */
-const RU: Record<string, string> = {
+export const RU_FUNCTIONS: Record<string, string> = {
   СУММ: 'SUM', СРЗНАЧ: 'AVERAGE', МИН: 'MIN', МАКС: 'MAX', СЧЁТ: 'COUNT', СЧЕТ: 'COUNT', СЧЁТЗ: 'COUNTA', СЧЕТЗ: 'COUNTA', ЕСЛИ: 'IF',
   СУММЕСЛИ: 'SUMIF', СЧЁТЕСЛИ: 'COUNTIF', СЧЕТЕСЛИ: 'COUNTIF', ОКРУГЛ: 'ROUND', ОКРУГЛВВЕРХ: 'ROUNDUP', ОКРУГЛВНИЗ: 'ROUNDDOWN',
   СЕГОДНЯ: 'TODAY', ТДАТА: 'NOW', ВПР: 'VLOOKUP', ГПР: 'HLOOKUP', ИНДЕКС: 'INDEX', И: 'AND', ИЛИ: 'OR', НЕ: 'NOT', ЕСЛИОШИБКА: 'IFERROR',
@@ -28,7 +37,7 @@ const RU: Record<string, string> = {
 };
 const ruToEn = (f: string) => f.replace(/("[^"]*")|([А-ЯЁA-Z][А-ЯЁA-Z.]*)\s*\(/gi, (m, str: string | undefined, name: string | undefined) => {
   if (str) return m;
-  const en = RU[(name || '').toUpperCase()];
+  const en = RU_FUNCTIONS[(name || '').toUpperCase()];
   return en ? m.replace(name!, en) : m;
 });
 

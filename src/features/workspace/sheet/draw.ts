@@ -13,7 +13,7 @@ export interface Geo {
   fr: number; fc: number; fh: number; fw: number; merges: Map<string, Range>;
 }
 export interface Theme {
-  bg: string; text: string; grid: string; head: string; headText: string; headOn: string; headFull: string; sel: string; selFill: string; borderAuto: string; frozenLine: string; dark: boolean;
+  bg: string; text: string; link: string; grid: string; head: string; headText: string; headOn: string; headFull: string; sel: string; selFill: string; borderAuto: string; frozenLine: string; dark: boolean;
 }
 export interface Peer { name: string; color: string; range: Range }
 export interface DrawState {
@@ -21,6 +21,8 @@ export interface DrawState {
   scrollX: number; scrollY: number; width: number; height: number; dpr: number;
   sel: Range; active: Range; clip: Range | null; peers: Peer[]; marks: Set<string>;
   filter: Range | null; filtered: Set<number>; hideActive?: boolean;
+  /** Ссылки правимой формулы — цветные рамки на листе (как в Google Таблицах). */
+  refs?: Array<{ range: Range; color: string }>;
 }
 
 const BORDER_W: Record<number, number> = { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 3, 8: 2, 9: 2, 10: 2, 11: 2, 12: 2, 13: 3 };
@@ -38,7 +40,7 @@ export function readTheme(el: Element): Theme {
   const v = (name: string, fallback: string) => cs.getPropertyValue(name).trim() || fallback;
   const bg = v('--sh-bg', '#fff');
   return {
-    bg, text: v('--sh-text', '#1f1f1f'), grid: v('--sh-grid', '#e2e3e3'), head: v('--sh-head', '#f8f9fa'), headText: v('--sh-head-text', '#5f6368'),
+    bg, text: v('--sh-text', '#1f1f1f'), link: (lightness(bg) ?? 1) < 0.4 ? '#8ab4f8' : '#1155cc', grid: v('--sh-grid', '#e2e3e3'), head: v('--sh-head', '#f8f9fa'), headText: v('--sh-head-text', '#5f6368'),
     headOn: v('--sh-head-on', '#d3e3fd'), headFull: v('--sh-head-full', '#0b57d0'), sel: v('--sh-sel', '#1a73e8'), selFill: v('--sh-sel-fill', 'rgba(26,115,232,.1)'),
     borderAuto: v('--sh-border-auto', '#000'), frozenLine: v('--sh-head-text', '#5f6368'), dark: (lightness(bg) ?? 1) < 0.4,
   };
@@ -48,10 +50,35 @@ export function readTheme(el: Element): Theme {
 export const screenX = (g: Geo, c: number, scrollX: number) => HEAD_W + g.colOffs[c] - (c >= g.fc ? scrollX : 0);
 export const screenY = (g: Geo, r: number, scrollY: number) => HEAD_H + g.rowOffs[r] - (r >= g.fr ? scrollY : 0);
 
-function font(style: Style | null): string {
+export function cellFont(style: Style | null): string {
   const size = typeof style?.fs === 'number' ? style.fs : 10;
   const family = typeof style?.ff === 'string' && style.ff ? `"${style.ff.replace(/"/g, '')}", Arial, sans-serif` : 'Arial, sans-serif';
   return `${style?.it ? 'italic ' : ''}${style?.bl ? '700 ' : ''}${size}pt ${family}`;
+}
+
+/** Адрес ссылки в ячейке: гиперссылка (своя или из Excel) или сам текст, если это адрес. */
+export function linkOf(cell: { v?: unknown; p?: unknown } | undefined): string | null {
+  const ranges = ((cell?.p as { body?: { customRanges?: Array<{ properties?: { url?: unknown } }> } } | undefined)?.body?.customRanges) || [];
+  const url = ranges.find((r) => typeof r.properties?.url === 'string')?.properties?.url as string | undefined;
+  if (url) return url;
+  const text = typeof cell?.v === 'string' ? cell.v.trim() : '';
+  return /^https?:\/\/\S+$/i.test(text) ? text : null;
+}
+
+/** Части текста с разным оформлением (богатый текст ячейки): [текст, оформление поверх стиля ячейки]. */
+function richParts(cell: { p?: unknown } | undefined, text: string): Array<{ text: string; ts: Style }> | null {
+  const body = (cell?.p as { body?: { textRuns?: Array<{ st: number; ed: number; ts?: Style }> } } | undefined)?.body;
+  const runs = (body?.textRuns || []).filter((r) => r.ts && Object.keys(r.ts).length).sort((a, b) => a.st - b.st);
+  if (!runs.length || text.includes('\n')) return null;
+  const out: Array<{ text: string; ts: Style }> = [];
+  let at = 0;
+  for (const r of runs) {
+    if (r.st > at) out.push({ text: text.slice(at, r.st), ts: {} as Style });
+    if (r.ed > r.st) out.push({ text: text.slice(Math.max(r.st, at), r.ed), ts: r.ts as Style });
+    at = Math.max(at, r.ed);
+  }
+  if (at < text.length) out.push({ text: text.slice(at), ts: {} as Style });
+  return out.filter((x) => x.text);
 }
 
 /** Перенос строк по словам под ширину. */
@@ -109,11 +136,13 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
     ctx.fillRect(x, y, X(m.endColumn + 1) - x, Y(m.endRow + 1) - y);
   }
 
-  // Сетка.
-  ctx.fillStyle = theme.grid;
-  const top = Y(r0); const bottom = Y(r1 + 1); const left = X(c0); const right = X(c1 + 1);
-  for (let r = r0; r <= r1 + 1; r += 1) { if (r <= r1 && g.rowOffs[r + 1] === g.rowOffs[r]) continue; ctx.fillRect(left, Y(r) - 1, right - left, 1); }
-  for (let c = c0; c <= c1 + 1; c += 1) { if (c <= c1 && g.colOffs[c + 1] === g.colOffs[c]) continue; ctx.fillRect(X(c) - 1, top, 1, bottom - top); }
+  // Сетка (у листа её можно выключить — «Вид → Сетка», как в Google).
+  if ((sheet as { showGridlines?: number }).showGridlines !== 0) {
+    ctx.fillStyle = theme.grid;
+    const top = Y(r0); const bottom = Y(r1 + 1); const left = X(c0); const right = X(c1 + 1);
+    for (let r = r0; r <= r1 + 1; r += 1) { if (r <= r1 && g.rowOffs[r + 1] === g.rowOffs[r]) continue; ctx.fillRect(left, Y(r) - 1, right - left, 1); }
+    for (let c = c0; c <= c1 + 1; c += 1) { if (c <= c1 && g.colOffs[c + 1] === g.colOffs[c]) continue; ctx.fillRect(X(c) - 1, top, 1, bottom - top); }
+  }
   for (const m of seenMerge) {
     const x = X(m.startColumn); const y = Y(m.startRow);
     ctx.fillStyle = theme.bg;
@@ -130,12 +159,14 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
     const text = displayText(d.cell, d.style);
     if (!text) continue;
     const st = d.style;
-    ctx.font = font(st);
+    ctx.font = cellFont(st);
     const bg = (st?.bg as { rgb?: string } | undefined)?.rgb;
     let color = (st?.cl as { rgb?: string } | undefined)?.rgb || '';
     const bgL = bg ? lightness(bg) : null;
     if (!color) color = bg && bgL !== null ? (bgL > 0.55 ? '#1f1f1f' : '#f1f1f1') : theme.text;
     else if (theme.dark && !bg) { const l = lightness(color); if (l !== null && l < 0.35) color = theme.text; }
+    const link = linkOf(d.cell);
+    if (link && !(st?.cl as { rgb?: string } | undefined)?.rgb) color = theme.link;
     ctx.fillStyle = color;
     const h = ({ 1: 'left', 2: 'center', 3: 'right', 4: 'left' } as Record<number, 'left' | 'center' | 'right'>)[Number(st?.ht)] || autoAlign(d.cell);
     const v = ({ 1: 'top', 2: 'middle', 3: 'bottom' } as Record<number, string>)[Number(st?.vt)] || 'bottom';
@@ -166,8 +197,28 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
     else if (clipW > d.w) { ctx.fillStyle = theme.bg; ctx.fillRect(d.x + d.w, d.y, clipW - d.w - 1, d.h - 1); ctx.fillStyle = color; }
     ctx.textAlign = h;
     const x = h === 'left' ? d.x + pad : h === 'center' ? d.x + d.w / 2 : d.x + d.w - pad;
-    const under = (st?.ul as { s?: number } | undefined)?.s;
+    const under = (st?.ul as { s?: number } | undefined)?.s || Boolean(link);
     const strike = (st?.st as { s?: number } | undefined)?.s;
+    const parts = !wrap ? richParts(d.cell, text) : null;
+    if (parts) {
+      // Богатый текст — частями: каждая своим шрифтом и цветом, выравнивание по общей ширине.
+      const widths = parts.map((part) => { ctx.font = cellFont({ ...(st || {}), ...part.ts } as Style); return ctx.measureText(part.text).width; });
+      const total = widths.reduce((a, b2) => a + b2, 0);
+      let px = h === 'left' ? d.x + pad : h === 'center' ? d.x + (d.w - total) / 2 : d.x + d.w - pad - total;
+      ctx.textAlign = 'left';
+      parts.forEach((part, i) => {
+        const ts = { ...(st || {}), ...part.ts } as Style;
+        ctx.font = cellFont(ts);
+        const pc = (part.ts.cl as { rgb?: string } | undefined)?.rgb;
+        ctx.fillStyle = pc ? (theme.dark && !bg && (lightness(pc) ?? 1) < 0.35 ? theme.text : pc) : color;
+        ctx.fillText(part.text, px, y);
+        if ((ts.ul as { s?: number } | undefined)?.s) ctx.fillRect(px, y + 2, widths[i], 1);
+        if ((ts.st as { s?: number } | undefined)?.s) ctx.fillRect(px, y - size * 0.32, widths[i], 1);
+        px += widths[i];
+      });
+      ctx.restore();
+      continue;
+    }
     for (const line of lines) {
       ctx.fillText(line, x, y);
       if (under || strike) {
@@ -271,6 +322,11 @@ export function drawSheet(ctx: CanvasRenderingContext2D, s: DrawState) {
       ctx.fillStyle = theme.bg; ctx.fillRect(x + w - 4, y + h - 5, 7, 1); ctx.fillRect(x + w - 5, y + h - 4, 1, 7);
     }
   }
+  for (const ref of s.refs || []) {
+    const [x, y, w, h] = rangeRect(s, ref.range);
+    ctx.globalAlpha = 0.12; ctx.fillStyle = ref.color; ctx.fillRect(x, y, w, h); ctx.globalAlpha = 1;
+    ctx.strokeStyle = ref.color; ctx.lineWidth = 2; ctx.setLineDash([]); ctx.strokeRect(x - 1, y - 1, w + 1, h + 1);
+  }
   ctx.restore();
 
   // Заголовки столбцов.
@@ -311,6 +367,24 @@ export function drawSheet(ctx: CanvasRenderingContext2D, s: DrawState) {
   for (let r = r0; r <= r1; r += 1) rowHead(r);
   ctx.restore();
   for (let r = 0; r < g.fr; r += 1) rowHead(r);
+  // Скрытые строки и столбцы — отметка на границе в заголовке (щелчок по ней их показывает).
+  const hiddenCol = (c: number) => c >= 0 && c < g.cols && g.colOffs[c + 1] === g.colOffs[c] && Boolean(s.sheet.columnData?.[c]?.hd);
+  const hiddenRow = (r: number) => r >= 0 && r < g.rows && g.rowOffs[r + 1] === g.rowOffs[r] && Boolean(s.sheet.rowData?.[r]?.hd);
+  ctx.fillStyle = theme.headText;
+  for (let c = 0; c <= c1 + 1; c += 1) {
+    if (c > 0 && c < c0 && c >= g.fc) continue;
+    if (hiddenCol(c) && !hiddenCol(c - 1)) {
+      const x = screenX(g, c, s.scrollX);
+      if (x > HEAD_W) { ctx.beginPath(); ctx.moveTo(x - 6, 6); ctx.lineTo(x - 2, HEAD_H / 2); ctx.lineTo(x - 6, HEAD_H - 6); ctx.moveTo(x + 6, 6); ctx.lineTo(x + 2, HEAD_H / 2); ctx.lineTo(x + 6, HEAD_H - 6); ctx.fill(); }
+    }
+  }
+  for (let r = 0; r <= r1 + 1; r += 1) {
+    if (r > 0 && r < r0 && r >= g.fr) continue;
+    if (hiddenRow(r) && !hiddenRow(r - 1)) {
+      const y = screenY(g, r, s.scrollY);
+      if (y > HEAD_H) { ctx.beginPath(); ctx.moveTo(12, y - 6); ctx.lineTo(HEAD_W / 2, y - 2); ctx.lineTo(HEAD_W - 12, y - 6); ctx.moveTo(12, y + 6); ctx.lineTo(HEAD_W / 2, y + 2); ctx.lineTo(HEAD_W - 12, y + 6); ctx.fill(); }
+    }
+  }
   ctx.fillStyle = theme.grid;
   ctx.fillRect(HEAD_W - 1, 0, 1, H);
   ctx.fillRect(0, HEAD_H - 1, W, 1);

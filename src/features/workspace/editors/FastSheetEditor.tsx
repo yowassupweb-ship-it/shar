@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import {
-  AlignVerticalJustifyCenter, ArrowDownAZ, ArrowUpZA, Filter, AlignVerticalJustifyEnd, AlignVerticalJustifyStart, ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine, ArrowUpToLine,
+  AlignVerticalJustifyCenter, ArrowDownAZ, ArrowUpZA, CopyPlus, Eye, EyeOff, Filter, Paintbrush, AlignVerticalJustifyEnd, AlignVerticalJustifyStart, ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine, ArrowUpToLine,
   ClipboardPaste, Columns2, Copy, Eraser, Grid2x2, MessageSquarePlus, Percent, Plus, RussianRuble, Scissors, Sigma, Snowflake, Square, TableCellsMerge,
   TableCellsSplit, Trash2, WrapText,
 } from 'lucide-react';
@@ -12,15 +12,16 @@ import { Menu, MenuItem } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
 import { applySnapshot, bookFromBase64, bookToBase64, excelToUniver } from '../lib/workbook';
 import type { LiveOp } from '../live/channel';
-import { recalc, shiftFormula } from '../sheet/formulas';
+import { recalc, shiftFormula, supportedFunctions } from '../sheet/formulas';
 import {
   a1, cellAt, colName, colWidth, displayText, editText, HEAD_H, HEAD_W, indexAt, inRange, mergeIndex, norm, offsets, parseA1, parseInput, parseRange,
   rangeA1, rowHeight, styleOf, Styles, usedBounds, type Book, type Cell, type Pos, type Range, type Sheet, type Style,
 } from '../sheet/model';
 import { applyOp, inverseOf, OP, wireCell } from '../sheet/ops';
-import { drawSheet, readTheme, screenX, screenY } from '../sheet/draw';
+import { cellFont, drawSheet, readTheme, screenX, screenY } from '../sheet/draw';
+import { canInsertRef, enclosingFunction, formulaRefs, refEndingAt, signatureOf, suggestFunctions, typingName } from '../sheet/formulaEdit';
 import { dataRegion, filteredRows, readFilters, type FilterColumn } from '../sheet/filter';
-import { Palette, Pop } from './FastDocToolbar';
+import { FONTS, Palette, Pop } from './FastDocToolbar';
 import { FindBar } from './FindBar';
 import { FilterMenu } from './SheetFilterMenu';
 import type { EditorProps } from './types';
@@ -88,6 +89,20 @@ function cellCss(style: Style | null): { css: CSSProperties; ink?: string; wrap:
   return { css, ink, wrap: style.tb === 3, h, v };
 }
 
+/** Текст формулы с цветными ссылками (подложка поля правки: цвет — тот же, что у рамки на листе). */
+function renderColored(text: string, refs: Array<{ start: number; end: number; color: string }>): ReactNode[] {
+  if (!text.startsWith('=') || !refs.length) return [text];
+  const out: ReactNode[] = [];
+  let at = 0;
+  refs.forEach((r, i) => {
+    if (r.start > at) out.push(text.slice(at, r.start));
+    out.push(<span key={i} style={{ color: r.color }}>{text.slice(r.start, r.end)}</span>);
+    at = r.end;
+  });
+  if (at < text.length) out.push(text.slice(at));
+  return out;
+}
+
 /** Разбор вставленного текста (TSV из Excel и Google Таблиц): кавычки, переводы строк внутри ячеек. */
 function parseTsv(text: string): string[][] {
   const rows: string[][] = [];
@@ -124,10 +139,18 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   const [pop, setPop] = useState<{ kind: string; at: DOMRect; trigger: HTMLElement } | null>(null);
   const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [find, setFind] = useState<{ open: boolean; query: string; index: number }>({ open: false, query: '', index: 0 });
+  const [find, setFind] = useState<{ open: boolean; query: string; index: number; replace?: boolean }>({ open: false, query: '', index: 0 });
   const [clipMark, setClipMark] = useState<Range | null>(null);
   const grid = useRef<HTMLDivElement>(null);
+  const pasteValues = useRef(false);
   const editor = useRef<HTMLTextAreaElement>(null);
+  const barInput = useRef<HTMLInputElement>(null);
+  /** Позиция каретки в правке (для подсказки функций и вставки ссылок щелчком). */
+  const [caret, setCaret] = useState(0);
+  const [suggestAt, setSuggestAt] = useState(0);
+  const [suggestOff, setSuggestOff] = useState(false);
+  /** «Копировать формат» (кисть): оформление, которое получит следующее выделение. */
+  const [painter, setPainter] = useState<Style | null>(null);
   const undo = useRef<Step[]>([]);
   const redo = useRef<Step[]>([]);
   const clip = useRef<Clip | null>(null);
@@ -447,7 +470,13 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     const focused = () => document.activeElement === grid.current;
     const onCopy = (e: ClipboardEvent) => { if (!focused()) return; e.preventDefault(); copy(false, e.clipboardData); };
     const onCut = (e: ClipboardEvent) => { if (!focused() || readOnly) return; e.preventDefault(); copy(true, e.clipboardData); };
-    const onPaste = (e: ClipboardEvent) => { if (!focused() || readOnly) return; e.preventDefault(); paste(e.clipboardData?.getData('text/plain') || ''); };
+    const onPaste = (e: ClipboardEvent) => {
+      if (!focused() || readOnly) return;
+      e.preventDefault();
+      const only = pasteValues.current ? 'values' as const : undefined;
+      pasteValues.current = false;
+      paste(e.clipboardData?.getData('text/plain') || '', only);
+    };
     document.addEventListener('copy', onCopy);
     document.addEventListener('cut', onCut);
     document.addEventListener('paste', onPaste);
@@ -576,28 +605,48 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   };
 
   // Ссылки в формулу мышью: в правке формулы щелчок по ячейке вставляет её адрес.
-  const insertRef = (text: string) => {
-    setEdit((e) => (e ? { ...e, text: e.text + text } : e));
-    window.requestAnimationFrame(() => { const el = editor.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } });
+  const editField = () => (edit?.bar ? barInput.current : editor.current);
+  const caretNow = () => editField()?.selectionStart ?? edit?.text.length ?? 0;
+  const insertRef = (ref: string) => {
+    if (!edit) return;
+    const at = caretNow();
+    const prev = refEndingAt(edit.text, at);
+    const start = prev ? prev.start : at;
+    const text = edit.text.slice(0, start) + ref + edit.text.slice(at);
+    const pos = start + ref.length;
+    setEdit({ ...edit, text });
+    setCaret(pos);
+    window.requestAnimationFrame(() => { const el = editField(); if (el) { el.focus(); el.setSelectionRange(pos, pos); } });
   };
 
+  const insertRefNow = useRef(insertRef);
+  insertRefNow.current = insertRef;
+
   // ── Мышь: всё по координатам холста — ручки размера на границах заголовков, квадратик автозаполнения, стрелки фильтра ──
-  type Drag = { kind: 'cells' | 'rows' | 'cols' | 'resize-col' | 'resize-row' | 'fill'; index?: number; start?: number; size?: number };
+  type Drag = { kind: 'cells' | 'rows' | 'cols' | 'resize-col' | 'resize-row' | 'fill' | 'ref'; index?: number; start?: number; size?: number; from?: Pos };
   const drag = useRef<Drag | null>(null);
   const [guide, setGuide] = useState<{ axis: 'x' | 'y'; at: number } | null>(null);
   const [fillTo, setFillTo] = useState<Range | null>(null);
   const [filterMenu, setFilterMenu] = useState<{ col: number; x: number; y: number } | null>(null);
 
   /** Что под курсором: граница столбца/строки в заголовке (для изменения размера), квадратик заполнения, стрелка фильтра. */
-  const handleAt = useCallback((clientX: number, clientY: number): { kind: 'resize-col' | 'resize-row' | 'fill' | 'filter'; index: number } | null => {
+  const handleAt = useCallback((clientX: number, clientY: number): { kind: 'resize-col' | 'resize-row' | 'fill' | 'filter' | 'unhide-col' | 'unhide-row'; index: number; end?: number } | null => {
     const el = grid.current;
     if (!el || !geo) return null;
     const box = el.getBoundingClientRect();
     const lx = clientX - box.left; const ly = clientY - box.top;
     const sx = el.scrollLeft; const sy = el.scrollTop;
+    const hiddenCol = (c: number) => c >= 0 && c < geo.cols && Boolean(sheet?.columnData?.[c]?.hd);
+    const hiddenRow = (r: number) => r >= 0 && r < geo.rows && Boolean(sheet?.rowData?.[r]?.hd);
     if (ly >= 0 && ly < HEAD_H && lx > HEAD_W) {
       const h0 = hit(clientX, clientY);
       if (h0 && h0.col >= 0) {
+        // Граница со скрытыми столбцами: справа от этого или слева (скрытые — подряд).
+        for (const [edge, first] of [[screenX(geo, h0.col + 1, sx), h0.col + 1], [screenX(geo, h0.col, sx), -1]] as Array<[number, number]>) {
+          if (Math.abs(lx - edge) > 6) continue;
+          if (first >= 0 && hiddenCol(first)) { let end = first; while (hiddenCol(end + 1)) end += 1; return { kind: 'unhide-col', index: first, end }; }
+          if (first < 0 && hiddenCol(h0.col - 1)) { let start = h0.col - 1; while (hiddenCol(start - 1)) start -= 1; return { kind: 'unhide-col', index: start, end: h0.col - 1 }; }
+        }
         const right = screenX(geo, h0.col + 1, sx); const left = screenX(geo, h0.col, sx);
         if (Math.abs(lx - right) <= 4) return { kind: 'resize-col', index: h0.col };
         if (Math.abs(lx - left) <= 4 && h0.col > 0) return { kind: 'resize-col', index: h0.col - 1 };
@@ -609,6 +658,11 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     if (lx >= 0 && lx < HEAD_W && ly > HEAD_H) {
       const h0 = hit(clientX, clientY);
       if (h0 && h0.row >= 0) {
+        for (const [edge, first] of [[screenY(geo, h0.row + 1, sy), h0.row + 1], [screenY(geo, h0.row, sy), -1]] as Array<[number, number]>) {
+          if (Math.abs(ly - edge) > 5) continue;
+          if (first >= 0 && hiddenRow(first)) { let end = first; while (hiddenRow(end + 1)) end += 1; return { kind: 'unhide-row', index: first, end }; }
+          if (first < 0 && hiddenRow(h0.row - 1)) { let start = h0.row - 1; while (hiddenRow(start - 1)) start -= 1; return { kind: 'unhide-row', index: start, end: h0.row - 1 }; }
+        }
         const bottom = screenY(geo, h0.row + 1, sy); const top = screenY(geo, h0.row, sy);
         if (Math.abs(ly - bottom) <= 3) return { kind: 'resize-row', index: h0.row };
         if (Math.abs(ly - top) <= 3 && h0.row > 0) return { kind: 'resize-row', index: h0.row - 1 };
@@ -620,12 +674,13 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       if (Math.abs(lx - fx) <= 5 && Math.abs(ly - fy) <= 5) return { kind: 'fill', index: 0 };
     }
     return null;
-  }, [geo, hit, b, sheetId, readOnly, edit, selRange]);
+  }, [geo, hit, b, sheet, sheetId, readOnly, edit, selRange]);
 
   const onHover = (e: React.MouseEvent) => {
     if (drag.current) return;
     const h = handleAt(e.clientX, e.clientY);
-    const cursor = h?.kind === 'resize-col' ? 'col-resize' : h?.kind === 'resize-row' ? 'row-resize' : h?.kind === 'fill' ? 'crosshair' : h?.kind === 'filter' ? 'pointer' : '';
+    const cursor = h?.kind === 'resize-col' ? 'col-resize' : h?.kind === 'resize-row' ? 'row-resize' : h?.kind === 'fill' ? 'crosshair'
+      : h?.kind === 'filter' || h?.kind === 'unhide-col' || h?.kind === 'unhide-row' ? 'pointer' : painter ? 'copy' : '';
     if (grid.current && grid.current.style.cursor !== cursor) grid.current.style.cursor = cursor;
   };
 
@@ -649,7 +704,18 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       return;
     }
     if (handle?.kind === 'fill') { e.preventDefault(); drag.current = { kind: 'fill' }; return; }
-    if (edit && edit.text.startsWith('=') && h.row >= 0 && h.col >= 0) { e.preventDefault(); insertRef(a1(h.row, h.col)); return; }
+    if (edit && h.row >= 0 && h.col >= 0 && canInsertRef(edit.text, caretNow())) {
+      e.preventDefault();
+      insertRef(a1(h.row, h.col));
+      drag.current = { kind: 'ref', from: { row: h.row, col: h.col } };
+      return;
+    }
+    if (handle && (handle.kind === 'unhide-col' || handle.kind === 'unhide-row') && !readOnly) {
+      e.preventDefault();
+      const cols = handle.kind === 'unhide-col';
+      commit([{ id: cols ? OP.COL_VISIBLE : OP.ROW_VISIBLE, params: { subUnitId: sheetId, ranges: [cols ? { startRow: 0, endRow: 0, startColumn: handle.index, endColumn: handle.end ?? handle.index } : { startRow: handle.index, endRow: handle.end ?? handle.index, startColumn: 0, endColumn: 0 }] } }]);
+      return;
+    }
     if (edit) finishEdit('stay');
     e.preventDefault();
     grid.current?.focus({ preventScroll: true });
@@ -744,6 +810,10 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
         if (!dr && !dc) setFillTo(null);
         else if (Math.abs(dr) >= Math.abs(dc)) setFillTo({ ...selRange, startRow: Math.min(selRange.startRow, r), endRow: Math.max(selRange.endRow, r) });
         else setFillTo({ ...selRange, startColumn: Math.min(selRange.startColumn, c), endColumn: Math.max(selRange.endColumn, c) });
+      } else if (d.kind === 'ref' && d.from) {
+        const r = Math.max(0, h.row); const c = Math.max(0, h.col);
+        const ref = r === d.from.row && c === d.from.col ? a1(r, c) : rangeA1(norm({ startRow: d.from.row, startColumn: d.from.col, endRow: r, endColumn: c }));
+        insertRefNow.current(ref);
       } else if (d.kind === 'cols') setSel((s) => ({ anchor: s.anchor, focus: { row: geo.rows - 1, col: Math.max(0, h.col) } }));
       else if (d.kind === 'rows') setSel((s) => ({ anchor: s.anchor, focus: { row: Math.max(0, h.row), col: geo.cols - 1 } }));
       else setSel((s) => ({ anchor: s.anchor, focus: { row: Math.max(0, h.row), col: Math.max(0, h.col) } }));
@@ -760,6 +830,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       drag.current = null;
       if (!d) return;
       if (d.kind === 'fill') { const to = fillTo; setFillTo(null); if (to) fill(selRange, to); return; }
+      if (d.kind === 'cells' && painter) { const st = painter; setPainter(null); restyle(() => ({ ...st })); return; }
       if (!(d.kind === 'resize-col' || d.kind === 'resize-row')) return;
       setGuide(null);
       const rows = d.kind === 'resize-row';
@@ -775,7 +846,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
-  }, [geo, hit, commit, sheetId, selRange, fillTo, fill]);
+  }, [geo, hit, commit, sheetId, selRange, fillTo, fill, painter, restyle]);
 
   // ── Сортировка и фильтр ──
   /** Сортировать по столбцу активной ячейки: выделение (несколько строк) или блок данных вокруг; заголовок остаётся. */
@@ -849,8 +920,87 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       if (last > selRange.endRow) fill(selRange, { ...selRange, endRow: last });
       return;
     }
+    if (handle && (handle.kind === 'resize-col' || handle.kind === 'resize-row') && !readOnly) { autofit(handle.kind === 'resize-col', handle.index); return; }
     if (!h || h.row < 0 || h.col < 0 || handle) return;
     startEdit();
+  };
+
+  /** Ширина столбца (высота строки) по содержимому; выделены целиком несколько — у всех них. */
+  const autofit = (cols: boolean, index: number) => {
+    if (!b || !sheet || !geo) return;
+    const whole = cols ? selRange.startRow === 0 && selRange.endRow >= geo.rows - 1 && index >= selRange.startColumn && index <= selRange.endColumn
+      : selRange.startColumn === 0 && selRange.endColumn >= geo.cols - 1 && index >= selRange.startRow && index <= selRange.endRow;
+    const [from, to] = whole ? (cols ? [selRange.startColumn, selRange.endColumn] : [selRange.startRow, selRange.endRow]) : [index, index];
+    const ctx = document.createElement('canvas').getContext('2d');
+    if (!ctx) return;
+    const used = usedBounds(sheet);
+    const ops: LiveOp[] = [];
+    for (let i = from; i <= to; i += 1) {
+      let size = 0;
+      if (cols) {
+        for (let r = 0; r < Math.min(used.rows, 20000); r += 1) {
+          const cell = cellAt(sheet, r, i);
+          if (!cell || geo.merges.has(`${r}:${i}`)) continue;
+          const st = styleOf(b, cell);
+          const text = displayText(cell, st);
+          if (!text || st?.tb === 3) continue;
+          ctx.font = cellFont(st);
+          for (const line of text.split('\n')) size = Math.max(size, ctx.measureText(line).width + 12);
+        }
+        size = Math.max(24, Math.ceil(size || 88));
+      } else {
+        for (let c = 0; c < used.cols; c += 1) {
+          const cell = cellAt(sheet, i, c);
+          if (!cell) continue;
+          const st = styleOf(b, cell);
+          const text = displayText(cell, st);
+          if (!text) continue;
+          const px = (typeof st?.fs === 'number' ? st.fs : 10) * (96 / 72);
+          let lines = text.split('\n').length;
+          if (st?.tb === 3) {
+            ctx.font = cellFont(st);
+            const w = colWidth(sheet, c) - 8;
+            lines = text.split('\n').reduce((n, para) => n + Math.max(1, Math.ceil(ctx.measureText(para).width / Math.max(10, w))), 0);
+          }
+          size = Math.max(size, Math.ceil(lines * px * 1.25 + 8));
+        }
+        size = Math.max(21, size || 24);
+      }
+      const cur = cols ? colWidth(sheet, i) : rowHeight(sheet, i);
+      if (size === cur) continue;
+      const r = cols ? { startRow: 0, endRow: 0, startColumn: i, endColumn: i } : { startRow: i, endRow: i, startColumn: 0, endColumn: 0 };
+      ops.push({ id: cols ? OP.COL_WIDTH : OP.ROW_HEIGHT, params: { subUnitId: sheetId, ranges: [r], [cols ? 'colWidth' : 'rowHeight']: size } });
+    }
+    commit(ops);
+  };
+
+  /** Скрыть выделенные строки (столбцы); показать — скрытые внутри выделения. */
+  const setHidden = (cols: boolean, hide: boolean) => {
+    const r = cols ? { startRow: 0, endRow: 0, startColumn: selRange.startColumn, endColumn: selRange.endColumn } : { startRow: selRange.startRow, endRow: selRange.endRow, startColumn: 0, endColumn: 0 };
+    commit([{ id: cols ? (hide ? OP.COL_HIDDEN : OP.COL_VISIBLE) : (hide ? OP.ROW_HIDDEN : OP.ROW_VISIBLE), params: { subUnitId: sheetId, ranges: [r] } }]);
+  };
+  const hasHidden = (cols: boolean) => {
+    if (!sheet) return false;
+    for (let i = cols ? selRange.startColumn : selRange.startRow; i <= (cols ? selRange.endColumn : selRange.endRow); i += 1) {
+      if (cols ? sheet.columnData?.[i]?.hd : sheet.rowData?.[i]?.hd) return true;
+    }
+    return false;
+  };
+
+  /** Копия листа — рядом с ним, как «Создать копию» в Google. */
+  const duplicateSheet = (id: string) => {
+    if (!b) return;
+    const src = b.sheets[id];
+    if (!src) return;
+    const names = new Set(Object.values(b.sheets).map((x) => x.name));
+    let name = `Копия ${src.name}`.slice(0, 31);
+    for (let n = 2; names.has(name); n += 1) name = `Копия ${src.name} ${n}`.slice(0, 31);
+    const cellData: Record<number, Record<number, Cell | null>> = {};
+    for (const [r, row] of Object.entries(src.cellData || {})) for (const [c, cell] of Object.entries(row || {})) (cellData[Number(r)] ||= {})[Number(c)] = wireCell(b, cell);
+    const copy = JSON.parse(JSON.stringify({ ...src, cellData }));
+    const nid = `sheet-${Date.now().toString(36)}`;
+    commit([{ id: OP.INSERT_SHEET, params: { index: b.sheetOrder.indexOf(id) + 1, sheet: { ...copy, id: nid, name } } }]);
+    setSheetId(nid);
   };
 
   // ── Клавиатура ──
@@ -866,12 +1016,33 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       if (lower === 'i' || lower === 'ш') { e.preventDefault(); toggle('it', 1); return; }
       if (lower === 'u' || lower === 'г') { e.preventDefault(); restyle((s) => ({ ...s, ul: anchorStyle.ul ? undefined : { s: 1 } })); return; }
       if (lower === 'a' || lower === 'ф') { e.preventDefault(); setSel({ anchor: { row: 0, col: 0 }, focus: { row: geo.rows - 1, col: geo.cols - 1 } }); return; }
-      if (lower === 'f' || lower === 'а') { e.preventDefault(); setFind((f) => ({ ...f, open: true })); return; }
+      if (lower === 'f' || lower === 'а') { e.preventDefault(); setFind((f) => ({ ...f, open: true, replace: false })); return; }
+      if (lower === 'h' || lower === 'р') { e.preventDefault(); setFind((f) => ({ ...f, open: true, replace: true })); return; }
       // Ctrl+D / Ctrl+R — заполнить выделение вниз / вправо первой строкой (столбцом), как в Excel.
       if ((lower === 'd' || lower === 'в') && selRange.endRow > selRange.startRow && !readOnly) { e.preventDefault(); fill({ ...selRange, endRow: selRange.startRow }, selRange); return; }
       if ((lower === 'r' || lower === 'к') && selRange.endColumn > selRange.startColumn && !readOnly) { e.preventDefault(); fill({ ...selRange, endColumn: selRange.startColumn }, selRange); return; }
       if (k === 'Home') { e.preventDefault(); setSel({ anchor: { row: 0, col: 0 }, focus: { row: 0, col: 0 } }); reveal(0, 0); return; }
+      if (k === 'End' && sheet) { e.preventDefault(); const u = usedBounds(sheet); const p0 = { row: Math.max(0, u.rows - 1), col: Math.max(0, u.cols - 1) }; setSel({ anchor: p0, focus: p0 }); reveal(p0.row, p0.col); return; }
+      if (k === ' ') { e.preventDefault(); setSel((x) => ({ anchor: { row: 0, col: x.anchor.col }, focus: { row: geo.rows - 1, col: x.focus.col } })); return; }
+      if (k === 'Backspace') { e.preventDefault(); reveal(sel.anchor.row, sel.anchor.col); return; }
+      if (k === '\\') { e.preventDefault(); if (!readOnly) restyle(() => ({} as Style)); return; }
+      if (!readOnly && (e.code === 'Semicolon' || k === ';' || k === 'ж')) {
+        // Ctrl+; — сегодняшняя дата, Ctrl+Shift+; — текущее время.
+        e.preventDefault();
+        const now = new Date(); const p2 = (n: number) => String(n).padStart(2, '0');
+        writeInput(sel.anchor.row, sel.anchor.col, e.shiftKey ? `${p2(now.getHours())}:${p2(now.getMinutes())}` : `${p2(now.getDate())}.${p2(now.getMonth() + 1)}.${now.getFullYear()}`);
+        return;
+      }
+      if (e.shiftKey && !readOnly) {
+        // Форматы чисел как в Google: Ctrl+Shift+1 число, 3 дата, 4 рубли, 5 процент; L/E/R — выравнивание.
+        const fmt: Record<string, string> = { Digit1: '#,##0.00', Digit3: 'dd.mm.yyyy', Digit4: '#,##0.00 "₽"', Digit5: '0.00%' };
+        if (fmt[e.code]) { e.preventDefault(); setPattern(fmt[e.code]); return; }
+        const align: Record<string, number> = { KeyL: 1, KeyE: 2, KeyR: 3 };
+        if (align[e.code]) { e.preventDefault(); const v = align[e.code]; restyle((x) => ({ ...x, ht: v })); return; }
+        if (e.code === 'KeyV') { pasteValues.current = true; return; }
+      }
     }
+    if (!mod && e.shiftKey && k === ' ') { e.preventDefault(); setSel((x) => ({ anchor: { row: x.anchor.row, col: 0 }, focus: { row: x.focus.row, col: geo.cols - 1 } })); return; }
     if (mod && e.altKey && e.code === 'KeyM' && onAddComment) { e.preventDefault(); onAddComment(); return; }
     const arrows: Record<string, [number, number]> = { ArrowDown: [1, 0], ArrowUp: [-1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
     if (arrows[k]) { e.preventDefault(); move(arrows[k][0], arrows[k][1], e.shiftKey, mod); return; }
@@ -881,7 +1052,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     if (k === 'PageDown' || k === 'PageUp') { e.preventDefault(); move(k === 'PageDown' ? 20 : -20, 0, e.shiftKey); return; }
     if (k === 'Home') { e.preventDefault(); move(0, -sel.anchor.col, e.shiftKey); return; }
     if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); if (!readOnly) clearValues(); return; }
-    if (k === 'Escape') { clip.current = null; setClipMark(null); return; }
+    if (k === 'Escape') { clip.current = null; setClipMark(null); setPainter(null); return; }
     if (!mod && !e.altKey && k.length === 1 && !readOnly) { e.preventDefault(); startEdit(k); }
   };
 
@@ -894,12 +1065,56 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     el.setSelectionRange(el.value.length, el.value.length);
   }, [edit?.row, edit?.col, Boolean(edit)]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const acceptSuggestion = (name: string) => {
+    if (!edit) return;
+    const at = caretNow();
+    const t = typingName(edit.text, at);
+    if (!t) return;
+    const text = `${edit.text.slice(0, t.start)}${name}(${edit.text.slice(at)}`;
+    const pos = t.start + name.length + 1;
+    setEdit({ ...edit, text });
+    setCaret(pos);
+    setSuggestAt(0);
+    window.requestAnimationFrame(() => { const el = editField(); if (el) { el.focus(); el.setSelectionRange(pos, pos); } });
+  };
   const onEditKey = (e: React.KeyboardEvent<HTMLTextAreaElement | HTMLInputElement>) => {
+    if (suggestions.length) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setSuggestAt((i) => (i + (e.key === 'ArrowDown' ? 1 : suggestions.length - 1)) % suggestions.length); return; }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.ctrlKey && !e.altKey)) { e.preventDefault(); acceptSuggestion(suggestions[Math.min(suggestAt, suggestions.length - 1)].name); return; }
+      if (e.key === 'Escape') { e.preventDefault(); setSuggestOff(true); return; }
+    }
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && edit && !readOnly) {
+      // Ctrl+Enter — то же значение во всё выделение (формула — со сдвигом ссылок), как в Google.
+      e.preventDefault();
+      const x = edit;
+      setEdit(null);
+      grid.current?.focus({ preventScroll: true });
+      const cells: Record<number, Record<number, Cell | null>> = {};
+      eachSelected((r, c) => {
+        const text = x.text.startsWith('=') ? shiftFormula(x.text, r - x.row, c - x.col) : x.text;
+        const parsed = parseInput(text);
+        (cells[r] ||= {})[c] = { v: parsed.v ?? null, f: parsed.f ?? null, t: parsed.t ?? null } as Cell;
+      });
+      setCells(cells);
+      return;
+    }
     if (e.key === 'Enter' && e.altKey) { e.preventDefault(); setEdit((x) => (x ? { ...x, text: `${x.text}\n` } : x)); return; }
     if (e.key === 'Enter') { e.preventDefault(); finishEdit(e.shiftKey ? 'up' : 'down'); return; }
     if (e.key === 'Tab') { e.preventDefault(); finishEdit(e.shiftKey ? 'left' : 'right'); return; }
     if (e.key === 'Escape') { e.preventDefault(); finishEdit('cancel'); }
   };
+
+  const suggestions = useMemo(() => {
+    if (!edit || suggestOff) return [];
+    const t = typingName(edit.text, caret);
+    return t && t.word.length >= 1 ? suggestFunctions(t.word, supportedFunctions()) : [];
+  }, [edit, caret, suggestOff]);
+  const hint = edit && !suggestions.length ? (() => { const f = enclosingFunction(edit.text, caret); return f ? signatureOf(f) : null; })() : null;
+  const editRefs = useMemo(() => {
+    if (!edit || !edit.text.startsWith('=') || !sheet) return [] as ReturnType<typeof formulaRefs>;
+    return formulaRefs(edit.text).filter((r) => r.range && (!r.sheet || r.sheet.toLowerCase() === sheet.name.toLowerCase()));
+  }, [edit, sheet]);
+  useEffect(() => { setSuggestOff(false); setSuggestAt(0); }, [edit?.row, edit?.col]);
 
   // ── Поиск (Ctrl+F) ──
   const findHits = useMemo(() => {
@@ -911,6 +1126,25 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     }
     return out.sort((x, y) => x.row - y.row || x.col - y.col);
   }, [find.open, find.query, sheet, b, undo.current.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** Заменить найденное: в тексте ячеек (формулы и числа не трогаем), без учёта регистра — как в Google. */
+  const replaceIn = (positions: Pos[], text: string) => {
+    if (!b || !sheet || readOnly) return;
+    const q = find.query.trim();
+    if (!q) return;
+    const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    const cells: Record<number, Record<number, Cell | null>> = {};
+    for (const p0 of positions) {
+      const cell = cellAt(sheet, p0.row, p0.col);
+      if (!cell || cell.f || typeof cell.v !== 'string') continue;
+      const next = cell.v.replace(re, text);
+      if (next !== cell.v) (cells[p0.row] ||= {})[p0.col] = { v: next, p: null } as Cell;
+    }
+    setCells(cells);
+  };
+  const replaceFind = {
+    one: (text: string) => { const p0 = findHits[find.index]; if (p0) replaceIn([p0], text); },
+    all: (text: string) => { replaceIn(findHits, text); },
+  };
   const goFind = (i: number) => {
     if (!findHits.length) return;
     const k = ((i % findHits.length) + findHits.length) % findHits.length;
@@ -929,7 +1163,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     'univer.command.paste': () => { void navigator.clipboard?.readText().then((t) => paste(t)).catch(() => showToast('Нажмите Ctrl+V', 'info')); },
     'sheet.command.paste-value': () => { void navigator.clipboard?.readText().then((t) => paste(t, 'values')).catch(() => showToast('Нажмите Ctrl+V', 'info')); },
     'sheet.command.paste-format': () => { if (clip.current) paste(clip.current.tsv, 'format'); },
-    'ui.operation.open-find-dialog': () => setFind((f) => ({ ...f, open: true })),
+    'ui.operation.open-find-dialog': () => setFind((f) => ({ ...f, open: true, replace: true })),
     'sheet.command.set-range-bold': () => toggle('bl', 1),
     'sheet.command.set-range-italic': () => toggle('it', 1),
     'sheet.command.set-range-underline': () => restyle((s) => ({ ...s, ul: anchorStyle.ul ? undefined : { s: 1 } })),
@@ -943,11 +1177,12 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     'sheet.command.add-worksheet-merge-all': () => { if (!merged) toggleMerge(); },
     'sheet.command.remove-worksheet-merge': () => { if (merged) toggleMerge(); },
     'ui.command.clear-formatting': () => restyle(() => ({} as Style)),
+    'sheet.command.toggle-gridlines': () => { if (sheet) commit([{ id: OP.GRIDLINES, params: { subUnitId: sheetId, showGridlines: sheet.showGridlines === 0 ? 1 : 0 } }]); },
     'sheet.command.sort-range-asc': () => sortBy(false),
     'sheet.command.sort-range-desc': () => sortBy(true),
     'sheet.command.smart-toggle-filter': () => toggleFilter(),
     'sheet.command.clear-filter-criteria': () => { if (!b) return; const f = readFilters(b)[sheetId]; for (const c of f?.filterColumns || []) setFilterCriteria(c.colId, null); },
-  }), [undoStep, copy, paste, restyle, anchorStyle, merged, sortBy, toggleFilter, setFilterCriteria, b, sheetId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }), [undoStep, copy, paste, restyle, anchorStyle, merged, sortBy, toggleFilter, setFilterCriteria, b, sheetId, sheet, commit]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!commentsBridge) return undefined;
     commentsBridge.current = {
@@ -993,6 +1228,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
         return p && p.sh === sheetId ? [{ name: cur.name, color: cur.color, range: norm({ startRow: p.r1, startColumn: p.c1, endRow: p.r2, endColumn: p.c2 }) }] : [];
       }),
       filter: f?.ref ?? null, filtered: new Set(f?.cachedFilteredOut || []),
+      refs: editRefs.map((r) => ({ range: r.range!, color: r.color })),
     });
   };
   const frame = useRef(0);
@@ -1077,12 +1313,15 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
           <div className="fdoc-bar fsh-bar" role="toolbar" aria-label="Оформление">
             {btn('undo', 'Отменить (Ctrl+Z)', false, <OUndo size={18} />, () => undoStep(true), !undo.current.length)}
             {btn('redo', 'Повторить (Ctrl+Y)', false, <ORedo size={18} />, () => undoStep(false), !redo.current.length)}
+            {btn('paint', painter ? 'Копирование формата: выделите ячейки (Esc — отмена)' : 'Копировать форматирование', Boolean(painter), <Paintbrush size={16} strokeWidth={1.75} />, () => setPainter(painter ? null : ({ ...anchorStyle } as Style)))}
             <span className="fdoc-sep" />
             {btn('rub', 'Формат: рубли', false, <RussianRuble size={16} strokeWidth={1.75} />, () => setPattern('#,##0.00 "₽"'))}
             {btn('pct', 'Формат: проценты', false, <Percent size={16} strokeWidth={1.75} />, () => setPattern('0%'))}
             {btn('dec-', 'Уменьшить число знаков после запятой', false, <span className="fsh-txt-btn">.0</span>, () => stepDecimals(-1))}
             {btn('dec+', 'Увеличить число знаков после запятой', false, <span className="fsh-txt-btn">.00</span>, () => stepDecimals(1))}
             <button type="button" className="fdoc-drop" onMouseDown={(e) => e.preventDefault()} onClick={open('numfmt')} title="Формат чисел"><span>123</span><OChevronDown size={14} aria-hidden="true" /></button>
+            <span className="fdoc-sep" />
+            <button type="button" className="fdoc-drop fsh-font" onMouseDown={(e) => e.preventDefault()} onClick={open('font')} title="Шрифт"><span style={{ fontFamily: String(anchorStyle.ff || 'Arial') }}>{String(anchorStyle.ff || 'По умолчанию')}</span><OChevronDown size={14} aria-hidden="true" /></button>
             <span className="fdoc-sep" />
             <button type="button" className="fdoc-drop" onMouseDown={(e) => e.preventDefault()} onClick={open('size')} title="Размер шрифта"><span>{fontSize}</span><OChevronDown size={14} aria-hidden="true" /></button>
             <span className="fdoc-sep" />
@@ -1130,7 +1369,8 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
           }}
           onFocus={(e) => e.currentTarget.select()} />
         <span className="fsh-fx" aria-hidden="true">fx</span>
-        <input className="fsh-bar-input" value={barText} readOnly={readOnly} aria-label="Содержимое ячейки"
+        <input ref={barInput} className="fsh-bar-input" value={barText} readOnly={readOnly} aria-label="Содержимое ячейки"
+          onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
           onFocus={() => { if (!edit && !readOnly) startEdit(undefined, true); }}
           onChange={(e) => setEdit((x) => (x ? { ...x, text: e.target.value, bar: true } : { row: sel.anchor.row, col: sel.anchor.col, text: e.target.value, bar: true }))}
           onKeyDown={onEditKey} />
@@ -1139,7 +1379,8 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       {find.open && (
         <div className="fdoc-find-bar">
           <FindBar query={find.query} onQuery={(q) => setFind({ open: true, query: q, index: 0 })} count={findHits.length} index={find.index}
-            onNext={() => goFind(find.index + 1)} onPrev={() => goFind(find.index - 1)} onClose={() => { setFind({ open: false, query: '', index: 0 }); grid.current?.focus(); }} focusToken={1} />
+            onNext={() => goFind(find.index + 1)} onPrev={() => goFind(find.index - 1)} onClose={() => { setFind({ open: false, query: '', index: 0 }); grid.current?.focus(); }} focusToken={1}
+            replace={readOnly ? undefined : replaceFind} replaceOpen={find.replace} />
         </div>
       )}
 
@@ -1153,11 +1394,29 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
         </div>
         {guide && <div className="fsh-guide" data-axis={guide.axis} style={guide.axis === 'x' ? { left: guide.at } : { top: guide.at }} />}
         {edit && !edit.bar && editBox && (
-          <textarea ref={editor} className="fsh-editor" value={edit.text} spellCheck={false}
-            style={{ left: editBox.x, top: editBox.y, minWidth: editBox.w, minHeight: editBox.h, ...editLook?.css, background: editLook?.css.background || undefined, textAlign: (editLook?.h as CSSProperties['textAlign']) || undefined }}
-            onChange={(e) => setEdit((x) => (x ? { ...x, text: e.target.value } : x))}
-            onKeyDown={onEditKey}
-            onBlur={(e) => { if (!root.current?.contains(e.relatedTarget as Node) && !(e.relatedTarget as HTMLElement | null)?.closest('.fsh-formula')) finishEdit('stay'); }} />
+          <div className="fsh-editbox" data-formula={edit.text.startsWith('=') || undefined}
+            style={{ left: editBox.x, top: editBox.y, minWidth: editBox.w, minHeight: editBox.h, ...editLook?.css, background: editLook?.css.background || undefined, textAlign: (editLook?.h as CSSProperties['textAlign']) || undefined }}>
+            <div className="fsh-editmirror" aria-hidden="true">{renderColored(edit.text, editRefs)}{'\u200b'}</div>
+            <textarea ref={editor} className="fsh-editor" value={edit.text} spellCheck={false}
+              onChange={(e) => { setEdit((x) => (x ? { ...x, text: e.target.value } : x)); setCaret(e.target.selectionStart); setSuggestOff(false); setSuggestAt(0); }}
+              onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+              onKeyDown={onEditKey}
+              onBlur={(e) => { if (!root.current?.contains(e.relatedTarget as Node) && !(e.relatedTarget as HTMLElement | null)?.closest('.fsh-formula')) finishEdit('stay'); }} />
+            {(suggestions.length > 0 || hint) && (
+              <div className="fsh-suggest" role="listbox" aria-label="Функции">
+                {suggestions.map((f, i) => (
+                  <button key={f.name} type="button" role="option" aria-selected={i === suggestAt} className="fsh-suggest-item"
+                    onMouseDown={(ev) => ev.preventDefault()} onClick={() => acceptSuggestion(f.name)}>
+                    <b>{f.name}</b>{f.about && <span>{f.about}</span>}
+                  </button>
+                ))}
+                {suggestions.length > 0 && suggestions[Math.min(suggestAt, suggestions.length - 1)] && (
+                  <div className="fsh-suggest-sig">{suggestions[Math.min(suggestAt, suggestions.length - 1)].signature}</div>
+                )}
+                {!suggestions.length && hint && <div className="fsh-suggest-sig">{hint}</div>}
+              </div>
+            )}
+          </div>
         )}
         {filterMenu && b && sheet && <FilterMenu {...filterMenu} book={b} sheet={sheet} onClose={() => setFilterMenu(null)} onApply={(col, criteria) => setFilterCriteria(col, criteria)} onSort={(desc, col) => sortBy(desc, col)} />}
       </div>
@@ -1196,6 +1455,10 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
               <MenuItem icon={<ArrowRightToLine size={16} />} onSelect={() => { setMenu(null); insertCols(false); }}>Вставить столбец справа</MenuItem>
               <MenuItem icon={<Trash2 size={16} />} onSelect={() => { setMenu(null); removeRows(); }}>Удалить {selRange.endRow > selRange.startRow ? 'строки' : 'строку'}</MenuItem>
               <MenuItem icon={<Columns2 size={16} />} onSelect={() => { setMenu(null); removeCols(); }}>Удалить {selRange.endColumn > selRange.startColumn ? 'столбцы' : 'столбец'}</MenuItem>
+              <MenuItem icon={<EyeOff size={16} />} onSelect={() => { setMenu(null); setHidden(false, true); }}>Скрыть {selRange.endRow > selRange.startRow ? `строки ${selRange.startRow + 1}–${selRange.endRow + 1}` : `строку ${selRange.startRow + 1}`}</MenuItem>
+              <MenuItem icon={<EyeOff size={16} />} onSelect={() => { setMenu(null); setHidden(true, true); }}>Скрыть {selRange.endColumn > selRange.startColumn ? `столбцы ${colName(selRange.startColumn)}–${colName(selRange.endColumn)}` : `столбец ${colName(selRange.startColumn)}`}</MenuItem>
+              {hasHidden(false) && <MenuItem icon={<Eye size={16} />} onSelect={() => { setMenu(null); setHidden(false, false); }}>Показать скрытые строки</MenuItem>}
+              {hasHidden(true) && <MenuItem icon={<Eye size={16} />} onSelect={() => { setMenu(null); setHidden(true, false); }}>Показать скрытые столбцы</MenuItem>}
               <div className="nx-menu-sep" />
               <MenuItem icon={<ArrowDownAZ size={16} />} onSelect={() => { setMenu(null); sortBy(false); }}>Сортировать А → Я</MenuItem>
               <MenuItem icon={<ArrowUpZA size={16} />} onSelect={() => { setMenu(null); sortBy(true); }}>Сортировать Я → А</MenuItem>
@@ -1216,6 +1479,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       {tabMenu && (
         <Menu anchor={{ x: tabMenu.x, y: tabMenu.y }} label="Лист" onClose={() => setTabMenu(null)}>
           <MenuItem onSelect={() => { setRenaming(tabMenu.id); setTabMenu(null); }}>Переименовать</MenuItem>
+          <MenuItem icon={<CopyPlus size={16} />} onSelect={() => { duplicateSheet(tabMenu.id); setTabMenu(null); }}>Создать копию</MenuItem>
           <MenuItem tone="danger" icon={<Trash2 size={16} />} onSelect={() => { removeSheet(tabMenu.id); setTabMenu(null); }}>Удалить лист</MenuItem>
         </Menu>
       )}
@@ -1230,6 +1494,12 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
         <Pop anchor={pop.at} trigger={pop.trigger} onClose={close}>
           <Palette current={(anchorStyle.bg as { rgb?: string } | undefined)?.rgb || ''} resetLabel="Без заливки" ResetIcon={OClearFormat}
             onReset={() => { restyle((s) => ({ ...s, bg: undefined })); close(); }} onPick={(c) => { restyle((s) => ({ ...s, bg: { rgb: c } })); close(); }} />
+        </Pop>
+      )}
+      {pop?.kind === 'font' && (
+        <Pop anchor={pop.at} trigger={pop.trigger} onClose={close} className="fdoc-pop-list">
+          <button type="button" className="fdoc-pop-item" aria-selected={!anchorStyle.ff} onClick={() => { restyle((x) => ({ ...x, ff: undefined })); close(); }}>По умолчанию</button>
+          {FONTS.map((f) => <button key={f} type="button" className="fdoc-pop-item" aria-selected={anchorStyle.ff === f} style={{ fontFamily: f }} onClick={() => { restyle((x) => ({ ...x, ff: f })); close(); }}>{f}</button>)}
         </Pop>
       )}
       {pop?.kind === 'size' && (
