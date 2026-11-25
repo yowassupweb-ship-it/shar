@@ -240,3 +240,22 @@ html[data-theme="graphite"] .fsh, html[data-theme="black"] .fsh { --sh-border-au
 .fsh-shortcuts { display: grid; gap: 6px; }
 .fsh-shortcut { display: grid; grid-template-columns: minmax(140px, 46%) 1fr; gap: 12px; align-items: center; font-size: var(--text-sm); }
 .fsh-shortcut kbd { justify-self: start; padding: 2px 6px; border: 1px solid var(--border-color); border-radius: 5px; background: var(--surface-hover); font: 12px/1.4 ui-monospace, Consolas, monospace; }
+
+/* Общее кольцо фокуса (.nx :focus-visible) рисовало внутри поля правки и вокруг сетки вторую, квадратную рамку
+   поверх скруглённой рамки ячейки. Фокус здесь и так виден — рамкой ячейки. */
+.fsh-editbox .fsh-editor:focus, .fsh-editbox .fsh-editor:focus-visible,
+.fsh-gridwrap .fsh-grid:focus, .fsh-gridwrap .fsh-grid:focus-visible { outline: none; box-shadow: none; }
+
+/* Карточка ссылки под ячейкой (как в Google Таблицах). */
+.fsh-linkcard {
+  position: absolute; z-index: 45; display: flex; align-items: center; gap: 4px; max-width: min(460px, calc(100% - 24px));
+  padding: 6px 8px 6px 14px; border-radius: 14px; background: var(--sh-bg); color: var(--sh-text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .18), 0 4px 14px rgba(0, 0, 0, .14);
+}
+.fsh-linkcard-globe { flex: none; margin-right: 8px; color: var(--sh-text); }
+.fsh-linkcard-url {
+  flex: 1 1 auto; min-width: 0; max-width: 260px; margin-right: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--sh-link, #0b57d0); font: 500 14px/20px Inter, Arial, sans-serif; text-decoration: none;
+}
+.fsh-linkcard-url:hover { text-decoration: underline; }
+.fsh-linkcard .nx-icon-btn { flex: none; width: 32px; height: 32px; border-radius: 50%; color: var(--sh-text); }

@@ -65,3 +65,33 @@ export function shiftRefs(formula: string, own: string, target: string, rows: bo
         : `${pre}${fmt(p, r1, span[0])}:${fmt(q, r2, span[1])}`;
     });
 }
+
+/**
+ * Переписать ссылки на лист target по перестановке строк (rows) или столбцов: индекс i → map(i). Нужен при
+ * перетаскивании строк за номера: ссылки следуют за ячейками, как в Google (A2 → A4, если строка 2 уехала на 4-ю).
+ */
+export function remapRefs(formula: string, own: string, target: string, rows: boolean, map: (i: number) => number, breaks: number[] = []): string {
+  // Диапазон после перестановки — от наименьшего до наибольшего нового индекса его строк. map кусочно-линейна, поэтому
+  // достаточно концов диапазона и точек излома (breaks), попавших внутрь.
+  const spanOf = (lo: number, hi: number) => { const xs = [lo, hi, ...breaks.filter((x) => x > lo && x < hi)].map(map); return [Math.min(...xs), Math.max(...xs)]; };
+  const sameSheet = (prefix: string | undefined) => {
+    if (!prefix) return own === target;
+    const name = prefix.slice(0, -1).replace(/^'(.*)'$/, '$1').replace(/''/g, "'");
+    return name.toLowerCase() === target.toLowerCase();
+  };
+  return formula.replace(/("(?:[^"]|"")*")|((?:'(?:[^']|'')+'|[A-Za-zА-Яа-яЁё_][\wА-Яа-яЁё.]*)!)?(?<![\w.$])(\$?[A-Z]{1,3}\$?\d{1,7})(?::(\$?[A-Z]{1,3}\$?\d{1,7}))?(?![\w(!])/gi,
+    (m, str: string | undefined, prefix: string | undefined, first: string, second: string | undefined) => {
+      if (str || !sameSheet(prefix)) return m;
+      const p = CELL.exec(first);
+      const q = second ? CELL.exec(second) : null;
+      if (!p) return m;
+      const pre = prefix || '';
+      const fmt = (x: RegExpExecArray, row: number, col: number) => `${x[1]}${colLetters(col)}${x[3]}${row + 1}`;
+      const r1 = Number(p[4]) - 1; const c1 = colIndex(p[2]);
+      if (!q) return pre + fmt(p, rows ? map(r1) : r1, rows ? c1 : map(c1));
+      const r2 = Number(q[4]) - 1; const c2 = colIndex(q[2]);
+      if (rows) { const [a, b] = spanOf(Math.min(r1, r2), Math.max(r1, r2)); return `${pre}${fmt(p, a, c1)}:${fmt(q, b, c2)}`; }
+      const [a, b] = spanOf(Math.min(c1, c2), Math.max(c1, c2));
+      return `${pre}${fmt(p, r1, a)}:${fmt(q, r2, b)}`;
+    });
+}

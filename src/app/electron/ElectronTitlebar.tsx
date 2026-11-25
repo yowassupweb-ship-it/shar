@@ -92,6 +92,29 @@ export default function ElectronTitlebar() {
     try { const applied = await desk?.windowControls.setZoom(value); if (typeof applied === 'number') setZoom(clampZoom(applied)); } catch { /* масштаб не применился */ }
   }, [desk]);
 
+  // Ctrl+колесо при включённой настройке: Electron сам окно не масштабирует (только сообщает о жесте), поэтому
+  // шагаем тем же масштабом, что и кнопки ± в меню. Листы документов и таблиц забирают Ctrl+колесо себе
+  // (preventDefault) — там масштабируется лист, а не окно.
+  const zoomNow = useRef(zoom);
+  zoomNow.current = zoom;
+  useEffect(() => {
+    if (!desk || !wheelZoom) return undefined;
+    void Promise.resolve(desk.windowControls.getZoom()).then((z) => { if (typeof z === 'number') { zoomNow.current = clampZoom(z); setZoom(zoomNow.current); } }).catch(() => undefined);
+    let acc = 0;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey || e.defaultPrevented) return;
+      e.preventDefault();
+      acc += e.deltaY;
+      if (Math.abs(acc) < 50) return;
+      const next = clampZoom(zoomNow.current + (acc < 0 ? 10 : -10));
+      acc = 0;
+      zoomNow.current = next;
+      void applyZoom(next);
+    };
+    window.addEventListener('wheel', onWheel, { passive: false });
+    return () => window.removeEventListener('wheel', onWheel);
+  }, [desk, wheelZoom, applyZoom]);
+
   if (!desk) return null;
 
   const connection = CONNECTION_LABEL[status];

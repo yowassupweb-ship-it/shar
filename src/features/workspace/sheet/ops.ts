@@ -271,6 +271,9 @@ export function applyOp(book: Book, styles: Styles, op: LiveOp): boolean {
       shiftFormulas(book, sheet, false, range.startColumn, delta);
       shiftSheetExtras(book, sheet.id, false, range.startColumn, delta);
       sheet.columnCount = Math.max(1, (sheet.columnCount || 26) + delta);
+      // Ширины вставленных столбцов (при перестановке перетаскиванием они едут вместе со столбцами).
+      const cinfo = p.colInfo as Record<string, { w?: number }> | undefined;
+      if (cinfo && delta > 0) for (const [k, v] of Object.entries(cinfo)) if (v?.w) (sheet.columnData ||= {})[range.startColumn + Number(k)] = { w: v.w };
       return true;
     }
     case OP.COL_WIDTH:
