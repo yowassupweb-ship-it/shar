@@ -92,9 +92,8 @@ def new_message(*, dialog_id: str, item_id: str, kind: str, platform: str, platf
                 except Exception:  # noqa: BLE001
                     pass
         if cfg["push"]:
-            # Тем, у кого Шар открыт, хватит уведомления на экране — пуш только тем, кто не в сети.
-            offline = [uid for uid in ids if _call_presence_count(uid) <= 0]
-            if offline:
-                push_service.notify(offline, title=title, body=body[:120], url=url, tag=f"social-{dialog_id}")
+            # У кого Шар открыт на компьютере — там уведомление на экране; пуш таким — только на телефоны.
+            online = [uid for uid in ids if _call_presence_count(uid) > 0]
+            push_service.notify(ids, title=title, body=body[:120], url=url, tag=f"social-{dialog_id}", online=online)
     except Exception as e:  # noqa: BLE001
         log.warning("social notify failed: %s", e)

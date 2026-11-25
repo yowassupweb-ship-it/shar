@@ -71,10 +71,18 @@ def _send_one(item: Dict[str, Any], data: str, tag: str) -> bool | None:
         return False
 
 
-def send_to_user(user_id: str, payload: Dict[str, Any]) -> Dict[str, int]:
+def is_mobile(user_agent: str | None) -> bool:
+    """Телефон или планшет — по браузеру, с которого сделана подписка."""
+    ua = user_agent or ""
+    return any(k in ua for k in ("iPhone", "iPad", "iPod", "Android"))
+
+
+def send_to_user(user_id: str, payload: Dict[str, Any], *, mobile_only: bool = False) -> Dict[str, int]:
     if not is_configured() or not user_id:
         return {"sent": 0, "failed": 0}
     items = store.subscriptions_of(str(user_id))
+    if mobile_only:
+        items = [it for it in items if is_mobile(it.get("user_agent"))]
     if not items:
         return {"sent": 0, "failed": 0}
     data = json.dumps(payload, ensure_ascii=False)
@@ -83,15 +91,21 @@ def send_to_user(user_id: str, payload: Dict[str, Any]) -> Dict[str, int]:
     return {"sent": sum(1 for r in results if r is True), "failed": sum(1 for r in results if r is False)}
 
 
-def notify(recipient_ids: Iterable[str], *, title: str, body: str = "", url: str = "/", tag: str = "message", **extra: Any) -> Dict[str, int]:
-    """Пуш получателям с учётом их настроек (реакции можно отключить)."""
+def notify(recipient_ids: Iterable[str], *, title: str, body: str = "", url: str = "/", tag: str = "message",
+           online: Iterable[str] = (), **extra: Any) -> Dict[str, int]:
+    """Пуш получателям с учётом их настроек (реакции можно отключить).
+
+    online — кто сейчас в сети (открыт Шар на каком-то устройстве). Им пуш уходит только на телефоны: на компьютере
+    открытый (даже свёрнутый) Шар покажет уведомление сам. Раньше таким людям пуш не слали вовсе — и пока Шар был
+    открыт на компьютере, на телефон ничего не приходило. Телефон с открытым Шаром гасит пуш сам (сервис-воркер)."""
+    online_ids = {str(u) for u in online}
     ids = [str(r) for r in dict.fromkeys(recipient_ids) if r]
     if tag.startswith("reaction-"):
         ids = [uid for uid in ids if store.get_prefs(uid).get("reactions") is not False]
     totals = {"sent": 0, "failed": 0}
     payload = {"title": title, "body": body, "url": url, "tag": tag, **extra}
     for uid in ids:
-        res = send_to_user(uid, payload)
+        res = send_to_user(uid, payload, mobile_only=uid in online_ids)
         totals["sent"] += res["sent"]
         totals["failed"] += res["failed"]
     return totals

@@ -100,13 +100,16 @@ def _web_push(chat: dict, chat_id: str, author_name: str, content: str) -> None:
     """Пуш тем, кто не в сети и не выключил звук у чата (как у обычных сообщений)."""
     try:
         muted = chat.get("muted_by_user") or chat.get("mutedByUser") or {}
-        recipients = [u for u in _participants(chat) if not muted.get(u) and _call_presence_count(u) <= 0]
+        recipients = [u for u in _participants(chat) if not muted.get(u)]
+        # В сети — пуш только на телефоны (см. push.service.notify, online).
+        online = [u for u in recipients if _call_presence_count(u) > 0]
         if not recipients:
             return
         title = chat.get("title") or chat.get("name") or author_name
         push_service.notify(
             recipients, title=f"{author_name} в {title}", body=content[:120],
             url=f"/account?tab=messages&chat={chat_id}", tag=f"chat-{chat_id}", chatId=str(chat_id), senderName=author_name,
+            online=online,
         )
     except Exception as e:
         log.debug("card: web push skipped: %s", e)

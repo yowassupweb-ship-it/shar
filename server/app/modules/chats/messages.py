@@ -309,12 +309,10 @@ def _send_message_web_push(chat: dict, chat_id: str, message_data, author_name: 
         if not is_important:
             muted_by_user = chat.get('muted_by_user') or chat.get('mutedByUser') or {}
             recipient_ids = [uid for uid in recipient_ids if not muted_by_user.get(uid)]
-        # Skip web push to recipients who are currently online (have a live WS
-        # connection on any device, tracked in Redis presence): they receive the
-        # message live over WS, so an extra OS push is redundant — this is what
-        # was buzzing someone's desktop while they were actively chatting on their
-        # phone. Only genuinely-offline recipients get a background push.
-        recipient_ids = [uid for uid in recipient_ids if _call_presence_count(uid) <= 0]
+        # Кто в сети (живое соединение на каком-то устройстве) — получает пуш только на телефоны: открытый на
+        # компьютере Шар (в том числе свёрнутый в трей) показывает сообщение сам, а телефон без пуша молчал бы.
+        # Раньше «в сети» исключало пуш совсем — пока Шар открыт на компьютере, телефон ничего не получал.
+        online = [uid for uid in recipient_ids if _call_presence_count(uid) > 0]
         if not recipient_ids:
             return
         chat_title = chat.get('title') or chat.get('name') or 'Новое сообщение'
@@ -326,6 +324,7 @@ def _send_message_web_push(chat: dict, chat_id: str, message_data, author_name: 
             tag=f"chat-{chat_id}",
             chatId=str(chat_id),
             senderName=author_name,
+            online=online,
         )
         # Tell the SENDER (not the recipients — they get the OS notification itself)
         # that at least one recipient's device actually received a push for this

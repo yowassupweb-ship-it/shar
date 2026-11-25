@@ -59,7 +59,7 @@ def upsert_subscription(user_id: str, subscription: Dict[str, Any], user_agent: 
 
 
 def subscriptions_of(user_id: str) -> List[Dict[str, Any]]:
-    return [dict(r) for r in db.conn.fetch_all("SELECT endpoint, subscription FROM push_subscriptions WHERE user_id = %s", (user_id,))]
+    return [dict(r) for r in db.conn.fetch_all("SELECT endpoint, subscription, user_agent FROM push_subscriptions WHERE user_id = %s", (user_id,))]
 
 
 def count_for(user_id: str) -> int:
