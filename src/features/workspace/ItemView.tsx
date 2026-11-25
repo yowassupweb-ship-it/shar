@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import {
   AArrowDown, AArrowUp, ArrowDownAZ, ArrowUpDown, ArrowUpZA, Bold, BookOpen, Pencil, ClipboardPaste, Columns2, Eraser, Filter, FilterX, Grid3x3, Hash, Italic, Keyboard, List, ListChecks, ListOrdered, Maximize, Minimize, MessageSquarePlus, Minus, PanelTop, Percent, Redo2, RefreshCw, RussianRuble, Scissors, Search, Settings2, Sigma, Strikethrough, Subscript, Superscript, Table, TableCellsMerge, TableCellsSplit, Underline, Undo2,
   AlertCircle, ArrowLeft, Check, Copy, Download, FilePlus, Globe2, History, Link2, Lock, Mail, MessageSquare, Star, MoreHorizontal, Pin, PinOff, MonitorUp, Printer, Send, Share2, Trash2, Upload, Users, Zap, Image as ImageIcon, Smile, Omega, CalendarDays, SeparatorHorizontal,
+  ChartColumn, ImagePlus, SquareCheck, NotebookPen, Palette, Group as GroupIcon, Ungroup, ZoomIn, ZoomOut, ArrowRightToLine, ArrowDownToLine,
 } from 'lucide-react';
 import { useMailConnected, writeMail } from '@/features/mail';
 import { recordVisit } from '@/features/spotlight/history';
@@ -432,7 +433,11 @@ ${absolute(links.office(item!.kind, item!.id))}` });
       ] },
       { id: 'view', label: 'Вид', items: [
         { label: commentsOpen ? 'Скрыть комментарии' : 'Комментарии', onSelect: () => setCommentsOpen((v) => !v), icon: <MessageSquare size={15} /> },
-        ...(isDoc ? [] : [cmd('Сетка', 'sheet.command.toggle-gridlines', <Grid3x3 size={15} />)]),
+        ...(isDoc ? [] : [
+          cmd('Сетка', 'sheet.command.toggle-gridlines', <Grid3x3 size={15} />),
+          cmd('Увеличить масштаб', 'shar.sheet.zoom-in', <ZoomIn size={15} />, `${mod}+`),
+          cmd('Уменьшить масштаб', 'shar.sheet.zoom-out', <ZoomOut size={15} />, `${mod}−`),
+        ]),
         'sep',
         fullScreen
           ? { label: 'Выйти из полноэкранного режима', onSelect: () => setFullScreen(false), icon: <Minimize size={15} />, hint: 'Esc' }
@@ -458,10 +463,19 @@ ${absolute(links.office(item!.kind, item!.id))}` });
         'sep',
         comment,
       ] : [
+        cmd('Ячейки со сдвигом вправо', 'shar.sheet.insert-cells-right', <ArrowRightToLine size={15} />),
+        cmd('Ячейки со сдвигом вниз', 'shar.sheet.insert-cells-down', <ArrowDownToLine size={15} />),
+        'sep',
+        cmd('Диаграмма', 'shar.sheet.chart', <ChartColumn size={15} />),
+        cmd('Изображение поверх ячеек', 'shar.sheet.image', <ImagePlus size={15} />),
+        'sep',
         cmd('Функция', 'formula-ui.operation.more-functions', <Sigma size={15} />),
         cmd('Ссылка', 'sheet.operation.insert-hyper-link-toolbar', <Link2 size={15} />, `${mod}K`),
+        cmd('Флажок', 'shar.sheet.checkbox', <SquareCheck size={15} />),
+        cmd('Раскрывающийся список', 'shar.sheet.dropdown', <ListChecks size={15} />),
         'sep',
         comment,
+        cmd('Заметка', 'shar.sheet.note', <NotebookPen size={15} />, 'Shift+F2'),
       ] },
       { id: 'format', label: 'Формат', items: isDoc ? [
         cmd('Жирный', 'doc.command.set-inline-format-bold', <Bold size={15} />, `${mod}B`),
@@ -496,6 +510,8 @@ ${absolute(links.office(item!.kind, item!.id))}` });
         cmd('Объединить ячейки', 'sheet.command.add-worksheet-merge-all', <TableCellsMerge size={15} />),
         cmd('Отменить объединение', 'sheet.command.remove-worksheet-merge', <TableCellsSplit size={15} />),
         'sep',
+        cmd('Условное форматирование…', 'shar.sheet.cf', <Palette size={15} />),
+        'sep',
         cmd('Очистить форматирование', 'ui.command.clear-formatting', <Eraser size={15} />, `${mod}\\`),
       ] },
     ];
@@ -508,6 +524,13 @@ ${absolute(links.office(item!.kind, item!.id))}` });
         cmd('Создать или удалить фильтр', 'sheet.command.smart-toggle-filter', <Filter size={15} />),
         cmd('Сбросить условия фильтра', 'sheet.command.clear-filter-criteria', <FilterX size={15} />),
         cmd('Пересчитать фильтр', 'sheet.command.re-calc-filter', <RefreshCw size={15} />),
+        'sep',
+        cmd('Проверка данных…', 'shar.sheet.dv', <ListChecks size={15} />),
+        'sep',
+        cmd('Сгруппировать строки', 'shar.sheet.group-rows', <GroupIcon size={15} />),
+        cmd('Разгруппировать строки', 'shar.sheet.ungroup-rows', <Ungroup size={15} />),
+        cmd('Сгруппировать столбцы', 'shar.sheet.group-cols', <GroupIcon size={15} />),
+        cmd('Разгруппировать столбцы', 'shar.sheet.ungroup-cols', <Ungroup size={15} />),
         'sep',
         cmd('Защитить диапазон', 'sheet.command.add-range-protection-from-toolbar', <Lock size={15} />),
       ] });

@@ -1,6 +1,8 @@
 import type { Cell, CellValue, Workbook as ExcelWorkbook, Worksheet } from 'exceljs';
 import type { ICellData, IStyleData, IWorkbookData } from '@univerjs/presets';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
+import { extrasFromWorksheet, extrasToWorksheet } from './workbookExtras';
+import type { SheetExtras } from '../sheet/extras';
 
 /**
  * Таблица хранится файлом xlsx (в base64): так её открывают Excel и Google Таблицы, а сервер ничего в ней
@@ -54,6 +56,10 @@ interface BookExtras {
   sorts: Map<string, string>;
   /** Отпечаток оформления ячейки «лист!строка:столбец» на момент чтения/записи: не изменилось — не трогаем. */
   styleKeys: Map<string, string>;
+  /** Дополнения листов (условия, флажки, заметки, объекты, группы, защита) по имени листа — xl/shar/extras.json. */
+  sheetExtras: Map<string, SheetExtras>;
+  /** В файле была наша часть: тогда родные условия и списки не перечитываем (они — её же копия). */
+  hasExtras: boolean;
 }
 
 const extras = new WeakMap<ExcelWorkbook, BookExtras>();
@@ -61,13 +67,14 @@ const extras = new WeakMap<ExcelWorkbook, BookExtras>();
 function extrasOf(book: ExcelWorkbook): BookExtras {
   let found = extras.get(book);
   if (!found) {
-    found = { sheetIds: new Map(), filters: new Map(), sorts: new Map(), styleKeys: new Map() };
+    found = { sheetIds: new Map(), filters: new Map(), sorts: new Map(), styleKeys: new Map(), sheetExtras: new Map(), hasExtras: false };
     extras.set(book, found);
   }
   return found;
 }
 
 const CUSTOM_PROPS = 'docProps/custom.xml';
+const EXTRAS_PART = 'xl/shar/extras.json';
 const SHEET_IDS_PROP = 'SharSheetIds';
 
 function parseXml(text: string): Document {
@@ -183,8 +190,13 @@ function readSheetIds(files: Record<string, Uint8Array>): Map<string, string> {
 }
 
 /** Дописать в архив, собранный ExcelJS, то, чего он не умеет: условия фильтров, сортировку, номера листов. */
-function finishZip(bytes: Uint8Array, state: { sheetIds: Map<string, string>; filters: Map<string, SheetFilter>; sorts: Map<string, string> }): Uint8Array {
+function finishZip(bytes: Uint8Array, state: { sheetIds: Map<string, string>; filters: Map<string, SheetFilter>; sorts: Map<string, string>; extras: Map<string, SheetExtras> }): Uint8Array {
   const files = unzipSync(bytes);
+  if (state.extras.size) {
+    files[EXTRAS_PART] = strToU8(JSON.stringify(Object.fromEntries(state.extras)));
+    const types0 = files['[Content_Types].xml'] ? strFromU8(files['[Content_Types].xml']) : '';
+    if (types0 && !types0.includes('Extension="json"')) files['[Content_Types].xml'] = strToU8(types0.replace('</Types>', '<Default Extension="json" ContentType="application/json"/></Types>'));
+  }
   const paths = sheetPaths(files);
   for (const [name, path] of paths) {
     const filter = state.filters.get(name);
@@ -238,9 +250,16 @@ export async function bookFromBase64(base64: string): Promise<ExcelWorkbook> {
   if (!book.worksheets.length) book.addWorksheet('Лист1');
   // Условия фильтров, сортировка и номера листов — прямо из XML: ExcelJS их не читает.
   try {
-    const files = unzipSync(bytes, { filter: (f) => f.name === CUSTOM_PROPS || f.name.startsWith('xl/worksheets/sheet') || f.name === 'xl/workbook.xml' || f.name === 'xl/_rels/workbook.xml.rels' });
+    const files = unzipSync(bytes, { filter: (f) => f.name === CUSTOM_PROPS || f.name === EXTRAS_PART || f.name.startsWith('xl/worksheets/sheet') || f.name === 'xl/workbook.xml' || f.name === 'xl/_rels/workbook.xml.rels' });
     const ex = extrasOf(book);
     ex.sheetIds = readSheetIds(files);
+    if (files[EXTRAS_PART]) {
+      try {
+        const data = JSON.parse(strFromU8(files[EXTRAS_PART])) as Record<string, SheetExtras>;
+        for (const [name, x] of Object.entries(data)) if (x && typeof x === 'object') ex.sheetExtras.set(name, x);
+        ex.hasExtras = true;
+      } catch { /* повреждена — возьмём родные структуры листов */ }
+    }
     for (const [name, path] of sheetPaths(files)) {
       const file = files[path];
       if (!file) continue;
@@ -261,7 +280,7 @@ export async function bookFromBase64(base64: string): Promise<ExcelWorkbook> {
  */
 export async function bookToBase64(book: ExcelWorkbook): Promise<string> {
   const ex = extrasOf(book);
-  const state = { sheetIds: new Map(ex.sheetIds), filters: new Map(ex.filters), sorts: new Map(ex.sorts) };
+  const state = { sheetIds: new Map(ex.sheetIds), filters: new Map(ex.filters), sorts: new Map(ex.sorts), extras: new Map(ex.sheetExtras) };
   const raw = new Uint8Array(await book.xlsx.writeBuffer());
   try { return bytesToBase64(finishZip(raw, state)); } catch { return bytesToBase64(raw); }
 }
@@ -500,6 +519,7 @@ function mergesOf(sheet: Worksheet): Array<{ top: number; left: number; bottom: 
 }
 
 const FILTER_RESOURCE = 'SHEET_FILTER_PLUGIN';
+const EXTRAS_RESOURCE = 'SHAR_SHEET_EXTRAS';
 
 export function excelToUniver(book: ExcelWorkbook): Partial<IWorkbookData> {
   const ex = extrasOf(book);
@@ -611,7 +631,20 @@ export function excelToUniver(book: ExcelWorkbook): Partial<IWorkbookData> {
     styles: styleBook.styles,
     sheetOrder,
     sheets,
-    resources: Object.keys(filters).length ? [{ name: FILTER_RESOURCE, data: JSON.stringify(filters) }] : [],
+    resources: [
+      ...(Object.keys(filters).length ? [{ name: FILTER_RESOURCE, data: JSON.stringify(filters) }] : []),
+      ...(() => {
+        // Дополнения: из нашей части файла, а у файла без неё — из родных структур (условия, списки, заметки, группы).
+        const out: Record<string, SheetExtras> = {};
+        for (const sheet of book.worksheets) {
+          const id = ids.get(sheet.name);
+          if (!id) continue;
+          const x = ex.hasExtras ? ex.sheetExtras.get(sheet.name) : extrasFromWorksheet(sheet);
+          if (x && Object.keys(x).length) out[id] = x;
+        }
+        return Object.keys(out).length ? [{ name: EXTRAS_RESOURCE, data: JSON.stringify(out) }] : [];
+      })(),
+    ],
   };
 }
 
@@ -627,6 +660,11 @@ export function applySnapshot(book: ExcelWorkbook, snapshot: IWorkbookData) {
   const nextIds = new Map<string, string>();
   const nextFilters = new Map<string, SheetFilter>();
   const nextSorts = new Map<string, string>();
+  const extrasData = (() => {
+    const found = (snapshot.resources || []).find((r) => r.name === EXTRAS_RESOURCE);
+    try { return found?.data ? JSON.parse(found.data) as Record<string, SheetExtras> : null; } catch { return null; }
+  })();
+  const nextExtras = new Map<string, SheetExtras>();
 
   snapshot.sheetOrder.forEach((sheetId, order) => {
     const source = snapshot.sheets[sheetId];
@@ -656,11 +694,22 @@ export function applySnapshot(book: ExcelWorkbook, snapshot: IWorkbookData) {
       (target as unknown as { autoFilter?: unknown }).autoFilter = undefined;
     }
     target.state = (source as { hidden?: number }).hidden ? 'hidden' : 'visible';
+    // Дополнения листа: из прежнего редактора (Univer) ресурса нет — тогда не трогаем то, что было в файле.
+    if (extrasData) {
+      const x = extrasData[sheetId] || {};
+      nextExtras.set(target.name, x);
+      try { extrasToWorksheet(target, x); } catch { /* родные структуры — только для Excel; наша часть всё равно запишется */ }
+    } else {
+      const kept0 = ex.sheetExtras.get(before ?? source.name);
+      if (kept0) nextExtras.set(target.name, kept0);
+    }
   });
   for (const ws of book.worksheets) if (!kept.has(ws)) book.removeWorksheet(ws.id);
   ex.sheetIds = nextIds;
   ex.filters = nextFilters;
   ex.sorts = nextSorts;
+  ex.sheetExtras = nextExtras;
+  if (extrasData) ex.hasExtras = true;
 }
 
 /** Текст ячейки rich text (поле `p`): абзацы — переводами строки, служебные знаки Univer убраны. */
@@ -754,7 +803,11 @@ function writeSheet(target: Worksheet, source: IWorkbookData['sheets'][string], 
     if (!data) continue;
     const row = target.getRow(Number(rowKey) + 1);
     if (typeof data.h === 'number' && Number.isFinite(data.h) && data.ia !== 1) row.height = pxToPt(data.h);
-    if (data.hd) row.hidden = true;
+    if (data.hd) {
+      row.hidden = true;
+      // Пустую строку ExcelJS пишет в файл, только если у неё задана высота: без неё скрытость терялась.
+      if (!row.height) row.height = pxToPt(24);
+    }
   }
   // Столбцы: ширина и скрытие.
   const columns = (source.columnData || {}) as Record<string, { w?: number; hd?: number }>;

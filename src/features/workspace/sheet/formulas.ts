@@ -152,3 +152,34 @@ export function shiftFormula(f: string, dr: number, dc: number): string {
     return `${colAbs}${name}${rowAbs}${nr}`;
   });
 }
+
+/**
+ * Вычислитель формулы «на месте» без пересчёта книги — для условного форматирования («Своя формула»): ссылки
+ * берут уже посчитанные значения ячеек (v). Один парсер на отрисовку.
+ */
+export function formulaEvaluator(book: Book): (sheet: Sheet, formula: string, row: number, col: number) => unknown {
+  const byName = new Map<string, Sheet>();
+  for (const id of book.sheetOrder) { const s = book.sheets[id] as Sheet | undefined; if (s) byName.set(s.name.toLowerCase(), s); }
+  let current: Sheet | null = null;
+  const sheetFor = (name: string | undefined) => (name ? byName.get(name.toLowerCase()) : current) ?? current;
+  const value = (s: Sheet, r: number, c: number) => { const v = s.cellData?.[r]?.[c]?.v; return v === null ? undefined : v; };
+  const parser = new Parser({
+    onCell: (ref: { sheet?: string; row: number; col: number }) => { const s = sheetFor(ref.sheet); return s ? value(s, ref.row - 1, ref.col - 1) : undefined; },
+    onRange: (ref: { sheet?: string; from: { row: number; col: number }; to: { row: number; col: number } }) => {
+      const s = sheetFor(ref.sheet);
+      if (!s) return [[]];
+      const b = usedBounds(s);
+      const out: unknown[][] = [];
+      for (let r = ref.from.row; r <= Math.min(ref.to.row, Math.max(ref.from.row, b.rows)); r += 1) {
+        const line: unknown[] = [];
+        for (let c = ref.from.col; c <= Math.min(ref.to.col, Math.max(ref.from.col, b.cols)); c += 1) line.push(value(s, r - 1, c - 1));
+        out.push(line);
+      }
+      return out;
+    },
+  });
+  return (sheet, formula, row, col) => {
+    current = sheet;
+    try { return toCellValue(parser.parse(ruToEn(formula.replace(/^=/, '')), { sheet: sheet.name, row: row + 1, col: col + 1 })); } catch { return false; }
+  };
+}

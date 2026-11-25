@@ -60,6 +60,9 @@ export function bindSheet(injector: Injector, unitId: string, channel: LiveChann
 
   const apply = (ops: LiveOp[]) => {
     for (const op of ops) {
+      // Правки своего редактора таблиц, которых нет в Univer (условия, флажки, заметки, объекты…), — пропускаем:
+      // они лежат в файле и видны после перечитывания.
+      if (!commands.hasCommand(op.id)) { shiftHistory(op); continue; }
       commands.syncExecuteCommand(op.id, { ...op.params, unitId }, { onlyLocal: true, fromCollab: true });
       shiftHistory(op);
     }

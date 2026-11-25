@@ -2,6 +2,15 @@ import type { LiveOp } from '../live/channel';
 import { styleOf, type Book, type Cell, type Range, type Sheet, type Style, Styles } from './model';
 import { shiftRefs } from './refs';
 import { readFilters, writeFilters, type FilterColumn, type SheetFilter } from './filter';
+import { readExtras, SET_EXTRA, shiftExtras, writeExtras, type ExtraKey, type SheetExtras } from './extras';
+
+/** Дополнения листа (условия, флажки, заметки, объекты, группы, защита) — вслед за вставкой/удалением строк. */
+function shiftSheetExtras(book: Book, sheetId: string, rows: boolean, start: number, delta: number) {
+  const all = readExtras(book);
+  if (!all[sheetId]) return;
+  all[sheetId] = shiftExtras(all[sheetId], rows, start, delta);
+  writeExtras(book, all);
+}
 
 /** Формулы всей книги — вслед за вставкой или удалением строк (столбцов) листа (sheet/refs.ts). */
 function shiftFormulas(book: Book, target: Sheet, rows: boolean, start: number, delta: number) {
@@ -44,6 +53,7 @@ export const OP = {
   FILTER_CRITERIA: 'sheet.mutation.set-filter-criteria',
   FILTER_REMOVE: 'sheet.mutation.remove-filter',
   GRIDLINES: 'sheet.mutation.toggle-gridlines',
+  EXTRA: SET_EXTRA,
 } as const;
 
 type Matrix = Record<string, Record<string, Cell | null>>;
@@ -136,7 +146,9 @@ export function inverseOf(book: Book, op: LiveOp): LiveOp[] {
       if (!sheet) return [];
       const cellData: Matrix = {};
       for (const [r, cols] of Object.entries(sheet.cellData || {})) for (const [c, cell] of Object.entries(cols || {})) (cellData[r] ||= {})[c] = wireCell(book, cell);
-      return [{ id: OP.INSERT_SHEET, params: { index: book.sheetOrder.indexOf(sheet.id), sheet: { ...sheet, cellData } } }];
+      const extras = readExtras(book)[sheet.id] || {};
+      return [{ id: OP.INSERT_SHEET, params: { index: book.sheetOrder.indexOf(sheet.id), sheet: { ...sheet, cellData } } },
+        ...Object.entries(extras).map(([key, value]) => ({ id: OP.EXTRA, params: { subUnitId: sheet.id, key, value } }))];
     }
     case OP.RENAME_SHEET: return sheet ? [{ id: OP.RENAME_SHEET, params: { subUnitId: p.subUnitId, name: sheet.name, oldName: p.name } }] : [];
     case OP.FILTER_RANGE:
@@ -149,6 +161,10 @@ export function inverseOf(book: Book, op: LiveOp): LiveOp[] {
       const cols = new Set<number>([...(prev.filterColumns || []).map((c) => c.colId), ...(op.id === OP.FILTER_CRITERIA ? [Number(p.col)] : [])]);
       for (const col of cols) back.push({ id: OP.FILTER_CRITERIA, params: { subUnitId: p.subUnitId, col, criteria: (prev.filterColumns || []).find((c) => c.colId === col) ?? null, filteredOutRows: prev.cachedFilteredOut || [] } });
       return back;
+    }
+    case OP.EXTRA: {
+      const prev = readExtras(book)[String(p.subUnitId)]?.[p.key as ExtraKey];
+      return [{ id: OP.EXTRA, params: { subUnitId: p.subUnitId, key: p.key, value: prev === undefined ? null : JSON.parse(JSON.stringify(prev)) } }];
     }
     case OP.GRIDLINES: return sheet ? [{ id: OP.GRIDLINES, params: { subUnitId: p.subUnitId, showGridlines: sheet.showGridlines === 0 ? 0 : 1 } }] : [];
     case OP.FREEZE: return sheet ? [{ id: OP.FREEZE, params: { subUnitId: p.subUnitId, ...(sheet.freeze || { startRow: -1, startColumn: -1, xSplit: 0, ySplit: 0 }) } }] : [];
@@ -227,6 +243,7 @@ export function applyOp(book: Book, styles: Styles, op: LiveOp): boolean {
       sheet.rowData = shiftKeys(sheet.rowData, range.startRow, delta);
       shiftMerges(sheet, true, range.startRow, delta);
       shiftFormulas(book, sheet, true, range.startRow, delta);
+      shiftSheetExtras(book, sheet.id, true, range.startRow, delta);
       sheet.rowCount = Math.max(1, (sheet.rowCount || 100) + delta);
       const info = p.rowInfo as Record<string, { h?: number }> | undefined;
       if (info && delta > 0) for (const [k, v] of Object.entries(info)) if (v?.h) (sheet.rowData ||= {})[range.startRow + Number(k)] = { h: v.h };
@@ -244,6 +261,7 @@ export function applyOp(book: Book, styles: Styles, op: LiveOp): boolean {
       sheet.columnData = shiftKeys(sheet.columnData, range.startColumn, delta);
       shiftMerges(sheet, false, range.startColumn, delta);
       shiftFormulas(book, sheet, false, range.startColumn, delta);
+      shiftSheetExtras(book, sheet.id, false, range.startColumn, delta);
       sheet.columnCount = Math.max(1, (sheet.columnCount || 26) + delta);
       return true;
     }
@@ -310,6 +328,8 @@ export function applyOp(book: Book, styles: Styles, op: LiveOp): boolean {
       const id = String(p.subUnitId);
       delete book.sheets[id];
       book.sheetOrder = book.sheetOrder.filter((x) => x !== id);
+      const all = readExtras(book);
+      if (all[id]) { delete all[id]; writeExtras(book, all); }
       return true;
     }
     case OP.RENAME_SHEET: if (sheet) sheet.name = String(p.name || sheet.name); return true;
@@ -335,6 +355,15 @@ export function applyOp(book: Book, styles: Styles, op: LiveOp): boolean {
       const all = readFilters(book);
       delete all[String(p.subUnitId)];
       writeFilters(book, all);
+      return true;
+    }
+    case OP.EXTRA: {
+      const all = readExtras(book);
+      const id = String(p.subUnitId);
+      const cur: SheetExtras = { ...(all[id] || {}) };
+      if (p.value === null || p.value === undefined) delete cur[p.key as ExtraKey]; else (cur as Record<string, unknown>)[String(p.key)] = p.value;
+      all[id] = cur;
+      writeExtras(book, all);
       return true;
     }
     case OP.GRIDLINES: if (sheet) sheet.showGridlines = Number(p.showGridlines) ? 1 : 0; return true;

@@ -1,3 +1,6 @@
+import type { CfLookup } from './cf';
+import { chartData, drawChart } from './chart';
+import type { DvRule, Group, SheetObject } from './extras';
 import { a1, autoAlign, colName, displayText, HEAD_H, HEAD_W, indexAt, styleOf, type Book, type Range, type Sheet, type Style } from './model';
 
 /**
@@ -23,6 +26,17 @@ export interface DrawState {
   filter: Range | null; filtered: Set<number>; hideActive?: boolean;
   /** Ссылки правимой формулы — цветные рамки на листе (как в Google Таблицах). */
   refs?: Array<{ range: Range; color: string }>;
+  /** Условное форматирование листа (sheet/cf.ts). */
+  cf?: CfLookup | null;
+  /** Диапазоны правил «ячейка пуста» — их пустые ячейки тоже красятся. */
+  cfBlank?: Range[];
+  /** Флажки и списки, заметки, объекты (картинки, диаграммы), группы строк/столбцов. */
+  dv?: DvRule[]; notes?: Record<string, string>; objects?: SheetObject[]; selectedObject?: string | null;
+  groups?: { rows?: Group[]; cols?: Group[] };
+  /** Масштаб (1 = 100%): ширина, высота и прокрутка приходят уже в единицах листа. */
+  zoom?: number;
+  /** Картинка догрузилась — перерисовать. */
+  onAsset?: () => void;
 }
 
 const BORDER_W: Record<number, number> = { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 3, 8: 2, 9: 2, 10: 2, 11: 2, 12: 2, 13: 3 };
@@ -81,6 +95,26 @@ function richParts(cell: { p?: unknown } | undefined, text: string): Array<{ tex
   return out.filter((x) => x.text);
 }
 
+const dvAt = (rules: DvRule[] | undefined, r: number, c: number) => {
+  if (!rules) return null;
+  for (const rule of rules) for (const x of rule.ranges) if (r >= x.startRow && r <= x.endRow && c >= x.startColumn && c <= x.endColumn) return rule;
+  return null;
+};
+export const isChecked = (v: unknown) => v === true || v === 1 || (typeof v === 'string' && ['TRUE', 'ИСТИНА', '1'].includes(v.toUpperCase()));
+
+const images = new Map<string, HTMLImageElement>();
+function imageOf(src: string, onLoad?: () => void): HTMLImageElement | null {
+  let img = images.get(src);
+  if (!img) {
+    img = new Image();
+    img.decoding = 'async';
+    img.onload = () => onLoad?.();
+    img.src = src;
+    images.set(src, img);
+  }
+  return img.complete && img.naturalWidth ? img : null;
+}
+
 /** Перенос строк по словам под ширину. */
 function wrapLines(ctx: CanvasRenderingContext2D, text: string, width: number): string[] {
   const out: string[] = [];
@@ -111,17 +145,34 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
   // Заливки (под сеткой нет — сетку заливка закрывает, как в Excel).
   const drawn: Array<{ r: number; c: number; x: number; y: number; w: number; h: number; cell: NonNullable<Sheet['cellData'][number][number]>; style: Style | null }> = [];
   const seenMerge = new Set<Range>();
-  const visit = (r: number, c: number) => {
+  const seenCell = new Set<string>();
+  const visit = (r: number, c: number, force = false) => {
+    if (seenCell.has(`${r}:${c}`)) return;
+    seenCell.add(`${r}:${c}`);
     let rr = r; let cc = c; let r2 = r; let c2 = c;
     const m = g.merges.get(`${r}:${c}`);
     if (m) { if (seenMerge.has(m)) return; seenMerge.add(m); rr = m.startRow; cc = m.startColumn; r2 = m.endRow; c2 = m.endColumn; }
-    const cell = sheet.cellData?.[rr]?.[cc];
-    if (!cell && !s.marks.size) return;
+    const cell = sheet.cellData?.[rr]?.[cc] ?? (force ? {} : undefined);
+    if (!cell) return;
     const x = X(cc); const y = Y(rr);
     const w = X(c2 + 1) - x; const h = Y(r2 + 1) - y;
     if (w <= 0 || h <= 0) return;
-    const style = cell ? styleOf(book, cell) : null;
-    if (cell) drawn.push({ r: rr, c: cc, x, y, w, h, cell, style });
+    let style = styleOf(book, cell);
+    // Условное форматирование — поверх своего оформления ячейки.
+    const hit = s.cf?.(rr, cc, cell) ?? null;
+    if (hit) {
+      const add: Record<string, unknown> = {};
+      const st0 = hit.style || {};
+      const bgc = hit.fill || st0.bg;
+      if (bgc) add.bg = { rgb: bgc };
+      if (st0.cl) add.cl = { rgb: st0.cl };
+      if (st0.bl) add.bl = 1;
+      if (st0.it) add.it = 1;
+      if (st0.ul) add.ul = { s: 1 };
+      if (st0.st) add.st = { s: 1 };
+      style = { ...(style || {}), ...add } as Style;
+    }
+    drawn.push({ r: rr, c: cc, x, y, w, h, cell, style });
   };
   for (let r = r0; r <= r1; r += 1) {
     if (g.rowOffs[r + 1] === g.rowOffs[r]) continue;
@@ -129,6 +180,18 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
     if (row) for (const k of Object.keys(row)) { const c = Number(k); if (c >= c0 && c <= c1) visit(r, c); }
   }
   for (const m of sheet.mergeData || []) if (m.startRow <= r1 && r0 <= m.endRow && m.startColumn <= c1 && c0 <= m.endColumn) visit(m.startRow, m.startColumn);
+  // Пустые ячейки, которые всё равно рисуются: флажки, заметки, правило «ячейка пуста».
+  const forceRanges: Range[] = [...(s.dv || []).flatMap((x) => x.ranges)];
+  let budget = 20000;
+  const forceIn = (x: Range) => {
+    for (let r = Math.max(r0, x.startRow); r <= Math.min(r1, x.endRow) && budget > 0; r += 1) {
+      if (g.rowOffs[r + 1] === g.rowOffs[r]) continue;
+      for (let c = Math.max(c0, x.startColumn); c <= Math.min(c1, x.endColumn) && budget > 0; c += 1) { budget -= 1; visit(r, c, true); }
+    }
+  };
+  for (const x of forceRanges) forceIn(x);
+  for (const x of s.cfBlank || []) forceIn(x);
+  for (const key of Object.keys(s.notes || {})) { const [r, c] = key.split(':').map(Number); if (r >= r0 && r <= r1 && c >= c0 && c <= c1) visit(r, c, true); }
   // Объединённые — на фоне листа (поверх сетки внутри них).
   for (const m of seenMerge) {
     const x = X(m.startColumn); const y = Y(m.startRow);
@@ -156,9 +219,51 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
   // Текст.
   ctx.textBaseline = 'alphabetic';
   for (const d of drawn) {
+    const rule = dvAt(s.dv, d.r, d.c);
+    if (rule?.kind === 'checkbox') {
+      // Флажок как в Google: квадрат по центру ячейки, отмеченный — залит цветом.
+      const sz = 14; const bx = d.x + (d.w - sz) / 2; const by = d.y + (d.h - sz) / 2;
+      const on = isChecked(d.cell.v);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = on ? theme.sel : theme.headText;
+      ctx.fillStyle = on ? theme.sel : 'transparent';
+      ctx.beginPath(); ctx.roundRect(bx, by, sz, sz, 2); if (on) ctx.fill(); ctx.stroke();
+      if (on) { ctx.strokeStyle = theme.bg; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(bx + 3, by + 7); ctx.lineTo(bx + 6, by + 10); ctx.lineTo(bx + 11, by + 4); ctx.stroke(); }
+      continue;
+    }
+    if (rule?.kind === 'list') {
+      // Раскрывающийся список: стрелка справа; значение — «чипом», как в Google.
+      const ax = d.x + d.w - 12; const ay = d.y + d.h / 2;
+      ctx.fillStyle = theme.headText; ctx.beginPath(); ctx.moveTo(ax - 4, ay - 2); ctx.lineTo(ax + 4, ay - 2); ctx.lineTo(ax, ay + 3); ctx.closePath(); ctx.fill();
+      const t = displayText(d.cell, d.style);
+      if (t && rule.chips !== false) {
+        ctx.font = cellFont(d.style);
+        const tw = Math.min(ctx.measureText(t).width + 14, d.w - 22);
+        ctx.fillStyle = theme.dark ? '#3c4043' : '#e8eaed';
+        ctx.beginPath(); ctx.roundRect(d.x + 3, d.y + Math.max(2, (d.h - 18) / 2), tw, Math.min(18, d.h - 4), 9); ctx.fill();
+        ctx.save(); ctx.beginPath(); ctx.rect(d.x + 3, d.y, tw - 4, d.h); ctx.clip();
+        ctx.fillStyle = theme.text; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(t, d.x + 10, d.y + d.h / 2 + 1);
+        ctx.restore(); ctx.textBaseline = 'alphabetic';
+        continue;
+      }
+    }
     const text = displayText(d.cell, d.style);
     if (!text) continue;
     const st = d.style;
+    const angle = Number((st?.tr as { a?: number } | undefined)?.a) || 0;
+    if (angle && angle !== 255 && st?.tb !== 3) {
+      // Повёрнутый текст: вокруг середины ячейки.
+      ctx.save();
+      ctx.beginPath(); ctx.rect(d.x, d.y, d.w, d.h); ctx.clip();
+      ctx.font = cellFont(st);
+      ctx.fillStyle = (st?.cl as { rgb?: string } | undefined)?.rgb || theme.text;
+      ctx.translate(d.x + d.w / 2, d.y + d.h / 2);
+      ctx.rotate((-angle * Math.PI) / 180);
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(text, 0, 0);
+      ctx.restore();
+      continue;
+    }
     ctx.font = cellFont(st);
     const bg = (st?.bg as { rgb?: string } | undefined)?.rgb;
     let color = (st?.cl as { rgb?: string } | undefined)?.rgb || '';
@@ -255,6 +360,16 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
   }
   ctx.setLineDash([]);
 
+  // Заметки — тёмный уголок.
+  if (s.notes) {
+    ctx.fillStyle = theme.dark ? '#e8eaed' : '#202124';
+    for (const key of Object.keys(s.notes)) {
+      const [r, c] = key.split(':').map(Number);
+      if (r < r0 || r > r1 || c < c0 || c > c1) continue;
+      const xr = X(c + 1) - 1; const y = Y(r);
+      ctx.beginPath(); ctx.moveTo(xr - 6, y); ctx.lineTo(xr, y); ctx.lineTo(xr, y + 6); ctx.closePath(); ctx.fill();
+    }
+  }
   // Уголки комментариев.
   if (s.marks.size) {
     ctx.fillStyle = '#ff9f0a';
@@ -276,7 +391,8 @@ function rangeRect(s: DrawState, r: Range): [number, number, number, number] {
 
 export function drawSheet(ctx: CanvasRenderingContext2D, s: DrawState) {
   const { geo: g, theme, width: W, height: H } = s;
-  ctx.setTransform(s.dpr, 0, 0, s.dpr, 0, 0);
+  const z = s.zoom || 1;
+  ctx.setTransform(s.dpr * z, 0, 0, s.dpr * z, 0, 0);
   ctx.clearRect(0, 0, W, H);
   // Видимые строки и столбцы тела.
   const r0 = Math.max(g.fr, indexAt(g.rowOffs, s.scrollY + g.fh));
@@ -292,6 +408,29 @@ export function drawSheet(ctx: CanvasRenderingContext2D, s: DrawState) {
   ctx.fillStyle = theme.frozenLine;
   if (g.fr) ctx.fillRect(HEAD_W, bodyY - 1, W - HEAD_W, 2);
   if (g.fc) ctx.fillRect(bodyX - 1, HEAD_H, 2, H - HEAD_H);
+
+  // Картинки и диаграммы — поверх ячеек.
+  if (s.objects?.length) {
+    ctx.save();
+    ctx.beginPath(); ctx.rect(HEAD_W, HEAD_H, W - HEAD_W, H - HEAD_H); ctx.clip();
+    for (const o of s.objects) {
+      const ox = screenX(g, Math.min(o.col, g.cols - 1), s.scrollX) + o.dx; const oy = screenY(g, Math.min(o.row, g.rows - 1), s.scrollY) + o.dy;
+      if (ox > W || oy > H || ox + o.w < 0 || oy + o.h < 0) continue;
+      if (o.kind === 'image' && o.src) {
+        const img = imageOf(o.src, s.onAsset);
+        if (img) ctx.drawImage(img, ox, oy, o.w, o.h);
+        else { ctx.fillStyle = theme.grid; ctx.fillRect(ox, oy, o.w, o.h); }
+      } else if (o.kind === 'chart' && o.chart) {
+        drawChart(ctx, ox, oy, o.w, o.h, o.chart, chartData(s.book, s.sheet, o.chart), theme);
+      }
+      if (s.selectedObject === o.id) {
+        ctx.strokeStyle = theme.sel; ctx.lineWidth = 2; ctx.strokeRect(ox - 1, oy - 1, o.w + 2, o.h + 2);
+        ctx.fillStyle = theme.bg;
+        for (const [hx, hy] of [[ox, oy], [ox + o.w, oy], [ox, oy + o.h], [ox + o.w, oy + o.h]]) { ctx.fillRect(hx - 4, hy - 4, 8, 8); ctx.strokeRect(hx - 4, hy - 4, 8, 8); }
+      }
+    }
+    ctx.restore();
+  }
 
   // Выделение, коллеги, буфер — поверх ячеек, под заголовками.
   ctx.save();
@@ -384,6 +523,24 @@ export function drawSheet(ctx: CanvasRenderingContext2D, s: DrawState) {
       const y = screenY(g, r, s.scrollY);
       if (y > HEAD_H) { ctx.beginPath(); ctx.moveTo(12, y - 6); ctx.lineTo(HEAD_W / 2, y - 2); ctx.lineTo(HEAD_W - 12, y - 6); ctx.moveTo(12, y + 6); ctx.lineTo(HEAD_W / 2, y + 2); ctx.lineTo(HEAD_W - 12, y + 6); ctx.fill(); }
     }
+  }
+  // Группы строк/столбцов: скобка вдоль заголовка и кнопка «−»/«+» за концом группы (как в Google).
+  ctx.strokeStyle = theme.headText; ctx.lineWidth = 1;
+  const box = (bx: number, by: number, plus: boolean) => {
+    ctx.fillStyle = theme.head; ctx.fillRect(bx, by, 10, 10); ctx.strokeRect(bx + 0.5, by + 0.5, 9, 9);
+    ctx.beginPath(); ctx.moveTo(bx + 2.5, by + 5); ctx.lineTo(bx + 7.5, by + 5); if (plus) { ctx.moveTo(bx + 5, by + 2.5); ctx.lineTo(bx + 5, by + 7.5); } ctx.stroke();
+  };
+  for (const gr of s.groups?.rows || []) {
+    const y1 = screenY(g, gr.start, s.scrollY); const y2 = screenY(g, Math.min(gr.end + 1, g.rows), s.scrollY);
+    if (y2 < HEAD_H || y1 > H) continue;
+    if (!gr.collapsed) { ctx.beginPath(); ctx.moveTo(3.5, Math.max(HEAD_H, y1 + 3)); ctx.lineTo(3.5, y2); ctx.lineTo(8, y2); ctx.stroke(); }
+    if (y2 >= HEAD_H) box(1, y2 + 2, Boolean(gr.collapsed));
+  }
+  for (const gr of s.groups?.cols || []) {
+    const x1 = screenX(g, gr.start, s.scrollX); const x2 = screenX(g, Math.min(gr.end + 1, g.cols), s.scrollX);
+    if (x2 < HEAD_W || x1 > W) continue;
+    if (!gr.collapsed) { ctx.beginPath(); ctx.moveTo(Math.max(HEAD_W, x1 + 3), 3.5); ctx.lineTo(x2, 3.5); ctx.lineTo(x2, 8); ctx.stroke(); }
+    if (x2 >= HEAD_W) box(x2 + 2, 1, Boolean(gr.collapsed));
   }
   ctx.fillStyle = theme.grid;
   ctx.fillRect(HEAD_W - 1, 0, 1, H);

@@ -160,3 +160,54 @@ html[data-theme="graphite"] .fsh, html[data-theme="black"] .fsh { --sh-border-au
 .fsh-fmenu-check input { accent-color: var(--accent-color); }
 .fsh-fmenu-empty { margin: 8px; color: var(--text-muted); }
 .fsh-fmenu-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 6px 4px 2px; border-top: 1px solid var(--border-color); margin-top: 4px; }
+
+/* ── Боковые панели (условное форматирование, проверка данных, диаграммы, защита) — колонкой справа от сетки. ── */
+.fsh-panel { display: flex; flex-direction: column; flex: none; width: 320px; min-height: 0; border-left: 1px solid var(--border-color); background: var(--surface-panel); color: var(--text-main); font-size: var(--text-sm); }
+.fsh-panel-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 10px 6px 16px; }
+.fsh-panel-head h2 { margin: 0; font-size: var(--text-md, 15px); font-weight: var(--weight-semibold); }
+.fsh-panel-body { flex: 1; min-height: 0; overflow: auto; display: grid; align-content: start; gap: 12px; padding: 6px 16px 16px; }
+.fsh-panel-tabs { margin-bottom: 4px; }
+.fsh-panel-empty { margin: 4px 0; color: var(--text-muted); }
+.fsh-panel-add { justify-self: start; display: inline-flex; align-items: center; gap: 6px; }
+.fsh-panel-foot { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
+.fsh-danger { color: var(--state-danger); }
+.fsh-field { display: grid; gap: 6px; }
+.fsh-field > span { color: var(--text-2); font-size: var(--text-xs); }
+.fsh-field input:not([type="color"]):not([type="checkbox"]), .fsh-field select, .fsh-field textarea {
+  width: 100%; box-sizing: border-box; min-height: 32px; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 8px;
+  background: var(--element-bg, transparent); color: var(--text-main); font: inherit; resize: vertical;
+}
+.fsh-field input:focus, .fsh-field select:focus, .fsh-field textarea:focus { outline: none; border-color: var(--accent-color); }
+.fsh-check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.fsh-check input { accent-color: var(--accent-color); }
+.fsh-cf-item { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--border-color); border-radius: 10px; cursor: pointer; }
+.fsh-cf-item:hover { background: var(--surface-hover); }
+.fsh-cf-text { display: grid; flex: 1; min-width: 0; gap: 2px; }
+.fsh-cf-text b { overflow: hidden; font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
+.fsh-cf-text span { color: var(--text-muted); font-size: var(--text-xs); }
+.fsh-cf-preview { display: inline-grid; place-items: center; flex: none; min-width: 44px; height: 24px; padding: 0 6px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 12px; }
+.fsh-cf-styles { display: flex; align-items: center; gap: 4px; }
+.fsh-cf-styles button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); cursor: pointer; }
+.fsh-cf-styles button[aria-pressed="true"] { background: var(--surface-selected); color: var(--accent-color); }
+.fsh-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.fsh-swatch { position: relative; width: 22px; height: 22px; padding: 0; border: 1px solid var(--border-color); border-radius: 50%; cursor: pointer; }
+.fsh-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface-panel), 0 0 0 4px var(--accent-color); }
+.fsh-swatch-none { background: linear-gradient(135deg, transparent 45%, var(--state-danger) 45%, var(--state-danger) 55%, transparent 55%); }
+.fsh-swatch-custom { background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); overflow: hidden; }
+.fsh-swatch-custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.fsh-scale-row { display: flex; align-items: center; gap: 6px; }
+.fsh-scale-row select { flex: 1; }
+.fsh-scale-num { width: 70px !important; flex: none; }
+.fsh-scale-row input[type="color"], .fsh-chart-colors input { width: 32px; height: 28px; padding: 0; border: 1px solid var(--border-color); border-radius: 6px; background: transparent; cursor: pointer; }
+.fsh-chart-types { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.fsh-chart-types button { display: grid; justify-items: center; gap: 4px; padding: 8px 4px; border: 1px solid var(--border-color); border-radius: 8px; background: transparent; color: var(--text-2); font: inherit; font-size: 11px; cursor: pointer; }
+.fsh-chart-types button[aria-pressed="true"] { border-color: var(--accent-color); color: var(--accent-color); background: color-mix(in srgb, var(--accent-color) 10%, transparent); }
+.fsh-chart-colors { display: flex; gap: 6px; }
+.fsh-people { display: grid; gap: 4px; max-height: 220px; overflow: auto; padding: 4px 0; }
+
+/* Заметка к ячейке — жёлтая карточка, как в Google. */
+.fsh-note {
+  z-index: 300; box-sizing: border-box; min-width: 180px; max-width: 300px; padding: 8px 10px; border: 1px solid rgba(0, 0, 0, .15); border-radius: 4px;
+  background: #fff8c4; color: #202124; box-shadow: 0 2px 8px rgba(0, 0, 0, .2); font: 13px/1.4 Inter, Arial, sans-serif; white-space: pre-wrap; pointer-events: none;
+}
+.fsh-note-edit { width: 240px; min-height: 90px; resize: both; pointer-events: auto; outline: none; }
