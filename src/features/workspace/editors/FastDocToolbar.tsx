@@ -74,7 +74,9 @@ export function Pop({ anchor, trigger, onClose, children, className }: { anchor:
     const place = () => {
       const { width, height } = el.getBoundingClientRect();
       el.style.left = `${Math.max(8, Math.min(anchor.left, window.innerWidth - width - 8))}px`;
-      el.style.top = `${Math.max(8, Math.min(anchor.bottom + 6, window.innerHeight - height - 8))}px`;
+      // Снизу не помещается — раскрываемся над кнопкой (а не наезжаем на неё, прижавшись к краю окна).
+      const below = anchor.bottom + 6 + height <= window.innerHeight - 8;
+      el.style.top = `${below ? anchor.bottom + 6 : Math.max(8, anchor.top - 6 - height)}px`;
     };
     place();
     window.addEventListener('resize', place);

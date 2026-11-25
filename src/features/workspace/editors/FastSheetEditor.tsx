@@ -1921,7 +1921,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     // Как в Google: числа с разрядами, без «хвоста» из двенадцати знаков.
     const f = (x: number) => Number(x.toPrecision(12)).toLocaleString('ru-RU', { maximumFractionDigits: 6 });
     const all: Array<[StatKind, string, string]> = n
-      ? [['sum', 'Сумма', f(sum)], ['avg', 'Среднее', f(sum / n)], ['min', 'Минимум', f(min)], ['max', 'Максимум', f(max)], ['count', 'Количество', f(count)], ['countNum', 'Количество чисел', f(n)]]
+      ? [['sum', 'Сумма', f(sum)], ['avg', 'Среднее', Number((sum / n).toFixed(2)).toLocaleString('ru-RU', { maximumFractionDigits: 2 })], ['min', 'Минимум', f(min)], ['max', 'Максимум', f(max)], ['count', 'Количество', f(count)], ['countNum', 'Количество чисел', f(n)]]
       : [['count', 'Количество', f(count)]];
     return all;
   }, [sheet, version, sumKey]); // eslint-disable-line react-hooks/exhaustive-deps
