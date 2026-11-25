@@ -39,6 +39,8 @@ const DeckEditor = lazy(() => import('./editors/DeckEditor'));
 // Свой редактор документов (TipTap, #704) — пока выбором в «⋯» (или ?fastdoc=1): основным станет, когда его функции
 // совпадут с Univer/Google Документами один в один (решение владельца 20.11.2026). По умолчанию — Univer.
 const FastDocEditor = lazy(() => import('./editors/FastDocEditor'));
+// Свой редактор таблиц (бета) — тот же переключатель «Beta-редактор»: xlsx и правки по сети те же, что у Univer.
+const FastSheetEditor = lazy(() => import('./editors/FastSheetEditor'));
 import { useAgentZones } from './useAgentZones';
 const FAST_DOCS_KEY = 'nx:fast-docs';
 const FAST_DOCS_EVENT = 'nx:fast-docs-changed';
@@ -226,7 +228,7 @@ export function ItemView({ source, kindHint, onBack, onChanged, onDeleted, onOpe
   if (status === 'error' || !item) return <div className="nws-missing" role="alert">{error || 'Не удалось открыть.'} <button type="button" className="nx-ghost" onClick={() => void session.reload()}>Повторить</button></div>;
 
   const info = KINDS[item.kind];
-  const Editor = item.kind === 'document' && fastDocs ? FastDocEditor : EDITORS[item.kind];
+  const Editor = item.kind === 'document' && fastDocs ? FastDocEditor : item.kind === 'table' && fastDocs ? FastSheetEditor : EDITORS[item.kind];
   const readOnly = !item.canEdit;
   const accessLevel: AccessLevel = item.accessLevel ?? 'private';
   const AccessIcon = ACCESS_ICON[accessLevel];
@@ -511,15 +513,16 @@ ${absolute(links.office(item!.kind, item!.id))}` });
       ] });
     }
     menus.push({ id: 'tools', label: 'Инструменты', items: [
-      ...(isDoc && fastDocs ? [] : [
+      ...(fastDocs ? [] : [
         { ...cmd('Поиск по функциям', 'ui.operation.open-feature-search', <Search size={15} />), disabled: !can('ui.operation.open-feature-search') },
         { ...cmd('Быстрые клавиши', 'base-ui.operation.toggle-shortcut-panel', <Keyboard size={15} />), disabled: !can('base-ui.operation.toggle-shortcut-panel') },
       ]),
-      // Свой редактор документов (бета) — галочкой: включён — документы открываются в нём, выключен — в Univer.
-      ...(isDoc ? [...(fastDocs ? [] : ['sep' as const]), {
+      // Свои редакторы документов и таблиц (бета) — галочкой: включены — материалы открываются в них, выключены — в Univer.
+      ...(fastDocs ? [] : ['sep' as const]),
+      {
         label: 'Beta-редактор', onSelect: () => setFastDocs(!fastDocs),
         icon: fastDocs ? <span className="nws-check" data-on="" aria-hidden="true"><Check size={12} /></span> : <span className="nws-check" aria-hidden="true" />,
-      }] : []),
+      },
     ] });
     menus.push({ id: 'help', label: 'Справка', items: [
       { label: 'Инструкция по Шару', onSelect: () => navigate(paths.guide), icon: <BookOpen size={15} /> },
@@ -683,7 +686,7 @@ ${absolute(links.office(item!.kind, item!.id))}` });
           {canSticky(item.kind) && <MenuItem icon={<MonitorUp size={15} />} onSelect={() => { setMenu(null); void openSticky(item.id, null, { kind: item.kind }); }}>{stickyLabel(item.kind)}</MenuItem>}
           <MenuItem icon={<Link2 size={15} />} onSelect={() => { setMenu(null); void copyLink(); }}>Скопировать ссылку на материал</MenuItem>
           <MenuItem icon={<Copy size={15} />} onSelect={() => { setMenu(null); void duplicate(); }}>Сделать копию</MenuItem>
-          {item.kind === 'document' && (
+          {(item.kind === 'document' || item.kind === 'table') && (
             <MenuItem icon={fastDocs ? <History size={15} /> : <Zap size={15} />} onSelect={() => { setMenu(null); setFastDocs(!fastDocs); }}>
               {fastDocs ? 'Вернуться в редактор Univer' : 'Новый редактор (бета)'}
             </MenuItem>

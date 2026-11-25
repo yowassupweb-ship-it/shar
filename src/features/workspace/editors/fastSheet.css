@@ -1,0 +1,100 @@
+/* Свой редактор таблиц (FastSheetEditor.tsx). Лист — светлый «как бумага» в светлой теме, тёмный — в тёмных;
+   панель оформления — та же, что у редактора документов (fastDoc.css: .fdoc-bar, .fdoc-btn, .fdoc-drop). */
+.fsh {
+  --sh-bg: #fff; --sh-text: #1f1f1f; --sh-grid: #e2e3e3; --sh-head: #f8f9fa; --sh-head-text: #5f6368; --sh-head-on: #d3e3fd; --sh-head-full: #0b57d0;
+  --sh-sel: #1a73e8; --sh-sel-fill: rgba(26, 115, 232, .1);
+  --bar-bg: var(--surface-panel, #edf2fa);
+  display: flex; flex-direction: column; height: 100%; min-height: 0; position: relative; background: var(--sh-bg); color: var(--sh-text);
+}
+html[data-theme="graphite"] .fsh {
+  --sh-bg: #2b2c30; --sh-text: #e9e9ec; --sh-grid: #3a3b40; --sh-head: #232428; --sh-head-text: #a5a7ad; --sh-head-on: #34435e; --sh-head-full: #8ab4f8;
+  --sh-sel: #8ab4f8; --sh-sel-fill: rgba(138, 180, 248, .14);
+}
+html[data-theme="black"] .fsh {
+  --sh-bg: #161618; --sh-text: #ececee; --sh-grid: #2a2a2e; --sh-head: #101012; --sh-head-text: #9a9ca2; --sh-head-on: #2a3650; --sh-head-full: #8ab4f8;
+  --sh-sel: #8ab4f8; --sh-sel-fill: rgba(138, 180, 248, .14);
+}
+.fsh-loading { display: grid; place-items: center; height: 100%; color: var(--text-muted); font-size: var(--text-sm); }
+.fsh-bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.fsh-txt-btn { font-size: 12px; font-weight: 600; letter-spacing: -.02em; }
+.fsh-bar .fdoc-drop { display: inline-flex; align-items: center; gap: 2px; height: 30px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); font: inherit; font-size: 13px; cursor: pointer; }
+.fsh-bar .fdoc-drop:hover { background: var(--surface-hover); color: var(--text-main); }
+
+/* Строка формул: адрес · fx · содержимое. */
+.fsh-formula { display: flex; align-items: center; gap: 0; flex: none; height: 30px; border-top: 1px solid var(--sh-grid); border-bottom: 1px solid var(--sh-grid); background: var(--sh-bg); }
+.fsh-name { width: 96px; height: 100%; padding: 0 8px; border: 0; border-right: 1px solid var(--sh-grid); background: transparent; color: var(--sh-text); font: inherit; font-size: 13px; outline: none; }
+.fsh-fx { padding: 0 10px; color: var(--sh-head-text); font-style: italic; font-size: 13px; border-right: 1px solid var(--sh-grid); }
+.fsh-bar-input { flex: 1; min-width: 0; height: 100%; padding: 0 10px; border: 0; background: transparent; color: var(--sh-text); font: inherit; font-size: 13px; outline: none; }
+.fsh-name:focus-visible, .fsh-bar-input:focus-visible { box-shadow: inset 0 0 0 2px var(--sh-sel); }
+
+/* Сетка: окно прокрутки, «распорка» на весь лист; видимые ячейки — абсолютно. */
+.fsh-grid { position: relative; flex: 1; min-height: 0; overflow: auto; outline: none; user-select: none; -webkit-user-select: none; font-family: Arial, Inter, sans-serif; font-size: 10pt; }
+.fsh-grid:focus-visible { box-shadow: none; }
+.fsh-sizer { position: relative; }
+.fsh-layer { position: absolute; inset: 0 auto auto 0; width: 0; height: 0; }
+.fsh-layer-bg { position: absolute; background: var(--sh-bg); }
+.fsh-layer[data-frozen] .fsh-layer-bg { box-shadow: 1px 1px 0 var(--sh-head-text); }
+.fsh-hline, .fsh-vline { position: absolute; display: block; background: var(--sh-grid); pointer-events: none; }
+.fsh-hline { height: 1px; }
+.fsh-vline { width: 1px; }
+.fsh-cell { position: absolute; box-sizing: border-box; display: flex; padding: 0 4px; overflow: hidden; color: var(--sh-text); line-height: 1.25; }
+.fsh-cell[data-v="bottom"] { align-items: flex-end; padding-bottom: 2px; }
+.fsh-cell[data-v="middle"] { align-items: center; }
+.fsh-cell[data-v="top"] { align-items: flex-start; padding-top: 2px; }
+.fsh-cell[data-h="left"] { justify-content: flex-start; }
+.fsh-cell[data-h="center"] { justify-content: center; text-align: center; }
+.fsh-cell[data-h="right"] { justify-content: flex-end; text-align: right; }
+.fsh-text { white-space: pre; overflow: hidden; text-overflow: clip; }
+.fsh-cell[data-wrap] .fsh-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.fsh-cell[style*="overflow: visible"] .fsh-text { overflow: visible; position: relative; z-index: 1; }
+/* Тёмный текст на тёмном листе — цветом темы, как в документах; сам цвет в файле не меняется. */
+html[data-theme="graphite"] .fsh-text[data-ink="dark"], html[data-theme="black"] .fsh-text[data-ink="dark"] { color: var(--sh-text) !important; }
+.fsh-mark { position: absolute; top: 0; right: 0; border-top: 9px solid #ff9f0a; border-left: 9px solid transparent; }
+
+/* Заголовки столбцов и строк. */
+.fsh-heads-top, .fsh-heads-left, .fsh-corner { position: absolute; left: 0; top: 0; z-index: 20; }
+.fsh-heads-top { height: 0; width: 0; }
+.fsh-heads-left { width: 0; height: 0; z-index: 19; }
+.fsh-corner { width: 46px; height: 24px; background: var(--sh-head); box-shadow: inset -1px -1px 0 var(--sh-grid); z-index: 22; }
+.fsh-heads-fixed { position: absolute; inset: 0; z-index: 2; }
+.fsh-colhead, .fsh-rowhead {
+  position: absolute; display: grid; place-items: center; box-sizing: border-box; background: var(--sh-head); color: var(--sh-head-text);
+  font: 11px/1 Inter, Arial, sans-serif; user-select: none;
+}
+.fsh-colhead { top: 0; height: 24px; box-shadow: inset -1px -1px 0 var(--sh-grid); }
+.fsh-rowhead { left: 0; width: 46px; box-shadow: inset -1px -1px 0 var(--sh-grid); }
+.fsh-colhead[data-on], .fsh-rowhead[data-on] { background: var(--sh-head-on); color: var(--sh-text); font-weight: 600; }
+.fsh-colhead[data-full], .fsh-rowhead[data-full] { background: var(--sh-head-full); color: #fff; }
+.fsh-resize { position: absolute; z-index: 1; transform: translate(var(--drag, 0px), 0); }
+.fsh-colhead .fsh-resize { top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; }
+.fsh-rowhead .fsh-resize { left: 0; bottom: -3px; width: 100%; height: 6px; cursor: row-resize; transform: translate(0, var(--drag, 0px)); }
+.fsh-resize:hover, .fsh-resize[style*="--drag"] { background: var(--sh-sel); }
+
+/* Выделение, активная ячейка, коллеги, «муравьи» буфера обмена. */
+.fsh-overlay { position: absolute; inset: 0 auto auto 0; z-index: 10; pointer-events: none; }
+.fsh-sel { position: absolute; box-sizing: border-box; border: 1px solid var(--sh-sel); background: var(--sh-sel-fill); }
+.fsh-active { position: absolute; box-sizing: border-box; border: 2px solid var(--sh-sel); }
+.fsh-clip { position: absolute; box-sizing: border-box; outline: 2px dashed var(--sh-sel); outline-offset: -1px; animation: fsh-ants 1s linear infinite; }
+@keyframes fsh-ants { 50% { outline-color: transparent; } }
+.fsh-peer { position: absolute; box-sizing: border-box; border: 2px solid var(--peer); }
+.fsh-peer-name { position: absolute; left: -2px; bottom: 100%; padding: 1px 5px; border-radius: 4px 4px 4px 0; background: var(--peer); color: #fff; font: 600 10px/1.4 Inter, sans-serif; white-space: nowrap; }
+
+/* Поле правки ячейки — поверх ячейки, растёт по тексту. */
+.fsh-editor {
+  position: absolute; z-index: 30; box-sizing: border-box; padding: 2px 4px; resize: none; overflow: hidden; border: 2px solid var(--sh-sel); border-radius: 0;
+  background: var(--sh-bg); color: var(--sh-text); font: inherit; line-height: 1.25; outline: none; box-shadow: 0 2px 8px rgba(0, 0, 0, .2); field-sizing: content; max-width: 600px; user-select: text;
+}
+
+/* Листы и сводка выделения. */
+.fsh-tabs { display: flex; align-items: center; gap: 2px; flex: none; height: 36px; padding: 0 8px; overflow-x: auto; border-top: 1px solid var(--sh-grid); background: var(--sh-head); scrollbar-width: none; }
+.fsh-tab-add { display: grid; place-items: center; flex: none; width: 28px; height: 28px; margin-right: 6px; border: 0; border-radius: 50%; background: transparent; color: var(--sh-head-text); cursor: pointer; }
+.fsh-tab-add:hover { background: var(--surface-hover); color: var(--sh-text); }
+.fsh-tab {
+  position: relative; flex: none; height: 28px; padding: 0 14px; border: 0; border-radius: 6px; background: transparent; color: var(--sh-head-text);
+  font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+.fsh-tab:hover { background: var(--surface-hover); }
+.fsh-tab[aria-selected="true"] { background: var(--sh-head-on); color: var(--sh-text); font-weight: 600; }
+.fsh-tab[style*="--tab"]::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: 2px; height: 3px; border-radius: 2px; background: var(--tab); }
+.fsh-tab-input { flex: none; width: 120px; height: 26px; padding: 0 8px; border: 2px solid var(--sh-sel); border-radius: 6px; background: var(--sh-bg); color: var(--sh-text); font: inherit; font-size: 13px; outline: none; }
+.fsh-summary { margin-left: auto; padding-left: 12px; color: var(--sh-head-text); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
