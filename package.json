@@ -36,6 +36,7 @@
     "docx-preview": "^0.4.1",
     "dompurify": "^3.4.17",
     "exceljs": "^4.4.0",
+    "fast-formula-parser": "^1.0.19",
     "fflate": "^0.8.3",
     "lottie-web": "^5.13.0",
     "lucide-react": "^0.553.0",

@@ -51,7 +51,7 @@ const REOPEN_MIN_GAP_MS = 6000;
 /** Перенос правок для вида материала: модули редакторов тяжёлые и грузятся отдельно — перенос тоже. */
 async function transformFor(kind: Kind): Promise<Transform | null> {
   if (kind === 'document') return (await import('./live/docOps')).docTransform;
-  if (kind === 'table') return (await import('./live/sheetOps')).sheetTransform;
+  if (kind === 'table') return (await import('./live/sheetTransform')).sheetTransform;
   if (kind === 'note') return (await import('./live/textOps')).textTransform;
   return null;
 }
