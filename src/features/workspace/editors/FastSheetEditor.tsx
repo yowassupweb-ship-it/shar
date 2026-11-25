@@ -21,6 +21,8 @@ import {
 } from '../sheet/model';
 import { applyOp, inverseOf, OP, wireCell } from '../sheet/ops';
 import { remapRefs } from '../sheet/refs';
+import { openHere, openInNewWindow, sharTarget } from '../../../shared/navigation/internalLinks';
+import { loadPreview, type PreviewData } from '../../chat/bubbles/LinkPreview';
 import { cellFont, drawSheet, FILTER_BTN, linkOf, readTheme, screenX, screenX2, screenY, screenY2, type BaseLayer } from '../sheet/draw';
 import { canInsertRef, enclosingFunction, formulaRefs, refEndingAt, signatureOf, suggestFunctions, typingName } from '../sheet/formulaEdit';
 import { dataRegion, filteredRows, readFilters, type FilterColumn } from '../sheet/filter';
@@ -180,6 +182,8 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   const [noteTip, setNoteTip] = useState<{ key: string; x: number; y: number } | null>(null);
   const [noteEdit, setNoteEdit] = useState<{ r: number; c: number; text: string } | null>(null);
   const [linkEdit, setLinkEdit] = useState<{ r: number; c: number; initial: string } | null>(null);
+  // Превью внешней ссылки в карточке (заголовок, описание, картинка сайта) — тот же источник и кэш, что в чате.
+  const [linkPreview, setLinkPreview] = useState<{ url: string; data: PreviewData | false } | null>(null);
   const imageInput = useRef<HTMLInputElement>(null);
   const pasteValues = useRef(false);
   const editor = useRef<HTMLTextAreaElement>(null);
@@ -1836,6 +1840,19 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       refs: editRefs.map((r) => ({ range: r.range!, color: r.color })),
     }, baseLayer.current);
   };
+  // Ссылка в активной ячейке — подгрузить превью (чужие сайты; ссылки на Шар открываются кнопками).
+  const cardUrl = (() => {
+    if (!sheet || edit || selRange.startRow !== selRange.endRow || selRange.startColumn !== selRange.endColumn) return null;
+    const url = linkOf(cellAt(sheet, sel.anchor.row, sel.anchor.col));
+    return url && !sharTarget(url) ? url : null;
+  })();
+  useEffect(() => {
+    if (!cardUrl) return undefined;
+    let alive = true;
+    // Небольшая задержка — не ходить за превью, пока стрелками пробегают по столбцу ссылок.
+    const t = window.setTimeout(() => { void loadPreview(cardUrl).then((data) => { if (alive) setLinkPreview({ url: cardUrl, data }); }); }, 250);
+    return () => { alive = false; window.clearTimeout(t); };
+  }, [cardUrl]);
   const frame = useRef(0);
   const redraw = useCallback(() => {
     if (frame.current) return;
@@ -1909,7 +1926,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     const viewH = (el?.clientHeight ?? 600) / zoom;
     if (y < HEAD_H || y > viewH - 30 || x < HEAD_W - 10) return null;
     const rich = Boolean((cell?.p as { body?: { customRanges?: unknown[] } } | undefined)?.body?.customRanges?.length);
-    return { url, x, y, rich };
+    return { url, x, y, rich, inner: sharTarget(url) };
   })();
   // Поле правки стоит на месте экрана, где правку начали, — при прокрутке оно не едет с ячейками (как в Google);
   // над ним тогда появляется адрес ячейки. Прокрутку запоминаем в момент открытия правки этой ячейки.
@@ -2088,11 +2105,33 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
         {linkCard && (
           // Карточка ссылки под ячейкой, как в Google: адрес (щелчок открывает), копировать, изменить, убрать.
           <div className="fsh-linkcard" style={{ left: linkCard.x * zoom, top: linkCard.y * zoom }} onMouseDown={(e) => e.preventDefault()}>
+            {!linkCard.inner && linkPreview?.url === linkCard.url && linkPreview.data && (
+              <a className="fsh-linkcard-prev" href={linkCard.url} target="_blank" rel="noopener noreferrer">
+                {linkPreview.data.image && <img src={linkPreview.data.image} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none'; }} />}
+                <span className="fsh-linkcard-prev-text">
+                  <b>{linkPreview.data.title}</b>
+                  {linkPreview.data.description && <span>{linkPreview.data.description}</span>}
+                  <small>{linkPreview.data.siteName || (() => { try { return new URL(linkCard.url).hostname.replace(/^www\./, ''); } catch { return ''; } })()}</small>
+                </span>
+              </a>
+            )}
+            <div className="fsh-linkcard-row">
             <Globe size={18} strokeWidth={1.75} className="fsh-linkcard-globe" />
             <a href={linkCard.url} target="_blank" rel="noopener noreferrer" title={linkCard.url} className="fsh-linkcard-url">{linkCard.url}</a>
-            <button type="button" className="nx-icon-btn" title="Копировать ссылку" aria-label="Копировать ссылку" onClick={() => { void navigator.clipboard?.writeText(linkCard.url).catch(() => undefined); }}><Copy size={17} strokeWidth={1.75} /></button>
-            {!readOnly && <button type="button" className="nx-icon-btn" title="Изменить ссылку" aria-label="Изменить ссылку" onClick={() => setLinkEdit({ r: sel.anchor.row, c: sel.anchor.col, initial: linkCard.url })}><Pencil size={17} strokeWidth={1.75} /></button>}
-            {!readOnly && linkCard.rich && <button type="button" className="nx-icon-btn" title="Удалить ссылку" aria-label="Удалить ссылку" onClick={() => setLink(sel.anchor.row, sel.anchor.col, '')}><Link2Off size={17} strokeWidth={1.75} /></button>}
+            {linkCard.inner ? (
+              // Ссылка на материал Шара — как раньше: открыть здесь (вместо текущего) или в отдельном окне.
+              <>
+                <button type="button" className="nx-ghost fsh-linkcard-act" onClick={() => openHere(linkCard.inner!)}>Открыть</button>
+                <button type="button" className="nx-ghost fsh-linkcard-act" onClick={() => { void openInNewWindow(linkCard.inner!); }}>В новом окне</button>
+              </>
+            ) : (
+              <>
+              <button type="button" className="nx-icon-btn" title="Копировать ссылку" aria-label="Копировать ссылку" onClick={() => { void navigator.clipboard?.writeText(linkCard.url).catch(() => undefined); }}><Copy size={17} strokeWidth={1.75} /></button>
+              {!readOnly && <button type="button" className="nx-icon-btn" title="Изменить ссылку" aria-label="Изменить ссылку" onClick={() => setLinkEdit({ r: sel.anchor.row, c: sel.anchor.col, initial: linkCard.url })}><Pencil size={17} strokeWidth={1.75} /></button>}
+              {!readOnly && linkCard.rich && <button type="button" className="nx-icon-btn" title="Удалить ссылку" aria-label="Удалить ссылку" onClick={() => setLink(sel.anchor.row, sel.anchor.col, '')}><Link2Off size={17} strokeWidth={1.75} /></button>}
+              </>
+            )}
+            </div>
           </div>
         )}
         {edit && !edit.bar && editBoxRaw && (

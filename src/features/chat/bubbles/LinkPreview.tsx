@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 
-interface PreviewData {
+export interface PreviewData {
   title: string;
   description: string;
   image: string;
@@ -18,7 +18,7 @@ interface LinkPreviewProps {
 const previewCache = new Map<string, PreviewData | false>();
 const inflight = new Map<string, Promise<PreviewData | false>>();
 
-function loadPreview(url: string): Promise<PreviewData | false> {
+export function loadPreview(url: string): Promise<PreviewData | false> {
   const cached = previewCache.get(url);
   if (cached !== undefined) return Promise.resolve(cached);
   let job = inflight.get(url);
