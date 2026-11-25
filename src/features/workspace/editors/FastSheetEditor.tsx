@@ -142,6 +142,36 @@ const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 
 type StatKind = 'sum' | 'avg' | 'min' | 'max' | 'count' | 'countNum';
 
+/**
+ * Фоновый поток сохранения (lib/sheetSave.worker.ts) — один на окно. null — не поднялся (тогда сохраняем по-старому).
+ * Ответы сопоставляются по номеру запроса.
+ */
+let saveWorker: Worker | null | undefined;
+let saveSeq = 0;
+const saveWaits = new Map<number, { resolve: (v: string | null) => void }>();
+function saveInWorker(doc: { key: string; content: string }, snapshot: unknown): Promise<string | null> {
+  if (!doc.key) return Promise.resolve(null);
+  if (saveWorker === undefined) {
+    try {
+      saveWorker = new Worker(new URL('../lib/sheetSave.worker.ts', import.meta.url), { type: 'module' });
+      saveWorker.onmessage = (e: MessageEvent<{ id: number; ok: boolean; content?: string }>) => {
+        const wait = saveWaits.get(e.data.id);
+        saveWaits.delete(e.data.id);
+        wait?.resolve(e.data.ok && typeof e.data.content === 'string' ? e.data.content : null);
+      };
+      saveWorker.onerror = () => { for (const w of saveWaits.values()) w.resolve(null); saveWaits.clear(); saveWorker = null; };
+    } catch { saveWorker = null; }
+  }
+  const worker = saveWorker;
+  if (!worker) return Promise.resolve(null);
+  saveSeq += 1;
+  const id = saveSeq;
+  return new Promise((resolve) => {
+    saveWaits.set(id, { resolve });
+    try { worker.postMessage({ id, key: doc.key, content: doc.content, snapshot }); } catch { saveWaits.delete(id); resolve(null); }
+  });
+}
+
 /** Номер объекта по его тождеству — для ключа кэша холста. */
 const objIds = new WeakMap<object, number>();
 let objSeq = 0;
@@ -208,6 +238,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   const liveRef = useRef<{ local: (ops: LiveOp[]) => void } | null>(null);
   const unknownWarned = useRef(false);
   const saveTimer = useRef(0);
+  const loaded = useRef<{ key: string; content: string }>({ key: '', content: '' });
   const onContentRef = useRef(onContent);
   onContentRef.current = onContent;
   const contentRef = useRef(content);
@@ -217,10 +248,13 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   useEffect(() => {
     let alive = true;
     setError('');
-    bookFromBase64(contentRef.current).then((wb) => {
+    const opened = contentRef.current;
+    bookFromBase64(opened).then((wb) => {
       if (!alive) return;
       const snap = excelToUniver(wb) as unknown as Book;
       excel.current = wb;
+      // Фоновое сохранение держит свою копию книги — от того же содержимого, с которым открыли.
+      loaded.current = { key: `${Date.now()}:${Math.random()}`, content: opened };
       book.current = snap;
       styles.current = new Styles(snap);
       recalc(snap);
@@ -233,6 +267,9 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
 
   const serialize = useCallback(async (): Promise<string> => {
     if (!book.current || !excel.current) return contentRef.current;
+    // Сначала — в фоновом потоке (лист не замирает на время сборки xlsx); не вышло — как раньше, здесь.
+    const viaWorker = await saveInWorker(loaded.current, book.current).catch(() => null);
+    if (viaWorker !== null) return viaWorker;
     applySnapshot(excel.current, book.current as never);
     return bookToBase64(excel.current);
   }, []);

@@ -78,7 +78,45 @@ const EXTRAS_PART = 'xl/shar/extras.json';
 const SHEET_IDS_PROP = 'SharSheetIds';
 
 function parseXml(text: string): Document {
-  return new DOMParser().parseFromString(text, 'application/xml');
+  if (typeof DOMParser !== 'undefined') return new DOMParser().parseFromString(text, 'application/xml');
+  return miniXml(text) as unknown as Document;
+}
+
+/**
+ * Разбор XML без DOMParser — для фонового потока сохранения (sheetSave.worker.ts), где DOM нет. Хватает на то, что
+ * здесь читается: элементы по имени тега, атрибуты, текст (связи листов, фильтры, свойства файла).
+ */
+interface MiniEl {
+  getAttribute(name: string): string | null;
+  getAttributeNS(ns: string, name: string): string | null;
+  getElementsByTagName(tag: string): MiniEl[];
+  readonly textContent: string;
+  readonly documentElement: MiniEl;
+}
+const unescapeXml = (s: string) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function miniEl(attrs: string, inner: string, root?: MiniEl): MiniEl {
+  const map = new Map<string, string>();
+  for (const m of attrs.matchAll(/([\w:.-]+)\s*=\s*("([^"]*)"|'([^']*)')/g)) map.set(m[1], unescapeXml(m[3] ?? m[4] ?? ''));
+  const el: MiniEl = {
+    getAttribute: (name) => map.get(name) ?? null,
+    getAttributeNS: () => null,
+    getElementsByTagName: (tag) => {
+      const t = escapeRe(tag);
+      const re = new RegExp(`<${t}(?=[\\s/>])([^>]*?)(?:/>|>([\\s\\S]*?)</${t}>)`, 'g');
+      return [...inner.matchAll(re)].map((m) => miniEl(m[1] || '', m[2] || ''));
+    },
+    get textContent() { return unescapeXml(inner.replace(/<[^>]*>/g, '')); },
+    get documentElement() { return root ?? el; },
+  };
+  return el;
+}
+function miniXml(text: string): MiniEl {
+  const body = text.replace(/<\?xml[^>]*\?>/, '').replace(/<!--[\s\S]*?-->/g, '');
+  const m = body.match(/<([\w:.-]+)([^>]*?)(\/>|>([\s\S]*)<\/\1>)/);
+  const root = m ? miniEl(m[2] || '', m[4] || '') : miniEl('', '');
+  // Документ: поиск тегов — по всему тексту, корень (documentElement) — первый элемент.
+  return miniEl('', body, root);
 }
 
 const escapeXml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
