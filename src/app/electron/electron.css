@@ -141,3 +141,6 @@
 
 @keyframes ntb-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .ntb-logo[data-spin="true"] { animation: none; } }
+/* Галочка-настройка в меню окна («Увеличение через Ctrl+скролл»). */
+.ntb-checkbox { display: grid; place-items: center; flex: none; width: 14px; height: 14px; border: 1.5px solid var(--border-strong); border-radius: 4px; color: var(--on-accent, #fff); }
+.ntb-check[aria-checked="true"] .ntb-checkbox { border-color: var(--accent-color); background: var(--accent-color); }

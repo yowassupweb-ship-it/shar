@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { BellRing, Copy, Minus, MoreVertical, PhoneCall, RefreshCw, RotateCw, Search, Square, X } from 'lucide-react';
+import { BellRing, Check, Copy, Minus, MoreVertical, PhoneCall, RefreshCw, RotateCw, Search, Square, X } from 'lucide-react';
 import { isNotifications, useChatStore } from '@/features/chat';
 import { openSpotlight } from '@/features/spotlight';
 import { links } from '@/shared/navigation/routes';
@@ -19,6 +19,14 @@ import './electron.css';
 export const TITLEBAR_HEIGHT = 30;
 const clampZoom = (n: number) => Math.max(50, Math.min(300, Math.round(n)));
 
+/**
+ * Масштаб окна по Ctrl+колесу — настройка, по умолчанию выключено: окно случайно «уплывало» при прокрутке с зажатым
+ * Ctrl. Выключено — гасим событие, пока его не забрал кто-то раньше (у листа документа своё Ctrl+колесо — масштаб
+ * листа, он обрабатывает событие сам и продолжает работать).
+ */
+const WHEEL_ZOOM_KEY = 'nx:ctrl-wheel-zoom';
+const readWheelZoom = () => { try { return localStorage.getItem(WHEEL_ZOOM_KEY) === '1'; } catch { return false; } };
+
 interface CallIsland { state: string | null; callerName?: string }
 
 const CONNECTION_LABEL: Record<string, string> = { connecting: 'Подключаюсь…', closed: 'Нет связи — переподключаюсь' };
@@ -33,6 +41,14 @@ export default function ElectronTitlebar() {
   const [maximized, setMaximized] = useState(false);
   const [menu, setMenu] = useState(false);
   const [zoom, setZoom] = useState(100);
+  const [wheelZoom, setWheelZoom] = useState(readWheelZoom);
+  useEffect(() => {
+    if (!desk || wheelZoom) return undefined;
+    const block = (e: WheelEvent) => { if (e.ctrlKey) e.preventDefault(); };
+    window.addEventListener('wheel', block, { passive: false });
+    return () => window.removeEventListener('wheel', block);
+  }, [desk, wheelZoom]);
+  const toggleWheelZoom = () => setWheelZoom((v) => { try { localStorage.setItem(WHEEL_ZOOM_KEY, v ? '0' : '1'); } catch { /* без памяти */ } return !v; });
   const [call, setCall] = useState<CallIsland | null>(null);
   const [update, setUpdate] = useState<UpdaterStatus | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -131,6 +147,9 @@ export default function ElectronTitlebar() {
                 <button type="button" title="Сбросить масштаб" onClick={() => void applyZoom(100)}>{zoom}%</button>
                 <button type="button" title="Больше" onClick={() => void applyZoom(zoom + 5)}>+</button>
               </div>
+              <button type="button" role="menuitemcheckbox" aria-checked={wheelZoom} className="ntb-item ntb-check" onClick={toggleWheelZoom}>
+                <span className="ntb-checkbox" aria-hidden="true">{wheelZoom && <Check size={11} strokeWidth={3} />}</span> Увеличение через Ctrl+скролл
+              </button>
               <button type="button" role="menuitem" className="ntb-item" onClick={() => { setMenu(false); void desk.windowControls.reload(); }}><RotateCw size={14} aria-hidden="true" /> Обновить страницу</button>
             </div>
           )}
