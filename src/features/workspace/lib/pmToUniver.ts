@@ -60,6 +60,8 @@ export function pmToUniver(doc: Json, base: Snapshot): Snapshot {
   const paragraphs: Array<Record<string, unknown>> = [];
   const customRanges: Array<Record<string, unknown>> = [];
   const customBlocks: Array<{ startIndex: number; blockId: string }> = [];
+  const tables: Array<{ startIndex: number; endIndex: number; tableId: string }> = [];
+  const tableSource: Record<string, Record<string, unknown>> = {};
   const baseDrawings = base.drawings || {};
   const drawings: Record<string, Record<string, unknown>> = {};
   const unitId = String(base.id || '');
@@ -169,17 +171,98 @@ export function pmToUniver(doc: Json, base: Snapshot): Snapshot {
     }
   };
 
+  /**
+   * Таблица в потоке Univer: «\x1A» строки «\x1B» ячейки «\x1C» абзацы «\x1D» «\x0E» «\x0F»; свойства — в tableSource
+   * по id (строки и ячейки — по порядку, как в потоке). Прежние свойства (src) берём как были, меняем только то, что
+   * правится здесь: объединение, ширину столбцов, заливку ячейки. Новые строки и ячейки — по образцу соседних.
+   */
+  const table = (node: Json) => {
+    const src = { ...((node.attrs?.src as Record<string, unknown> | null) || {}) };
+    let tableId = typeof src.tableId === 'string' && src.tableId && !tableSource[src.tableId] ? src.tableId : '';
+    if (!tableId) tableId = rid('t').slice(0, 8);
+    const rows = (node.content || []).filter((r) => r.type === 'tableRow');
+    // Сетка столбцов: по самой «широкой» строке; ширины — из colwidth ячеек первой строки, где они заданы.
+    let columns = 0;
+    const widths: number[] = [];
+    rows.forEach((row) => {
+      let col = 0;
+      for (const cell of row.content || []) {
+        const span = Math.max(1, Number(cell.attrs?.colspan) || 1);
+        const cw = Array.isArray(cell.attrs?.colwidth) ? (cell.attrs!.colwidth as unknown[]) : [];
+        for (let k = 0; k < span; k += 1) if (!widths[col + k] && Number(cw[k]) > 0) widths[col + k] = Number(cw[k]);
+        col += span;
+      }
+      columns = Math.max(columns, col);
+    });
+    const style = (base.documentStyle || {}) as { pageSize?: { width?: number }; marginLeft?: number; marginRight?: number };
+    const content = Math.max(200, (style.pageSize?.width || 794) - (style.marginLeft ?? 72) - (style.marginRight ?? 72));
+    const known = widths.filter((w) => w > 0);
+    const rest = columns - known.length;
+    const fallback = rest > 0 ? Math.max(40, (content - known.reduce((a, b) => a + b, 0)) / rest) : 0;
+    const tableColumns = Array.from({ length: Math.max(1, columns) }, (_, i) => ({ size: { type: 1, width: { v: Math.round(widths[i] || fallback || content / Math.max(1, columns)) } } }));
+
+    const startIndex = stream.length;
+    stream += '\x1A';
+    let lastRow: Record<string, unknown> | null = null;
+    const tableRows = rows.map((row) => {
+      stream += '\x1B';
+      const rowSrc = { ...((row.attrs?.src as Record<string, unknown> | null) || lastRow || { trHeight: { val: { v: 30 }, hRule: 0 } }) };
+      delete rowSrc.tableCells;
+      lastRow = rowSrc;
+      let lastCell: Record<string, unknown> = {};
+      const tableCells = (row.content || []).map((cell) => {
+        stream += '\x1C';
+        const blocks = cell.content || [];
+        const before = paragraphs.length;
+        blocks.forEach(block);
+        // В ячейке всегда хотя бы один абзац: поток ячейки должен кончаться «\r».
+        if (paragraphs.length === before || stream[stream.length - 1] !== '\r') paragraph({ type: 'paragraph' });
+        stream += '\x1D';
+        const own = (cell.attrs?.src as Record<string, unknown> | null) || null;
+        const cellSrc: Record<string, unknown> = { ...(own || lastCell) };
+        const colspan = Math.max(1, Number(cell.attrs?.colspan) || 1);
+        const rowspan = Math.max(1, Number(cell.attrs?.rowspan) || 1);
+        if (colspan > 1) cellSrc.columnSpan = colspan; else delete cellSrc.columnSpan;
+        if (rowspan > 1) cellSrc.rowSpan = rowspan; else delete cellSrc.rowSpan;
+        const bg = cell.attrs?.background ? String(cell.attrs.background) : '';
+        if (bg) cellSrc.backgroundColor = { rgb: bg }; else delete cellSrc.backgroundColor;
+        delete cellSrc.size;
+        if (own) lastCell = { ...own, backgroundColor: undefined };
+        return JSON.parse(JSON.stringify(cellSrc)) as Record<string, unknown>;
+      });
+      stream += '\x0E';
+      return { ...rowSrc, tableCells };
+    });
+    stream += '\x0F';
+    tables.push({ startIndex, endIndex: stream.length, tableId });
+    delete src.tableRows;
+    delete src.tableColumns;
+    tableSource[tableId] = {
+      align: 0, indent: { v: 0 }, textWrap: 0,
+      position: { positionH: { relativeFrom: 0, posOffset: 0 }, positionV: { relativeFrom: 0, posOffset: 0 } },
+      dist: { distB: 0, distL: 0, distR: 0, distT: 0 },
+      cellMargin: { start: { v: 10 }, end: { v: 10 }, top: { v: 5 }, bottom: { v: 5 } },
+      size: { type: 0, width: { v: content } },
+      ...src,
+      tableId,
+      tableRows,
+      tableColumns,
+    };
+  };
+
   const block = (node: Json) => {
     switch (node.type) {
       case 'paragraph': case 'heading': paragraph(node); break;
       case 'bulletList': case 'orderedList': case 'taskList': listCounter += 1; list(node, 0, `shar-list-${listCounter}`); break;
       case 'horizontalRule': stream += '\f'; paragraph({ type: 'paragraph' }); break;
+      case 'table': table(node); break;
       default: if (node.content) node.content.forEach(block);
     }
   };
 
   (doc.content || []).forEach(block);
-  if (!paragraphs.length) paragraph({ type: 'paragraph' });
+  // Документ не кончается таблицей: после неё нужен абзац, куда можно поставить курсор (так и в Univer).
+  if (!paragraphs.length || stream[stream.length - 1] === '') paragraph({ type: 'paragraph' });
   stream += '\n';
   const oldBreaks = (base.body?.sectionBreaks as Array<Record<string, unknown>> | undefined) || [];
   const sectionBreaks = [{ ...(oldBreaks[oldBreaks.length - 1] || { sectionId: rid('section') }), startIndex: stream.length - 1 }];
@@ -189,6 +272,7 @@ export function pmToUniver(doc: Json, base: Snapshot): Snapshot {
     ...base,
     drawings,
     drawingsOrder: order,
+    tableSource,
     body: {
       ...(base.body || {}),
       dataStream: stream,
@@ -197,7 +281,7 @@ export function pmToUniver(doc: Json, base: Snapshot): Snapshot {
       sectionBreaks,
       customRanges,
       customBlocks,
-      tables: [],
+      tables,
       // Позиции украшений после правки уже не те — Univer пересчитает свои, если понадобятся.
       customDecorations: [],
     },

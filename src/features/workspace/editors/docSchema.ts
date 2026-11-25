@@ -4,12 +4,13 @@ import Image from '@tiptap/extension-image';
 import { TaskItem, TaskList } from '@tiptap/extension-list';
 import { TextStyleKit } from '@tiptap/extension-text-style';
 import TextAlign from '@tiptap/extension-text-align';
+import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
 import { docImageView } from './docImageView';
 
 /**
  * Возможности нового редактора документов (TipTap/ProseMirror) — ровно то, что есть в документах Шара (опрос всех
  * 205 документов, 19.11.2026): абзацы и заголовки, списки и чек-листы, выравнивание, жирный, курсив, подчёркнутый,
- * зачёркнутый, цвет, фон, кегль, гарнитура, индексы, ссылки, картинки, разрыв страницы.
+ * зачёркнутый, цвет, фон, кегль, гарнитура, индексы, ссылки, картинки, таблицы (объединение ячеек, ширина столбцов, заливка), разрыв страницы.
  *
  * Хранение не меняется — снимок Univer: открытие через lib/univerHtml.ts, сохранение через lib/pmToUniver.ts.
  * То, чего редактор не показывает, но что лежит в снимке (межстрочный интервал и отступы абзаца, id картинки),
@@ -157,6 +158,43 @@ const GoogleKeys = Extension.create({
   },
 });
 
+
+/** Свойства Univer у таблицы, строки и ячейки (границы, поля, высота, заливка…) — едут в атрибуте src и возвращаются в снимок. */
+const srcAttr = (data: string) => ({
+  src: {
+    default: null,
+    parseHTML: (el: HTMLElement) => { try { return JSON.parse(el.getAttribute(`data-${data}`) || 'null'); } catch { return null; } },
+    renderHTML: (a: Record<string, unknown>) => (a.src ? { [`data-${data}`]: JSON.stringify(a.src) } : {}),
+  },
+});
+const SharTable = Table.extend({ addAttributes() { return { ...this.parent?.(), ...srcAttr('table') }; } })
+  .configure({ resizable: true, cellMinWidth: 40, lastColumnResizable: false });
+const SharTableRow = TableRow.extend({ addAttributes() { return { ...this.parent?.(), ...srcAttr('row') }; } });
+/** Ячейка: заливка — видимым фоном (как в Univer), остальные свойства — в src. */
+const SharTableCell = TableCell.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      ...srcAttr('cell'),
+      // Ширина столбцов (px листа) — из data-colwidth, который пишет lib/univerHtml.ts; ручка у границы меняет её.
+      colwidth: {
+        default: null,
+        parseHTML: (el: HTMLElement) => {
+          const raw = el.getAttribute('data-colwidth') || el.getAttribute('colwidth');
+          const list = raw ? raw.split(',').map((x) => Number(x)) : [];
+          return list.length && list.every((x) => x > 0) ? list : null;
+        },
+        renderHTML: (a: Record<string, unknown>) => (Array.isArray(a.colwidth) ? { 'data-colwidth': a.colwidth.join(',') } : {}),
+      },
+      background: {
+        default: null,
+        parseHTML: (el: HTMLElement) => el.style.backgroundColor || null,
+        renderHTML: (a: Record<string, unknown>) => (a.background ? { style: `background-color:${String(a.background)}` } : {}),
+      },
+    };
+  },
+});
+
 export function docExtensions(): AnyExtension[] {
   return [
     StarterKit.configure({
@@ -172,6 +210,11 @@ export function docExtensions(): AnyExtension[] {
     TaskList,
     TaskItem.configure({ nested: true }),
     SharImage,
+    SharTable,
+    SharTableRow,
+    SharTableCell,
+    // У Univer нет ячеек-заголовков; узел нужен схеме таблицы (вставленная из HTML <th> станет обычной ячейкой при сохранении).
+    TableHeader,
     Subscript,
     Superscript,
     ParagraphStyle,

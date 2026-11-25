@@ -27,10 +27,17 @@ interface Para {
 interface Range { startIndex: number; endIndex: number; rangeType: number; properties?: { url?: string } }
 interface Block { startIndex: number; blockId: string }
 interface Snapshot {
-  body?: { dataStream?: string; textRuns?: Run[]; paragraphs?: Para[]; customRanges?: Range[]; customBlocks?: Block[] };
+  body?: { dataStream?: string; textRuns?: Run[]; paragraphs?: Para[]; customRanges?: Range[]; customBlocks?: Block[]; tables?: Array<{ startIndex: number; tableId: string }> };
+  /** Свойства таблиц по id: строки (высота, ячейки — объединение, заливка, ширина), столбцы (ширина), поля ячеек. */
+  tableSource?: Record<string, TableSource>;
   lists?: Record<string, { listType?: string }>;
   drawings?: Record<string, { source?: unknown; title?: string; description?: string; transform?: { width?: number; height?: number } }>;
 }
+
+type TableSource = Record<string, unknown> & {
+  tableRows?: Array<Record<string, unknown> & { tableCells?: Array<Record<string, unknown>> }>;
+  tableColumns?: Array<{ size?: { width?: { v?: number } } }>;
+};
 
 const NAMED_TAG: Record<number, string> = { 2: 'h1', 3: 'h2', 4: 'h1', 5: 'h2', 6: 'h3', 7: 'h4', 8: 'h5' };
 const ALIGN: Record<number, string> = { 2: 'center', 3: 'right', 4: 'justify', 5: 'justify', 6: 'justify' };
@@ -99,7 +106,9 @@ function convert(snapshot: Snapshot, options: UniverHtmlOptions): string {
     | { kind: 'raw'; html: string };
   const out: Item[] = [];
   // Стек таблиц: каждая — строки → ячейки → HTML абзацев внутри.
-  const tables: Array<{ rows: string[][]; cell: Item[] | null }> = [];
+  type Cell = { html: string; src?: Record<string, unknown> };
+  const tables: Array<{ rows: Cell[][]; cell: Item[] | null; source?: TableSource }> = [];
+  const tableAt = new Map((body?.tables || []).map((t) => [t.startIndex, t.tableId]));
   let inline = '';
   let pending = '';
   let pendingTs: Ts | undefined;
@@ -146,21 +155,25 @@ function convert(snapshot: Snapshot, options: UniverHtmlOptions): string {
         }
         continue;
       }
-      case '\x1A': flushText(); tables.push({ rows: [], cell: null }); continue;
+      case '\x1A': { flushText(); const id = tableAt.get(i); tables.push({ rows: [], cell: null, source: id ? snapshot.tableSource?.[id] : undefined }); continue; }
       case '\x1B': tables[tables.length - 1]?.rows.push([]); continue;
       case '\x1C': { const t = tables[tables.length - 1]; if (t) t.cell = []; continue; }
       case '\x1D': {
         const t = tables[tables.length - 1];
-        if (t?.cell) { flushText(); if (inline) endParagraph(-1); t.rows[t.rows.length - 1]?.push(renderBlocks(t.cell)); t.cell = null; }
+        if (t?.cell) {
+          flushText(); if (inline) endParagraph(-1);
+          const r = t.rows.length - 1;
+          const row = t.rows[r];
+          // Ячейки и строки в tableSource идут в том же порядке, что и в потоке (так требует формат Univer).
+          row?.push({ html: renderBlocks(t.cell), src: t.source?.tableRows?.[r]?.tableCells?.[row.length] });
+          t.cell = null;
+        }
         continue;
       }
       case '\x0E': continue;
       case '\x0F': {
         const t = tables.pop();
-        if (t) {
-          const html = `<table><tbody>${t.rows.map((r) => `<tr>${r.map((c) => `<td>${c || '<p></p>'}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
-          sink().push({ kind: 'raw', html });
-        }
+        if (t) sink().push({ kind: 'raw', html: tableHtml(t.rows, t.source, Boolean(options.editor)) });
         continue;
       }
       default: {
@@ -175,6 +188,46 @@ function convert(snapshot: Snapshot, options: UniverHtmlOptions): string {
   flushText();
   if (inline) endParagraph(-1);
   return renderBlocks(out);
+}
+
+/**
+ * Таблица → HTML. Объединение ячеек — colspan/rowspan, заливка — фон ячейки, ширина столбцов — colwidth (для редактора)
+ * или <col>. Для редактора свойства таблицы, строк и ячеек едут целиком в data-атрибутах и возвращаются в снимок
+ * как были (lib/pmToUniver.ts): то, чего редактор не показывает (границы, поля, высота строк), не теряется.
+ */
+function tableHtml(rows: Array<Array<{ html: string; src?: Record<string, unknown> }>>, source: TableSource | undefined, editor: boolean): string {
+  const widths = (source?.tableColumns || []).map((c) => Math.round(Number(c?.size?.width?.v) || 0));
+  const props = <T extends Record<string, unknown>>(o: T | undefined, drop: string): Record<string, unknown> | null => {
+    if (!o) return null;
+    const rest: Record<string, unknown> = { ...o };
+    delete rest[drop];
+    return rest;
+  };
+  const tableProps = props(source, 'tableRows');
+  if (tableProps) delete tableProps.tableColumns;
+  const body = rows.map((cells, r) => {
+    const rowProps = props(source?.tableRows?.[r], 'tableCells');
+    let col = 0;
+    const tds = cells.map((cell) => {
+      const src = cell.src || {};
+      const span = Math.max(1, Number(src.columnSpan) || 1);
+      const rspan = Math.max(1, Number(src.rowSpan) || 1);
+      const w = widths.slice(col, col + span);
+      col += span;
+      const bg = color((src.backgroundColor as { rgb?: string } | undefined)?.rgb);
+      const attrs = [
+        span > 1 ? ` colspan="${span}"` : '',
+        rspan > 1 ? ` rowspan="${rspan}"` : '',
+        editor && w.length === span && w.every((x) => x > 0) ? ` data-colwidth="${w.join(',')}"` : '',
+        bg ? ` style="background-color:${bg}"` : '',
+        editor && cell.src ? ` data-cell="${esc(JSON.stringify(cell.src))}"` : '',
+      ].join('');
+      return `<td${attrs}>${cell.html || '<p></p>'}</td>`;
+    }).join('');
+    return `<tr${editor && rowProps ? ` data-row="${esc(JSON.stringify(rowProps))}"` : ''}>${tds}</tr>`;
+  }).join('');
+  const cols = !editor && widths.length && widths.every((x) => x > 0) ? `<colgroup>${widths.map((x) => `<col style="width:${x}px">`).join('')}</colgroup>` : '';
+  return `<table${editor && tableProps ? ` data-table="${esc(JSON.stringify(tableProps))}"` : ''}>${cols}<tbody>${body}</tbody></table>`;
 }
 
 /** Абзацы → HTML, подряд идущие пункты списка — в ul/ol с вложенностью по nestingLevel. */

@@ -16,7 +16,8 @@ import { DocInsertPicker } from './UniverDocMenu';
 import { FindBar } from './FindBar';
 import { HorizontalRuler, VerticalRuler, type IndentKey, type Indents, type MarginKey, type PageBox } from './DocRulers';
 import { PageSetupSheet } from './PageSetupSheet';
-import { FastDocToolbar } from './FastDocToolbar';
+import { FastDocToolbar, Palette, Pop } from './FastDocToolbar';
+import { OClearFormat } from '@/shared/ui/OfficeIcons';
 import { DocNavigation } from './DocNavigation';
 import { DocLinkSheet } from './DocLinkSheet';
 import { buildSegment, fillFields, newSegmentId, PAGE_TOKEN, PAGES_TOKEN, readSegment, segmentStyled, type SegKind } from './docHeaderFooter';
@@ -409,6 +410,7 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
   }, [editor, readOnly]);
   // Своё контекстное меню (в стиле Шара) вместо меню браузера; Shift+ПКМ — системное (там подсказки орфографии).
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [cellColorAt, setCellColorAt] = useState<{ x: number; y: number } | null>(null);
 
   // Своя позиция — коллегам; курсор в прокомментированном тексте — открыть ветку (только при настоящем движении).
   const onCursorRef = useRef(onCursor);
@@ -478,6 +480,15 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
           { type: 'paragraph' },
         ]).setTextSelection(at + 3).run();
       },
+      // Таблица: «Вставка → Таблица» без выбора размера — 3×3, как быстрый вариант; размер выбирается кнопкой в панели.
+      'doc.operation.create-table': run((c) => c.insertTable({ rows: 3, cols: 3, withHeaderRow: false })),
+      'doc.command.table-insert-row-above': run((c) => c.addRowBefore()),
+      'doc.command.table-insert-row-bellow': run((c) => c.addRowAfter()),
+      'doc.command.table-insert-column-left': run((c) => c.addColumnBefore()),
+      'doc.command.table-insert-column-right': run((c) => c.addColumnAfter()),
+      'doc.table.delete-rows': run((c) => c.deleteRow()),
+      'doc.table.delete-columns': run((c) => c.deleteColumn()),
+      'doc.table.delete-table': run((c) => c.deleteTable()),
       'docs.operation.open-page-setting': () => setPageSetup(true),
       'doc.command.open-header-footer-panel': () => startHfRef.current('headers'),
       'shar.insert.emoji': pickAt('emoji'),
@@ -609,7 +620,14 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
           </div>
         </div>
         {menuAt && editor && <DocContextMenu editor={editor} at={menuAt} readOnly={readOnly} onClose={() => setMenuAt(null)} onAddComment={onAddComment}
-          onLink={() => commands['doc.operation.show-hyper-link-edit-popup']?.()} />}
+          onLink={() => commands['doc.operation.show-hyper-link-edit-popup']?.()} onCellColor={() => setCellColorAt(menuAt)} />}
+        {cellColorAt && editor && (
+          <Pop anchor={new DOMRect(cellColorAt.x, cellColorAt.y, 0, 0)} trigger={editor.view.dom} onClose={() => setCellColorAt(null)}>
+            <Palette current={String(editor.getAttributes('tableCell').background || '')} resetLabel="Без заливки" ResetIcon={OClearFormat}
+              onReset={() => { editor.chain().focus().setCellAttribute('background', null).run(); setCellColorAt(null); }}
+              onPick={(c) => { editor.chain().focus().setCellAttribute('background', c).run(); setCellColorAt(null); }} />
+          </Pop>
+        )}
       </div>
       {/* Структура, страницы, слова, поиск — полосой под листом (внизу окна), чтобы верх был одной панелью. */}
       {editor && <DocNavigation editor={editor} pages={pages} onFind={() => openFind.current()} />}

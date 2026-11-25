@@ -7,6 +7,7 @@ import {
   OFontSizeMinus, OFontSizePlus, OHighlightColor, OIncreaseIndent, OInsertImage, OInsertLink, OItalic, OLineSpacing, ONumberedList, OPaintFormat, OPrint,
   ORedo, OSpecialCharacter, OStrikethrough, OSubscript, OSuperscript, OTextColor, OUnderline, OUndo,
 } from '@/shared/ui/OfficeIcons';
+import { PaintBucket, Table as TableIcon } from 'lucide-react';
 
 /**
  * Панель оформления своего редактора — в порядке и с набором Google Документов (и прежнего Univer):
@@ -65,7 +66,7 @@ function patchPs(editor: Editor, patch: (ps: Ps) => Ps) {
 }
 
 /** Всплывающая панель у кнопки (палитра, списки выбора). Закрывается кликом мимо и Esc. */
-function Pop({ anchor, trigger, onClose, children, className }: { anchor: DOMRect; trigger: HTMLElement; onClose: () => void; children: ReactNode; className?: string }) {
+export function Pop({ anchor, trigger, onClose, children, className }: { anchor: DOMRect; trigger: HTMLElement; onClose: () => void; children: ReactNode; className?: string }) {
   const box = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const el = box.current;
@@ -110,7 +111,7 @@ function Pop({ anchor, trigger, onClose, children, className }: { anchor: DOMRec
   );
 }
 
-function Palette({ current, onPick, onReset, resetLabel, ResetIcon }: { current: string; onPick: (c: string) => void; onReset: () => void; resetLabel: string; ResetIcon: typeof OClearFormat }) {
+export function Palette({ current, onPick, onReset, resetLabel, ResetIcon }: { current: string; onPick: (c: string) => void; onReset: () => void; resetLabel: string; ResetIcon: typeof OClearFormat }) {
   const cur = current.toLowerCase();
   const sw = (c: string) => (
     <button key={c} type="button" className="fdoc-sw" style={{ background: c }} data-light={GRAYS.indexOf(c) >= 6 || undefined}
@@ -153,6 +154,8 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink, zoom }: {
       return {
         bold: e.isActive('bold'), italic: e.isActive('italic'), underline: e.isActive('underline'), strike: e.isActive('strike'),
         sub: e.isActive('subscript'), sup: e.isActive('superscript'),
+        table: e.isActive('table'),
+        cellBg: String(e.getAttributes('tableCell').background || ''),
         bullet: e.isActive('bulletList'), ordered: e.isActive('orderedList'), task: e.isActive('taskList'), link: e.isActive('link'),
         align: (['center', 'right', 'justify'] as const).find((a) => e.isActive({ textAlign: a })) ?? 'left',
         style,
@@ -296,6 +299,14 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink, zoom }: {
         <span className="fdoc-sep" />
         {btn('link', 'Вставить ссылку (Ctrl+K)', st.link, <OInsertLink size={18} />, onLink)}
         {btn('img', 'Вставить изображение', false, <OInsertImage size={18} />, onPicture)}
+        <button type="button" className="fdoc-btn" title="Вставить таблицу" aria-label="Вставить таблицу" onMouseDown={(e) => e.preventDefault()} onClick={open('table')} aria-expanded={pop?.kind === 'table'}>
+          <TableIcon size={17} strokeWidth={1.75} aria-hidden="true" />
+        </button>
+        {st.table && (
+          <button type="button" className="fdoc-btn fdoc-color" title="Цвет ячейки" aria-label="Цвет ячейки" onMouseDown={(e) => e.preventDefault()} onClick={open('cell')} aria-expanded={pop?.kind === 'cell'}>
+            <PaintBucket size={17} strokeWidth={1.75} style={{ color: st.cellBg || undefined }} aria-hidden="true" />
+          </button>
+        )}
         <span className="fdoc-sep" />
         <button type="button" className="fdoc-btn fdoc-btn-drop" title="Выравнивание" aria-label="Выравнивание" onMouseDown={(e) => e.preventDefault()} onClick={open('align')} aria-expanded={pop?.kind === 'align'}>
           <AlignIcon size={16} /><OChevronDown size={12} aria-hidden="true" />
@@ -357,6 +368,16 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink, zoom }: {
           <Palette current={st.bg} resetLabel="Без выделения" ResetIcon={OClearFormat} onReset={() => { run((c) => c.unsetBackgroundColor()); close(); }} onPick={(c) => { run((ch) => ch.setBackgroundColor(c)); close(); }} />
         </Pop>
       )}
+      {pop?.kind === 'table' && (
+        <Pop anchor={pop.at} trigger={pop.trigger} onClose={close}>
+          <TableGrid onPick={(rows, cols) => { run((c) => c.insertTable({ rows, cols, withHeaderRow: false })); close(); }} />
+        </Pop>
+      )}
+      {pop?.kind === 'cell' && (
+        <Pop anchor={pop.at} trigger={pop.trigger} onClose={close}>
+          <Palette current={st.cellBg} resetLabel="Без заливки" ResetIcon={OClearFormat} onReset={() => { run((c) => c.setCellAttribute('background', null)); close(); }} onPick={(c) => { run((ch) => ch.setCellAttribute('background', c)); close(); }} />
+        </Pop>
+      )}
       {pop?.kind === 'align' && (
         <Pop anchor={pop.at} trigger={pop.trigger} onClose={close} className="fdoc-pop-row">
           {btn('al', 'По левому краю (Ctrl+Shift+L)', st.align === 'left', <OAlignLeft size={18} />, () => { run((c) => c.setTextAlign('left')); close(); })}
@@ -376,6 +397,26 @@ export function FastDocToolbar({ editor, onPicture, onPick, onLink, zoom }: {
           <button type="button" className="fdoc-pop-item" onClick={() => { patchPs(editor, (ps) => ({ ...ps, spaceBelow: { v: ptOf(ps.spaceBelow) ? 0 : 10 } })); close(); }}>Интервал после абзаца — добавить/убрать</button>
         </Pop>
       )}
+    </div>
+  );
+}
+
+/** Выбор размера новой таблицы — сетка, как в Google Документах: наведение подсвечивает строки×столбцы. */
+function TableGrid({ onPick }: { onPick: (rows: number, cols: number) => void }) {
+  const [hover, setHover] = useState<[number, number]>([1, 1]);
+  const ROWS = 8;
+  const COLS = 10;
+  return (
+    <div className="fdoc-tgrid" onMouseLeave={() => setHover([1, 1])}>
+      <div className="fdoc-tgrid-cells" style={{ gridTemplateColumns: `repeat(${COLS}, 18px)` }}>
+        {Array.from({ length: ROWS * COLS }, (_, i) => {
+          const r = Math.floor(i / COLS) + 1;
+          const c = (i % COLS) + 1;
+          return <button key={i} type="button" className="fdoc-tgrid-cell" data-on={r <= hover[0] && c <= hover[1] || undefined}
+            aria-label={`${r} × ${c}`} onMouseEnter={() => setHover([r, c])} onFocus={() => setHover([r, c])} onClick={() => onPick(r, c)} />;
+        })}
+      </div>
+      <div className="fdoc-tgrid-label">{hover[0]} × {hover[1]}</div>
     </div>
   );
 }

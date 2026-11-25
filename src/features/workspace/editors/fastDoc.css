@@ -352,3 +352,18 @@ html:not([data-theme="graphite"]):not([data-theme="black"]) .fdoc-content [data-
 .fdoc-image-handle:focus-visible { outline: 2px solid var(--page-text); outline-offset: 2px; }
 .fdoc-image.is-resizing::after { content: attr(data-size); position: absolute; right: 0; bottom: 16px; padding: 6px 8px; border-radius: var(--radius-xs); background: var(--surface-panel); color: var(--text-main); font: 12px/1.3 system-ui; box-shadow: var(--float); pointer-events: none; }
 .fdoc[data-readonly="true"] .fdoc-image-handle { display: none; }
+
+/* ── Таблицы: тонкие границы как в Google Документах, выделенные ячейки — заливкой акцента, ширина — ручкой у границы. */
+.fdoc-flow table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 6pt 0; overflow: hidden; }
+.fdoc-flow td, .fdoc-flow th { border: 1px solid var(--fdoc-rule, #b7bcc5); padding: 5px 10px; vertical-align: top; position: relative; min-width: 40px; box-sizing: border-box; }
+.fdoc-flow td > p, .fdoc-flow th > p { margin: 0; }
+.fdoc-flow .tableWrapper { overflow-x: auto; margin: 6pt 0; }
+.fdoc-flow .tableWrapper table { margin: 0; }
+.fdoc-flow .selectedCell::after { content: ''; position: absolute; inset: 0; background: color-mix(in srgb, var(--accent-color) 18%, transparent); pointer-events: none; }
+.fdoc-flow .column-resize-handle { position: absolute; right: -2px; top: 0; bottom: -2px; width: 4px; background: var(--accent-color); pointer-events: none; }
+.fdoc-flow.resize-cursor, .fdoc-flow .resize-cursor { cursor: col-resize; }
+.fdoc-tgrid { padding: 8px; }
+.fdoc-tgrid-cells { display: grid; gap: 3px; }
+.fdoc-tgrid-cell { width: 18px; height: 18px; padding: 0; border: 1px solid var(--border-color); border-radius: 2px; background: transparent; cursor: pointer; }
+.fdoc-tgrid-cell[data-on] { background: color-mix(in srgb, var(--accent-color) 30%, transparent); border-color: var(--accent-color); }
+.fdoc-tgrid-label { margin-top: 6px; text-align: center; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
