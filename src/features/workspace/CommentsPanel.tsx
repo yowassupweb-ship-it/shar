@@ -6,6 +6,8 @@ import { showToast } from '@/shared/ui/Toast';
 import { myId } from '@/shared/session/session';
 import type { Comment, CommentAnchor } from './types';
 import type { Thread, useComments } from './useComments';
+// Стили панели — здесь: панель живёт и вне «Офиса» (комментарии задач).
+import './workspace.css';
 
 type Comments = ReturnType<typeof useComments>;
 
@@ -163,7 +165,7 @@ function ThreadCard({ thread, comments, canModerate, active, onJump, onActivate 
  * ветки с ответами, «Решено» убирает ветку в архив, у каждой — переход к месту в материале.
  */
 export function CommentsPanel({ comments, canModerate, getAnchor, onJump, onClose, kind, focusTick = 0, focusCell = null }: {
-  comments: Comments; canModerate: boolean; kind: 'document' | 'table';
+  comments: Comments; canModerate: boolean; kind: 'document' | 'table' | 'task';
   getAnchor: () => CommentAnchor | null; onJump?: (anchor: CommentAnchor) => void; onClose: () => void;
   /** Меняется — поставить курсор в поле нового комментария. */
   focusTick?: number;

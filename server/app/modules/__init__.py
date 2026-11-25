@@ -42,6 +42,7 @@ def _collect() -> list[APIRouter]:
     from app.modules.search import router as search
     from app.modules.studio import router as studio
     from app.modules.social import router as social
+    from app.modules.todos import comments as todos_comments
     from app.modules.todos import folders as todos_folders
     from app.modules.todos import router as todos
     from app.modules.users import router as users
@@ -64,7 +65,7 @@ def _collect() -> list[APIRouter]:
     mods = [
         auth, users, departments, chats, messages, receipts, chat_notifications, inline,
         realtime, calls_rooms, calls_signaling, mail_messages, mail_avatars, mail_folder_rules, mail_sync, accounts, mailboxes, email_chat_rules,
-        cloud, computer, contacts, uploads, avatars, backgrounds, stickers, calendar_workdays, calendar, todos_folders, todos, notifications, push, requests_mod, admin,
+        cloud, computer, contacts, uploads, avatars, backgrounds, stickers, calendar_workdays, calendar, todos_folders, todos_comments, todos, notifications, push, requests_mod, admin,
         client_errors, health, utm, og, chats_scheduled, leads, social, integrations, workspace_folders, workspace, workspace_public, search, birthdays,
         mcp_keys, mcp, core_chat, core_accounts, core_hidden, core_integrations, core_mcp_servers, core_memory, core_node, core_task_agent, core_tours, usage, studio,
     ]

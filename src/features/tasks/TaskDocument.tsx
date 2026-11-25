@@ -1,7 +1,7 @@
 import { createPortal } from 'react-dom';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import {
-  AlertCircle, ArrowLeft, Bot, CalendarDays, Check, ChevronDown, Cloud, Eye, FileText, Flag, FolderClosed, FolderPlus, History, Link2, MoreHorizontal, Paperclip, Pencil,
+  AlertCircle, ArrowLeft, Bot, CalendarDays, Check, ChevronDown, Cloud, Eye, FileText, Flag, FolderClosed, FolderPlus, MessageSquare, History, Link2, MoreHorizontal, Paperclip, Pencil,
   Repeat, Search, Trash2, UserPlus,
 } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
@@ -18,6 +18,10 @@ import { DatePicker } from '@/shared/ui/DatePicker';
 import { parseDue } from './due';
 import { TaskVersionsSheet } from './VersionsSheet';
 import { FolderSheet } from './Folders';
+import { CommentsPanel } from '@/features/workspace/CommentsPanel';
+import { useCommentSource } from '@/features/workspace/useComments';
+import type { CommentAnchor } from '@/features/workspace/types';
+import { findQuote, SelectionCommentButton, selectionAnchor, taskCommentSource, TaskTextMenu, useQuoteHighlights } from './TaskComments';
 // Визуальный редактор (TipTap) — отдельным куском: список задач открывается без него.
 const VisualEditor = lazy(() => import('@/shared/markdown/VisualEditor').then((m) => ({ default: m.VisualEditor })));
 import { AgentReports, AgentSheet } from './AgentTask';
@@ -86,6 +90,53 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
   const [people, setPeople] = useState<'assignees' | 'customer' | null>(null);
   const [versions, setVersions] = useState(false);
   const [newFolder, setNewFolder] = useState(false);
+
+  // ── Комментарии, как в документах: панель справа (открыта/закрыта — помним), ветки к выделенному тексту ──
+  const [cmOpen, setCmOpenState] = useState(() => { try { return localStorage.getItem('nx:task-comments') === '1'; } catch { return false; } });
+  const setCmOpen = (v: boolean) => { setCmOpenState(v); try { localStorage.setItem('nx:task-comments', v ? '1' : '0'); } catch { /* без памяти */ } };
+  const commentSource = useMemo(() => taskCommentSource(draft ? null : task.id), [draft, task.id]);
+  const comments = useCommentSource(commentSource);
+  const [cmFocus, setCmFocus] = useState(0);
+  const [cmThread, setCmThread] = useState<{ sheet: string; cell: string; quote?: string; tick: number } | null>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const [textMenu, setTextMenu] = useState<{ x: number; y: number } | null>(null);
+  // Привязка — последнее выделение в тексте задачи: в поле комментария фокус уходит из текста, и выделение гаснет.
+  const lastAnchor = useRef<CommentAnchor | null>(null);
+  useEffect(() => {
+    const onSel = () => {
+      const sel = window.getSelection();
+      const el = pageRef.current;
+      if (!el || !sel || !sel.rangeCount || !el.contains(sel.getRangeAt(0).commonAncestorContainer)) return;
+      lastAnchor.current = selectionAnchor(el);
+    };
+    document.addEventListener('selectionchange', onSel);
+    return () => document.removeEventListener('selectionchange', onSel);
+  }, []);
+  const getCommentAnchor = useCallback(() => lastAnchor.current, []);
+  const startComment = useCallback(() => {
+    if (draft) { showToast('Комментарии — после создания задачи', 'info'); return; }
+    lastAnchor.current = selectionAnchor(pageRef.current) ?? lastAnchor.current;
+    setCmOpen(true);
+    setCmFocus((n) => n + 1);
+  }, [draft]);
+  const quotes = useMemo(() => comments.open.map((t) => (t.root.anchor && 'kind' in t.root.anchor && t.root.anchor.kind === 'text' ? t.root.anchor.quote : '')).filter(Boolean), [comments.open]);
+  const quoteAt = useQuoteHighlights(pageRef, quotes, `${md}${mode}${title}`);
+  const jumpToQuote = (anchor: CommentAnchor) => {
+    if (anchor.kind !== 'text' || !pageRef.current) return;
+    const range = findQuote(pageRef.current, anchor.quote);
+    if (!range) { showToast('Этого текста в задаче больше нет', 'info'); return; }
+    (range.startContainer.parentElement)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  };
+  // Щелчок по подсвеченному тексту — открыть его ветку.
+  const onPageClick = (e: React.MouseEvent) => {
+    const quote = quoteAt(e.clientX, e.clientY);
+    if (!quote) return;
+    setCmOpen(true);
+    setCmThread({ sheet: '', cell: '', quote, tick: Date.now() });
+  };
   const assigneeHover = useHoverCard();
   // Поручение агенту «Ядра»: чип показываем, если «Ядро» человеку включено.
   const agentOn = useAgentBridge((s) => s.available);
@@ -170,11 +221,12 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); void save(); }
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && draft) { e.preventDefault(); void publish(); }
+      if ((e.ctrlKey || e.metaKey) && e.altKey && e.code === 'KeyM') { e.preventDefault(); startComment(); }
       if (e.key === 'Escape' && mode !== 'preview' && !document.querySelector('.nx-scrim, .nx-menu')) { e.preventDefault(); finishEditing(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [save, mode, finishEditing, draft, publish]);
+  }, [save, mode, finishEditing, draft, publish, startComment]);
 
   // В правке — фокус в заголовок.
   useEffect(() => {
@@ -288,6 +340,7 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
   const open = (kind: 'status' | 'priority' | 'list' | 'more' | 'date' | 'repeat' | 'attach') => (e: React.MouseEvent<HTMLButtonElement>) => setMenu({ kind, anchor: { element: e.currentTarget, align: kind === 'more' ? 'end' : 'start' } });
 
   return (
+    <div className="ntd-shell" data-comments={cmOpen && !draft ? 'true' : undefined}>
     <section className="ntd" aria-label={title || 'Задача'}>
       <header className="ntd-bar">
         <button type="button" className="nx-icon-btn ntd-back" onClick={onBack} aria-label="К списку задач"><ArrowLeft size={20} aria-hidden="true" /></button>
@@ -309,6 +362,13 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
             : state === 'saving' || state === 'pending' ? <span><Spinner size={13} /> Сохраняю</span>
               : <span><Check size={13} aria-hidden="true" /> Сохранено</span>}
         </span>
+        )}
+        {!draft && (
+          <button type="button" className="nx-icon-btn ntd-cm-btn" aria-pressed={cmOpen} onClick={() => setCmOpen(!cmOpen)}
+            title={cmOpen ? 'Скрыть комментарии' : 'Комментарии (выделите текст и Ctrl+Alt+M)'} aria-label="Комментарии">
+            <MessageSquare size={18} aria-hidden="true" />
+            {comments.open.length > 0 && <span className="ntd-cm-count">{comments.open.length}</span>}
+          </button>
         )}
         <button type="button" className="nx-icon-btn" onClick={open('more')} aria-label="Ещё действия" aria-haspopup="menu"><MoreHorizontal size={18} /></button>
       </header>
@@ -364,7 +424,13 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
       {agentOn && !draft && <AgentReports task={task} version={agentVersion} onOpen={openAgent} />}
       <input ref={filePick} type="file" multiple hidden onChange={(e) => { void uploadFiles([...(e.target.files ?? [])]); e.target.value = ''; }} />
 
-      <div className="ntd-scroll nx-scroll-y">
+      <div className="ntd-scroll nx-scroll-y" ref={pageRef} onClick={onPageClick}
+        onContextMenu={(e) => {
+          // Своё меню — только над текстом; Shift+ПКМ — системное (подсказки орфографии).
+          if (e.shiftKey || !(e.target as HTMLElement).closest('.ntd-read, .nve-content')) return;
+          e.preventDefault();
+          setTextMenu({ x: e.clientX, y: e.clientY });
+        }}>
         {editing ? (
           <div className="ntd-page">
             <textarea
@@ -488,6 +554,13 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
         />
       )}
     </section>
+      {cmOpen && !draft && (
+        <CommentsPanel comments={comments} kind="task" canModerate={String(task.authorId || '') === myId()} getAnchor={getCommentAnchor}
+          onJump={jumpToQuote} focusTick={cmFocus} focusCell={cmThread} onClose={() => setCmOpen(false)} />
+      )}
+      {!draft && <SelectionCommentButton root={pageRef} onComment={startComment} />}
+      {textMenu && <TaskTextMenu at={textMenu} editable={editing && !viewOnly} root={pageRef.current} onComment={draft ? undefined : startComment} onClose={() => setTextMenu(null)} />}
+    </div>
   );
 }
 
