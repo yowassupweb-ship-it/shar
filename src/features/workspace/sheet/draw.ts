@@ -1,0 +1,319 @@
+import { a1, autoAlign, colName, displayText, HEAD_H, HEAD_W, indexAt, styleOf, type Book, type Range, type Sheet, type Style } from './model';
+
+/**
+ * Отрисовка листа на холсте (как у Google Таблиц): холст размером с окно прилипает к краю области прокрутки, а на
+ * каждый кадр прокрутки рисуются только видимые ячейки. Никакой перестройки элементов страницы — прокрутка ровная
+ * на любых размерах таблицы.
+ *
+ * Координаты: столбец c на экране — HEAD_W + colOffs[c] − (c ≥ закреплённых ? scrollX : 0); строки так же.
+ */
+
+export interface Geo {
+  rows: number; cols: number; rowOffs: Float64Array; colOffs: Float64Array;
+  fr: number; fc: number; fh: number; fw: number; merges: Map<string, Range>;
+}
+export interface Theme {
+  bg: string; text: string; grid: string; head: string; headText: string; headOn: string; headFull: string; sel: string; selFill: string; borderAuto: string; frozenLine: string; dark: boolean;
+}
+export interface Peer { name: string; color: string; range: Range }
+export interface DrawState {
+  book: Book; sheet: Sheet; geo: Geo; theme: Theme;
+  scrollX: number; scrollY: number; width: number; height: number; dpr: number;
+  sel: Range; active: Range; clip: Range | null; peers: Peer[]; marks: Set<string>;
+  filter: Range | null; filtered: Set<number>; hideActive?: boolean;
+}
+
+const BORDER_W: Record<number, number> = { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 3, 8: 2, 9: 2, 10: 2, 11: 2, 12: 2, 13: 3 };
+const DASH: Record<number, number[]> = { 2: [1, 1], 3: [1, 2], 4: [3, 2], 9: [4, 2] };
+
+const lightness = (hex: string) => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16));
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+};
+
+export function readTheme(el: Element): Theme {
+  const cs = getComputedStyle(el);
+  const v = (name: string, fallback: string) => cs.getPropertyValue(name).trim() || fallback;
+  const bg = v('--sh-bg', '#fff');
+  return {
+    bg, text: v('--sh-text', '#1f1f1f'), grid: v('--sh-grid', '#e2e3e3'), head: v('--sh-head', '#f8f9fa'), headText: v('--sh-head-text', '#5f6368'),
+    headOn: v('--sh-head-on', '#d3e3fd'), headFull: v('--sh-head-full', '#0b57d0'), sel: v('--sh-sel', '#1a73e8'), selFill: v('--sh-sel-fill', 'rgba(26,115,232,.1)'),
+    borderAuto: v('--sh-border-auto', '#000'), frozenLine: v('--sh-head-text', '#5f6368'), dark: (lightness(bg) ?? 1) < 0.4,
+  };
+}
+
+/** Экранная x начала столбца c (и аналогично строки). */
+export const screenX = (g: Geo, c: number, scrollX: number) => HEAD_W + g.colOffs[c] - (c >= g.fc ? scrollX : 0);
+export const screenY = (g: Geo, r: number, scrollY: number) => HEAD_H + g.rowOffs[r] - (r >= g.fr ? scrollY : 0);
+
+function font(style: Style | null): string {
+  const size = typeof style?.fs === 'number' ? style.fs : 10;
+  const family = typeof style?.ff === 'string' && style.ff ? `"${style.ff.replace(/"/g, '')}", Arial, sans-serif` : 'Arial, sans-serif';
+  return `${style?.it ? 'italic ' : ''}${style?.bl ? '700 ' : ''}${size}pt ${family}`;
+}
+
+/** Перенос строк по словам под ширину. */
+function wrapLines(ctx: CanvasRenderingContext2D, text: string, width: number): string[] {
+  const out: string[] = [];
+  for (const para of text.split('\n')) {
+    let line = '';
+    for (const word of para.split(/(\s+)/)) {
+      const next = line + word;
+      if (line && ctx.measureText(next).width > width) { out.push(line.trimEnd()); line = word.trimStart(); } else line = next;
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+/** Нарисовать область листа: строки r0..r1, столбцы c0..c1, обрезанную прямоугольником clip. */
+function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1: number, c0: number, c1: number, clip: [number, number, number, number]) {
+  const { geo: g, sheet, book, theme } = s;
+  if (r1 < r0 || c1 < c0 || clip[2] <= 0 || clip[3] <= 0) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(clip[0], clip[1], clip[2], clip[3]);
+  ctx.clip();
+  ctx.fillStyle = theme.bg;
+  ctx.fillRect(clip[0], clip[1], clip[2], clip[3]);
+  const X = (c: number) => screenX(g, c, s.scrollX);
+  const Y = (r: number) => screenY(g, r, s.scrollY);
+
+  // Заливки (под сеткой нет — сетку заливка закрывает, как в Excel).
+  const drawn: Array<{ r: number; c: number; x: number; y: number; w: number; h: number; cell: NonNullable<Sheet['cellData'][number][number]>; style: Style | null }> = [];
+  const seenMerge = new Set<Range>();
+  const visit = (r: number, c: number) => {
+    let rr = r; let cc = c; let r2 = r; let c2 = c;
+    const m = g.merges.get(`${r}:${c}`);
+    if (m) { if (seenMerge.has(m)) return; seenMerge.add(m); rr = m.startRow; cc = m.startColumn; r2 = m.endRow; c2 = m.endColumn; }
+    const cell = sheet.cellData?.[rr]?.[cc];
+    if (!cell && !s.marks.size) return;
+    const x = X(cc); const y = Y(rr);
+    const w = X(c2 + 1) - x; const h = Y(r2 + 1) - y;
+    if (w <= 0 || h <= 0) return;
+    const style = cell ? styleOf(book, cell) : null;
+    if (cell) drawn.push({ r: rr, c: cc, x, y, w, h, cell, style });
+  };
+  for (let r = r0; r <= r1; r += 1) {
+    if (g.rowOffs[r + 1] === g.rowOffs[r]) continue;
+    const row = sheet.cellData?.[r];
+    if (row) for (const k of Object.keys(row)) { const c = Number(k); if (c >= c0 && c <= c1) visit(r, c); }
+  }
+  for (const m of sheet.mergeData || []) if (m.startRow <= r1 && r0 <= m.endRow && m.startColumn <= c1 && c0 <= m.endColumn) visit(m.startRow, m.startColumn);
+  // Объединённые — на фоне листа (поверх сетки внутри них).
+  for (const m of seenMerge) {
+    const x = X(m.startColumn); const y = Y(m.startRow);
+    ctx.fillStyle = theme.bg;
+    ctx.fillRect(x, y, X(m.endColumn + 1) - x, Y(m.endRow + 1) - y);
+  }
+
+  // Сетка.
+  ctx.fillStyle = theme.grid;
+  const top = Y(r0); const bottom = Y(r1 + 1); const left = X(c0); const right = X(c1 + 1);
+  for (let r = r0; r <= r1 + 1; r += 1) { if (r <= r1 && g.rowOffs[r + 1] === g.rowOffs[r]) continue; ctx.fillRect(left, Y(r) - 1, right - left, 1); }
+  for (let c = c0; c <= c1 + 1; c += 1) { if (c <= c1 && g.colOffs[c + 1] === g.colOffs[c]) continue; ctx.fillRect(X(c) - 1, top, 1, bottom - top); }
+  for (const m of seenMerge) {
+    const x = X(m.startColumn); const y = Y(m.startRow);
+    ctx.fillStyle = theme.bg;
+    ctx.fillRect(x, y, X(m.endColumn + 1) - x - 1, Y(m.endRow + 1) - y - 1);
+  }
+  for (const d of drawn) {
+    const bg = (d.style?.bg as { rgb?: string } | undefined)?.rgb;
+    if (bg) { ctx.fillStyle = bg; ctx.fillRect(d.x - 1, d.y - 1, d.w + 1, d.h + 1); }
+  }
+
+  // Текст.
+  ctx.textBaseline = 'alphabetic';
+  for (const d of drawn) {
+    const text = displayText(d.cell, d.style);
+    if (!text) continue;
+    const st = d.style;
+    ctx.font = font(st);
+    const bg = (st?.bg as { rgb?: string } | undefined)?.rgb;
+    let color = (st?.cl as { rgb?: string } | undefined)?.rgb || '';
+    const bgL = bg ? lightness(bg) : null;
+    if (!color) color = bg && bgL !== null ? (bgL > 0.55 ? '#1f1f1f' : '#f1f1f1') : theme.text;
+    else if (theme.dark && !bg) { const l = lightness(color); if (l !== null && l < 0.35) color = theme.text; }
+    ctx.fillStyle = color;
+    const h = ({ 1: 'left', 2: 'center', 3: 'right', 4: 'left' } as Record<number, 'left' | 'center' | 'right'>)[Number(st?.ht)] || autoAlign(d.cell);
+    const v = ({ 1: 'top', 2: 'middle', 3: 'bottom' } as Record<number, string>)[Number(st?.vt)] || 'bottom';
+    const size = (typeof st?.fs === 'number' ? st.fs : 10) * (96 / 72);
+    const lineH = Math.round(size * 1.25);
+    const wrap = st?.tb === 3;
+    const pad = 4;
+    // Переливание текста вправо в пустые ячейки (без переноса, по левому краю).
+    let clipW = d.w;
+    if (!wrap && h === 'left' && !g.merges.has(`${d.r}:${d.c}`)) {
+      const need = ctx.measureText(text).width + pad * 2;
+      let cc = d.c + 1;
+      while (clipW < need && cc < g.cols) {
+        const nb = sheet.cellData?.[d.r]?.[cc];
+        if ((nb && nb.v !== null && nb.v !== undefined && nb.v !== '') || g.merges.has(`${d.r}:${cc}`)) break;
+        clipW += g.colOffs[cc + 1] - g.colOffs[cc];
+        cc += 1;
+      }
+    }
+    const lines = wrap ? wrapLines(ctx, text, d.w - pad * 2) : text.split('\n');
+    const blockH = lines.length * lineH;
+    let y = v === 'top' ? d.y + 2 + size : v === 'middle' ? d.y + (d.h - blockH) / 2 + size : d.y + d.h - 4 - (lines.length - 1) * lineH;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(d.x, d.y, clipW, d.h);
+    ctx.clip();
+    if (bg) { ctx.fillStyle = bg; ctx.fillRect(d.x, d.y, d.w, d.h); ctx.fillStyle = color; }
+    else if (clipW > d.w) { ctx.fillStyle = theme.bg; ctx.fillRect(d.x + d.w, d.y, clipW - d.w - 1, d.h - 1); ctx.fillStyle = color; }
+    ctx.textAlign = h;
+    const x = h === 'left' ? d.x + pad : h === 'center' ? d.x + d.w / 2 : d.x + d.w - pad;
+    const under = (st?.ul as { s?: number } | undefined)?.s;
+    const strike = (st?.st as { s?: number } | undefined)?.s;
+    for (const line of lines) {
+      ctx.fillText(line, x, y);
+      if (under || strike) {
+        const wpx = ctx.measureText(line).width;
+        const lx = h === 'left' ? x : h === 'center' ? x - wpx / 2 : x - wpx;
+        if (under) ctx.fillRect(lx, y + 2, wpx, 1);
+        if (strike) ctx.fillRect(lx, y - size * 0.32, wpx, 1);
+      }
+      y += lineH;
+    }
+    ctx.restore();
+  }
+
+  // Границы ячеек.
+  for (const d of drawn) {
+    const bd = d.style?.bd as Record<string, { s?: number; cl?: { rgb?: string } } | null> | undefined;
+    if (!bd) continue;
+    for (const side of ['t', 'b', 'l', 'r'] as const) {
+      const b = bd[side];
+      if (!b?.s) continue;
+      const rgb = b.cl?.rgb;
+      ctx.strokeStyle = !rgb || /^#?0{6}$/.test(rgb) ? theme.borderAuto : rgb;
+      const lw = BORDER_W[b.s] ?? 1;
+      ctx.lineWidth = lw;
+      ctx.setLineDash(DASH[b.s] || []);
+      ctx.beginPath();
+      const o = lw % 2 ? 0.5 : 0;
+      if (side === 't') { ctx.moveTo(d.x - 1, d.y - 1 + o); ctx.lineTo(d.x + d.w, d.y - 1 + o); }
+      if (side === 'b') { ctx.moveTo(d.x - 1, d.y + d.h - 1 + o); ctx.lineTo(d.x + d.w, d.y + d.h - 1 + o); }
+      if (side === 'l') { ctx.moveTo(d.x - 1 + o, d.y - 1); ctx.lineTo(d.x - 1 + o, d.y + d.h); }
+      if (side === 'r') { ctx.moveTo(d.x + d.w - 1 + o, d.y - 1); ctx.lineTo(d.x + d.w - 1 + o, d.y + d.h); }
+      ctx.stroke();
+    }
+  }
+  ctx.setLineDash([]);
+
+  // Уголки комментариев.
+  if (s.marks.size) {
+    ctx.fillStyle = '#ff9f0a';
+    for (let r = r0; r <= r1; r += 1) for (let c = c0; c <= c1; c += 1) {
+      if (!s.marks.has(a1(r, c))) continue;
+      const xr = X(c + 1) - 1; const y = Y(r);
+      ctx.beginPath(); ctx.moveTo(xr - 8, y); ctx.lineTo(xr, y); ctx.lineTo(xr, y + 8); ctx.closePath(); ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+/** Прямоугольник диапазона на экране. */
+function rangeRect(s: DrawState, r: Range): [number, number, number, number] {
+  const x = screenX(s.geo, r.startColumn, s.scrollX); const y = screenY(s.geo, r.startRow, s.scrollY);
+  const x2 = screenX(s.geo, Math.min(r.endColumn + 1, s.geo.cols), s.scrollX); const y2 = screenY(s.geo, Math.min(r.endRow + 1, s.geo.rows), s.scrollY);
+  return [x, y, Math.max(0, x2 - x), Math.max(0, y2 - y)];
+}
+
+export function drawSheet(ctx: CanvasRenderingContext2D, s: DrawState) {
+  const { geo: g, theme, width: W, height: H } = s;
+  ctx.setTransform(s.dpr, 0, 0, s.dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  // Видимые строки и столбцы тела.
+  const r0 = Math.max(g.fr, indexAt(g.rowOffs, s.scrollY + g.fh));
+  const r1 = Math.min(g.rows - 1, indexAt(g.rowOffs, s.scrollY + H - HEAD_H) + 1);
+  const c0 = Math.max(g.fc, indexAt(g.colOffs, s.scrollX + g.fw));
+  const c1 = Math.min(g.cols - 1, indexAt(g.colOffs, s.scrollX + W - HEAD_W) + 1);
+  const bodyX = HEAD_W + g.fw; const bodyY = HEAD_H + g.fh;
+  drawRegion(ctx, s, r0, r1, c0, c1, [bodyX, bodyY, W - bodyX, H - bodyY]);
+  if (g.fr) drawRegion(ctx, s, 0, g.fr - 1, c0, c1, [bodyX, HEAD_H, W - bodyX, g.fh]);
+  if (g.fc) drawRegion(ctx, s, r0, r1, 0, g.fc - 1, [HEAD_W, bodyY, g.fw, H - bodyY]);
+  if (g.fr && g.fc) drawRegion(ctx, s, 0, g.fr - 1, 0, g.fc - 1, [HEAD_W, HEAD_H, g.fw, g.fh]);
+  // Черта закрепления.
+  ctx.fillStyle = theme.frozenLine;
+  if (g.fr) ctx.fillRect(HEAD_W, bodyY - 1, W - HEAD_W, 2);
+  if (g.fc) ctx.fillRect(bodyX - 1, HEAD_H, 2, H - HEAD_H);
+
+  // Выделение, коллеги, буфер — поверх ячеек, под заголовками.
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(HEAD_W, HEAD_H, W - HEAD_W, H - HEAD_H);
+  ctx.clip();
+  for (const p of s.peers) {
+    const [x, y, w, h] = rangeRect(s, p.range);
+    ctx.strokeStyle = p.color; ctx.lineWidth = 2; ctx.strokeRect(x, y, w - 1, h - 1);
+    ctx.font = '600 10px Inter, Arial, sans-serif';
+    const tw = ctx.measureText(p.name).width + 10;
+    ctx.fillStyle = p.color; ctx.fillRect(x - 1, y - 15, tw, 14);
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.fillText(p.name, x + 4, y - 4);
+  }
+  if (s.clip) {
+    const [x, y, w, h] = rangeRect(s, s.clip);
+    ctx.strokeStyle = theme.sel; ctx.lineWidth = 2; ctx.setLineDash([5, 3]); ctx.strokeRect(x, y, w - 1, h - 1); ctx.setLineDash([]);
+  }
+  {
+    const [x, y, w, h] = rangeRect(s, s.sel);
+    ctx.fillStyle = theme.selFill; ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = theme.sel; ctx.lineWidth = 1; ctx.strokeRect(x - 0.5, y - 0.5, w, h);
+    if (!s.hideActive) {
+      const [ax, ay, aw, ah] = rangeRect(s, s.active);
+      ctx.lineWidth = 2; ctx.strokeRect(ax - 1, ay - 1, aw + 1, ah + 1);
+      // Квадратик автозаполнения — в правом нижнем углу выделения.
+      ctx.fillStyle = theme.sel; ctx.fillRect(x + w - 4, y + h - 4, 7, 7);
+      ctx.fillStyle = theme.bg; ctx.fillRect(x + w - 4, y + h - 5, 7, 1); ctx.fillRect(x + w - 5, y + h - 4, 1, 7);
+    }
+  }
+  ctx.restore();
+
+  // Заголовки столбцов.
+  const full = { cols: s.sel.startRow === 0 && s.sel.endRow >= g.rows - 1, rows: s.sel.startColumn === 0 && s.sel.endColumn >= g.cols - 1 };
+  const colHead = (c: number) => {
+    const x = screenX(g, c, s.scrollX); const w = g.colOffs[c + 1] - g.colOffs[c];
+    if (!w) return;
+    const on = c >= s.sel.startColumn && c <= s.sel.endColumn;
+    ctx.fillStyle = on ? (full.cols ? theme.headFull : theme.headOn) : theme.head; ctx.fillRect(x, 0, w, HEAD_H);
+    ctx.fillStyle = theme.grid; ctx.fillRect(x + w - 1, 0, 1, HEAD_H);
+    ctx.fillStyle = on && full.cols ? '#fff' : on ? theme.text : theme.headText;
+    ctx.font = `${on ? '600 ' : ''}11px Inter, Arial, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(colName(c), x + w / 2, HEAD_H / 2 + 1);
+    if (s.filter && c >= s.filter.startColumn && c <= s.filter.endColumn) {
+      // Стрелка фильтра — в заголовке столбца (щелчок открывает список).
+      const fx = x + w - 14; const fy = HEAD_H / 2;
+      ctx.fillStyle = theme.sel; ctx.beginPath(); ctx.moveTo(fx - 4, fy - 2); ctx.lineTo(fx + 4, fy - 2); ctx.lineTo(fx, fy + 3); ctx.closePath(); ctx.fill();
+    }
+  };
+  ctx.save(); ctx.beginPath(); ctx.rect(bodyX, 0, W - bodyX, HEAD_H); ctx.clip();
+  ctx.fillStyle = theme.head; ctx.fillRect(bodyX, 0, W - bodyX, HEAD_H);
+  for (let c = c0; c <= c1; c += 1) colHead(c);
+  ctx.restore();
+  for (let c = 0; c < g.fc; c += 1) colHead(c);
+  // Номера строк.
+  const rowHead = (r: number) => {
+    const y = screenY(g, r, s.scrollY); const h = g.rowOffs[r + 1] - g.rowOffs[r];
+    if (!h) return;
+    const on = r >= s.sel.startRow && r <= s.sel.endRow;
+    ctx.fillStyle = on ? (full.rows ? theme.headFull : theme.headOn) : theme.head; ctx.fillRect(0, y, HEAD_W, h);
+    ctx.fillStyle = theme.grid; ctx.fillRect(0, y + h - 1, HEAD_W, 1);
+    ctx.fillStyle = on && full.rows ? '#fff' : on ? theme.text : s.filtered.size && s.filter && r > s.filter.startRow && r <= s.filter.endRow ? theme.sel : theme.headText;
+    ctx.font = `${on ? '600 ' : ''}11px Inter, Arial, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(String(r + 1), HEAD_W / 2, y + h / 2 + 1);
+  };
+  ctx.save(); ctx.beginPath(); ctx.rect(0, bodyY, HEAD_W, H - bodyY); ctx.clip();
+  ctx.fillStyle = theme.head; ctx.fillRect(0, bodyY, HEAD_W, H - bodyY);
+  for (let r = r0; r <= r1; r += 1) rowHead(r);
+  ctx.restore();
+  for (let r = 0; r < g.fr; r += 1) rowHead(r);
+  ctx.fillStyle = theme.grid;
+  ctx.fillRect(HEAD_W - 1, 0, 1, H);
+  ctx.fillRect(0, HEAD_H - 1, W, 1);
+  ctx.fillStyle = theme.head; ctx.fillRect(0, 0, HEAD_W - 1, HEAD_H - 1);
+  ctx.textBaseline = 'alphabetic';
+}

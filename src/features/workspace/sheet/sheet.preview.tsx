@@ -73,3 +73,26 @@ export async function mountPair(): Promise<string> {
   );
   return 'ok';
 }
+
+/** Большая таблица для замера прокрутки: rows × cols, текст, числа, формулы, закреплённые строка и столбец. */
+export async function mountBig(rows = 3000, cols = 12): Promise<string> {
+  const book = await newBook();
+  const ws = book.worksheets[0];
+  for (let r = 1; r <= rows; r += 1) {
+    const row = ws.getRow(r);
+    for (let c = 1; c <= cols; c += 1) {
+      row.getCell(c).value = c === 1 ? `Строка ${r} https://vokrug-sveta.shar-os.ru/office?id=${r}` : c === cols ? ({ formula: `B${r}*C${r}`, result: 0 } as never) : (r * c) % 997;
+    }
+  }
+  ws.views = [{ state: 'frozen', ySplit: 1, xSplit: 1 }];
+  const content = await bookToBase64(book);
+  document.querySelectorAll('#fsh-preview').forEach((el) => el.remove());
+  host = document.createElement('div');
+  host.id = 'fsh-preview';
+  host.style.cssText = 'position:fixed;inset:40px;z-index:99999;display:flex;flex-direction:column;border:1px solid #888;';
+  host.className = 'nx';
+  document.body.appendChild(host);
+  root = createRoot(host);
+  root.render(<FastSheetEditor content={content} onContent={() => undefined} readOnly={false} loadKey={0} />);
+  return 'ok';
+}

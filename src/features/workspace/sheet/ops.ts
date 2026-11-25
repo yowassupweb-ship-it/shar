@@ -1,6 +1,7 @@
 import type { LiveOp } from '../live/channel';
 import { styleOf, type Book, type Cell, type Range, type Sheet, type Style, Styles } from './model';
 import { shiftRefs } from './refs';
+import { readFilters, writeFilters, type FilterColumn, type SheetFilter } from './filter';
 
 /** Формулы всей книги — вслед за вставкой или удалением строк (столбцов) листа (sheet/refs.ts). */
 function shiftFormulas(book: Book, target: Sheet, rows: boolean, start: number, delta: number) {
@@ -39,6 +40,9 @@ export const OP = {
   REMOVE_SHEET: 'sheet.mutation.remove-sheet',
   RENAME_SHEET: 'sheet.mutation.set-worksheet-name',
   FREEZE: 'sheet.mutation.set-frozen',
+  FILTER_RANGE: 'sheet.mutation.set-filter-range',
+  FILTER_CRITERIA: 'sheet.mutation.set-filter-criteria',
+  FILTER_REMOVE: 'sheet.mutation.remove-filter',
 } as const;
 
 type Matrix = Record<string, Record<string, Cell | null>>;
@@ -134,6 +138,17 @@ export function inverseOf(book: Book, op: LiveOp): LiveOp[] {
       return [{ id: OP.INSERT_SHEET, params: { index: book.sheetOrder.indexOf(sheet.id), sheet: { ...sheet, cellData } } }];
     }
     case OP.RENAME_SHEET: return sheet ? [{ id: OP.RENAME_SHEET, params: { subUnitId: p.subUnitId, name: sheet.name, oldName: p.name } }] : [];
+    case OP.FILTER_RANGE:
+    case OP.FILTER_CRITERIA:
+    case OP.FILTER_REMOVE: {
+      // Обратная к любой правке фильтра — вернуть его целиком: диапазон и условия каждого столбца (или убрать, если не было).
+      const prev = readFilters(book)[String(p.subUnitId)];
+      if (!prev) return [{ id: OP.FILTER_REMOVE, params: { subUnitId: p.subUnitId } }];
+      const back: LiveOp[] = [{ id: OP.FILTER_RANGE, params: { subUnitId: p.subUnitId, range: prev.ref, filteredOutRows: prev.cachedFilteredOut || [] } }];
+      const cols = new Set<number>([...(prev.filterColumns || []).map((c) => c.colId), ...(op.id === OP.FILTER_CRITERIA ? [Number(p.col)] : [])]);
+      for (const col of cols) back.push({ id: OP.FILTER_CRITERIA, params: { subUnitId: p.subUnitId, col, criteria: (prev.filterColumns || []).find((c) => c.colId === col) ?? null, filteredOutRows: prev.cachedFilteredOut || [] } });
+      return back;
+    }
     case OP.FREEZE: return sheet ? [{ id: OP.FREEZE, params: { subUnitId: p.subUnitId, ...(sheet.freeze || { startRow: -1, startColumn: -1, xSplit: 0, ySplit: 0 }) } }] : [];
     default: return [];
   }
@@ -296,6 +311,30 @@ export function applyOp(book: Book, styles: Styles, op: LiveOp): boolean {
       return true;
     }
     case OP.RENAME_SHEET: if (sheet) sheet.name = String(p.name || sheet.name); return true;
+    case OP.FILTER_RANGE: {
+      const all = readFilters(book);
+      const id = String(p.subUnitId);
+      const prev: SheetFilter | undefined = all[id];
+      all[id] = { ref: p.range as Range, filterColumns: prev?.filterColumns || [], cachedFilteredOut: (p.filteredOutRows as number[] | undefined) ?? prev?.cachedFilteredOut ?? [] };
+      writeFilters(book, all);
+      return true;
+    }
+    case OP.FILTER_CRITERIA: {
+      const all = readFilters(book);
+      const f = all[String(p.subUnitId)];
+      if (!f) return true;
+      const col = Number(p.col);
+      f.filterColumns = [...(f.filterColumns || []).filter((c) => c.colId !== col), ...(p.criteria ? [{ ...(p.criteria as FilterColumn), colId: col }] : [])];
+      if (Array.isArray(p.filteredOutRows)) f.cachedFilteredOut = p.filteredOutRows as number[];
+      writeFilters(book, all);
+      return true;
+    }
+    case OP.FILTER_REMOVE: {
+      const all = readFilters(book);
+      delete all[String(p.subUnitId)];
+      writeFilters(book, all);
+      return true;
+    }
     case OP.FREEZE: {
       if (!sheet) return true;
       const sr = Number(p.startRow); const sc = Number(p.startColumn);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import {
-  AlignVerticalJustifyCenter, AlignVerticalJustifyEnd, AlignVerticalJustifyStart, ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine, ArrowUpToLine,
+  AlignVerticalJustifyCenter, ArrowDownAZ, ArrowUpZA, Filter, AlignVerticalJustifyEnd, AlignVerticalJustifyStart, ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine, ArrowUpToLine,
   ClipboardPaste, Columns2, Copy, Eraser, Grid2x2, MessageSquarePlus, Percent, Plus, RussianRuble, Scissors, Sigma, Snowflake, Square, TableCellsMerge,
   TableCellsSplit, Trash2, WrapText,
 } from 'lucide-react';
@@ -14,12 +14,15 @@ import { applySnapshot, bookFromBase64, bookToBase64, excelToUniver } from '../l
 import type { LiveOp } from '../live/channel';
 import { recalc, shiftFormula } from '../sheet/formulas';
 import {
-  a1, autoAlign, cellAt, colName, colWidth, displayText, editText, HEAD_H, HEAD_W, indexAt, inRange, mergeIndex, norm, offsets, parseA1, parseInput, parseRange,
+  a1, cellAt, colName, colWidth, displayText, editText, HEAD_H, HEAD_W, indexAt, inRange, mergeIndex, norm, offsets, parseA1, parseInput, parseRange,
   rangeA1, rowHeight, styleOf, Styles, usedBounds, type Book, type Cell, type Pos, type Range, type Sheet, type Style,
 } from '../sheet/model';
 import { applyOp, inverseOf, OP, wireCell } from '../sheet/ops';
+import { drawSheet, readTheme, screenX, screenY } from '../sheet/draw';
+import { dataRegion, filteredRows, readFilters, type FilterColumn } from '../sheet/filter';
 import { Palette, Pop } from './FastDocToolbar';
 import { FindBar } from './FindBar';
+import { FilterMenu } from './SheetFilterMenu';
 import type { EditorProps } from './types';
 import './fastDoc.css';
 import './fastSheet.css';
@@ -75,7 +78,9 @@ function cellCss(style: Style | null): { css: CSSProperties; ink?: string; wrap:
   }
   const bd = style.bd as Record<string, { s?: number; cl?: { rgb?: string } } | null> | undefined;
   if (bd) {
-    const side = (k: string) => { const b = bd[k]; return b?.s ? `${BORDER_W[b.s] ?? 1}px ${BORDER_KIND[b.s] ?? 'solid'} ${b.cl?.rgb || '#000'}` : undefined; };
+    // Цвет «авто» (не задан или чёрный) — цветом текста листа: в тёмной теме чёрные границы были тяжёлыми тёмными полосами.
+    const auto = (c?: string) => (!c || /^#?0{6}$/.test(c) ? 'var(--sh-border-auto)' : c);
+    const side = (k: string) => { const b = bd[k]; return b?.s ? `${BORDER_W[b.s] ?? 1}px ${BORDER_KIND[b.s] ?? 'solid'} ${auto(b.cl?.rgb)}` : undefined; };
     css.borderTop = side('t'); css.borderBottom = side('b'); css.borderLeft = side('l'); css.borderRight = side('r');
   }
   const h = ({ 1: 'left', 2: 'center', 3: 'right', 4: 'justify' } as Record<number, string>)[Number(style.ht)];
@@ -105,7 +110,7 @@ const tsvCell = (s: string) => (/[\t\n"]/.test(s) ? `"${s.replace(/"/g, '""')}"`
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 export default function FastSheetEditor({ content, onContent, readOnly, loadKey, cursors = [], onCursor, live, commentsBridge, commentCells = NO_CELLS, onAddComment, onCommentCell }: EditorProps) {
-  const [, bump] = useReducer((n: number) => n + 1, 0);
+  const [version, bump] = useReducer((n: number) => n + 1, 0);
   const book = useRef<Book | null>(null);
   const excel = useRef<ExcelWorkbook | null>(null);
   const styles = useRef<Styles | null>(null);
@@ -227,15 +232,12 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   sheetIdRef.current = sheetId;
 
   // ── Геометрия: смещения строк и столбцов, закрепление, объединения, отфильтрованные строки. ──
-  const filteredOut = useMemo(() => {
-    const out = new Set<number>();
-    const res = b?.resources?.find((r) => r.name === 'SHEET_FILTER_PLUGIN');
-    try { const data = res?.data ? JSON.parse(res.data) as Record<string, { cachedFilteredOut?: number[] }> : {}; for (const r of data[sheetId]?.cachedFilteredOut || []) out.add(r); } catch { /* без фильтра */ }
-    return out;
-  }, [b, sheetId, sheet?.rowCount]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Пересчёт на каждый рендер: дёшево, а правки меняют лист на месте.
-  const geo = (() => {
+  // Пересчёт — только при правках (version) и смене листа: прокрутка их не трогает (раньше считалось на каждый кадр).
+  const geo = useMemo(() => {
     if (!sheet) return null;
+    const filteredOut = new Set<number>();
+    const res = b?.resources?.find((r) => r.name === 'SHEET_FILTER_PLUGIN');
+    try { const data = res?.data ? JSON.parse(res.data) as Record<string, { cachedFilteredOut?: number[] }> : {}; for (const r of data[sheetId]?.cachedFilteredOut || []) filteredOut.add(r); } catch { /* без фильтра */ }
     const rows = Math.max(sheet.rowCount || 100, 100);
     const cols = Math.max(sheet.columnCount || 26, 26);
     const rowOffs = offsets(rows, (r) => (filteredOut.has(r) ? 0 : rowHeight(sheet, r)));
@@ -243,7 +245,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     const fr = sheet.freeze && sheet.freeze.ySplit > 0 ? Math.min(rows, sheet.freeze.startRow) : 0;
     const fc = sheet.freeze && sheet.freeze.xSplit > 0 ? Math.min(cols, sheet.freeze.startColumn) : 0;
     return { rows, cols, rowOffs, colOffs, fr, fc, fh: rowOffs[fr], fw: colOffs[fc], merges: mergeIndex(sheet) };
-  })();
+  }, [sheet, b, sheetId, version]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Размер окна сетки.
   useLayoutEffect(() => {
@@ -295,12 +297,6 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   }, [sel.anchor.row, sel.anchor.col, sheet?.name]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Координаты: ячейка ↔ точка окна (с учётом закрепления) ──
-  const cellRect = useCallback((r: number, c: number, r2 = r, c2 = c) => {
-    if (!geo) return { x: 0, y: 0, w: 0, h: 0 };
-    const x = HEAD_W + geo.colOffs[c] + (c < geo.fc ? scroll.x : 0);
-    const y = HEAD_H + geo.rowOffs[r] + (r < geo.fr ? scroll.y : 0);
-    return { x, y, w: geo.colOffs[Math.min(c2 + 1, geo.cols)] - geo.colOffs[c], h: geo.rowOffs[Math.min(r2 + 1, geo.rows)] - geo.rowOffs[r] };
-  }, [geo, scroll]);
   const hit = useCallback((clientX: number, clientY: number) => {
     const el = grid.current;
     if (!el || !geo) return null;
@@ -585,8 +581,54 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     window.requestAnimationFrame(() => { const el = editor.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } });
   };
 
-  // ── Мышь ──
-  const drag = useRef<{ kind: 'cells' | 'rows' | 'cols' | 'resize-col' | 'resize-row'; index?: number; start?: number; size?: number } | null>(null);
+  // ── Мышь: всё по координатам холста — ручки размера на границах заголовков, квадратик автозаполнения, стрелки фильтра ──
+  type Drag = { kind: 'cells' | 'rows' | 'cols' | 'resize-col' | 'resize-row' | 'fill'; index?: number; start?: number; size?: number };
+  const drag = useRef<Drag | null>(null);
+  const [guide, setGuide] = useState<{ axis: 'x' | 'y'; at: number } | null>(null);
+  const [fillTo, setFillTo] = useState<Range | null>(null);
+  const [filterMenu, setFilterMenu] = useState<{ col: number; x: number; y: number } | null>(null);
+
+  /** Что под курсором: граница столбца/строки в заголовке (для изменения размера), квадратик заполнения, стрелка фильтра. */
+  const handleAt = useCallback((clientX: number, clientY: number): { kind: 'resize-col' | 'resize-row' | 'fill' | 'filter'; index: number } | null => {
+    const el = grid.current;
+    if (!el || !geo) return null;
+    const box = el.getBoundingClientRect();
+    const lx = clientX - box.left; const ly = clientY - box.top;
+    const sx = el.scrollLeft; const sy = el.scrollTop;
+    if (ly >= 0 && ly < HEAD_H && lx > HEAD_W) {
+      const h0 = hit(clientX, clientY);
+      if (h0 && h0.col >= 0) {
+        const right = screenX(geo, h0.col + 1, sx); const left = screenX(geo, h0.col, sx);
+        if (Math.abs(lx - right) <= 4) return { kind: 'resize-col', index: h0.col };
+        if (Math.abs(lx - left) <= 4 && h0.col > 0) return { kind: 'resize-col', index: h0.col - 1 };
+        const f = b ? readFilters(b)[sheetId] : undefined;
+        if (f && h0.col >= f.ref.startColumn && h0.col <= f.ref.endColumn && lx > right - 24) return { kind: 'filter', index: h0.col };
+      }
+      return null;
+    }
+    if (lx >= 0 && lx < HEAD_W && ly > HEAD_H) {
+      const h0 = hit(clientX, clientY);
+      if (h0 && h0.row >= 0) {
+        const bottom = screenY(geo, h0.row + 1, sy); const top = screenY(geo, h0.row, sy);
+        if (Math.abs(ly - bottom) <= 3) return { kind: 'resize-row', index: h0.row };
+        if (Math.abs(ly - top) <= 3 && h0.row > 0) return { kind: 'resize-row', index: h0.row - 1 };
+      }
+      return null;
+    }
+    if (!readOnly && !edit) {
+      const fx = screenX(geo, selRange.endColumn + 1, sx); const fy = screenY(geo, selRange.endRow + 1, sy);
+      if (Math.abs(lx - fx) <= 5 && Math.abs(ly - fy) <= 5) return { kind: 'fill', index: 0 };
+    }
+    return null;
+  }, [geo, hit, b, sheetId, readOnly, edit, selRange]);
+
+  const onHover = (e: React.MouseEvent) => {
+    if (drag.current) return;
+    const h = handleAt(e.clientX, e.clientY);
+    const cursor = h?.kind === 'resize-col' ? 'col-resize' : h?.kind === 'resize-row' ? 'row-resize' : h?.kind === 'fill' ? 'crosshair' : h?.kind === 'filter' ? 'pointer' : '';
+    if (grid.current && grid.current.style.cursor !== cursor) grid.current.style.cursor = cursor;
+  };
+
   const onMouseDown = (e: React.MouseEvent) => {
     if (e.button === 2) {
       const h = hit(e.clientX, e.clientY);
@@ -596,15 +638,17 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     if (e.button !== 0) return;
     const h = hit(e.clientX, e.clientY);
     if (!h || !geo) return;
-    const target = e.target as HTMLElement;
-    const resize = target.closest<HTMLElement>('[data-resize]');
-    if (resize && !readOnly) {
+    const handle = handleAt(e.clientX, e.clientY);
+    if (handle?.kind === 'filter') { e.preventDefault(); setFilterMenu({ col: handle.index, x: e.clientX, y: e.clientY + 8 }); return; }
+    if (handle && !readOnly && (handle.kind === 'resize-col' || handle.kind === 'resize-row')) {
       e.preventDefault();
-      const kind = resize.dataset.resize === 'col' ? 'resize-col' : 'resize-row';
-      const index = Number(resize.dataset.index);
-      drag.current = { kind, index, start: kind === 'resize-col' ? e.clientX : e.clientY, size: kind === 'resize-col' ? colWidth(sheet!, index) : rowHeight(sheet!, index) };
+      const cols = handle.kind === 'resize-col';
+      drag.current = { kind: handle.kind, index: handle.index, start: cols ? e.clientX : e.clientY, size: cols ? colWidth(sheet!, handle.index) : rowHeight(sheet!, handle.index) };
+      const box = grid.current!.getBoundingClientRect();
+      setGuide({ axis: cols ? 'x' : 'y', at: cols ? e.clientX - box.left : e.clientY - box.top });
       return;
     }
+    if (handle?.kind === 'fill') { e.preventDefault(); drag.current = { kind: 'fill' }; return; }
     if (edit && edit.text.startsWith('=') && h.row >= 0 && h.col >= 0) { e.preventDefault(); insertRef(a1(h.row, h.col)); return; }
     if (edit) finishEdit('stay');
     e.preventDefault();
@@ -633,19 +677,74 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       if (url) window.open(url, '_blank', 'noopener');
     }
   };
+
+  /**
+   * Автозаполнение (квадратик в углу выделения), как в Excel: ряд чисел с шагом продолжается, одно число и текст
+   * копируются, «Пункт 1» → «Пункт 2», дата — по дням, формулы сдвигают относительные ссылки. Оформление копируется.
+   */
+  const fill = useCallback((src: Range, to: Range) => {
+    if (!b || !sheet) return;
+    const down = to.endRow > src.endRow || to.startRow < src.startRow;
+    const cells: Record<number, Record<number, Cell | null>> = {};
+    const lines = down ? src.endColumn - src.startColumn + 1 : src.endRow - src.startRow + 1;
+    for (let k = 0; k < lines; k += 1) {
+      const seq: Array<{ cell: Cell | undefined; r: number; c: number }> = [];
+      const n = down ? src.endRow - src.startRow + 1 : src.endColumn - src.startColumn + 1;
+      for (let i = 0; i < n; i += 1) {
+        const r = down ? src.startRow + i : src.startRow + k; const c = down ? src.startColumn + k : src.startColumn + i;
+        seq.push({ cell: cellAt(sheet, r, c), r, c });
+      }
+      const nums = seq.map((x) => (typeof x.cell?.v === 'number' && !x.cell.f ? x.cell.v : null));
+      const step = nums.length > 1 && nums.every((x) => x !== null) ? (nums[nums.length - 1]! - nums[0]!) / (nums.length - 1) : null;
+      const isDate = (x: Cell | undefined) => /[dmy]/i.test(String((styleOf(b, x)?.n as { pattern?: string } | undefined)?.pattern || '').replace(/"[^"]*"/g, ''));
+      const forward = down ? to.endRow > src.endRow : to.endColumn > src.endColumn;
+      const total = down ? (forward ? to.endRow - src.endRow : src.startRow - to.startRow) : (forward ? to.endColumn - src.endColumn : src.startColumn - to.startColumn);
+      for (let j = 1; j <= total; j += 1) {
+        const idx = forward ? (j - 1) % n : n - 1 - ((j - 1) % n);
+        const base = seq[idx];
+        const r = down ? (forward ? src.endRow + j : src.startRow - j) : base.r;
+        const c = down ? base.c : (forward ? src.endColumn + j : src.startColumn - j);
+        const from = base.cell;
+        let next: Cell = from ? wireCell(b, from) ?? {} : { v: null, f: null, s: null } as Cell;
+        const lastNum = nums[forward ? n - 1 : 0];
+        if (from?.f) next = { ...next, f: shiftFormula(String(from.f), r - base.r, c - base.c), v: null };
+        else if (step !== null && lastNum !== null) next = { ...next, v: lastNum + (forward ? 1 : -1) * step * j, t: 2 };
+        else if (n === 1 && typeof from?.v === 'number' && isDate(from)) next = { ...next, v: from.v + (forward ? j : -j), t: 2 };
+        else if (typeof from?.v === 'string' && /\d+$/.test(from.v)) {
+          const m = /^(.*?)(\d+)$/.exec(from.v)!;
+          const num = Number(m[2]) + (forward ? 1 : -1) * Math.ceil(j / n) * (n === 1 ? 1 : 1);
+          next = { ...next, v: `${m[1]}${Math.max(0, num)}`, t: 1 };
+        }
+        (cells[r] ||= {})[c] = next;
+      }
+    }
+    setCells(cells);
+    setSel({ anchor: { row: to.startRow, col: to.startColumn }, focus: { row: to.endRow, col: to.endColumn } });
+  }, [b, sheet, setCells]);
+
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       const d = drag.current;
       if (!d || !geo) return;
       if (d.kind === 'resize-col' || d.kind === 'resize-row') {
-        const delta = (d.kind === 'resize-col' ? e.clientX : e.clientY) - (d.start ?? 0);
-        const el = grid.current?.querySelector<HTMLElement>(`[data-resize="${d.kind === 'resize-col' ? 'col' : 'row'}"][data-index="${d.index}"]`);
-        el?.style.setProperty('--drag', `${delta}px`);
+        const box = grid.current!.getBoundingClientRect();
+        const cols = d.kind === 'resize-col';
+        const min = (d.start ?? 0) - (d.size ?? 0) + (cols ? 16 : 12);
+        const at = Math.max(min, cols ? e.clientX : e.clientY) - (cols ? box.left : box.top);
+        setGuide({ axis: cols ? 'x' : 'y', at });
         return;
       }
       const h = hit(e.clientX, e.clientY);
       if (!h) return;
-      if (d.kind === 'cols') setSel((s) => ({ anchor: s.anchor, focus: { row: geo.rows - 1, col: Math.max(0, h.col) } }));
+      if (d.kind === 'fill') {
+        // Тянем вниз/вверх или вбок — по тому, куда курсор ушёл дальше от выделения.
+        const r = Math.max(0, h.row); const c = Math.max(0, h.col);
+        const dr = r > selRange.endRow ? r - selRange.endRow : r < selRange.startRow ? r - selRange.startRow : 0;
+        const dc = c > selRange.endColumn ? c - selRange.endColumn : c < selRange.startColumn ? c - selRange.startColumn : 0;
+        if (!dr && !dc) setFillTo(null);
+        else if (Math.abs(dr) >= Math.abs(dc)) setFillTo({ ...selRange, startRow: Math.min(selRange.startRow, r), endRow: Math.max(selRange.endRow, r) });
+        else setFillTo({ ...selRange, startColumn: Math.min(selRange.startColumn, c), endColumn: Math.max(selRange.endColumn, c) });
+      } else if (d.kind === 'cols') setSel((s) => ({ anchor: s.anchor, focus: { row: geo.rows - 1, col: Math.max(0, h.col) } }));
       else if (d.kind === 'rows') setSel((s) => ({ anchor: s.anchor, focus: { row: Math.max(0, h.row), col: geo.cols - 1 } }));
       else setSel((s) => ({ anchor: s.anchor, focus: { row: Math.max(0, h.row), col: Math.max(0, h.col) } }));
       // Автопрокрутка у края.
@@ -659,26 +758,98 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     const onUp = (e: MouseEvent) => {
       const d = drag.current;
       drag.current = null;
-      if (!d || !(d.kind === 'resize-col' || d.kind === 'resize-row')) return;
+      if (!d) return;
+      if (d.kind === 'fill') { const to = fillTo; setFillTo(null); if (to) fill(selRange, to); return; }
+      if (!(d.kind === 'resize-col' || d.kind === 'resize-row')) return;
+      setGuide(null);
       const rows = d.kind === 'resize-row';
       const size = Math.max(rows ? 12 : 16, Math.round((d.size ?? 0) + (rows ? e.clientY : e.clientX) - (d.start ?? 0)));
-      grid.current?.querySelectorAll<HTMLElement>('[data-resize]').forEach((x) => x.style.removeProperty('--drag'));
       // Меняли размер выделенных целиком столбцов — меняем у всех них.
       const idx = d.index ?? 0;
       const whole = rows ? selRange.startColumn === 0 && selRange.endColumn >= (geo?.cols ?? 1) - 1 && idx >= selRange.startRow && idx <= selRange.endRow
         : selRange.startRow === 0 && selRange.endRow >= (geo?.rows ?? 1) - 1 && idx >= selRange.startColumn && idx <= selRange.endColumn;
       const span = whole ? (rows ? [selRange.startRow, selRange.endRow] : [selRange.startColumn, selRange.endColumn]) : [idx, idx];
       const r = rows ? { startRow: span[0], endRow: span[1], startColumn: 0, endColumn: 0 } : { startRow: 0, endRow: 0, startColumn: span[0], endColumn: span[1] };
-      commit([{ id: rows ? OP.ROW_HEIGHT : OP.COL_WIDTH, params: { subUnitId: sheetId, ranges: [r], [rows ? 'rowHeight' : 'colWidth']: size } }]);
+      if (size !== d.size) commit([{ id: rows ? OP.ROW_HEIGHT : OP.COL_WIDTH, params: { subUnitId: sheetId, ranges: [r], [rows ? 'rowHeight' : 'colWidth']: size } }]);
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
-  }, [geo, hit, commit, sheetId, selRange]);
+  }, [geo, hit, commit, sheetId, selRange, fillTo, fill]);
+
+  // ── Сортировка и фильтр ──
+  /** Сортировать по столбцу активной ячейки: выделение (несколько строк) или блок данных вокруг; заголовок остаётся. */
+  const sortBy = useCallback((desc: boolean, byCol?: number) => {
+    if (!b || !sheet || readOnly) return;
+    const f = readFilters(b)[sheetId];
+    let area = selRange.endRow > selRange.startRow ? { ...selRange } : f ? { ...f.ref, startRow: f.ref.startRow + 1 } : dataRegion(sheet, sel.anchor.row, sel.anchor.col);
+    if (selRange.endRow === selRange.startRow && !f) {
+      // Первая строка блока — текст, а ниже есть числа или жирный шрифт: это заголовок, его не сортируем.
+      const head = area.startRow;
+      const isHead = [...Array(area.endColumn - area.startColumn + 1).keys()].some((i) => {
+        const c = area.startColumn + i; const cell = cellAt(sheet, head, c);
+        return Boolean(styleOf(b, cell)?.bl) || (typeof cell?.v === 'string' && typeof cellAt(sheet, head + 1, c)?.v === 'number');
+      });
+      if (isHead) area = { ...area, startRow: head + 1 };
+    }
+    if (area.endRow <= area.startRow) return;
+    const key = byCol ?? sel.anchor.col;
+    const rowsList: Array<{ r: number; v: unknown }> = [];
+    for (let r = area.startRow; r <= area.endRow; r += 1) rowsList.push({ r, v: cellAt(sheet, r, key)?.v });
+    const cmp = (x: unknown, y: unknown) => {
+      const ex = x === null || x === undefined || x === ''; const ey = y === null || y === undefined || y === '';
+      if (ex || ey) return ex === ey ? 0 : ex ? 1 : -1; // пустые — всегда в конце
+      if (typeof x === 'number' && typeof y === 'number') return desc ? y - x : x - y;
+      if (typeof x === 'number') return -1;
+      if (typeof y === 'number') return 1;
+      const t = String(x).localeCompare(String(y), 'ru', { numeric: true, sensitivity: 'base' });
+      return desc ? -t : t;
+    };
+    const sorted = [...rowsList].sort((p, q) => cmp(p.v, q.v) || p.r - q.r);
+    if (sorted.every((x, i) => x.r === rowsList[i].r)) return;
+    const cells: Record<number, Record<number, Cell | null>> = {};
+    sorted.forEach((from, i) => {
+      const r = area.startRow + i;
+      if (from.r === r) return;
+      for (let c = area.startColumn; c <= area.endColumn; c += 1) {
+        const cell = cellAt(sheet, from.r, c);
+        const wire = cell ? wireCell(b, cell) : null;
+        (cells[r] ||= {})[c] = wire?.f ? { ...wire, f: shiftFormula(String(wire.f), r - from.r, 0) } : (wire ?? { v: null, f: null, s: null } as Cell);
+      }
+    });
+    setCells(cells);
+  }, [b, sheet, readOnly, sheetId, selRange, sel.anchor.row, sel.anchor.col, setCells]);
+
+  /** Фильтр: включить на выделении (или блоке данных вокруг) / выключить. */
+  const toggleFilter = useCallback(() => {
+    if (!b || !sheet || readOnly) return;
+    if (readFilters(b)[sheetId]) { commit([{ id: OP.FILTER_REMOVE, params: { subUnitId: sheetId } }]); return; }
+    const ref = selRange.endRow > selRange.startRow ? selRange : dataRegion(sheet, sel.anchor.row, sel.anchor.col);
+    commit([{ id: OP.FILTER_RANGE, params: { subUnitId: sheetId, range: ref } }]);
+  }, [b, sheet, readOnly, sheetId, selRange, sel.anchor.row, sel.anchor.col, commit]);
+
+  const setFilterCriteria = useCallback((col: number, criteria: FilterColumn | null) => {
+    if (!b || !sheet) return;
+    const f = readFilters(b)[sheetId];
+    if (!f) return;
+    // Скрытые строки считаем здесь и отправляем вместе с условием — у всех одинаково, как у Univer (filteredOutRows).
+    const nextCols = [...(f.filterColumns || []).filter((x) => x.colId !== col), ...(criteria ? [criteria] : [])];
+    const out = filteredRows(b, sheet, { ...f, filterColumns: nextCols });
+    commit([{ id: OP.FILTER_CRITERIA, params: { subUnitId: sheetId, col, criteria, filteredOutRows: out } }]);
+  }, [b, sheet, sheetId, commit]);
 
   const onDoubleClick = (e: React.MouseEvent) => {
     const h = hit(e.clientX, e.clientY);
-    if (!h || h.row < 0 || h.col < 0 || (e.target as HTMLElement).closest('[data-resize]')) return;
+    const handle = handleAt(e.clientX, e.clientY);
+    if (handle?.kind === 'fill' && sheet && b) {
+      // Двойной щелчок по квадратику — заполнить вниз до конца соседнего столбца с данными.
+      const side = selRange.startColumn > 0 ? selRange.startColumn - 1 : selRange.endColumn + 1;
+      let last = selRange.endRow;
+      while (cellAt(sheet, last + 1, side)?.v !== undefined && cellAt(sheet, last + 1, side)?.v !== null && cellAt(sheet, last + 1, side)?.v !== '') last += 1;
+      if (last > selRange.endRow) fill(selRange, { ...selRange, endRow: last });
+      return;
+    }
+    if (!h || h.row < 0 || h.col < 0 || handle) return;
     startEdit();
   };
 
@@ -696,6 +867,9 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       if (lower === 'u' || lower === 'г') { e.preventDefault(); restyle((s) => ({ ...s, ul: anchorStyle.ul ? undefined : { s: 1 } })); return; }
       if (lower === 'a' || lower === 'ф') { e.preventDefault(); setSel({ anchor: { row: 0, col: 0 }, focus: { row: geo.rows - 1, col: geo.cols - 1 } }); return; }
       if (lower === 'f' || lower === 'а') { e.preventDefault(); setFind((f) => ({ ...f, open: true })); return; }
+      // Ctrl+D / Ctrl+R — заполнить выделение вниз / вправо первой строкой (столбцом), как в Excel.
+      if ((lower === 'd' || lower === 'в') && selRange.endRow > selRange.startRow && !readOnly) { e.preventDefault(); fill({ ...selRange, endRow: selRange.startRow }, selRange); return; }
+      if ((lower === 'r' || lower === 'к') && selRange.endColumn > selRange.startColumn && !readOnly) { e.preventDefault(); fill({ ...selRange, endColumn: selRange.startColumn }, selRange); return; }
       if (k === 'Home') { e.preventDefault(); setSel({ anchor: { row: 0, col: 0 }, focus: { row: 0, col: 0 } }); reveal(0, 0); return; }
     }
     if (mod && e.altKey && e.code === 'KeyM' && onAddComment) { e.preventDefault(); onAddComment(); return; }
@@ -769,7 +943,11 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     'sheet.command.add-worksheet-merge-all': () => { if (!merged) toggleMerge(); },
     'sheet.command.remove-worksheet-merge': () => { if (merged) toggleMerge(); },
     'ui.command.clear-formatting': () => restyle(() => ({} as Style)),
-  }), [undoStep, copy, paste, restyle, anchorStyle, merged]); // eslint-disable-line react-hooks/exhaustive-deps
+    'sheet.command.sort-range-asc': () => sortBy(false),
+    'sheet.command.sort-range-desc': () => sortBy(true),
+    'sheet.command.smart-toggle-filter': () => toggleFilter(),
+    'sheet.command.clear-filter-criteria': () => { if (!b) return; const f = readFilters(b)[sheetId]; for (const c of f?.filterColumns || []) setFilterCriteria(c.colId, null); },
+  }), [undoStep, copy, paste, restyle, anchorStyle, merged, sortBy, toggleFilter, setFilterCriteria, b, sheetId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!commentsBridge) return undefined;
     commentsBridge.current = {
@@ -787,116 +965,75 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     return () => { commentsBridge.current = null; };
   }, [commentsBridge, commands, sheet, sel.anchor.row, sel.anchor.col, b, readOnly, reveal]);
 
+  // ── Отрисовка на холсте (sheet/draw.ts): холст размером с окно прилипает к краю прокрутки, на каждый кадр
+  // рисуются только видимые ячейки — без перестройки элементов страницы (DOM-сетка лагала на больших таблицах). ──
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const drawState = useRef<() => void>(() => undefined);
+  drawState.current = () => {
+    const el = grid.current; const cv = canvas.current;
+    if (!el || !cv || !geo || !sheet || !b || !root.current) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = el.clientWidth; const H = el.clientHeight;
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
+      cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+      cv.style.width = `${W}px`; cv.style.height = `${H}px`;
+    }
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    const filters = readFilters(b);
+    const f = filters[sheetId];
+    const anchorM = geo.merges.get(`${sel.anchor.row}:${sel.anchor.col}`);
+    drawSheet(ctx, {
+      book: b, sheet, geo, theme: readTheme(root.current), scrollX: el.scrollLeft, scrollY: el.scrollTop, width: W, height: H, dpr,
+      sel: fillTo ?? selRange, active: anchorM ?? { startRow: sel.anchor.row, endRow: sel.anchor.row, startColumn: sel.anchor.col, endColumn: sel.anchor.col },
+      clip: clipMark, marks: new Set(commentCells.filter((m) => !m.sheet || m.sheet === sheet.name).map((m) => m.cell)),
+      peers: cursors.flatMap((cur) => {
+        const p = cur.pos as SheetCursor | null;
+        return p && p.sh === sheetId ? [{ name: cur.name, color: cur.color, range: norm({ startRow: p.r1, startColumn: p.c1, endRow: p.r2, endColumn: p.c2 }) }] : [];
+      }),
+      filter: f?.ref ?? null, filtered: new Set(f?.cachedFilteredOut || []),
+    });
+  };
+  const frame = useRef(0);
+  const redraw = useCallback(() => {
+    if (frame.current) return;
+    frame.current = window.requestAnimationFrame(() => { frame.current = 0; drawState.current(); });
+  }, []);
+  // Перерисовать после каждого рендера (правка, выделение, коллеги) — сам рендер холст не трогает.
+  useEffect(() => { redraw(); });
+  // Смена темы — перерисовать.
+  useEffect(() => {
+    const mo = new MutationObserver(redraw);
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => mo.disconnect();
+  }, [redraw]);
+
+  // Сводка выделения (как в углу Google Таблиц): сумма, среднее, количество — только при смене выделения и правках.
+  const summaryText = useMemo(() => {
+    if (!sheet || (selRange.startRow === selRange.endRow && selRange.startColumn === selRange.endColumn)) return null;
+    let sum = 0; let n = 0; let count = 0;
+    eachSelected((r, c) => { const v = cellAt(sheet, r, c)?.v; if (v !== null && v !== undefined && v !== '') count += 1; if (typeof v === 'number') { sum += v; n += 1; } });
+    if (!count) return null;
+    const f = (x: number) => String(Number(x.toPrecision(12))).replace('.', ',');
+    return n ? `Сумма: ${f(sum)} · Среднее: ${f(sum / n)} · Количество: ${count}` : `Количество: ${count}`;
+  }, [sheet, version, selRange.startRow, selRange.endRow, selRange.startColumn, selRange.endColumn]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (error) return <div className="nws-missing" role="alert">{error}</div>;
   if (!b || !sheet || !geo) return <div className="fsh-loading" aria-busy="true">Открываю таблицу…</div>;
 
   // ── Отрисовка видимой части ──
-  const { rowOffs, colOffs, fr, fc, fh, fw, rows, cols } = geo;
-  const bodyRows: [number, number] = [Math.max(fr, indexAt(rowOffs, scroll.y + fh)), Math.min(rows - 1, indexAt(rowOffs, scroll.y + view.h - HEAD_H) + 1)];
-  const bodyCols: [number, number] = [Math.max(fc, indexAt(colOffs, scroll.x + fw)), Math.min(cols - 1, indexAt(colOffs, scroll.x + view.w - HEAD_W) + 1)];
-  const marks = new Set(commentCells.filter((m) => !m.sheet || m.sheet === sheet.name).map((m) => m.cell));
+  const { rowOffs, colOffs, rows, cols } = geo;
 
-  const renderCells = (r0: number, r1: number, c0: number, c1: number, key: string) => {
-    const out: ReactNode[] = [];
-    const masters = new Set<string>();
-    // Объединения, задевающие видимую часть, — рисуем их главную ячейку целиком.
-    for (const m of sheet.mergeData || []) {
-      if (m.startRow <= r1 && r0 <= m.endRow && m.startColumn <= c1 && c0 <= m.endColumn) masters.add(`${m.startRow}:${m.startColumn}`);
-    }
-    const draw = (r: number, c: number) => {
-      const m = geo.merges.get(`${r}:${c}`);
-      if (m && (m.startRow !== r || m.startColumn !== c)) return;
-      const cell = cellAt(sheet, r, c);
-      const style = styleOf(b, cell);
-      const text = displayText(cell, style);
-      const hasMark = marks.has(a1(r, c));
-      if (!text && !style && !hasMark) return;
-      const look = cellCss(style);
-      const w = (m ? colOffs[m.endColumn + 1] : colOffs[c + 1]) - colOffs[c];
-      const h = (m ? rowOffs[m.endRow + 1] : rowOffs[r + 1]) - rowOffs[r];
-      if (!w || !h) return;
-      const align = look.h || autoAlign(cell);
-      // Текст без переноса переливается в пустые соседние ячейки справа (как в Excel).
-      let spill = 0;
-      if (text && !look.wrap && !m && align === 'left') {
-        let cc = c + 1;
-        while (cc <= Math.min(c1 + 2, cols - 1)) { const nb = cellAt(sheet, r, cc); if (nb && (nb.v !== null && nb.v !== undefined && nb.v !== '')) break; if (geo.merges.has(`${r}:${cc}`)) break; spill += colOffs[cc + 1] - colOffs[cc]; cc += 1; }
-      }
-      out.push(
-        <div key={`${key}${r}:${c}`} className="fsh-cell" data-wrap={look.wrap || undefined} data-v={look.v || 'bottom'} data-h={align}
-          style={{ left: HEAD_W + colOffs[c], top: HEAD_H + rowOffs[r], width: w, height: h, ...look.css, ...(spill && look.css.background === undefined ? { overflow: 'visible' } : {}) }}>
-          {text && <span className="fsh-text" data-ink={look.ink} style={spill ? { maxWidth: w + spill } : undefined}>{text}</span>}
-          {hasMark && <i className="fsh-mark" aria-hidden="true" />}
-        </div>,
-      );
-    };
-    for (const k of masters) { const [r, c] = k.split(':').map(Number); if (r < r0 || r > r1 || c < c0 || c > c1) draw(r, c); }
-    for (let r = r0; r <= r1; r += 1) {
-      if (rowOffs[r + 1] === rowOffs[r]) continue;
-      const row = sheet.cellData?.[r];
-      if (row) for (const ck of Object.keys(row)) { const c = Number(ck); if (c >= c0 && c <= c1) draw(r, c); }
-      for (const k of marks) { const p = parseA1(k); if (p && p.row === r && p.col >= c0 && p.col <= c1 && !row?.[p.col]) draw(r, p.col); }
-    }
-    return out;
-  };
-  const gridLines = (r0: number, r1: number, c0: number, c1: number, key: string) => {
-    const out: ReactNode[] = [];
-    const top = HEAD_H + rowOffs[r0]; const bottom = HEAD_H + rowOffs[r1 + 1];
-    const left = HEAD_W + colOffs[c0]; const right = HEAD_W + colOffs[c1 + 1];
-    for (let r = r0; r <= r1 + 1; r += 1) out.push(<i key={`${key}h${r}`} className="fsh-hline" style={{ top: HEAD_H + rowOffs[r] - 1, left, width: right - left }} />);
-    for (let c = c0; c <= c1 + 1; c += 1) out.push(<i key={`${key}v${c}`} className="fsh-vline" style={{ left: HEAD_W + colOffs[c] - 1, top, height: bottom - top }} />);
-    return out;
-  };
-  const layer = (r0: number, r1: number, c0: number, c1: number, key: string, dx: number, dy: number, z: number) => (
-    r1 < r0 || c1 < c0 ? null : (
-      <div key={key} className="fsh-layer" data-frozen={dx || dy ? 'true' : undefined} style={{ transform: dx || dy ? `translate(${dx}px, ${dy}px)` : undefined, zIndex: z }}>
-        {(dx || dy) ? <div className="fsh-layer-bg" style={{ left: HEAD_W + colOffs[c0], top: HEAD_H + rowOffs[r0], width: colOffs[c1 + 1] - colOffs[c0], height: rowOffs[r1 + 1] - rowOffs[r0] }} /> : null}
-        {gridLines(r0, r1, c0, c1, key)}
-        {renderCells(r0, r1, c0, c1, key)}
-      </div>
-    )
-  );
-
-  const selBox = cellRect(selRange.startRow, selRange.startColumn, selRange.endRow, selRange.endColumn);
-  const anchorM = geo.merges.get(`${sel.anchor.row}:${sel.anchor.col}`);
-  const actBox = anchorM ? cellRect(anchorM.startRow, anchorM.startColumn, anchorM.endRow, anchorM.endColumn) : cellRect(sel.anchor.row, sel.anchor.col);
-  const clipBox = clipMark ? cellRect(clipMark.startRow, clipMark.startColumn, clipMark.endRow, clipMark.endColumn) : null;
   const editCell = edit ? cellAt(sheet, edit.row, edit.col) : undefined;
   const editLook = edit ? cellCss(styleOf(b, editCell)) : null;
-  const editBox = edit ? (() => { const m = geo.merges.get(`${edit.row}:${edit.col}`); return m ? cellRect(m.startRow, m.startColumn, m.endRow, m.endColumn) : cellRect(edit.row, edit.col); })() : null;
-  const isFullCols = selRange.startRow === 0 && selRange.endRow >= rows - 1;
-  const isFullRows = selRange.startColumn === 0 && selRange.endColumn >= cols - 1;
-
-  const colHeads = (c0: number, c1: number, fixed: boolean) => {
-    const out: ReactNode[] = [];
-    for (let c = c0; c <= c1; c += 1) {
-      const w = colOffs[c + 1] - colOffs[c];
-      if (!w) continue;
-      out.push(
-        <div key={`ch${c}`} className="fsh-colhead" data-on={c >= selRange.startColumn && c <= selRange.endColumn || undefined} data-full={isFullCols && c >= selRange.startColumn && c <= selRange.endColumn || undefined}
-          style={{ left: HEAD_W + colOffs[c] + (fixed ? scroll.x : 0), width: w }}>
-          {colName(c)}
-          <span className="fsh-resize" data-resize="col" data-index={c} />
-        </div>,
-      );
-    }
-    return out;
-  };
-  const rowHeads = (r0: number, r1: number, fixed: boolean) => {
-    const out: ReactNode[] = [];
-    for (let r = r0; r <= r1; r += 1) {
-      const h = rowOffs[r + 1] - rowOffs[r];
-      if (!h) continue;
-      out.push(
-        <div key={`rh${r}`} className="fsh-rowhead" data-on={r >= selRange.startRow && r <= selRange.endRow || undefined} data-full={isFullRows && r >= selRange.startRow && r <= selRange.endRow || undefined}
-          style={{ top: HEAD_H + rowOffs[r] + (fixed ? scroll.y : 0), height: h }}>
-          {r + 1}
-          <span className="fsh-resize" data-resize="row" data-index={r} />
-        </div>,
-      );
-    }
-    return out;
-  };
+  // Поле правки — в экранных координатах поверх холста (с учётом прокрутки и закрепления).
+  const editBox = edit ? (() => {
+    const m = geo.merges.get(`${edit.row}:${edit.col}`);
+    const r0 = m?.startRow ?? edit.row; const c0 = m?.startColumn ?? edit.col; const r1 = m?.endRow ?? edit.row; const c1 = m?.endColumn ?? edit.col;
+    const x = screenX(geo, c0, scroll.x); const y = screenY(geo, r0, scroll.y);
+    return { x, y, w: screenX(geo, c1 + 1, scroll.x) - x, h: screenY(geo, r1 + 1, scroll.y) - y };
+  })() : null;
 
   const btn = (key: string, title: string, active: boolean, icon: ReactNode, action: (e: React.MouseEvent<HTMLButtonElement>) => void, disabled = false) => (
     <button key={key} type="button" className="fdoc-btn" title={title} aria-label={title} aria-pressed={active} disabled={disabled}
@@ -911,15 +1048,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   const anchorCell = cellAt(sheet, sel.anchor.row, sel.anchor.col);
   const barText = edit ? edit.text : editText(anchorCell, styleOf(b, anchorCell));
 
-  // Сводка выделения (как в углу Google Таблиц): сумма, среднее, количество.
-  const summary = (() => {
-    if (selRange.startRow === selRange.endRow && selRange.startColumn === selRange.endColumn) return null;
-    let sum = 0; let n = 0; let count = 0;
-    eachSelected((r, c) => { const v = cellAt(sheet, r, c)?.v; if (v !== null && v !== undefined && v !== '') count += 1; if (typeof v === 'number') { sum += v; n += 1; } });
-    if (!count) return null;
-    const f = (x: number) => String(Number(x.toPrecision(12))).replace('.', ',');
-    return n ? `Сумма: ${f(sum)} · Среднее: ${f(sum / n)} · Количество: ${count}` : `Количество: ${count}`;
-  })();
+  const summary = summaryText;
 
   const borderSet = (kind: 'all' | 'outer' | 'none') => {
     const line = { s: 1, cl: { rgb: '#000000' } };
@@ -979,6 +1108,8 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
             {btn('vb', 'По нижнему краю', vAlign === 3, <AlignVerticalJustifyEnd size={16} strokeWidth={1.75} />, () => restyle((s) => ({ ...s, vt: vAlign === 3 ? undefined : 3 })))}
             {btn('wrap', 'Переносить по словам', anchorStyle.tb === 3, <WrapText size={16} strokeWidth={1.75} />, () => restyle((s) => ({ ...s, tb: s.tb === 3 ? undefined : 3 })))}
             <span className="fdoc-sep" />
+            {btn('sort', 'Сортировать А → Я по столбцу', false, <ArrowDownAZ size={16} strokeWidth={1.75} />, () => sortBy(false))}
+            {btn('filter', b && readFilters(b)[sheetId] ? 'Убрать фильтр' : 'Фильтр', Boolean(b && readFilters(b)[sheetId]), <Filter size={16} strokeWidth={1.75} />, toggleFilter)}
             {btn('sum', 'Сумма (СУММ)', false, <Sigma size={16} strokeWidth={1.75} />, sumBelow)}
             {btn('freeze', 'Закрепить', Boolean(sheet.freeze), <Snowflake size={16} strokeWidth={1.75} />, open('freeze'))}
             {btn('clear', 'Очистить форматирование', false, <OClearFormat size={18} />, () => restyle(() => ({} as Style)))}
@@ -1012,52 +1143,23 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
         </div>
       )}
 
-      <div ref={grid} className="fsh-grid" tabIndex={0} role="grid" aria-label={`Лист «${sheet.name}»`} aria-rowcount={rows} aria-colcount={cols}
-        onScroll={(e) => { const el = e.currentTarget; window.requestAnimationFrame(() => setScroll({ x: el.scrollLeft, y: el.scrollTop })); }}
-        onMouseDown={onMouseDown} onDoubleClick={onDoubleClick} onKeyDown={onKeyDown}
-        onContextMenu={(e) => { if (e.shiftKey) return; e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }); }}>
-        <div className="fsh-sizer" style={{ width: HEAD_W + colOffs[cols], height: HEAD_H + rowOffs[rows] }}>
-          {layer(bodyRows[0], bodyRows[1], bodyCols[0], bodyCols[1], 'b', 0, 0, 1)}
-          {fc > 0 && layer(bodyRows[0], bodyRows[1], 0, fc - 1, 'l', scroll.x, 0, 3)}
-          {fr > 0 && layer(0, fr - 1, bodyCols[0], bodyCols[1], 't', 0, scroll.y, 4)}
-          {fr > 0 && fc > 0 && layer(0, fr - 1, 0, fc - 1, 'c', scroll.x, scroll.y, 5)}
-
-          {/* Выделение, курсоры коллег, буфер обмена */}
-          <div className="fsh-overlay">
-            {cursors.map((cur) => {
-              const p = cur.pos as SheetCursor | null;
-              if (!p || p.sh !== sheetId) return null;
-              const box = cellRect(Math.min(p.r1, p.r2), Math.min(p.c1, p.c2), Math.max(p.r1, p.r2), Math.max(p.c1, p.c2));
-              return (
-                <div key={cur.userId} className="fsh-peer" style={{ left: box.x, top: box.y, width: box.w, height: box.h, '--peer': cur.color } as CSSProperties}>
-                  <span className="fsh-peer-name">{cur.name}</span>
-                </div>
-              );
-            })}
-            {clipBox && <div className="fsh-clip" style={{ left: clipBox.x, top: clipBox.y, width: clipBox.w, height: clipBox.h }} />}
-            <div className="fsh-sel" style={{ left: selBox.x, top: selBox.y, width: selBox.w, height: selBox.h }} />
-            <div className="fsh-active" style={{ left: actBox.x, top: actBox.y, width: actBox.w, height: actBox.h }} />
-          </div>
-
-          {/* Заголовки столбцов и строк — не уезжают при прокрутке */}
-          <div className="fsh-heads-top" style={{ transform: `translateY(${scroll.y}px)` }}>
-            {colHeads(bodyCols[0], bodyCols[1], false)}
-            {fc > 0 && <div className="fsh-heads-fixed" style={{ transform: `translateX(0px)` }}>{colHeads(0, fc - 1, true)}</div>}
-          </div>
-          <div className="fsh-heads-left" style={{ transform: `translateX(${scroll.x}px)` }}>
-            {rowHeads(bodyRows[0], bodyRows[1], false)}
-            {fr > 0 && rowHeads(0, fr - 1, true)}
-          </div>
-          <div className="fsh-corner" style={{ transform: `translate(${scroll.x}px, ${scroll.y}px)` }} />
-
-          {edit && !edit.bar && editBox && (
-            <textarea ref={editor} className="fsh-editor" value={edit.text} spellCheck={false}
-              style={{ left: editBox.x, top: editBox.y, minWidth: editBox.w, minHeight: editBox.h, ...editLook?.css, background: editLook?.css.background || undefined, textAlign: (editLook?.h as CSSProperties['textAlign']) || undefined }}
-              onChange={(e) => setEdit((x) => (x ? { ...x, text: e.target.value } : x))}
-              onKeyDown={onEditKey}
-              onBlur={(e) => { if (!grid.current?.contains(e.relatedTarget as Node) && !(e.relatedTarget as HTMLElement | null)?.closest('.fsh-formula')) finishEdit('stay'); }} />
-          )}
+      <div className="fsh-gridwrap" ref={root}>
+        <div ref={grid} className="fsh-grid" tabIndex={0} role="grid" aria-label={`Лист «${sheet.name}»`} aria-rowcount={rows} aria-colcount={cols}
+          onScroll={(e) => { redraw(); if (edit) { const el = e.currentTarget; setScroll({ x: el.scrollLeft, y: el.scrollTop }); } }}
+          onMouseDown={onMouseDown} onMouseMove={onHover} onDoubleClick={onDoubleClick} onKeyDown={onKeyDown}
+          onContextMenu={(e) => { if (e.shiftKey) return; e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }); }}>
+          <canvas ref={canvas} className="fsh-canvas" aria-hidden="true" />
+          <div className="fsh-sizer" style={{ width: HEAD_W + colOffs[cols], height: HEAD_H + rowOffs[rows], marginTop: -view.h }} />
         </div>
+        {guide && <div className="fsh-guide" data-axis={guide.axis} style={guide.axis === 'x' ? { left: guide.at } : { top: guide.at }} />}
+        {edit && !edit.bar && editBox && (
+          <textarea ref={editor} className="fsh-editor" value={edit.text} spellCheck={false}
+            style={{ left: editBox.x, top: editBox.y, minWidth: editBox.w, minHeight: editBox.h, ...editLook?.css, background: editLook?.css.background || undefined, textAlign: (editLook?.h as CSSProperties['textAlign']) || undefined }}
+            onChange={(e) => setEdit((x) => (x ? { ...x, text: e.target.value } : x))}
+            onKeyDown={onEditKey}
+            onBlur={(e) => { if (!root.current?.contains(e.relatedTarget as Node) && !(e.relatedTarget as HTMLElement | null)?.closest('.fsh-formula')) finishEdit('stay'); }} />
+        )}
+        {filterMenu && b && sheet && <FilterMenu {...filterMenu} book={b} sheet={sheet} onClose={() => setFilterMenu(null)} onApply={(col, criteria) => setFilterCriteria(col, criteria)} onSort={(desc, col) => sortBy(desc, col)} />}
       </div>
 
       <div className="fsh-tabs" role="tablist" aria-label="Листы">
@@ -1094,6 +1196,10 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
               <MenuItem icon={<ArrowRightToLine size={16} />} onSelect={() => { setMenu(null); insertCols(false); }}>Вставить столбец справа</MenuItem>
               <MenuItem icon={<Trash2 size={16} />} onSelect={() => { setMenu(null); removeRows(); }}>Удалить {selRange.endRow > selRange.startRow ? 'строки' : 'строку'}</MenuItem>
               <MenuItem icon={<Columns2 size={16} />} onSelect={() => { setMenu(null); removeCols(); }}>Удалить {selRange.endColumn > selRange.startColumn ? 'столбцы' : 'столбец'}</MenuItem>
+              <div className="nx-menu-sep" />
+              <MenuItem icon={<ArrowDownAZ size={16} />} onSelect={() => { setMenu(null); sortBy(false); }}>Сортировать А → Я</MenuItem>
+              <MenuItem icon={<ArrowUpZA size={16} />} onSelect={() => { setMenu(null); sortBy(true); }}>Сортировать Я → А</MenuItem>
+              <MenuItem icon={<Filter size={16} />} onSelect={() => { setMenu(null); toggleFilter(); }}>{b && readFilters(b)[sheetId] ? 'Убрать фильтр' : 'Создать фильтр'}</MenuItem>
               <div className="nx-menu-sep" />
               <MenuItem icon={<Eraser size={16} />} onSelect={() => { setMenu(null); clearValues(); }}>Очистить содержимое <kbd className="nx-menu-kbd">Del</kbd></MenuItem>
               <MenuItem icon={merged ? <TableCellsSplit size={16} /> : <TableCellsMerge size={16} />} onSelect={() => { setMenu(null); toggleMerge(); }}>{merged ? 'Отменить объединение' : 'Объединить ячейки'}</MenuItem>

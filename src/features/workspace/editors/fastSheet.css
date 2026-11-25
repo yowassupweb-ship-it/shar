@@ -51,12 +51,19 @@ html[data-theme="black"] .fsh {
 html[data-theme="graphite"] .fsh-text[data-ink="dark"], html[data-theme="black"] .fsh-text[data-ink="dark"] { color: var(--sh-text) !important; }
 .fsh-mark { position: absolute; top: 0; right: 0; border-top: 9px solid #ff9f0a; border-left: 9px solid transparent; }
 
-/* Заголовки столбцов и строк. */
-.fsh-heads-top, .fsh-heads-left, .fsh-corner { position: absolute; left: 0; top: 0; z-index: 20; }
-.fsh-heads-top { height: 0; width: 0; }
-.fsh-heads-left { width: 0; height: 0; z-index: 19; }
-.fsh-corner { width: 46px; height: 24px; background: var(--sh-head); box-shadow: inset -1px -1px 0 var(--sh-grid); z-index: 22; }
-.fsh-heads-fixed { position: absolute; inset: 0; z-index: 2; }
+/* Липкие полосы (FastSheetEditor): шапка столбцов, закреплённые строки, левая полоса с номерами строк и закреплёнными
+   столбцами. Их держит при прокрутке браузер (position: sticky) — без задержки на кадр. */
+.fsh-band { position: sticky; overflow: hidden; background: var(--sh-bg); }
+.fsh-band-top { top: 0; z-index: 30; background: var(--sh-head); }
+.fsh-band-frozen { z-index: 25; box-shadow: inset 0 -1px 0 var(--sh-head-text); }
+.fsh-band-left { left: 0; z-index: 22; }
+.fsh-band-pin { position: sticky; left: 0; z-index: 3; overflow: hidden; background: var(--sh-bg); }
+.fsh-band-top > .fsh-band-pin { background: var(--sh-head); }
+.fsh-band-in { position: absolute; left: 0; width: 0; height: 0; }
+.fsh-corner { position: absolute; left: 0; top: 0; z-index: 5; width: 46px; height: 24px; background: var(--sh-head); box-shadow: inset -1px -1px 0 var(--sh-grid); }
+.fsh-band-frozen .fsh-band-pin, .fsh-band-left { box-shadow: inset -1px 0 0 var(--sh-head-text); }
+.fsh { --sh-border-auto: #000; }
+html[data-theme="graphite"] .fsh, html[data-theme="black"] .fsh { --sh-border-auto: #9a9ca2; }
 .fsh-colhead, .fsh-rowhead {
   position: absolute; display: grid; place-items: center; box-sizing: border-box; background: var(--sh-head); color: var(--sh-head-text);
   font: 11px/1 Inter, Arial, sans-serif; user-select: none;
@@ -71,7 +78,7 @@ html[data-theme="graphite"] .fsh-text[data-ink="dark"], html[data-theme="black"]
 .fsh-resize:hover, .fsh-resize[style*="--drag"] { background: var(--sh-sel); }
 
 /* Выделение, активная ячейка, коллеги, «муравьи» буфера обмена. */
-.fsh-overlay { position: absolute; inset: 0 auto auto 0; z-index: 10; pointer-events: none; }
+.fsh-overlay { position: absolute; inset: 0 auto auto 0; z-index: 2; pointer-events: none; }
 .fsh-sel { position: absolute; box-sizing: border-box; border: 1px solid var(--sh-sel); background: var(--sh-sel-fill); }
 .fsh-active { position: absolute; box-sizing: border-box; border: 2px solid var(--sh-sel); }
 .fsh-clip { position: absolute; box-sizing: border-box; outline: 2px dashed var(--sh-sel); outline-offset: -1px; animation: fsh-ants 1s linear infinite; }
@@ -98,3 +105,34 @@ html[data-theme="graphite"] .fsh-text[data-ink="dark"], html[data-theme="black"]
 .fsh-tab[style*="--tab"]::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: 2px; height: 3px; border-radius: 2px; background: var(--tab); }
 .fsh-tab-input { flex: none; width: 120px; height: 26px; padding: 0 8px; border: 2px solid var(--sh-sel); border-radius: 6px; background: var(--sh-bg); color: var(--sh-text); font: inherit; font-size: 13px; outline: none; }
 .fsh-summary { margin-left: auto; padding-left: 12px; color: var(--sh-head-text); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* Холст (sheet/draw.ts): прилипает к краю области прокрутки, распорка под ним даёт полосы прокрутки нужной длины. */
+.fsh-gridwrap { position: relative; flex: 1; min-height: 0; display: flex; }
+.fsh-gridwrap > .fsh-grid { flex: 1; }
+.fsh-canvas { position: sticky; top: 0; left: 0; display: block; z-index: 1; pointer-events: none; }
+.fsh-gridwrap .fsh-sizer { position: relative; z-index: 0; pointer-events: none; }
+.fsh-gridwrap > .fsh-editor { z-index: 40; }
+.fsh-guide { position: absolute; z-index: 35; pointer-events: none; background: var(--sh-sel); }
+.fsh-guide[data-axis="x"] { top: 0; bottom: 0; width: 2px; margin-left: -1px; }
+.fsh-guide[data-axis="y"] { left: 0; right: 0; height: 2px; margin-top: -1px; }
+
+/* Меню фильтра столбца. */
+.fsh-fmenu {
+  position: fixed; z-index: 300; display: flex; flex-direction: column; width: 260px; max-height: min(480px, 80vh); padding: 6px;
+  border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-raised); color: var(--text-main);
+  box-shadow: var(--shadow-lg, 0 12px 32px rgb(0 0 0 / .25)); font-size: var(--text-sm);
+}
+.fsh-fmenu-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.fsh-fmenu-item:hover { background: var(--surface-hover); }
+.fsh-fmenu-sep { height: 1px; margin: 4px 0; background: var(--border-color); }
+.fsh-fmenu-head { display: flex; gap: 12px; padding: 4px 8px; }
+.fsh-fmenu-link { padding: 0; border: 0; background: transparent; color: var(--accent-color); font: inherit; font-size: var(--text-xs); cursor: pointer; }
+.fsh-fmenu-search { display: flex; align-items: center; gap: 6px; margin: 4px; padding: 0 8px; height: 30px; border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-muted); }
+.fsh-fmenu-search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text-main); font: inherit; outline: none; }
+.fsh-fmenu-list { flex: 1; min-height: 60px; overflow: auto; padding: 2px 4px; }
+.fsh-fmenu-check { display: flex; align-items: center; gap: 8px; padding: 4px; border-radius: 6px; cursor: pointer; }
+.fsh-fmenu-check:hover { background: var(--surface-hover); }
+.fsh-fmenu-check span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fsh-fmenu-check input { accent-color: var(--accent-color); }
+.fsh-fmenu-empty { margin: 8px; color: var(--text-muted); }
+.fsh-fmenu-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 6px 4px 2px; border-top: 1px solid var(--border-color); margin-top: 4px; }
