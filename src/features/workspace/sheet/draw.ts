@@ -26,6 +26,8 @@ export interface DrawState {
   filter: Range | null; filtered: Set<number>; hideActive?: boolean;
   /** Куда переносится выделение при перетаскивании за рамку. */
   ghost?: Range | null;
+  /** Ячейки «r:c», где адрес в тексте — не ссылка. */
+  noLinks?: Record<string, 1>;
   /** Куда встанут перетаскиваемые строки (столбцы) — линия перед индексом at. */
   dropAt?: { axis: 'row' | 'col'; at: number } | null;
   /** Столбцы фильтра с заданным условием — их кнопка залита. */
@@ -315,7 +317,7 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
     const bgL = bg ? lightness(bg) : null;
     if (!color) color = bg && bgL !== null ? (bgL > 0.55 ? '#1f1f1f' : '#f1f1f1') : theme.text;
     else if (theme.dark && !bg) { const l = lightness(color); if (l !== null && l < 0.35) color = theme.text; }
-    const link = linkOf(d.cell);
+    const link = s.noLinks?.[`${d.r}:${d.c}`] ? null : linkOf(d.cell);
     if (link && !(st?.cl as { rgb?: string } | undefined)?.rgb) color = theme.link;
     ctx.fillStyle = color;
     const h = ({ 1: 'left', 2: 'center', 3: 'right', 4: 'left' } as Record<number, 'left' | 'center' | 'right'>)[Number(st?.ht)] || autoAlign(d.cell);

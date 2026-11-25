@@ -51,6 +51,8 @@ export interface SheetExtras {
   cf?: CfRule[];
   dv?: DvRule[];
   notes?: Record<string, string>;
+  /** Ячейки «r:c», где адрес в тексте — не ссылка («Удалить ссылку» у голого адреса, как в Google). */
+  nolink?: Record<string, 1>;
   objects?: SheetObject[];
   groups?: { rows?: Group[]; cols?: Group[] };
   protect?: Protection[];
@@ -100,18 +102,21 @@ export function shiftExtras(x: SheetExtras, rows: boolean, start: number, delta:
   if (x.dv) out.dv = x.dv.map((r) => ({ ...r, ranges: shiftRanges(r.ranges, rows, start, delta) })).filter((r) => r.ranges.length);
   if (x.banding) out.banding = x.banding.map((bd) => { const range = shiftRange(bd.range, rows, start, delta); return range ? { ...bd, range } : null; }).filter((bd): bd is Banding => Boolean(bd));
   if (x.protect) out.protect = x.protect.map((p) => { const range = shiftRange(p.range, rows, start, delta); return range ? { ...p, range } : null; }).filter((p): p is Protection => Boolean(p));
-  if (x.notes) {
-    const notes: Record<string, string> = {};
-    for (const [key, text] of Object.entries(x.notes)) {
+  // Заметки и «не ссылка» — по ключу ячейки «r:c»: сдвигаются вместе со строками/столбцами.
+  const shiftCellMap = <T,>(map: Record<string, T>): Record<string, T> => {
+    const next: Record<string, T> = {};
+    for (const [key, value] of Object.entries(map)) {
       const [r, c] = key.split(':').map(Number);
       const p = rows ? r : c;
       let np = p;
       if (delta > 0 && p >= start) np = p + delta;
       if (delta < 0) { if (p >= start && p < start - delta) continue; if (p >= start - delta) np = p + delta; }
-      notes[rows ? `${np}:${c}` : `${r}:${np}`] = text;
+      next[rows ? `${np}:${c}` : `${r}:${np}`] = value;
     }
-    out.notes = notes;
-  }
+    return next;
+  };
+  if (x.notes) out.notes = shiftCellMap(x.notes);
+  if (x.nolink) out.nolink = shiftCellMap(x.nolink);
   if (x.objects) {
     out.objects = x.objects.map((o) => {
       const p = rows ? o.row : o.col;

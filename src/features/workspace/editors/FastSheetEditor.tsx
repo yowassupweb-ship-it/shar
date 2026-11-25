@@ -184,6 +184,8 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   const [noteTip, setNoteTip] = useState<{ key: string; x: number; y: number } | null>(null);
   const [noteEdit, setNoteEdit] = useState<{ r: number; c: number; text: string } | null>(null);
   const [linkEdit, setLinkEdit] = useState<{ r: number; c: number; initial: string } | null>(null);
+  // Карточку ссылки закрыли (Esc) — для этой ячейки не показываем, пока не выберут другую.
+  const [cardClosed, setCardClosed] = useState('');
   // Превью внешней ссылки в карточке (заголовок, описание, картинка сайта) — тот же источник и кэш, что в чате.
   const [linkPreview, setLinkPreview] = useState<{ url: string; data: PreviewData | false } | null>(null);
   const imageInput = useRef<HTMLInputElement>(null);
@@ -1446,6 +1448,12 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     const p0 = url ? { id: newId('ln'), documentStyle: {}, body: { dataStream: `${text}\r\n`, customRanges: [{ startIndex: 0, endIndex: Math.max(0, text.length - 1), rangeId: newId('r'), rangeType: 0, properties: { url } }] } } : null;
     setCells({ [r]: { [c]: { v: text, t: 1, f: null, p: p0 } as unknown as Cell } });
   };
+  /** «Удалить ссылку»: у оформленной ссылки снимается адрес, голый адрес в тексте помечается «не ссылка» (как в Google). */
+  const unlinkCell = (r: number, c: number, rich: boolean) => {
+    if (rich) setLink(r, c, '');
+    const text = String(cellAt(sheet!, r, c)?.v ?? '').trim();
+    if (/^https?:\/\/\S+$/i.test(text)) setExtra('nolink', { ...(xs.nolink || {}), [`${r}:${c}`]: 1 });
+  };
   const insertCheckbox = () => {
     setExtra('dv', [...(xs.dv || []).map((x) => ({ ...x, ranges: x.ranges })), { id: newId('dv'), ranges: [selRange], kind: 'checkbox' }]);
   };
@@ -1538,6 +1546,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
 
   // ── Клавиатура ──
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape' && !edit && sheet) { const url = linkOf(cellAt(sheet, sel.anchor.row, sel.anchor.col)); if (url) { const key = `${sheetId}:${sel.anchor.row}:${sel.anchor.col}`; if (cardClosed !== key) { setCardClosed(key); return; } } }
     if (edit || !geo) return;
     if (selectedObject) {
       if ((e.key === 'Delete' || e.key === 'Backspace') && !readOnly) { e.preventDefault(); removeObject(selectedObject); return; }
@@ -1831,7 +1840,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     drawSheet(ctx, {
       book: b, sheet, geo, theme, scrollX: el.scrollLeft / z, scrollY: el.scrollTop / z, width: W / z, height: H / z, dpr, zoom: z,
       cf: cfLookup, cfBlank: (xs.cf || []).filter((x) => x.kind === 'blank').flatMap((x) => x.ranges),
-      dv: xs.dv, notes: xs.notes, objects, selectedObject, groups: xs.groups, banding: xs.banding, onAsset: () => { assetTick.current += 1; redraw(); },
+      dv: xs.dv, notes: xs.notes, noLinks: xs.nolink, objects, selectedObject, groups: xs.groups, banding: xs.banding, onAsset: () => { assetTick.current += 1; redraw(); },
       sel: fillTo ?? selRange, ghost: moveTo, dropAt, active: anchorM ?? { startRow: sel.anchor.row, endRow: sel.anchor.row, startColumn: sel.anchor.col, endColumn: sel.anchor.col },
       clip: clipMark, marks: new Set(commentCells.filter((m) => !m.sheet || m.sheet === sheet.name).map((m) => m.cell)),
       peers: cursors.flatMap((cur) => {
@@ -1847,7 +1856,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   // Ссылка в активной ячейке — подгрузить превью (чужие сайты; ссылки на Шар открываются кнопками).
   const cardUrl = (() => {
     if (!sheet || edit || selRange.startRow !== selRange.endRow || selRange.startColumn !== selRange.endColumn) return null;
-    const url = linkOf(cellAt(sheet, sel.anchor.row, sel.anchor.col));
+    const url = xs.nolink?.[`${sel.anchor.row}:${sel.anchor.col}`] ? null : linkOf(cellAt(sheet, sel.anchor.row, sel.anchor.col));
     return url && !sharTarget(url) ? url : null;
   })();
   useEffect(() => {
@@ -1924,10 +1933,10 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     const m = geo.merges.get(`${sel.anchor.row}:${sel.anchor.col}`);
     const r0 = m?.startRow ?? sel.anchor.row; const c0 = m?.startColumn ?? sel.anchor.col; const r1 = m?.endRow ?? sel.anchor.row;
     const cell = cellAt(sheet, r0, c0);
-    const url = linkOf(cell);
-    if (!url) return null;
+    const url = xs.nolink?.[`${r0}:${c0}`] ? null : linkOf(cell);
+    if (!url || cardClosed === `${sheetId}:${r0}:${c0}`) return null;
     const rich = Boolean((cell?.p as { body?: { customRanges?: unknown[] } } | undefined)?.body?.customRanges?.length);
-    return { url, r1, c0, rich, inner: sharTarget(url) };
+    return { url, r0, r1, c0, rich, inner: sharTarget(url) };
   })();
   /**
    * Карточку ссылки ставим под ячейку прямо из прокрутки, в том же кадре, что и холст (через перерисовку React она
@@ -1940,7 +1949,9 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     const x = screenX(geo, linkCard.c0, el.scrollLeft / z); const y = screenY2(geo, linkCard.r1, el.scrollTop / z) + 6;
     const top = HEAD_H + (linkCard.r1 >= geo.fr ? geo.fh : 0); const left = HEAD_W + (linkCard.c0 >= geo.fc ? geo.fw : 0);
     const hidden = y - 6 <= top || y > el.clientHeight / z - 30 || x < left - 10;
-    card.style.left = `${x * z}px`; card.style.top = `${y * z}px`; card.style.visibility = hidden ? 'hidden' : '';
+    // Ячейка уехала влево под заголовки — карточка не вылезает за край сетки.
+    const cx = Math.max(left + 4, Math.min(x, el.clientWidth / z - card.offsetWidth / z - 8));
+    card.style.left = `${cx * z}px`; card.style.top = `${y * z}px`; card.style.visibility = hidden ? 'hidden' : '';
   };
   placeLinkCardRef.current = placeLinkCard;
   // Поле правки стоит на месте экрана, где правку начали, — при прокрутке оно не едет с ячейками (как в Google);
@@ -1967,7 +1978,13 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     const lineH = Math.round(pt * (96 / 72) * 1.25);
     const vt = Number(st?.vt) || 3;
     const h = Math.max(12, (editBoxRaw?.h ?? 24) - 1);
-    const padTop = vt === 1 ? 2 : vt === 2 ? Math.max(0, Math.floor((h - lineH) / 2)) : Math.max(0, h - lineH - 3);
+    // Базовая линия текста — там же, где её рисует холст (draw.ts: низ — y+h−4, верх — y+2+кегль, середина — по центру
+    // строки): иначе при входе в правку текст подпрыгивал. Внутри строки высотой lineH базовая линия Arial — на
+    // (lineH − кегль)/2 + 0,905·кегль от её верха.
+    const px = pt * (96 / 72);
+    const rawH = editBoxRaw?.h ?? 24;
+    const base = vt === 1 ? 2 + px : vt === 2 ? (rawH - lineH) / 2 + px : rawH - 4;
+    const padTop = Math.max(0, Math.round(base - (lineH - px) / 2 - 0.905 * px));
     const css = editLook?.css || {};
     const viewW = (grid.current?.clientWidth ?? 800) / zoom;
     return {
@@ -1975,7 +1992,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       minWidth: (editBoxRaw?.w ?? 88) - 1, minHeight: h,
       maxWidth: Math.max((editBoxRaw?.w ?? 88) - 1, viewW - (editBoxRaw?.x ?? 0) - 4),
       fontFamily: css.fontFamily, fontSize: css.fontSize, fontWeight: css.fontWeight, fontStyle: css.fontStyle, textDecoration: css.textDecoration, color: css.color,
-      background: css.background || undefined, textAlign: (editLook?.h as CSSProperties['textAlign']) || undefined,
+      background: css.background || undefined, textAlign: (editLook?.h as CSSProperties['textAlign']) || (typeof editCell?.v === 'number' && !edit.text.startsWith('=') ? 'right' : undefined),
       '--edit-line': `${lineH}px`, '--edit-pad-top': `${padTop}px`,
     } as CSSProperties;
   })();
@@ -2152,7 +2169,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
               <>
               <button type="button" className="nx-icon-btn" title="Копировать ссылку" aria-label="Копировать ссылку" onClick={() => { void navigator.clipboard?.writeText(linkCard.url).catch(() => undefined); }}><Copy size={17} strokeWidth={1.75} /></button>
               {!readOnly && <button type="button" className="nx-icon-btn" title="Изменить ссылку" aria-label="Изменить ссылку" onClick={() => setLinkEdit({ r: sel.anchor.row, c: sel.anchor.col, initial: linkCard.url })}><Pencil size={17} strokeWidth={1.75} /></button>}
-              {!readOnly && linkCard.rich && <button type="button" className="nx-icon-btn" title="Удалить ссылку" aria-label="Удалить ссылку" onClick={() => setLink(sel.anchor.row, sel.anchor.col, '')}><Link2Off size={17} strokeWidth={1.75} /></button>}
+              {!readOnly && <button type="button" className="nx-icon-btn" title="Удалить ссылку" aria-label="Удалить ссылку" onClick={() => unlinkCell(linkCard.r0, linkCard.c0, linkCard.rich)}><Link2Off size={17} strokeWidth={1.75} /></button>}
               </>
             )}
             </div>
