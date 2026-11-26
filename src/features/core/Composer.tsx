@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, CalendarDays, Check, Dumbbell, MoreHorizontal, ShieldCheck, CheckSquare, CornerDownRight, FileSpreadsheet, FileText, Folder, Forward, LayoutGrid, Mail, MessageCircle, MonitorUp,
+import { ArrowUp, CalendarDays, Check, Dumbbell, MoreHorizontal, ShieldCheck, CheckSquare, CornerDownRight, FileSpreadsheet, FileText, Folder, Forward, LayoutGrid, Mail, MessageCircle, Eye,
   ListChecks, Paperclip, Plug, Presentation, Slash, StickyNote, User, X } from 'lucide-react';
 import { KindIcon } from '@/features/workspace/KindIcon';
 import { KINDS } from '@/features/workspace/kinds';
@@ -99,7 +99,7 @@ function WhereChips({ items, struck, onToggle }: { items: WhereItem[]; struck: S
   if (!items.length) return null;
   return (
     <div className="ncore-where" aria-label="Что агент увидит из открытого у вас">
-      <span className="ncore-where-label" title="Агент знает, что у вас открыто. Лишнее — зачеркните щелчком."><MonitorUp size={12} aria-hidden="true" /> Видит</span>
+      <span className="ncore-where-label" role="img" aria-label="Агент видит" title="Агент видит, что у вас открыто. Лишнее — зачеркните щелчком."><Eye size={14} aria-hidden="true" /></span>
       {items.map((item) => {
         const Icon = WHERE_ICON[item.kind] || LayoutGrid;
         const off = struck.has(item.key);
