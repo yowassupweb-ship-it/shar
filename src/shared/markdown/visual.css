@@ -26,6 +26,25 @@
 .nve-content pre code { padding: 0; background: transparent; }
 .nve-content a { color: var(--accent-color); text-decoration: underline; text-underline-offset: 2px; cursor: text; }
 .nve-content img { max-width: 100%; height: auto; border-radius: var(--radius-md); }
+/* Картинка с ручками размера (extensions.ts → ResizableImage). Без размера — своя ширина, но не шире текста. */
+.nve-img { position: relative; display: block; width: fit-content; max-width: 100%; margin: 0.5em 0; line-height: 0; }
+.nve-img[data-sized] img { width: 100%; }
+.nve-img img { display: block; }
+.nve-img.is-selected img, .nve-img[data-resizing] img { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+.nve-img-handle {
+  position: absolute; z-index: 1; box-sizing: border-box; border: 2px solid var(--surface-panel, #fff); border-radius: 4px;
+  background: var(--accent-color); box-shadow: 0 1px 3px rgb(0 0 0 / .3); opacity: 0; transition: opacity .12s;
+}
+.nve-img-handle[data-side="r"] { top: 50%; right: -5px; width: 10px; height: 34px; margin-top: -17px; cursor: ew-resize; }
+.nve-img-handle[data-side="br"] { right: -6px; bottom: -6px; width: 14px; height: 14px; border-radius: 50%; cursor: nwse-resize; }
+.nve-img:hover .nve-img-handle, .nve-img.is-selected .nve-img-handle, .nve-img[data-resizing] .nve-img-handle { opacity: 1; }
+.nve-img-size {
+  position: absolute; top: 8px; right: 8px; padding: 2px 8px; border-radius: var(--radius-pill); background: rgb(0 0 0 / .65);
+  color: #fff; font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; opacity: 0; pointer-events: none;
+}
+.nve-img[data-resizing] .nve-img-size { opacity: 1; }
+.ProseMirror[contenteditable="false"] .nve-img-handle { display: none; }
+@media (hover: none) { .nve-img.is-selected .nve-img-handle[data-side="r"] { width: 14px; right: -7px; } }
 .nve-content hr { border: 0; border-top: 1px solid var(--border-color); margin: 1em 0; }
 .nve-content p.is-editor-empty:first-child::before { content: attr(data-placeholder); float: left; height: 0; color: var(--text-muted); pointer-events: none; }
 /* Чек-лист: «квадратик» и текст в одну строку, зачёркивание выполненного. */

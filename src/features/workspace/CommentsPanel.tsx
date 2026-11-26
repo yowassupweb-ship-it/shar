@@ -191,7 +191,7 @@ function ThreadCard({ thread, comments, canModerate, active, onJump, onActivate 
  * Панель комментариев документа и таблицы, как в Google Docs: новый комментарий к выделенному тексту или ячейке,
  * ветки с ответами, «Решено» убирает ветку в архив, у каждой — переход к месту в материале.
  */
-export function CommentsPanel({ comments, canModerate, getAnchor, onJump, onClose, kind, focusTick = 0, focusCell = null }: {
+export function CommentsPanel({ comments, canModerate, getAnchor, onJump, onClose, kind, focusTick = 0, focusCell = null, closing = false }: {
   comments: Comments; canModerate: boolean; kind: 'document' | 'table' | 'task';
   getAnchor: () => CommentAnchor | null; onJump?: (anchor: CommentAnchor) => void; onClose: () => void;
   /** Меняется — поставить курсор в поле нового комментария. */
@@ -199,6 +199,8 @@ export function CommentsPanel({ comments, canModerate, getAnchor, onJump, onClos
   /** Выбрали ячейку (таблица) или прокомментированный текст (документ, quote) — ветка становится активной и прокручивается
    *  в вид (tick — каждый выбор). */
   focusCell?: { sheet: string; cell: string; quote?: string; tick: number } | null;
+  /** Панель уезжает (закрытие с анимацией — её держит на экране тот, кто показывает). */
+  closing?: boolean;
 }) {
   const newBox = useRef<HTMLDivElement>(null);
   useEffect(() => { if (focusTick) newBox.current?.querySelector('textarea')?.focus(); }, [focusTick]);
@@ -235,7 +237,7 @@ export function CommentsPanel({ comments, canModerate, getAnchor, onJump, onClos
   }, [getAnchor]);
 
   return (
-    <aside className="nws-cm" aria-label="Комментарии">
+    <aside className="nws-cm" aria-label="Комментарии" data-closing={closing || undefined}>
       <header className="nws-cm-head">
         <h2>Комментарии</h2>
         <button type="button" className="nx-icon-btn" onClick={onClose} aria-label="Закрыть комментарии"><X size={16} /></button>

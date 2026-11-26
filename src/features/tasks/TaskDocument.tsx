@@ -57,6 +57,9 @@ export function dueLabel(iso?: string | null): { text: string; late: boolean } |
   return { text: due.time ? `${date}, ${due.time}` : date, late };
 }
 
+/** Сколько длится уезд панели комментариев (tasks.css, ntd-cm-close). */
+const CM_CLOSE_MS = 230;
+
 export default function TaskDocument({ task, onBack, onGone, onCreated }: {
   task: Task;
   onBack: () => void;
@@ -96,6 +99,13 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
   // ── Комментарии, как в документах: панель справа (открыта/закрыта — помним), ветки к выделенному тексту ──
   const [cmOpen, setCmOpenState] = useState(() => { try { return localStorage.getItem('nx:task-comments') === '1'; } catch { return false; } });
   const setCmOpen = (v: boolean) => { setCmOpenState(v); try { localStorage.setItem('nx:task-comments', v ? '1' : '0'); } catch { /* без памяти */ } };
+  // Закрытие — тоже плавное: панель ещё CM_CLOSE_MS на экране с пометкой «закрывается» (уезжает), потом убирается.
+  const [cmMounted, setCmMounted] = useState(cmOpen);
+  useEffect(() => {
+    if (cmOpen) { setCmMounted(true); return undefined; }
+    const t = window.setTimeout(() => setCmMounted(false), CM_CLOSE_MS);
+    return () => window.clearTimeout(t);
+  }, [cmOpen]);
   const commentSource = useMemo(() => taskCommentSource(draft ? null : task.id), [draft, task.id]);
   const comments = useCommentSource(commentSource);
   const [cmFocus, setCmFocus] = useState(0);
@@ -601,9 +611,9 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
         />
       )}
     </section>
-      {cmOpen && !draft && (
+      {cmMounted && !draft && (
         <CommentsPanel comments={comments} kind="task" canModerate={String(task.authorId || '') === myId()} getAnchor={getCommentAnchor}
-          onJump={jumpToQuote} focusTick={cmFocus} focusCell={cmThread} onClose={() => setCmOpen(false)} />
+          onJump={jumpToQuote} focusTick={cmFocus} focusCell={cmThread} onClose={() => setCmOpen(false)} closing={!cmOpen} />
       )}
       {textMenu && <TaskTextMenu at={textMenu} editable={editing && !viewOnly} root={pageRef.current} onComment={draft ? undefined : startComment} onClose={() => setTextMenu(null)} />}
     </div>

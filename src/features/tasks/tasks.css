@@ -233,6 +233,8 @@
 .ntd-md a { color: var(--accent-color); text-decoration: none; }
 @media (hover: hover) { .ntd-md a:hover { text-decoration: underline; text-underline-offset: 2px; } }
 .ntd-md .ntd-image { display: block; max-width: 100%; max-height: 480px; margin: 0.5em 0; border-radius: var(--radius-md); }
+/* Размер задан вручную (метка «#w=NN») — ширина в процентах, без предела по высоте. */
+.ntd-md .ntd-image[data-sized] { max-height: none; height: auto; }
 .ntd-table { margin: 0.5em 0; overflow-x: auto; }
 .ntd-table table { border-collapse: collapse; font-size: var(--text-sm); }
 .ntd-table th,
@@ -398,7 +400,9 @@
 .ntf-add { display: grid; place-items: center; flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text-muted); cursor: pointer; }
 @media (hover: hover) { .ntf-add:hover { background: var(--surface-hover); color: var(--text-main); } }
 .ntf-colors { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 8px 6px; }
-.ntf-colors-sheet { padding: var(--space-3) 0 0; }
+/* В окне папки: кружки крупнее и с ровным шагом; поле 4px — чтобы рамка выбранного цвета не обрезалась у края. */
+.ntf-colors-sheet { gap: 10px; padding: var(--space-3) 4px 4px; }
+.ntf-colors-sheet .ntf-color { width: 26px; height: 26px; }
 .ntf-color { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: var(--tone); color: #fff; cursor: pointer; }
 .ntf-color[aria-checked="true"] { box-shadow: 0 0 0 2px var(--surface, #fff), 0 0 0 4px var(--tone); }
 .ntf-person { cursor: default; }
@@ -566,6 +570,10 @@
    перескакивает); на телефоне — выезжает поверх задачи. */
 @keyframes ntd-cm-open { from { margin-right: -320px; opacity: 0; } to { margin-right: 0; opacity: 1; } }
 @keyframes ntd-cm-slide { from { transform: translateX(100%); } to { transform: none; } }
+/* Закрытие — обратным ходом (TaskDocument держит панель CM_CLOSE_MS с data-closing). */
+.ntd-shell > .nws-cm[data-closing] { animation: ntd-cm-close .23s cubic-bezier(.4, 0, .6, 1) forwards; pointer-events: none; }
+@keyframes ntd-cm-close { from { margin-right: 0; opacity: 1; } to { margin-right: -320px; opacity: 0; } }
+@keyframes ntd-cm-unslide { from { transform: none; } to { transform: translateX(100%); } }
 @media (min-width: 641px) {
   .ntd-shell { overflow-x: clip; } /* выезжающая панель не показывается за правым краем */
 }
@@ -573,6 +581,7 @@
   .ntn[data-pane="list"] > .ntd-shell { display: none; }
   .ntd-shell > .nws-cm { position: absolute; inset: 0 0 0 auto; width: min(100%, 360px); z-index: 20; box-shadow: -8px 0 24px rgba(0, 0, 0, .25); padding-bottom: env(safe-area-inset-bottom);
     animation: ntd-cm-slide .28s cubic-bezier(.2, .8, .2, 1); }
+  .ntd-shell > .nws-cm[data-closing] { animation-name: ntd-cm-unslide; }
   /* Панель поверх всей задачи, от самого верха экрана: шапка — ниже статус-бара, иначе «Закрыть» под часами
      iPhone не нажать, и из комментариев не выйти. */
   .ntd-shell > .nws-cm .nws-cm-head { padding-top: calc(var(--space-3) + env(safe-area-inset-top)); }
@@ -662,4 +671,4 @@
 /* Новые комментарии у задачи — как непрочитанные у чата: акцентная пилюля с числом справа. */
 .ntl-badge-comments { flex: none; display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 7px; border-radius: var(--radius-pill); background: var(--accent-fill); color: var(--on-accent, #fff); font-size: 11px; font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; }
 
-@media (prefers-reduced-motion: reduce) { .ntd-shell > .nws-cm { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .ntd-shell > .nws-cm, .ntd-shell > .nws-cm[data-closing] { animation: none; } }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Check, FolderPlus, Lock, MoreHorizontal, Palette, Pencil, Search, Share2, Trash2, Users } from 'lucide-react';
+import { Check, FolderPlus, MoreHorizontal, Palette, Pencil, Search, Share2, Trash2, Users } from 'lucide-react';
 import { displayName, useChatStore } from '@/features/chat';
 import { Avatar } from '@/shared/ui/Avatar';
 import { askConfirm, Menu, MenuItem, Sheet, type MenuAnchor } from '@/shared/ui/overlay';
@@ -160,7 +160,6 @@ export function FolderSheet({ list, onClose, onSaved }: { list?: TaskList; onClo
           </button>
         ))}
       </div>
-      {!list && <p className="nx-hint"><Lock size={12} aria-hidden="true" /> Новая папка личная. Открыть её коллегам можно в меню папки → «Доступ».</p>}
     </Sheet>
   );
 }

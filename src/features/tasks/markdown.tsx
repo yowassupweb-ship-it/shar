@@ -1,4 +1,5 @@
 import { Fragment, type ReactNode } from 'react';
+import { imageWidth, withImageWidth } from '@/shared/markdown/imageSize';
 
 /**
  * Markdown задач — перенос из MBOX (workbench/MemoryDocument.renderDocument и
@@ -29,7 +30,11 @@ function inline(text: string, key: string, inLink = false): ReactNode[] {
     const id = `${key}-${index}`;
     const image = part.match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/);
     if (image) {
-      return safeHref(image[2]) ? <img key={id} className="ntd-image" src={image[2]} alt={image[1]} loading="lazy" /> : <Fragment key={id}>{part}</Fragment>;
+      // Ширина из метки «#w=NN» (shared/markdown/imageSize.ts) — проценты ширины текста.
+      const w = imageWidth(image[2]);
+      return safeHref(image[2])
+        ? <img key={id} className="ntd-image" src={image[2]} alt={image[1]} loading="lazy" style={w ? { width: `${w}%` } : undefined} data-sized={w ? '' : undefined} />
+        : <Fragment key={id}>{part}</Fragment>;
     }
     const link = part.match(/^\[([^\]]+)\]\(([^)\s]+)\)$/);
     // Внутри ссылки адреса ссылками не делаем: вложенный <a> ломает разметку.
@@ -134,7 +139,10 @@ const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 function inlineHtml(text: string): string {
   return text.split(INLINE).filter(Boolean).map((part) => {
     const image = part.match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/);
-    if (image) return safeHref(image[2]) ? `<img src="${esc(image[2])}" alt="${esc(image[1])}">` : esc(part);
+    if (image) {
+      const w = imageWidth(image[2]);
+      return safeHref(image[2]) ? `<img src="${esc(image[2])}" alt="${esc(image[1])}"${w ? ` style="width:${w}%"` : ''}>` : esc(part);
+    }
     const link = part.match(/^\[([^\]]+)\]\(([^)\s]+)\)$/);
     if (link) return safeHref(link[2]) ? `<a href="${esc(link[2])}" target="_blank" rel="noreferrer">${inlineHtml(link[1])}</a>` : esc(part);
     if (/^https?:\/\//.test(part)) return `<a href="${esc(part)}" target="_blank" rel="noreferrer">${esc(part)}</a>`;
@@ -207,7 +215,13 @@ export function htmlToMarkdown(html: string): string {
         // Текст ссылки — сам адрес: оставляем просто адрес, без [адрес](адрес).
         return !t || t === href ? href : `[${t}](${href})`;
       }
-      case 'img': { const src = el.getAttribute('src') || ''; return safeHref(src) ? `![${el.getAttribute('alt') || ''}](${src})` : ''; }
+      case 'img': {
+        const raw = el.getAttribute('src') || '';
+        // Ширина в процентах из style (так её пишет inlineHtml) — обратно в метку адреса.
+        const pct = /width:\s*(\d{1,3})%/.exec(el.getAttribute('style') || '');
+        const src = pct ? withImageWidth(raw, Number(pct[1])) : raw;
+        return safeHref(raw) ? `![${el.getAttribute('alt') || ''}](${src})` : '';
+      }
       case 'h1': return `\n# ${kids().trim()}\n`;
       case 'h2': return `\n## ${kids().trim()}\n`;
       case 'h3': case 'h4': case 'h5': case 'h6': return `\n### ${kids().trim()}\n`;
