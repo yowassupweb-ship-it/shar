@@ -38,6 +38,8 @@ export interface Task {
   updatedAt?: string;
   metadata?: Record<string, unknown>;
   chatId?: string;
+  /** Поручили другие, а я её ещё не открывал (сервер: todos/seen.py). */
+  isNew?: boolean;
 }
 
 export interface TaskList {
@@ -231,10 +233,27 @@ function listen() {
     }
     const incoming = e.task as Task | undefined;
     if (!incoming) return;
+    // Итог правки пришёл — поток «агент пишет» по этой задаче закончен.
+    if (useTaskStream.getState().byId[id]) useTaskStream.setState((st) => { const next = { ...st.byId }; delete next[id]; return { byId: next }; });
     const cur = useTasks.getState().tasks[id];
+    // Новая задача от другого человека, где я исполнитель, — «Новое», пока не открою.
+    if (e.type === 'task_created' && !cur && assigneesOf(incoming).includes(myId()) && String(incoming.assignedById || incoming.authorId || '') !== myId()) incoming.isNew = true;
     // Своя правка, которую мы ещё сохраняем, важнее эха с сервера.
     if (dirty.has(id)) return;
     put({ ...cur, ...incoming, id });
+  });
+  // Агент пишет задачу (MCP task_create/task_update): частичный текст — только на экран, в базу пишет итог.
+  realtime.subscribe((e: RealtimeEvent) => {
+    if (e.type !== 'task_stream') return;
+    const id = String(e.taskId || '');
+    if (!id) return;
+    const ev = e as unknown as { agent?: string; md?: string; title?: string };
+    useTaskStream.setState((st) => ({ byId: { ...st.byId, [id]: { agent: String(ev.agent || 'Агент'), md: String(ev.md || ''), title: ev.title, at: Date.now() } } }));
+    // Итог может не дойти (сеть) — поток гаснет сам.
+    window.setTimeout(() => {
+      const cur = useTaskStream.getState().byId[id];
+      if (cur && Date.now() - cur.at > 3500) useTaskStream.setState((st) => { const next = { ...st.byId }; delete next[id]; return { byId: next }; });
+    }, 4000);
   });
   // После переподключения — перечитать: пока сокета не было, события не приходили.
   // resync — после переподключения; tasks_resync — папку открыли или закрыли (набор видимых задач изменился).
@@ -242,6 +261,17 @@ function listen() {
 }
 
 const dirty = new Set<string>();
+
+/** Задачи, которые сейчас «печатает» агент: частичный текст для показа (не сохраняется). */
+export const useTaskStream = create<{ byId: Record<string, { agent: string; md: string; title?: string; at: number }> }>(() => ({ byId: {} }));
+
+/** Человек открыл задачу — снять «Новое» (у себя сразу, на сервере — отметкой). */
+export function markTaskSeen(id: string): void {
+  const t = useTasks.getState().tasks[id];
+  if (!t?.isNew || isDraft(id)) return;
+  put({ ...t, isNew: false });
+  void fetch(`/api/todos/${encodeURIComponent(id)}/seen`, { method: 'POST' }).catch(() => undefined);
+}
 
 // ── Запись ──────────────────────────────────────────────────────────────────
 

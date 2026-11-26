@@ -283,13 +283,58 @@ def _task_fields(args: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+# ── Поток агента в задаче: текст появляется у открывших на глазах ──────────────────────────────────────────
+STREAM_BUDGET_S = 1.6
+STREAM_MIN_CHARS = 24
+
+
+def _agent_name(access) -> str:
+    name = str(getattr(access.ctx, "key_name", "") or "").split("(")[0].split("·")[0].strip()
+    return name[:30] or "Агент"
+
+
+def _stream_task_text(access, task_id: str, md: str, title: str | None = None) -> None:
+    """Перед записью текста задачи — показать его у открывших «печатаемым»: частями по словам (task_stream), весь
+    поток не дольше STREAM_BUDGET_S. Запись в базу — потом, обычной правкой (её task_updated завершает поток)."""
+    import re
+    import time
+
+    from app.core.db import db
+
+    if len(md or "") < STREAM_MIN_CHARS:
+        return
+    try:
+        task = db.get_task(task_id)
+    except Exception:
+        task = None
+    if not task:
+        return
+    tokens = re.findall(r"\S+\s*|\s+", md)
+    steps = max(1, min(28, len(tokens)))
+    per = max(1, -(-len(tokens) // steps))
+    pause = STREAM_BUDGET_S / steps
+    agent = _agent_name(access)
+    for i in range(per, len(tokens) + per, per):
+        todos.push_task_stream(task, {"agent": agent, "md": "".join(tokens[:i]), **({"title": title} if title else {})})
+        time.sleep(pause)
+
+
 def task_create(access, args: dict[str, Any]) -> dict[str, Any]:
     if not str(args.get("title") or "").strip():
         raise _err("Нужно название задачи (title)")
     fields = _task_fields({"text": "", "assignee_ids": [access.me.user_id], **args})
     me = access.me.user_id
-    payload = {"type": "todo", "status": "pending", "priority": "medium", "authorId": me, "assignedById": me, **fields}
+    md = str((fields.get("metadata") or {}).get("md") or "")
+    # Длинный текст — потоком: задача появляется сразу с названием, текст дописывается на глазах.
+    streaming = len(md) >= STREAM_MIN_CHARS
+    first = {**fields, "description": "", "metadata": {"md": ""}} if streaming else fields
+    payload = {"type": "todo", "status": "pending", "priority": "medium", "authorId": me, "assignedById": me, **first}
     created = _call(todos.create_todo, None, payload, access.me)
+    if streaming:
+        task_id = str(created.get("id") or "")
+        _stream_task_text(access, task_id, md, str(fields.get("title") or ""))
+        _call(todos.update_todo, None, {"id": task_id, "type": "todo", "description": fields.get("description") or "", "metadata": {"md": md}}, access.me)
+        created = (_call(todos.get_todos, userId=None, taskId=task_id, me=access.me).get("todos") or [created])[0]
     return {"created": _task_view(created, full=True)}
 
 
@@ -301,6 +346,9 @@ def task_update(access, args: dict[str, Any]) -> dict[str, Any]:
     if "metadata" in fields:  # markdown кладём рядом с остальными метаданными задачи, а не вместо них
         current = (_call(todos.get_todos, userId=None, taskId=task_id, me=access.me).get("todos") or [{}])[0]
         meta = current.get("metadata") if isinstance(current.get("metadata"), dict) else {}
+        new_md = str(fields["metadata"].get("md") or "")
+        if new_md != str(meta.get("md") or ""):
+            _stream_task_text(access, task_id, new_md, fields.get("title"))
         fields["metadata"] = {**meta, **fields["metadata"]}
     _call(todos.update_todo, None, {"id": task_id, "type": "todo", **fields}, access.me)
     return task_read(access, {"id": task_id})

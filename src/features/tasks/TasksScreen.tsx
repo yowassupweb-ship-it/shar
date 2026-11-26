@@ -16,7 +16,7 @@ import { askConfirm, Menu, MenuItem, Sheet, type MenuAnchor } from '@/shared/ui/
 import Splitter from '@/shared/ui/Splitter';
 import {
   assigneesOf, canAddToFolder, canManageFolder, chainOf, deleteTask, doersOf, isDone, isDraft, loadTasks, makeChain, myId, newDraft, relevantLists, removeFromChain, setChain, shownAssignees, STATUSES, statusOf,
-  type Status, taskMarkdown, updateTask, useTasks, type Task, type TaskList,
+  type Status, taskMarkdown, updateTask, useTasks, useTaskStream, markTaskSeen, type Task, type TaskList,
 } from './api';
 import { FolderMenu, FolderSheet, FolderShareSheet } from './Folders';
 import { checklistProgress, plainSnippet } from './markdown';
@@ -53,7 +53,7 @@ const Row = memo(function Row({ t, active, onOpen, onMenu, depth = 0, showStatus
   t: Task; active: boolean; onOpen: (id: string) => void; onMenu: (t: Task, at: MenuAnchor) => void; depth?: number;
   /** Режим выделения нескольких задач (для цепочки): щелчок выделяет, а не открывает. */
   selecting?: boolean; selected?: boolean; onSelect?: (id: string) => void;
-  /** Этап цепочки: отметку «выполнено» несёт узел цепочки слева, свой кружок не рисуем. */
+  /** Этап цепочки: отметку «выполнено» несёт узел цепочки слева, свой кружок не рисуем; лицо — ответственного. */
   inChain?: boolean;
   /** Статус в строке — кроме вида «по статусам», где он уже в заголовке группы. */
   showStatus?: boolean;
@@ -70,8 +70,10 @@ const Row = memo(function Row({ t, active, onOpen, onMenu, depth = 0, showStatus
   const progress = checklistProgress(md);
   const snippet = plainSnippet(md);
   const press = useLongPress((x, y) => onMenu(t, { x, y }));
-  // Задача «себе» — без лица исполнителя (заказчик и так понятен).
-  const people = shownAssignees(t);
+  // Задача «себе» — без лица исполнителя (заказчик и так понятен); у этапа цепочки — лицо ответственного (по
+  // умолчанию заказчик), чтобы у каждого этапа был виден тот, кто его ведёт.
+  const people = inChain ? doersOf(t) : shownAssignees(t);
+  const stream = useTaskStream((st) => st.byId[t.id]);
   const toggle = (e: React.MouseEvent) => {
     e.stopPropagation();
     void updateTask(t.id, { isCompleted: !done, completed: !done }).catch(() => showToast('Не сохранилось — нет связи с сервером.', 'error'));
@@ -110,8 +112,8 @@ const Row = memo(function Row({ t, active, onOpen, onMenu, depth = 0, showStatus
         </button>
       )}
       <span className="ntl-text">
-        <span className="ntl-name">{t.title || (draft ? 'Новая задача' : 'Без названия')}</span>
-        {snippet && <span className="ntl-snippet">{snippet}</span>}
+        <span className="ntl-name">{t.isNew && <span className="ntl-new">Новое</span>}{stream?.title || t.title || (draft ? 'Новая задача' : 'Без названия')}</span>
+        {stream ? <span className="ntl-snippet ntl-streaming"><i aria-hidden="true" />{stream.agent} пишет…</span> : snippet && <span className="ntl-snippet">{snippet}</span>}
         <span className="ntl-meta">
           {draft && <span className="ntl-draft">Черновик</span>}
           {!draft && showStatus && statusInfo && !done && <span className="ntl-status" style={{ '--tone': statusInfo.tone } as CSSProperties}><i aria-hidden="true" />{statusInfo.label}</span>}
@@ -204,6 +206,8 @@ export default function TasksScreen() {
   const [chainRename, setChainRename] = useState<Chain | null>(null);
 
   useEffect(() => { void loadTasks(); }, []);
+  // Открытая (в том числе по ссылке) задача — уже не «новая».
+  useEffect(() => { if (activeId && tasks[activeId]?.isNew) markTaskSeen(activeId); }, [activeId, tasks]);
   useEffect(() => {
     const onPop = () => setActiveId(readTaskParam());
     window.addEventListener('popstate', onPop);
@@ -211,6 +215,7 @@ export default function TasksScreen() {
   }, []);
 
   const open = useCallback((id: string) => {
+    markTaskSeen(id);
     const cur = readTaskParam();
     if (cur === id) return;
     writeTaskParam(id, window.matchMedia(NARROW).matches && !cur);

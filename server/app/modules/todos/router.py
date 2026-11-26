@@ -14,7 +14,7 @@ from app.core.realtime import sse_manager
 from app.core.security import Identity, current_identity
 from app.modules.calendar.router import _roll_recurring_calendar_events
 from app.modules.chats.chat_notifications import send_notification_message
-from app.modules.todos import folders
+from app.modules.todos import chain, folders, seen
 
 router = APIRouter()
 
@@ -131,6 +131,8 @@ def get_todos(userId: Optional[str] = None, taskId: Optional[str] = None, me: Id
         logger.debug("[GET /api/todos] user %s has no accessible lists", uid)
     # Преобразуем snake_case в camelCase
     todos = [hydrate_task(todo) for todo in todos]
+    # «Новое» — поручили другие, ещё не открывал (как у материалов «Офиса»; todos/seen.py).
+    seen.flag_new(todos, uid)
     lists = [snake_to_camel(list_item) for list_item in lists]
     categories = [snake_to_camel(cat) for cat in categories]
     
@@ -141,10 +143,8 @@ def get_todos(userId: Optional[str] = None, taskId: Optional[str] = None, me: Id
     }
 
 
-def _push_task_sse(task: dict, event: str = 'task_updated') -> None:
-    """Push SSE event to all users related to a task (assignees, creator, delegator)."""
-    if not task:
-        return
+def _task_recipients(task: dict) -> set:
+    """Кому видна задача сразу: исполнители, постановщик, делегировавший и те, кому открыта её папка."""
     recipients: set = set()
     for key in ('assigned_to_id', 'assigned_by_id', 'delegated_by_id'):
         uid = task.get(key) or task.get(snake_to_camel(key) if '_' in key else key)
@@ -154,6 +154,27 @@ def _push_task_sse(task: dict, event: str = 'task_updated') -> None:
         if uid:
             recipients.add(str(uid))
     recipients |= folders.members(task.get('list_id'))  # кому открыта папка с этой задачей
+    return recipients
+
+
+def push_task_stream(task: dict, data: dict) -> None:
+    """Временное событие «агент пишет задачу» (task_stream): частичный текст для открывших — без записи в базу.
+    Итог приходит обычным task_updated."""
+    if not task:
+        return
+    payload = {'type': 'task_stream', 'taskId': task.get('id'), **data}
+    for uid in _task_recipients(task):
+        try:
+            sse_manager.push(uid, payload)
+        except Exception:
+            pass
+
+
+def _push_task_sse(task: dict, event: str = 'task_updated') -> None:
+    """Push SSE event to all users related to a task (assignees, creator, delegator)."""
+    if not task:
+        return
+    recipients = _task_recipients(task)
     payload = {
         'type': event,
         'taskId': task.get('id'),
@@ -255,8 +276,18 @@ def _notify_task_change(before: Optional[dict], after: Optional[dict], actor: st
                 text = f"{icon} {actor_name}: «{title}» — {_TASK_STATUS_RU.get(st_after, st_after)}"
                 for uid in watchers:
                     _send_task_notice(uid, 'task_status_changed', task_id, text, actor)
+        # Цепочка задач: «ваша очередь», «этап вернули», «цепочка завершена», «вы ответственный» (todos/chain.py).
+        chain.notify(before, after, actor, actor_name, lambda uid, kind, tid, msg: _send_task_notice(uid, kind, tid, msg, actor))
     except Exception as e:
         logger.debug(f"[tasks] notify change failed: {e}")
+
+
+@router.post("/api/todos/{task_id}/seen")
+def mark_task_seen(task_id: str, me: Identity = Depends(current_identity)):
+    """Человек открыл задачу — метка «Новое» снимается."""
+    _owned_task_or_403(task_id, me)
+    seen.mark(task_id, me.user_id)
+    return {"ok": True}
 
 
 @router.post("/api/todos")

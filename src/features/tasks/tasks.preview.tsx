@@ -30,7 +30,7 @@ export function mountTasks(): string {
     t3: task('t3', 'Согласование текстов', { assignedToIds: ['u3'], assignedToId: 'u3', metadata: { md: '', chain: chain(3) } }),
     t4: task('t4', 'Публикация', { metadata: { md: '', chain: chain(4) } }),
     t5: task('t5', 'Задача себе: позвонить подрядчику', {}),
-    t6: task('t6', 'Обновить фото тура', { assignedToIds: ['u2'], assignedToId: 'u2' }),
+    t6: task('t6', 'Обновить фото тура', { assignedToIds: [me], assignedToId: me, assignedById: 'u2', authorId: 'u2', isNew: true }),
   };
   useTasks.setState({ tasks, lists: [{ id: 'L1', name: 'Корп сайт', color: 'var(--note-blue)', creatorId: me, sharedLevel: 'edit' }], phase: 'ready' } as never);
   host = document.createElement('div');

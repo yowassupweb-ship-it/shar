@@ -9,7 +9,7 @@ import { displayName, useChatStore } from '@/features/chat';
 import { Avatar } from '@/shared/ui/Avatar';
 import { askConfirm, Menu, MenuItem, Sheet, type MenuAnchor } from '@/shared/ui/overlay';
 import {
-  assigneesOf, canAddToFolder, deleteTask, shownAssignees, isDraft, publishDraft, relevantLists, isDone, myId, PRIORITIES, saveText, STATUSES, statusOf, taskMarkdown, updateTask, useTasks,
+  assigneesOf, canAddToFolder, chainOf, customerOf, deleteTask, shownAssignees, useTaskStream, isDraft, publishDraft, relevantLists, isDone, myId, PRIORITIES, saveText, STATUSES, statusOf, taskMarkdown, updateTask, useTasks,
   type Priority, type Status, type Task,
 } from './api';
 import { renderMarkdown, toggleTaskLine } from './markdown';
@@ -195,6 +195,10 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
     setMd(remoteMd);
   }, [task.title, remoteMd]);
 
+  // Агент пишет эту задачу — показываем его текст по ходу (только в просмотре и без своих несохранённых правок).
+  const streamRaw = useTaskStream((st) => st.byId[task.id]);
+  const stream = streamRaw && !editing && latest.current.md === saved.current.md && latest.current.title === saved.current.title ? streamRaw : undefined;
+
   const finishEditing = useCallback(() => { void save(); setMode('preview'); }, [save]);
 
   // «Создать»: черновик уходит на сервер одним запросом — исполнители получают задачу сразу целиком.
@@ -334,6 +338,9 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
   const done = isDone(task);
   // Задача «себе» — без исполнителя: заказчик и так виден, исполнитель подразумевается тот же (api.shownAssignees).
   const assignees = shownAssignees(task);
+  // Этап цепочки — у него ответственный: исполнитель, а по умолчанию заказчик (его и показываем, бледнее).
+  const inChain = Boolean(chainOf(task));
+  const owner = inChain && !assignees.length ? customerOf(task) : '';
   const due = dueLabel(task.dueDate);
   const list = lists.find((l) => l.id === task.listId);
   const priority = PRIORITIES.find((p) => p.id === (task.priority || 'medium'))!;
@@ -387,14 +394,17 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
           <span className="ntd-chip-label">Заказчик</span>
           {customer ? (String(customer.id) === myId() ? 'Я' : displayName(customer)) : 'не указан'}
         </button>
-        <button type="button" className="ntd-chip" onClick={() => setPeople('assignees')} aria-label="Исполнители" {...assigneeHover.bind}>
-          <span className="ntd-chip-label">Исполнитель</span>
-          {assignees.length ? (
+        <button type="button" className="ntd-chip" onClick={() => setPeople('assignees')} aria-label={inChain ? 'Ответственный за этап' : 'Исполнители'} {...assigneeHover.bind}
+          title={inChain ? 'Кто ведёт этот этап цепочки. По умолчанию — заказчик' : undefined}>
+          <span className="ntd-chip-label">{inChain ? 'Ответственный' : 'Исполнитель'}</span>
+          {owner ? (
+            <span className="ntd-faces ntd-implicit"><Avatar name={displayName(users[owner]) || '?'} seed={owner} src={users[owner]?.avatar} person size={20} /></span>
+          ) : assignees.length ? (
             <span className="ntd-faces">
               {assignees.slice(0, 3).map((id) => { const u = users[id]; return <Avatar key={id} name={displayName(u) || '?'} seed={id} src={u?.avatar} person size={20} />; })}
             </span>
           ) : <UserPlus size={14} aria-hidden="true" />}
-          {assignees.length === 1 ? (assignees[0] === myId() ? 'Я' : displayName(users[assignees[0]]) || 'Исполнитель') : assignees.length ? `${assignees.length} исполнителя` : 'Исполнитель'}
+          {owner ? `${owner === myId() ? 'Я' : displayName(users[owner]) || 'Заказчик'} (заказчик)` : assignees.length === 1 ? (assignees[0] === myId() ? 'Я' : displayName(users[assignees[0]]) || 'Исполнитель') : assignees.length ? `${assignees.length} исполнителя` : (inChain ? 'Ответственный' : 'Исполнитель')}
         </button>
         <button type="button" className="ntd-chip" data-tone={due?.late && !done ? 'danger' : undefined} onClick={open('date')} aria-haspopup="menu">
           <CalendarDays size={14} aria-hidden="true" />
@@ -457,9 +467,12 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
             </Suspense>
           </div>
         ) : (
-          <article className="ntd-page ntd-read" onDoubleClick={() => { if (!viewOnly) setMode('visual'); }}>
-            <h1 className="ntd-title-view" data-done={done ? 'true' : undefined}>{title || 'Без названия'}</h1>
-            {md.trim()
+          <article className="ntd-page ntd-read" onDoubleClick={() => { if (!viewOnly) setMode('visual'); }} data-streaming={stream ? 'true' : undefined}>
+            {stream && <div className="ntd-stream" role="status"><i aria-hidden="true" />{stream.agent} пишет…</div>}
+            <h1 className="ntd-title-view" data-done={done ? 'true' : undefined}>{(stream && stream.title) || title || 'Без названия'}</h1>
+            {stream
+              ? <div className="ntd-md">{renderMarkdown(stream.md)}<span className="ntd-stream-caret" aria-hidden="true" /></div>
+              : md.trim()
               ? <div className="ntd-md">{renderMarkdown(md, { onToggleTask: (line) => setMd((cur) => toggleTaskLine(cur, line)) })}</div>
               : <p className="ntd-empty">Описания нет. Двойной клик или «Правка» — добавить подробности и чек-лист.</p>}
           </article>
