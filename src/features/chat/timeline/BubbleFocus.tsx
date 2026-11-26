@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { visibleBox } from '@/shared/platform/viewport';
 
@@ -51,18 +51,49 @@ export function focusAnchor(shot: FocusShot) {
   return { x: shot.mine ? shot.bubble.right : shot.bubble.left, y: shot.bubble.bottom + shot.shift + GAP };
 }
 
-export function BubbleFocus({ shot, closing }: { shot: FocusShot; closing: boolean }) {
+export function BubbleFocus({ shot, closing, onClose, children }: {
+  shot: FocusShot; closing: boolean; onClose?: () => void;
+  /** Меню действий — встаёт прямо под сообщением, у края его пузыря (со стороны автора). */
+  children?: ReactNode;
+}) {
   const host = useRef<HTMLDivElement>(null);
+  const column = useRef<HTMLDivElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => { host.current?.replaceChildren(shot.clone); }, [shot]);
+  // Где встаёт колонка «сообщение + меню»: на месте сообщения в ленте, но так, чтобы меню поместилось под ним
+  // (приподнимаем); не помещаются вместе даже от верхнего края — колонка с верха экрана и листается пальцем.
+  const [top, setTop] = useState(shot.rect.top);
+  useLayoutEffect(() => {
+    const col = column.current;
+    if (!col || closing) return;
+    const box = visibleBox();
+    // Высота самого содержимого (без отступа сверху, который мы и подбираем).
+    const h = col.offsetHeight - (parseFloat(getComputedStyle(col).paddingTop) || 0);
+    const fits = box.top + MARGIN + h + MARGIN <= box.bottom;
+    setTop(fits ? Math.max(box.top + MARGIN, Math.min(shot.rect.top, box.bottom - MARGIN - h)) : box.top + MARGIN);
+  }, [shot, closing, children]);
   const root = document.querySelector<HTMLElement>('.nx') || document.body;
+  const interactive = Boolean(children) && !closing;
   return createPortal(
-    <div className="cxm-focus" data-closing={closing ? 'true' : undefined} aria-hidden="true">
-      <div className="cxm-focus-scrim" />
+    <div className="cxm-focus" data-closing={closing ? 'true' : undefined} data-interactive={interactive || undefined}>
+      <div className="cxm-focus-scrim" aria-hidden="true" />
       <div
-        className="cxm-focus-shot"
-        style={{ top: shot.rect.top, left: shot.rect.left, width: shot.rect.width, transform: `translateY(${closing ? 0 : shot.shift}px)` }}
+        ref={scroller}
+        className="cxm-focus-scroll"
+        // Нажатие мимо сообщения и меню — закрыть (как раньше нажатие мимо меню).
+        onClick={(e) => { if (interactive && !(e.target as HTMLElement).closest('.cxm-focus-menu, .cxm-focus-lift')) onClose?.(); }}
       >
-        <div ref={host} className="cxm-focus-lift" style={{ transformOrigin: shot.mine ? 'right center' : 'left center' }} />
+        <div ref={column} className="cxm-focus-column" style={{ paddingTop: closing ? shot.rect.top : top }}>
+          <div className="cxm-focus-shot" style={{ marginLeft: shot.rect.left, width: shot.rect.width }} aria-hidden="true">
+            <div ref={host} className="cxm-focus-lift" style={{ transformOrigin: shot.mine ? 'right center' : 'left center' }} />
+          </div>
+          {interactive && (
+            <div className="cxm-focus-menu-row" data-mine={shot.mine || undefined}
+              style={shot.mine ? { paddingRight: Math.max(MARGIN, window.innerWidth - shot.bubble.right) } : { paddingLeft: Math.max(MARGIN, shot.bubble.left) }}>
+              {children}
+            </div>
+          )}
+        </div>
       </div>
     </div>,
     root,

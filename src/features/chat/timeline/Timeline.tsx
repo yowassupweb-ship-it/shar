@@ -754,6 +754,94 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
   const pollHasVotes = Boolean(menuPoll?.options?.some((o) => (o.voters || []).length));
   const myReactions = new Set(Object.entries(menuMsg?.metadata?.reactions || {}).filter(([, ids]) => (ids as string[]).map(String).includes(myId)).map(([e]) => e));
 
+  // Действия с сообщением: на телефоне с выделением — под самим сообщением (BubbleFocus), иначе — меню у точки.
+  const menuBody = menu && menuMsg ? (
+    <>
+      {!notificationsChat && (
+        <div className="cxm-quick" role="group" aria-label="Реакции">
+          {pinnedReactions.map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              className="cxm-quick-btn"
+              aria-pressed={myReactions.has(emoji)}
+              aria-label={emoji}
+              onClick={() => { void toggleReaction(chatId, String(menuMsg.id), emoji); setMenu(null); }}
+            >
+              <img src={getAppleEmojiUrl(emoji)} alt="" draggable={false} />
+            </button>
+          ))}
+          <button
+            type="button"
+            className="cxm-quick-btn cxm-quick-more"
+            aria-label="Все эмодзи"
+            title="Все эмодзи"
+            onClick={() => { setMoreReact({ id: String(menuMsg.id), at: menu.at }); setMenu(null); }}
+          >
+            <Plus size={18} aria-hidden="true" />
+          </button>
+        </div>
+      )}
+      {!notificationsChat && (
+        <MenuItem icon={<CornerUpLeft size={16} />} onSelect={() => { setCompose(chatId, { replyToId: String(menuMsg.id) }); setMenu(null); }}>Ответить</MenuItem>
+      )}
+      {!menuPoll && (
+        <MenuItem icon={<CheckCheck size={16} />} onSelect={() => { setSelection({ chatId, ids: [String(menuMsg.id)] }); setMenu(null); }}>Выбрать</MenuItem>
+      )}
+      {!menuPoll && (
+        <MenuItem icon={<Forward size={16} />} onSelect={() => { setForwarding([menuMsg]); setMenu(null); }}>Переслать</MenuItem>
+      )}
+      {!menuPoll && agentOn && (
+        <MenuItem icon={<CoreMini size={16} />} onSelect={() => { forwardToAgentFrom([menuMsg], (m) => readerName(users[String(m.authorId)])); setMenu(null); }}>Переслать агенту</MenuItem>
+      )}
+      {!menuPoll && menuMsg.content && (
+        <MenuItem icon={<Copy size={16} />} onSelect={() => { void copySelectionOr(menuMsg); setMenu(null); }}>Копировать</MenuItem>
+      )}
+      {!menuPoll && menuMsg.content && (
+        <MenuItem icon={<BellPlus size={16} />} onSelect={() => { openReminderFromText(plainFromMarkdown(String(menuMsg.content || ''))); setMenu(null); }}>Напоминание…</MenuItem>
+      )}
+      {menu.image && (
+        <MenuItem icon={<ImageDown size={16} />} onSelect={() => { void copyImage(menu.image!); setMenu(null); }}>Копировать картинку</MenuItem>
+      )}
+      {menuMine && ((menuMsg.content && !menuPoll) || (menuPoll && !pollHasVotes)) && (
+        <MenuItem
+          icon={<Pencil size={16} />}
+          onSelect={() => {
+            if (menuPoll) setPollEdit(menuMsg);
+            else setCompose(chatId, { editingId: String(menuMsg.id) });
+            setMenu(null);
+          }}
+        >
+          Изменить
+        </MenuItem>
+      )}
+      {!notificationsChat && (
+        <MenuItem
+          icon={menuMsg.metadata?.isPinned ? <PinOff size={16} /> : <Pin size={16} />}
+          onSelect={() => { void togglePin(chatId, String(menuMsg.id)); setMenu(null); }}
+        >
+          {menuMsg.metadata?.isPinned ? 'Открепить' : 'Закрепить'}
+        </MenuItem>
+      )}
+      {(menuMine || notificationsChat) && (
+        <>
+          <div className="nx-menu-sep" />
+          <MenuItem
+            icon={<Trash2 size={16} />}
+            tone="danger"
+            onSelect={() => {
+              setMenu(null);
+              void askConfirm({ title: 'Удалить сообщение?', text: 'Оно пропадёт у всех участников чата.', confirm: 'Удалить', tone: 'danger' })
+                .then((ok) => { if (ok) void deleteMessage(chatId, String(menuMsg.id)); });
+            }}
+          >
+            Удалить
+          </MenuItem>
+        </>
+      )}
+    </>
+  ) : null;
+
   return (
     <div className="cxn-scroll-wrap">
       <div
@@ -790,92 +878,14 @@ export default function Timeline({ chatId, chat, query = '', jumpTo: jumpRequest
         </button>
       )}
 
-      {focus && <BubbleFocus shot={focus.shot} closing={focus.closing} />}
-      {menu && menuMsg && (
-        <Menu anchor={menu.at} label="Действия с сообщением" onClose={() => setMenu(null)}>
-          {!notificationsChat && (
-            <div className="cxm-quick" role="group" aria-label="Реакции">
-              {pinnedReactions.map((emoji) => (
-                <button
-                  key={emoji}
-                  type="button"
-                  className="cxm-quick-btn"
-                  aria-pressed={myReactions.has(emoji)}
-                  aria-label={emoji}
-                  onClick={() => { void toggleReaction(chatId, String(menuMsg.id), emoji); setMenu(null); }}
-                >
-                  <img src={getAppleEmojiUrl(emoji)} alt="" draggable={false} />
-                </button>
-              ))}
-              <button
-                type="button"
-                className="cxm-quick-btn cxm-quick-more"
-                aria-label="Все эмодзи"
-                title="Все эмодзи"
-                onClick={() => { setMoreReact({ id: String(menuMsg.id), at: menu.at }); setMenu(null); }}
-              >
-                <Plus size={18} aria-hidden="true" />
-              </button>
-            </div>
-          )}
-          {!notificationsChat && (
-            <MenuItem icon={<CornerUpLeft size={16} />} onSelect={() => { setCompose(chatId, { replyToId: String(menuMsg.id) }); setMenu(null); }}>Ответить</MenuItem>
-          )}
-          {!menuPoll && (
-            <MenuItem icon={<CheckCheck size={16} />} onSelect={() => { setSelection({ chatId, ids: [String(menuMsg.id)] }); setMenu(null); }}>Выбрать</MenuItem>
-          )}
-          {!menuPoll && (
-            <MenuItem icon={<Forward size={16} />} onSelect={() => { setForwarding([menuMsg]); setMenu(null); }}>Переслать</MenuItem>
-          )}
-          {!menuPoll && agentOn && (
-            <MenuItem icon={<CoreMini size={16} />} onSelect={() => { forwardToAgentFrom([menuMsg], (m) => readerName(users[String(m.authorId)])); setMenu(null); }}>Переслать агенту</MenuItem>
-          )}
-          {!menuPoll && menuMsg.content && (
-            <MenuItem icon={<Copy size={16} />} onSelect={() => { void copySelectionOr(menuMsg); setMenu(null); }}>Копировать</MenuItem>
-          )}
-          {!menuPoll && menuMsg.content && (
-            <MenuItem icon={<BellPlus size={16} />} onSelect={() => { openReminderFromText(plainFromMarkdown(String(menuMsg.content || ''))); setMenu(null); }}>Напоминание…</MenuItem>
-          )}
-          {menu.image && (
-            <MenuItem icon={<ImageDown size={16} />} onSelect={() => { void copyImage(menu.image!); setMenu(null); }}>Копировать картинку</MenuItem>
-          )}
-          {menuMine && ((menuMsg.content && !menuPoll) || (menuPoll && !pollHasVotes)) && (
-            <MenuItem
-              icon={<Pencil size={16} />}
-              onSelect={() => {
-                if (menuPoll) setPollEdit(menuMsg);
-                else setCompose(chatId, { editingId: String(menuMsg.id) });
-                setMenu(null);
-              }}
-            >
-              Изменить
-            </MenuItem>
-          )}
-          {!notificationsChat && (
-            <MenuItem
-              icon={menuMsg.metadata?.isPinned ? <PinOff size={16} /> : <Pin size={16} />}
-              onSelect={() => { void togglePin(chatId, String(menuMsg.id)); setMenu(null); }}
-            >
-              {menuMsg.metadata?.isPinned ? 'Открепить' : 'Закрепить'}
-            </MenuItem>
-          )}
-          {(menuMine || notificationsChat) && (
-            <>
-              <div className="nx-menu-sep" />
-              <MenuItem
-                icon={<Trash2 size={16} />}
-                tone="danger"
-                onSelect={() => {
-                  setMenu(null);
-                  void askConfirm({ title: 'Удалить сообщение?', text: 'Оно пропадёт у всех участников чата.', confirm: 'Удалить', tone: 'danger' })
-                    .then((ok) => { if (ok) void deleteMessage(chatId, String(menuMsg.id)); });
-                }}
-              >
-                Удалить
-              </MenuItem>
-            </>
-          )}
-        </Menu>
+      {focus && (
+        // Телефон: меню — прямо под сообщением, внутри слоя выделения; вместе с сообщением листается, если не влезает.
+        <BubbleFocus shot={focus.shot} closing={focus.closing} onClose={() => setMenu(null)}>
+          {menu && menuMsg ? <div className="nx-menu cxm-focus-menu" role="menu" aria-label="Действия с сообщением">{menuBody}</div> : null}
+        </BubbleFocus>
+      )}
+      {menu && menuMsg && !focus && (
+        <Menu anchor={menu.at} label="Действия с сообщением" onClose={() => setMenu(null)}>{menuBody}</Menu>
       )}
 
       {moreReact && (
