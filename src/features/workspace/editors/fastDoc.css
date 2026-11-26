@@ -371,8 +371,19 @@ html:not([data-theme="graphite"]):not([data-theme="black"]) .fdoc-content [data-
 .fdoc-flow .selectedCell::after { content: ''; position: absolute; inset: 0; background: color-mix(in srgb, var(--accent-color) 18%, transparent); pointer-events: none; }
 .fdoc-flow .column-resize-handle { position: absolute; right: -2px; top: 0; bottom: -2px; width: 4px; background: var(--accent-color); pointer-events: none; }
 .fdoc-flow.resize-cursor, .fdoc-flow .resize-cursor { cursor: col-resize; }
-.fdoc-tgrid { padding: 8px; }
-.fdoc-tgrid-cells { display: grid; gap: 3px; }
-.fdoc-tgrid-cell { width: 18px; height: 18px; padding: 0; border: 1px solid var(--border-color); border-radius: 2px; background: transparent; cursor: pointer; }
-.fdoc-tgrid-cell[data-on] { background: color-mix(in srgb, var(--accent-color) 30%, transparent); border-color: var(--accent-color); }
-.fdoc-tgrid-label { margin-top: 6px; text-align: center; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+/* Сетка «Вставить таблицу»: клетки-квадраты, выбранные — акцентом; сетка растёт за указателем (TableGrid). */
+.fdoc-tgrid { padding: 10px 12px 12px; }
+.fdoc-tgrid-label { margin: 0 0 8px; font-size: 13px; font-weight: var(--weight-medium, 500); color: var(--text-main); font-variant-numeric: tabular-nums; }
+.fdoc-tgrid-cells { display: grid; cursor: pointer; outline: none; border-radius: 4px; }
+.fdoc-tgrid-cells:focus-visible { box-shadow: 0 0 0 2px var(--accent-color); }
+.fdoc-tgrid-cell {
+  box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--text-main) 22%, transparent); border-radius: 3px;
+  background: color-mix(in srgb, var(--text-main) 3%, transparent); transition: background-color .08s, border-color .08s;
+}
+.fdoc-tgrid-cell[data-on] { border-color: var(--accent-color); background: color-mix(in srgb, var(--accent-color) 22%, transparent); }
+/* Панель, которой не хватает места: группы по одной, хвост — в «⋮» (toolbarOverflow). */
+.fdoc-grp { display: inline-flex; flex: none; align-items: center; gap: 2px; }
+.fdoc-grp[hidden] { display: none; }
+.fdoc-more { margin-left: auto; }
+.fdoc-more-pop { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; max-width: min(360px, calc(100vw - 24px)); padding: 6px; }
+.fdoc-more-pop .fdoc-sep { display: none; }

@@ -1,4 +1,5 @@
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useToolbarOverflow } from './toolbarOverflow';
 import {
   ArrowDownAZ, ArrowUpZA, CopyPlus, Eye, EyeOff, Filter, Link2, ListChecks, Lock, NotebookPen, 
   Ungroup, Group as GroupIcon, Palette as PaletteIcon, ChevronsDownUp, Rows3, Columns3, PanelTop, PanelBottom, PanelLeft, PanelRight, Plus as PlusIcon,
@@ -43,6 +44,9 @@ import { attachmentUrl } from '@/shared/ui/format';
 import type { EditorProps } from './types';
 import './fastDoc.css';
 import './fastSheet.css';
+
+/** Групп в панели оформления таблицы (toolGroups): от неё считается, что уходит в «⋮». */
+const TOOL_GROUPS = 9;
 
 /**
  * Свой редактор таблиц (бета) вместо Univer Sheets. Таблица — тот же xlsx: открывается через lib/workbook.ts в снимок
@@ -201,6 +205,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   const [menuPage, setMenuPage] = useState<'main' | 'paste' | 'insert' | 'delete' | 'more'>('main');
   useEffect(() => { if (menu) setMenuPage('main'); }, [menu]);
   const [pop, setPop] = useState<{ kind: string; at: DOMRect; trigger: HTMLElement } | null>(null);
+  const toolbar = useRef<HTMLDivElement>(null);
   const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [find, setFind] = useState<{ open: boolean; query: string; index: number; replace?: boolean }>({ open: false, query: '', index: 0 });
@@ -1996,6 +2001,9 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     return all;
   }, [sheet, version, sumKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Сколько групп панели оформления помещается (toolbarOverflow; групп TOOL_GROUPS — см. toolGroups ниже). Пока
+  // таблица грузится, панели нет — 0: при появлении панели хук пересчитает.
+  const toolFit = useToolbarOverflow(toolbar, readOnly || !(b && sheet && geo) ? 0 : TOOL_GROUPS, 44, true);
   if (error) return <div className="nws-missing" role="alert">{error}</div>;
   if (!b || !sheet || !geo) return <div className="fsh-loading" aria-busy="true">Открываю таблицу…</div>;
 
@@ -2142,70 +2150,88 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     setCells(cells);
   };
 
+  // Группы панели оформления (см. разметку ниже).
+  const toolGroups: ReactNode[] = readOnly ? [] : [
+    <>
+      {btn('undo', 'Отменить (Ctrl+Z)', false, <OUndo size={18} />, () => undoStep(true), !undo.current.length)}
+      {btn('redo', 'Повторить (Ctrl+Y)', false, <ORedo size={18} />, () => undoStep(false), !redo.current.length)}
+      {btn('print', 'Печать (Ctrl+P)', false, <OPrint size={18} />, () => window.dispatchEvent(new Event('nx:print-item')))}
+      {btn('paint', painter ? 'Копирование формата: выделите ячейки (Esc — отмена)' : 'Копировать форматирование', Boolean(painter), <OPaintFormat size={18} />, () => setPainter(painter ? null : { ...anchorStyle }))}
+      <button type="button" className="fdoc-drop fdoc-drop-zoom" onMouseDown={(e) => e.preventDefault()} onClick={open('zoom')} aria-expanded={pop?.kind === 'zoom'} title="Масштаб (Ctrl+колесо)"><span>{Math.round(zoom * 100)}%</span><OChevronDown size={14} aria-hidden="true" /></button>
+    </>,
+    <>
+      {btn('rub', 'Формат: рубли', false, <OCurrency size={18} />, () => setPattern('#,##0.00 "₽"'))}
+      {btn('pct', 'Формат: проценты', false, <OPercent size={18} />, () => setPattern('0%'))}
+      {btn('dec-', 'Уменьшить число знаков после запятой', false, <ODecimalDecrease size={18} />, () => stepDecimals(-1))}
+      {btn('dec+', 'Увеличить число знаков после запятой', false, <ODecimalIncrease size={18} />, () => stepDecimals(1))}
+      <button type="button" className="fdoc-drop" onMouseDown={(e) => e.preventDefault()} onClick={open('numfmt')} aria-expanded={pop?.kind === 'numfmt'} title="Другие форматы"><span>123</span><OChevronDown size={14} aria-hidden="true" /></button>
+    </>,
+    <>
+      <button type="button" className="fdoc-drop fdoc-drop-font" onMouseDown={(e) => e.preventDefault()} onClick={open('font')} aria-expanded={pop?.kind === 'font'} title="Шрифт"><span style={{ fontFamily: String(anchorStyle.ff || 'Arial') }}>{String(anchorStyle.ff || 'Arial')}</span><OChevronDown size={14} aria-hidden="true" /></button>
+    </>,
+    <>
+      <span className="fdoc-size" role="group" aria-label="Размер шрифта">
+        {btn('sz-', 'Уменьшить размер шрифта', false, <OFontSizeMinus size={14} />, () => stepFont(-1))}
+        <button type="button" className="fdoc-size-input fsh-size-btn" onMouseDown={(e) => e.preventDefault()} onClick={open('size')} aria-expanded={pop?.kind === 'size'} title="Размер шрифта">{fontSize}</button>
+        {btn('sz+', 'Увеличить размер шрифта', false, <OFontSizePlus size={14} />, () => stepFont(1))}
+      </span>
+    </>,
+    <>
+      {btn('b', 'Полужирный (Ctrl+B)', Boolean(anchorStyle.bl), <OBold size={18} />, () => toggle('bl', 1))}
+      {btn('i', 'Курсив (Ctrl+I)', Boolean(anchorStyle.it), <OItalic size={18} />, () => toggle('it', 1))}
+      {btn('s', 'Зачёркнутый (Alt+Shift+5)', Boolean((anchorStyle.st as { s?: number } | undefined)?.s), <OStrikethrough size={18} />, () => restyle((s) => ({ ...s, st: anchorStyle.st ? undefined : { s: 1 } })))}
+      <button type="button" className="fdoc-btn fdoc-color" title="Цвет текста" aria-label="Цвет текста" onMouseDown={(e) => e.preventDefault()} onClick={open('color')} aria-expanded={pop?.kind === 'color'}>
+        <OTextColor size={18} style={{ '--swatch': (anchorStyle.cl as { rgb?: string } | undefined)?.rgb || 'currentColor' } as CSSProperties} />
+      </button>
+    </>,
+    <>
+      <button type="button" className="fdoc-btn fdoc-color" title="Цвет заливки" aria-label="Цвет заливки" onMouseDown={(e) => e.preventDefault()} onClick={open('fill')} aria-expanded={pop?.kind === 'fill'}>
+        <OFillColor size={18} style={{ '--swatch': (anchorStyle.bg as { rgb?: string } | undefined)?.rgb || 'transparent' } as CSSProperties} />
+      </button>
+      <button type="button" className="fdoc-btn" title="Границы" aria-label="Границы" onMouseDown={(e) => e.preventDefault()} onClick={open('borders')} aria-expanded={pop?.kind === 'borders'}><OBorders size={18} /></button>
+      {btn('merge', merged ? 'Отменить объединение' : 'Объединить ячейки', merged, <OMerge size={18} />, toggleMerge)}
+    </>,
+    <>
+      <button type="button" className="fdoc-btn fdoc-btn-drop" title="Выравнивание по горизонтали" aria-label="Выравнивание по горизонтали" onMouseDown={(e) => e.preventDefault()} onClick={open('halign')} aria-expanded={pop?.kind === 'halign'}>
+        {hAlign === 2 ? <OAlignCenter size={18} /> : hAlign === 3 ? <OAlignRight size={18} /> : <OAlignLeft size={18} />}<OChevronDown size={12} aria-hidden="true" />
+      </button>
+      <button type="button" className="fdoc-btn fdoc-btn-drop" title="Выравнивание по вертикали" aria-label="Выравнивание по вертикали" onMouseDown={(e) => e.preventDefault()} onClick={open('valign')} aria-expanded={pop?.kind === 'valign'}>
+        {vAlign === 1 ? <OVAlignTop size={18} /> : vAlign === 2 ? <OVAlignMiddle size={18} /> : <OVAlignBottom size={18} />}<OChevronDown size={12} aria-hidden="true" />
+      </button>
+      <button type="button" className="fdoc-btn fdoc-btn-drop" title="Перенос текста" aria-label="Перенос текста" onMouseDown={(e) => e.preventDefault()} onClick={open('wrap')} aria-expanded={pop?.kind === 'wrap'}>
+        <OWrap size={18} /><OChevronDown size={12} aria-hidden="true" />
+      </button>
+      <button type="button" className="fdoc-btn fdoc-btn-drop" title="Поворот текста" aria-label="Поворот текста" onMouseDown={(e) => e.preventDefault()} onClick={open('rotate')} aria-expanded={pop?.kind === 'rotate'}>
+        <ORotate size={18} /><OChevronDown size={12} aria-hidden="true" />
+      </button>
+    </>,
+    <>
+      {btn('link', 'Вставить ссылку (Ctrl+K)', false, <OInsertLink size={18} />, () => commands['sheet.operation.insert-hyper-link-toolbar']())}
+      {onAddComment && btn('comment', 'Комментарий (Ctrl+Alt+M)', false, <OComment size={18} />, () => onAddComment())}
+      {btn('chart', 'Вставить диаграмму', false, <OChart size={18} />, insertChart)}
+    </>,
+    <>
+      {(() => {
+        // Кнопка «нажата», только если по столбцу выбранной ячейки фильтр что-то отсеивает: подсветка на любом
+        // столбце листа с фильтром читалась как «здесь отфильтровано».
+        const f = b ? readFilters(b)[sheetId] : undefined;
+        const here = Boolean(f && sel.anchor.col >= f.ref.startColumn && sel.anchor.col <= f.ref.endColumn && (f.filterColumns || []).some((x) => x.colId === sel.anchor.col));
+        return btn('filter', f ? 'Убрать фильтр' : 'Создать фильтр', here, <OFilter size={18} />, toggleFilter);
+      })()}
+      {btn('sum', 'Сумма (СУММ)', false, <OFunctions size={18} />, sumBelow)}
+    </>,
+  ];
+
   return (
     <div className="fsh" data-readonly={readOnly || undefined}>
       {!readOnly && (
         <div className="fdoc-bar-wrap">
-          <div className="fdoc-bar fsh-bar" role="toolbar" aria-label="Оформление">
-            {/* Порядок и значки — как у Google Таблиц; набор значков и вид кнопок — как у панели бета-документов. */}
-            {btn('undo', 'Отменить (Ctrl+Z)', false, <OUndo size={18} />, () => undoStep(true), !undo.current.length)}
-            {btn('redo', 'Повторить (Ctrl+Y)', false, <ORedo size={18} />, () => undoStep(false), !redo.current.length)}
-            {btn('print', 'Печать (Ctrl+P)', false, <OPrint size={18} />, () => window.dispatchEvent(new Event('nx:print-item')))}
-            {btn('paint', painter ? 'Копирование формата: выделите ячейки (Esc — отмена)' : 'Копировать форматирование', Boolean(painter), <OPaintFormat size={18} />, () => setPainter(painter ? null : { ...anchorStyle }))}
-            <button type="button" className="fdoc-drop fdoc-drop-zoom" onMouseDown={(e) => e.preventDefault()} onClick={open('zoom')} aria-expanded={pop?.kind === 'zoom'} title="Масштаб (Ctrl+колесо)"><span>{Math.round(zoom * 100)}%</span><OChevronDown size={14} aria-hidden="true" /></button>
-            <span className="fdoc-sep" />
-            {btn('rub', 'Формат: рубли', false, <OCurrency size={18} />, () => setPattern('#,##0.00 "₽"'))}
-            {btn('pct', 'Формат: проценты', false, <OPercent size={18} />, () => setPattern('0%'))}
-            {btn('dec-', 'Уменьшить число знаков после запятой', false, <ODecimalDecrease size={18} />, () => stepDecimals(-1))}
-            {btn('dec+', 'Увеличить число знаков после запятой', false, <ODecimalIncrease size={18} />, () => stepDecimals(1))}
-            <button type="button" className="fdoc-drop" onMouseDown={(e) => e.preventDefault()} onClick={open('numfmt')} aria-expanded={pop?.kind === 'numfmt'} title="Другие форматы"><span>123</span><OChevronDown size={14} aria-hidden="true" /></button>
-            <span className="fdoc-sep" />
-            <button type="button" className="fdoc-drop fdoc-drop-font" onMouseDown={(e) => e.preventDefault()} onClick={open('font')} aria-expanded={pop?.kind === 'font'} title="Шрифт"><span style={{ fontFamily: String(anchorStyle.ff || 'Arial') }}>{String(anchorStyle.ff || 'Arial')}</span><OChevronDown size={14} aria-hidden="true" /></button>
-            <span className="fdoc-sep" />
-            <span className="fdoc-size" role="group" aria-label="Размер шрифта">
-              {btn('sz-', 'Уменьшить размер шрифта', false, <OFontSizeMinus size={14} />, () => stepFont(-1))}
-              <button type="button" className="fdoc-size-input fsh-size-btn" onMouseDown={(e) => e.preventDefault()} onClick={open('size')} aria-expanded={pop?.kind === 'size'} title="Размер шрифта">{fontSize}</button>
-              {btn('sz+', 'Увеличить размер шрифта', false, <OFontSizePlus size={14} />, () => stepFont(1))}
-            </span>
-            <span className="fdoc-sep" />
-            {btn('b', 'Полужирный (Ctrl+B)', Boolean(anchorStyle.bl), <OBold size={18} />, () => toggle('bl', 1))}
-            {btn('i', 'Курсив (Ctrl+I)', Boolean(anchorStyle.it), <OItalic size={18} />, () => toggle('it', 1))}
-            {btn('s', 'Зачёркнутый (Alt+Shift+5)', Boolean((anchorStyle.st as { s?: number } | undefined)?.s), <OStrikethrough size={18} />, () => restyle((s) => ({ ...s, st: anchorStyle.st ? undefined : { s: 1 } })))}
-            <button type="button" className="fdoc-btn fdoc-color" title="Цвет текста" aria-label="Цвет текста" onMouseDown={(e) => e.preventDefault()} onClick={open('color')} aria-expanded={pop?.kind === 'color'}>
-              <OTextColor size={18} style={{ '--swatch': (anchorStyle.cl as { rgb?: string } | undefined)?.rgb || 'currentColor' } as CSSProperties} />
-            </button>
-            <span className="fdoc-sep" />
-            <button type="button" className="fdoc-btn fdoc-color" title="Цвет заливки" aria-label="Цвет заливки" onMouseDown={(e) => e.preventDefault()} onClick={open('fill')} aria-expanded={pop?.kind === 'fill'}>
-              <OFillColor size={18} style={{ '--swatch': (anchorStyle.bg as { rgb?: string } | undefined)?.rgb || 'transparent' } as CSSProperties} />
-            </button>
-            <button type="button" className="fdoc-btn" title="Границы" aria-label="Границы" onMouseDown={(e) => e.preventDefault()} onClick={open('borders')} aria-expanded={pop?.kind === 'borders'}><OBorders size={18} /></button>
-            {btn('merge', merged ? 'Отменить объединение' : 'Объединить ячейки', merged, <OMerge size={18} />, toggleMerge)}
-            <span className="fdoc-sep" />
-            <button type="button" className="fdoc-btn fdoc-btn-drop" title="Выравнивание по горизонтали" aria-label="Выравнивание по горизонтали" onMouseDown={(e) => e.preventDefault()} onClick={open('halign')} aria-expanded={pop?.kind === 'halign'}>
-              {hAlign === 2 ? <OAlignCenter size={18} /> : hAlign === 3 ? <OAlignRight size={18} /> : <OAlignLeft size={18} />}<OChevronDown size={12} aria-hidden="true" />
-            </button>
-            <button type="button" className="fdoc-btn fdoc-btn-drop" title="Выравнивание по вертикали" aria-label="Выравнивание по вертикали" onMouseDown={(e) => e.preventDefault()} onClick={open('valign')} aria-expanded={pop?.kind === 'valign'}>
-              {vAlign === 1 ? <OVAlignTop size={18} /> : vAlign === 2 ? <OVAlignMiddle size={18} /> : <OVAlignBottom size={18} />}<OChevronDown size={12} aria-hidden="true" />
-            </button>
-            <button type="button" className="fdoc-btn fdoc-btn-drop" title="Перенос текста" aria-label="Перенос текста" onMouseDown={(e) => e.preventDefault()} onClick={open('wrap')} aria-expanded={pop?.kind === 'wrap'}>
-              <OWrap size={18} /><OChevronDown size={12} aria-hidden="true" />
-            </button>
-            <button type="button" className="fdoc-btn fdoc-btn-drop" title="Поворот текста" aria-label="Поворот текста" onMouseDown={(e) => e.preventDefault()} onClick={open('rotate')} aria-expanded={pop?.kind === 'rotate'}>
-              <ORotate size={18} /><OChevronDown size={12} aria-hidden="true" />
-            </button>
-            <span className="fdoc-sep" />
-            {btn('link', 'Вставить ссылку (Ctrl+K)', false, <OInsertLink size={18} />, () => commands['sheet.operation.insert-hyper-link-toolbar']())}
-            {onAddComment && btn('comment', 'Комментарий (Ctrl+Alt+M)', false, <OComment size={18} />, () => onAddComment())}
-            {btn('chart', 'Вставить диаграмму', false, <OChart size={18} />, insertChart)}
-            <span className="fdoc-sep" />
-            {(() => {
-              // Кнопка «нажата», только если по столбцу выбранной ячейки фильтр что-то отсеивает: подсветка на любом
-              // столбце листа с фильтром читалась как «здесь отфильтровано».
-              const f = b ? readFilters(b)[sheetId] : undefined;
-              const here = Boolean(f && sel.anchor.col >= f.ref.startColumn && sel.anchor.col <= f.ref.endColumn && (f.filterColumns || []).some((x) => x.colId === sel.anchor.col));
-              return btn('filter', f ? 'Убрать фильтр' : 'Создать фильтр', here, <OFilter size={18} />, toggleFilter);
-            })()}
-            {btn('sum', 'Сумма (СУММ)', false, <OFunctions size={18} />, sumBelow)}
+          <div ref={toolbar} className="fdoc-bar fsh-bar" role="toolbar" aria-label="Оформление">
+            {/* Порядок и значки — как у Google Таблиц; набор значков и вид кнопок — как у панели бета-документов.
+                Группы, которым не хватает места, уходят в «⋮» (toolbarOverflow) — над его пунктами. */}
+            {toolGroups.map((g, i) => (
+              <span key={i} className="fdoc-grp" data-tb-group="" hidden={i >= toolFit}>{i > 0 && <span className="fdoc-sep" />}{g}</span>
+            ))}
             <span className="fdoc-sep" />
             <button type="button" className="fdoc-btn" title="Ещё: закрепление, сортировка, условное форматирование…" aria-label="Ещё" onMouseDown={(e) => e.preventDefault()} onClick={open('more')} aria-expanded={pop?.kind === 'more'}><OMoreVertical size={18} /></button>
           </div>
@@ -2577,6 +2603,12 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       )}
       {pop?.kind === 'more' && (
         <Pop anchor={pop.at} trigger={pop.trigger} onClose={close} className="fdoc-pop-list">
+          {toolFit < toolGroups.length && (
+            <>
+              <div className="fdoc-more-pop fsh-more-tools">{toolGroups.slice(toolFit).map((g, i) => <span key={i} className="fdoc-grp">{g}</span>)}</div>
+              <div className="fdoc-pop-sep" />
+            </>
+          )}
           <button type="button" className="fdoc-pop-item" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setPop({ kind: 'freeze', at: r, trigger: pop.trigger }); }}>Закрепить…</button>
           <button type="button" className="fdoc-pop-item" onClick={() => { sortBy(false); close(); }}>Сортировать А → Я</button>
           <button type="button" className="fdoc-pop-item" onClick={() => { sortBy(true); close(); }}>Сортировать Я → А</button>
