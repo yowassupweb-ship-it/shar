@@ -561,10 +561,18 @@
 /* ── Комментарии задачи: панель справа (та же, что у документов), подсветка прокомментированного текста ── */
 .ntd-shell { position: relative; display: flex; min-width: 0; min-height: 0; }
 .ntd-shell > .ntd { flex: 1; }
-.ntd-shell > .nws-cm { width: 320px; }
+.ntd-shell > .nws-cm { width: 320px; animation: ntd-cm-open .26s cubic-bezier(.2, .8, .2, 1); }
+/* Панель комментариев не выскакивает рывком: выезжает справа полной ширины (текст задачи сдвигается плавно, а не
+   перескакивает); на телефоне — выезжает поверх задачи. */
+@keyframes ntd-cm-open { from { margin-right: -320px; opacity: 0; } to { margin-right: 0; opacity: 1; } }
+@keyframes ntd-cm-slide { from { transform: translateX(100%); } to { transform: none; } }
+@media (min-width: 641px) {
+  .ntd-shell { overflow-x: clip; } /* выезжающая панель не показывается за правым краем */
+}
 @media (max-width: 640px) {
   .ntn[data-pane="list"] > .ntd-shell { display: none; }
-  .ntd-shell > .nws-cm { position: absolute; inset: 0 0 0 auto; width: min(100%, 360px); z-index: 20; box-shadow: -8px 0 24px rgba(0, 0, 0, .25); padding-bottom: env(safe-area-inset-bottom); }
+  .ntd-shell > .nws-cm { position: absolute; inset: 0 0 0 auto; width: min(100%, 360px); z-index: 20; box-shadow: -8px 0 24px rgba(0, 0, 0, .25); padding-bottom: env(safe-area-inset-bottom);
+    animation: ntd-cm-slide .28s cubic-bezier(.2, .8, .2, 1); }
   /* Панель поверх всей задачи, от самого верха экрана: шапка — ниже статус-бара, иначе «Закрыть» под часами
      iPhone не нажать, и из комментариев не выйти. */
   .ntd-shell > .nws-cm .nws-cm-head { padding-top: calc(var(--space-3) + env(safe-area-inset-top)); }
@@ -653,3 +661,5 @@
 
 /* Новые комментарии у задачи — как непрочитанные у чата: акцентная пилюля с числом справа. */
 .ntl-badge-comments { flex: none; display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 7px; border-radius: var(--radius-pill); background: var(--accent-fill); color: var(--on-accent, #fff); font-size: 11px; font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) { .ntd-shell > .nws-cm { animation: none; } }
