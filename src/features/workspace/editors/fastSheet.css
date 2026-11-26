@@ -115,6 +115,19 @@ html[data-theme="graphite"] .fsh, html[data-theme="black"] .fsh { --sh-border-au
 }
 .fsh-editbox[data-formula] .fsh-editor { color: transparent; caret-color: var(--sh-text); }
 .fsh-editor::selection { background: color-mix(in srgb, var(--sh-sel) 30%, transparent); }
+/* Свой курсор: зеркало под полем с тем же текстом и разметкой, видна только черта на всю строку. */
+.fsh-caretmirror {
+  position: absolute; inset: 0; box-sizing: border-box; padding: var(--edit-pad-top, 2px) 4px 0; white-space: pre-wrap; overflow-wrap: anywhere;
+  visibility: hidden; pointer-events: none; user-select: none;
+}
+.fsh-caret { position: relative; display: inline-block; width: 0; height: var(--edit-line, 17px); vertical-align: top; }
+.fsh-caret::after {
+  content: ''; position: absolute; top: 1px; bottom: 1px; left: -1px; width: 2px; border-radius: 1px; background: var(--sh-text);
+  visibility: visible; animation: fsh-caret-blink 1.06s steps(1, end) infinite;
+}
+@keyframes fsh-caret-blink { 50% { opacity: 0; } }
+.fsh-editbox[data-caret] .fsh-editor, .fsh-editbox[data-caret][data-formula] .fsh-editor { caret-color: transparent; }
+@media (prefers-reduced-motion: reduce) { .fsh-caret::after { animation: none; } }
 
 /* Подсказка функций (как в Google: имя, описание, аргументы). */
 .fsh-suggest {

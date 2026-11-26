@@ -237,6 +237,8 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   const barInput = useRef<HTMLInputElement>(null);
   /** Позиция каретки в правке (для подсказки функций и вставки ссылок щелчком). */
   const [caret, setCaret] = useState(0);
+  const [editFocused, setEditFocused] = useState(false);
+  const [, setSelTick] = useState(0); // выделение в поле поменялось — перерисовать свой курсор
   // Подсказка из столбца погашена (стёрли символ) — до следующего набранного.
   const [autoOff, setAutoOff] = useState(false);
   const [suggestAt, setSuggestAt] = useState(0);
@@ -2080,6 +2082,8 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
    * что и в ячейке (шрифт, кегль, отступы, вертикальное выравнивание); длинный текст растит поле вправо до края окна,
    * дальше — переносом вниз.
    */
+  // Курсор без выделения — рисуем свой (fsh-caret); при выделении — обычная подсветка поля.
+  const caretCollapsed = Boolean(edit) && editFocused && (editor.current ? editor.current.selectionStart === editor.current.selectionEnd : true);
   const editBoxStyle: CSSProperties | undefined = (() => {
     if (!edit) return undefined;
     const st = styleOf(b, editCell);
@@ -2285,14 +2289,20 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
         )}
         {edit && !edit.bar && editBoxRaw && (
           <div ref={editBoxEl} className="fsh-editbox" data-formula={edit.text.startsWith('=') || undefined} data-auto={autoSuffix ? '' : undefined}
-            style={editBoxStyle}>
+            data-caret={caretCollapsed || undefined} style={editBoxStyle}>
             {editMoved && <span className="fsh-edit-ref">{a1(edit.row, edit.col)}</span>}
             <div className="fsh-editmirror" aria-hidden="true">{autoSuffix ? <><span>{edit.text}</span><span className="fsh-ghost">{autoSuffix}</span></> : renderColored(edit.text, editRefs)}{'\u200b'}</div>
+            {/* \u0421\u0432\u043e\u0439 \u043a\u0443\u0440\u0441\u043e\u0440 \u043d\u0430 \u0432\u0441\u044e \u0432\u044b\u0441\u043e\u0442\u0443 \u0441\u0442\u0440\u043e\u043a\u0438 (\u0441\u0438\u0441\u0442\u0435\u043c\u043d\u044b\u0439 \u0432 \u043f\u043e\u043b\u0435 \u2014 \u043f\u043e \u043a\u0435\u0433\u043b\u044e, \u0432 \u043a\u043b\u0435\u0442\u043a\u0435 \u0432\u044b\u0433\u043b\u044f\u0434\u0435\u043b \u043c\u0435\u043b\u043a\u0438\u043c): \u0442\u043e\u0442 \u0436\u0435 \u0442\u0435\u043a\u0441\u0442
+                \u043d\u0435\u0432\u0438\u0434\u0438\u043c\u043e, \u0432 \u043c\u0435\u0441\u0442\u0435 \u0432\u0432\u043e\u0434\u0430 \u2014 \u043c\u0438\u0433\u0430\u044e\u0449\u0430\u044f \u0447\u0435\u0440\u0442\u0430. \u041a\u043b\u044e\u0447 \u2014 \u043f\u043e\u0437\u0438\u0446\u0438\u044f: \u043f\u0440\u0438 \u0432\u0432\u043e\u0434\u0435 \u043c\u0438\u0433\u0430\u043d\u0438\u0435 \u043d\u0430\u0447\u0438\u043d\u0430\u0435\u0442\u0441\u044f \u0437\u0430\u043d\u043e\u0432\u043e. */}
+            {caretCollapsed && (
+              <div className="fsh-caretmirror" aria-hidden="true">{edit.text.slice(0, caret)}<span key={caret} className="fsh-caret" />{edit.text.slice(caret)}{'\u200b'}</div>
+            )}
             <textarea ref={editor} className="fsh-editor" value={edit.text} spellCheck={false}
               onChange={(e) => { const grew = e.target.value.length > (edit?.text.length ?? 0); setEdit((x) => (x ? { ...x, text: e.target.value } : x)); setCaret(e.target.selectionStart); setSuggestOff(false); setSuggestAt(0); setAutoOff(!grew); }}
-              onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+              onSelect={(e) => { setCaret(e.currentTarget.selectionStart); setSelTick((n) => n + 1); }}
+              onFocus={() => setEditFocused(true)}
               onKeyDown={onEditKey}
-              onBlur={(e) => { if (!root.current?.contains(e.relatedTarget as Node) && !(e.relatedTarget as HTMLElement | null)?.closest('.fsh-formula')) finishEdit('stay'); }} />
+              onBlur={(e) => { setEditFocused(false); if (!root.current?.contains(e.relatedTarget as Node) && !(e.relatedTarget as HTMLElement | null)?.closest('.fsh-formula')) finishEdit('stay'); }} />
             {(suggestions.length > 0 || hint) && (
               <div className="fsh-suggest" role="listbox" aria-label="Функции">
                 {suggestions.map((f, i) => (
