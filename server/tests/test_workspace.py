@@ -693,3 +693,18 @@ def test_new_items_get_numbered_names(anna):
     first = anna.post("/api/workspace/items", json={"kind": "presentation", "title": own, "content": DECK}).json()["item"]["title"]
     second = anna.post("/api/workspace/items", json={"kind": "presentation", "title": own, "content": DECK}).json()["item"]["title"]
     assert first == own and second == f"{own} (1)"
+
+
+def test_copy_item_keeps_content_and_numbers_name(anna, boris):
+    import uuid
+
+    name = f"Смета {uuid.uuid4().hex[:6]}"
+    src = _create(anna, "presentation", title=name, content=DECK)
+    first = anna.post(f"/api/workspace/items/{src['id']}/copy")
+    assert first.status_code == 201, first.text
+    copy = first.json()["item"]
+    assert copy["title"] == f"{name} (копия)" and copy["id"] != src["id"]
+    assert anna.get(f"/api/workspace/items/{copy['id']}").json()["item"]["content"] == DECK
+    assert anna.post(f"/api/workspace/items/{src['id']}/copy").json()["item"]["title"] == f"{name} (копия) (1)"
+    # чужое, что не видно, — не скопировать
+    assert boris.post(f"/api/workspace/items/{src['id']}/copy").status_code == 404

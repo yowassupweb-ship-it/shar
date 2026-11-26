@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { HiddenMark } from '@/shared/core/HiddenMark';
 import { useSearchParams } from 'react-router';
-import { Check, ChevronsDownUp, ChevronsUpDown, Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, UserPlus, LayoutGrid, ListTree, MessageSquare, MonitorUp, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
+import { Check, ChevronsDownUp, ChevronsUpDown, Copy, Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, UserPlus, LayoutGrid, ListTree, MessageSquare, MonitorUp, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
 import { useShellOptions } from '@/shared/shell/ShellContext';
 import { realtime } from '@/shared/realtime/realtime';
 import { SearchField } from '@/shared/ui/SearchField';
@@ -476,6 +476,17 @@ export default function OfficeScreen() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [openId]);
+
+  /** «Создать копию»: своя копия с тем же содержимым — рядом, в той же папке (если туда можно класть). */
+  async function copyItem(item: Item) {
+    setBusy(`copy:${item.id}`);
+    try {
+      const copy = await workspaceApi.copy(item.id);
+      if (item.folderId) await workspaceApi.placeItem(copy.id, item.folderId).catch(() => undefined);
+      showToast(`Создана копия «${copy.title || KINDS[copy.kind].untitled}»`, 'success');
+      void load();
+    } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не удалось создать копию', 'error'); } finally { setBusy(''); }
+  }
 
   async function togglePin(item: Item) {
     try { await workspaceApi.patch(item.id, { pinned: !item.pinned }); void load(); } catch (cause) { showToast(cause instanceof Error ? cause.message : 'Не получилось', 'error'); }
@@ -983,6 +994,7 @@ export default function OfficeScreen() {
           <MenuItem onSelect={() => { const i = rowMenu.item; setRowMenu(null); select(i.id, filter === 'all' ? 'all' : i.kind); }}>Открыть</MenuItem>
           <MenuItem icon={<Send size={15} />} onSelect={() => { const i = rowMenu.item; setRowMenu(null); setSendItem(i); }}>Отправить в чат</MenuItem>
           {(rowMenu.item.isOwner || rowMenu.item.canEdit) && <MenuItem icon={<Pencil size={15} />} onSelect={() => { const i = rowMenu.item; setRowMenu(null); setRenamingId(i.id); }}>Переименовать</MenuItem>}
+          <MenuItem icon={<Copy size={15} />} onSelect={() => { const i = rowMenu.item; setRowMenu(null); void copyItem(i); }}>Создать копию</MenuItem>
           <MenuItem icon={<FolderInput size={15} />} onSelect={() => { const { item, anchor } = rowMenu; setRowMenu(null); setMoveMenu({ item, anchor }); }}>Переместить в папку…</MenuItem>
           {canSticky(rowMenu.item.kind) && (
             <MenuItem icon={<MonitorUp size={15} />} onSelect={() => { const i = rowMenu.item; setRowMenu(null); void openSticky(i.id, null, { kind: i.kind }); }}>{stickyLabel(rowMenu.item.kind)}</MenuItem>

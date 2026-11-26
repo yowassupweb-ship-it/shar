@@ -181,10 +181,15 @@ def create_item(body: ItemCreate, me: Identity = Depends(current_identity)):
     except WorkspaceError as exc:
         raise _raise(exc) from exc
     title = store.unique_title(body.kind, title, me.user_id)  # «Новая таблица (1)» вместо второй «Новой таблицы»
+    return {"item": _insert(body.kind, title, content, meta, me.user_id)}
+
+
+def _insert(kind: str, title: str, content: str, meta: dict, owner_id: str) -> dict:
+    """Записать новый материал (содержимое — в базу или S3) и отдать его как в списке, с содержимым."""
     row = db.conn.fetch_one(
         """INSERT INTO workspace_items (kind, title, text_content, meta, owner_id)
            VALUES (%s, %s, %s, %s, %s) RETURNING id""",
-        (body.kind, title, store.text_of(body.kind, content), store.as_json(meta), me.user_id),
+        (kind, title, store.text_of(kind, content), store.as_json(meta), owner_id),
     )
     item_id = int(row["id"])
     try:
@@ -195,7 +200,21 @@ def create_item(body: ItemCreate, me: Identity = Depends(current_identity)):
     except WorkspaceError as exc:
         db.conn.execute_query("DELETE FROM workspace_items WHERE id = %s", (item_id,))
         raise _raise(exc) from exc
-    return {"item": store.present(store.get_row(str(item_id)), me.user_id, with_content=True)}
+    return store.present(store.get_row(str(item_id)), owner_id, with_content=True)
+
+
+@router.post("/api/workspace/items/{item_id}/copy", status_code=201)
+def copy_item(item_id: str, me: Identity = Depends(current_identity)):
+    """«Создать копию»: своя копия всего, что видно человеку, — то же содержимое и оформление, имя «… (копия)»
+    (занято — с номером). Копия — его собственная; в папку оригинала её кладёт клиент (если туда можно класть)."""
+    try:
+        row = store.get_visible(item_id, me.user_id)
+    except WorkspaceError as exc:
+        raise _raise(exc) from exc
+    kind = row["kind"]
+    base = (row.get("title") or "").strip() or store.DEFAULT_TITLES.get(kind, "")
+    title = store.unique_title(kind, f"{base} (копия)" if base else "", me.user_id)
+    return {"item": _insert(kind, title, row.get("content") or "", store.clean_meta(kind, row.get("meta") or {}), me.user_id)}
 
 
 @router.get("/api/workspace/items/{item_id}")

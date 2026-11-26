@@ -85,6 +85,8 @@ export const workspaceApi = {
   listPresence: (ids: string[]) => call<{ viewers: Record<string, Viewer[]> }>('/api/workspace/presence', { method: 'POST', json: { ids } }).then((r) => r.viewers),
   deleteFolder: (id: string) => call<{ folders: Folder[] }>(`/api/workspace/folders/${enc(id)}`, { method: 'DELETE' }).then((r) => r.folders),
   /** Положить материал в свою папку или вынуть (null). */
+  /** Своя копия материала: то же содержимое, имя «… (копия)» (сервер: workspace/router.copy_item). */
+  copy: (id: string) => call<{ item: Item }>(`/api/workspace/items/${encodeURIComponent(id)}/copy`, { method: 'POST' }).then((r) => r.item),
   placeItem: (id: string, folderId: string | null) =>
     call<{ folderId: string | null }>(`/api/workspace/items/${enc(id)}/folder`, { method: 'PUT', json: { folderId } }),
 
