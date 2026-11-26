@@ -176,6 +176,10 @@
 .cxm-photo-single { object-fit: cover; }
 .cxm-media-top .cxm-photo-single { object-fit: cover; }
 .cxm-photo-fill { width: 100%; height: 100%; }
+/* Клетка альбома заполняется снимком без зазоров (cover), и с подписью тоже. Правило «фото с подписью»
+   (.cxm-media-top .cxm-photo: высота по пропорциям, contain) раньше доставалось и клеткам альбома: снимок с другими
+   пропорциями, чем клетка (или пока они не известны), не доходил до краёв — в щелях была видна подложка пузыря. */
+.cxm-album .cxm-photo, .cxm-media-top .cxm-album .cxm-photo { width: 100% !important; height: 100% !important; max-height: none; object-fit: cover; }
 .cxm-album { position: relative; }
 .cxm-album-cell { position: absolute; overflow: hidden; }
 .cxm-album-more {
@@ -1961,10 +1965,16 @@ button.cxm-status { cursor: pointer; }
   animation: cxm-focus-in 180ms var(--ease-out) both;
 }
 .cxm-focus[data-closing] .cxm-focus-scrim { animation: cxm-focus-out 200ms var(--ease-out) both; }
-.cxm-focus-shot {
-  position: absolute;
-  transition: transform 220ms cubic-bezier(.34, 1.2, .64, 1);
-}
+/* Колонка «сообщение + меню» листается целиком, если вместе они не влезают в экран (длинное сообщение). */
+.cxm-focus[data-interactive] { pointer-events: auto; }
+.cxm-focus-scroll { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.cxm-focus-column { box-sizing: border-box; padding-bottom: calc(12px + var(--nx-safe-bottom, 0px)); transition: padding-top 220ms cubic-bezier(.34, 1.2, .64, 1); }
+.cxm-focus-shot { position: relative; }
+.cxm-focus-menu-row { display: flex; margin-top: 10px; }
+.cxm-focus-menu-row[data-mine] { justify-content: flex-end; }
+/* Меню — то же оформление, что всплывающее (.nx-menu), но стоит в колонке, а не поверх. */
+.cxm-focus-menu.nx-menu { position: static; max-height: none; overflow: visible; animation: cxm-focus-menu-in 180ms var(--ease-out) both; }
+@keyframes cxm-focus-menu-in { from { opacity: 0; transform: translateY(-6px) scale(.98); } }
 .cxm-focus-shot .cxm-row { margin: 0; }
 .cxm-focus-lift { animation: cxm-focus-lift 220ms cubic-bezier(.34, 1.3, .64, 1) both; }
 .cxm-focus[data-closing] .cxm-focus-lift { animation: cxm-focus-drop 200ms var(--ease-out) both; }
