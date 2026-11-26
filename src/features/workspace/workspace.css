@@ -172,7 +172,7 @@
   color: var(--on-media);
   box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .25);
 }
-.nws-kind-icon svg { width: 20px; height: 20px; }
+.nws-kind-icon svg { width: 22px; height: 22px; }
 
 /* ── Правая часть ─────────────────────────────────────────────────────── */
 .nws-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
@@ -196,12 +196,13 @@
 .nws-tile-icon {
   display: grid;
   place-items: center;
-  width: 56px;
-  height: 56px;
-  border-radius: 15px;
+  width: 64px;
+  height: 64px;
+  border-radius: 17px;
   background: linear-gradient(180deg, rgba(255, 255, 255, .28), rgba(255, 255, 255, 0) 55%), linear-gradient(145deg, var(--a), var(--b));
   color: var(--on-media);
 }
+.nws-tile-icon svg { width: 36px; height: 36px; }
 
 .nws-item { display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--surface-panel); container-type: inline-size; }
 /* Узкая панель: подписи «Сохранено» и «Только я» уступают место названию, значки остаются. */
@@ -1001,7 +1002,8 @@ button.nws-cm-anchor { cursor: pointer; }
 
 /* ── Шапка документа и таблицы как в Google: значок на две строки, название + звезда + статус, под ними меню ── */
 .nws-head[data-layout="gdocs"] { align-items: center; padding-top: calc(var(--space-2) + env(safe-area-inset-top)); padding-bottom: 2px; min-height: 64px; }
-.nws-head[data-layout="gdocs"] > .nws-kind-icon { width: 40px; height: 40px; border-radius: 10px; align-self: center; }
+.nws-head[data-layout="gdocs"] > .nws-kind-icon { width: 44px; height: 44px; border-radius: 11px; align-self: center; }
+.nws-head[data-layout="gdocs"] > .nws-kind-icon svg { width: 28px; height: 28px; }
 .nws-head-main { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 0; }
 .nws-head-titlerow { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .nws-head[data-layout="gdocs"] .nws-title { flex: 0 1 auto; min-width: 120px; max-width: 520px; field-sizing: content; padding: 2px 6px; font-size: 18px; font-weight: var(--weight-regular, 400); }
@@ -1178,8 +1180,8 @@ html:is([data-theme="graphite"], [data-theme="black"]) .nws-text-marks > span { 
 .nws-list[data-density="compact"] .nws-rows { gap: 0; }
 .nws-list[data-density="compact"] .nws-group { margin: var(--space-2) var(--space-2) 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
 .nws-list[data-density="compact"] .nws-row { gap: 6px; min-height: 26px; padding: 2px 8px; border-radius: 6px; }
-.nws-list[data-density="compact"] .nws-kind-icon { width: 18px; height: 18px; border-radius: 5px; }
-.nws-list[data-density="compact"] .nws-kind-icon svg { width: 12px; height: 12px; }
+.nws-list[data-density="compact"] .nws-kind-icon { width: 22px; height: 22px; border-radius: 6px; }
+.nws-list[data-density="compact"] .nws-kind-icon svg { width: 16px; height: 16px; }
 .nws-list[data-density="compact"] .nws-row-title { font-size: var(--text-sm); font-weight: var(--weight-regular, 400); }
 .nws-list[data-density="compact"] .nws-row-snippet:not([data-hit]) { display: none; }
 .nws-list[data-density="compact"] .nws-row-meta > span:first-child { display: none; }

@@ -1,7 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { HiddenMark } from '@/shared/core/HiddenMark';
+import { OfficeAllIcon } from '@/shared/ui/OfficeKindIcons';
 import { useSearchParams } from 'react-router';
-import { Check, ChevronsDownUp, ChevronsUpDown, Copy, Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, UserPlus, LayoutGrid, ListTree, MessageSquare, MonitorUp, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
+import { Check, ChevronsDownUp, ChevronsUpDown, Copy, Folder as FolderIcon, FolderInput, FolderMinus, FolderPlus, FolderUp, Globe2, UserPlus, ListTree, MessageSquare, MonitorUp, PanelLeftClose, PanelLeftOpen, Pencil, Pin, Plus, Send, Trash2, Upload, Users } from 'lucide-react';
 import { useShellOptions } from '@/shared/shell/ShellContext';
 import { realtime } from '@/shared/realtime/realtime';
 import { SearchField } from '@/shared/ui/SearchField';
@@ -824,7 +825,7 @@ export default function OfficeScreen() {
         </header>
 
         <div className="nws-kinds" role="group" aria-label="Вид материалов">
-          <button type="button" title="Все материалы" aria-pressed={filter === 'all'} onClick={() => select(null, 'all')}><LayoutGrid size={16} aria-hidden="true" /><span>Все</span></button>
+          <button type="button" title="Все материалы" aria-pressed={filter === 'all'} onClick={() => select(null, 'all')}><OfficeAllIcon size={16} aria-hidden="true" /><span>Все</span></button>
           {KIND_LIST.map((k) => (
             <button key={k.kind} type="button" title={k.plural} aria-pressed={filter === k.kind} onClick={() => select(null, k.kind)} style={{ '--a': k.tint[0], '--b': k.tint[1] } as React.CSSProperties}>
               <k.icon size={16} aria-hidden="true" /><span>{k.short}</span>

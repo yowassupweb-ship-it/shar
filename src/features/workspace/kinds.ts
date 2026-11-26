@@ -1,4 +1,5 @@
-import { FilePenLine, Presentation, StickyNote, Table2, type LucideIcon } from 'lucide-react';
+import type { ComponentType } from 'react';
+import { OfficeDocumentIcon, OfficeNoteIcon, OfficeSlidesIcon, OfficeTableIcon, type KindIconProps } from '@/shared/ui/OfficeKindIcons';
 import { PUBLIC_ORIGIN, links } from '@/shared/navigation/routes';
 import type { Kind } from './types';
 
@@ -14,7 +15,7 @@ export interface KindInfo {
   newLabel: string;
   untitled: string;
   empty: string;
-  icon: LucideIcon;
+  icon: ComponentType<KindIconProps>;
   /** Цвета плашки в «Ещё». */
   tint: [string, string];
   /** Адрес раздела «Офис» на этом виде. */
@@ -26,19 +27,19 @@ export interface KindInfo {
 export const KINDS: Record<Kind, KindInfo> = {
   note: {
     kind: 'note', plural: 'Заметки', short: 'Заметки', accusative: 'заметку', newLabel: 'Новая заметка', untitled: 'Без заголовка',
-    empty: 'Заметок пока нет.', icon: StickyNote, tint: ['#fde047', '#f59e0b'], href: links.office('note'), linkPrefix: 'n',
+    empty: 'Заметок пока нет.', icon: OfficeNoteIcon, tint: ['#fde047', '#f59e0b'], href: links.office('note'), linkPrefix: 'n',
   },
   document: {
     kind: 'document', plural: 'Документы', short: 'Доки', accusative: 'документ', newLabel: 'Новый документ', untitled: 'Новый документ',
-    empty: 'Документов пока нет.', icon: FilePenLine, tint: ['#60a5fa', '#2563eb'], href: links.office('document'), linkPrefix: 'd',
+    empty: 'Документов пока нет.', icon: OfficeDocumentIcon, tint: ['#60a5fa', '#2563eb'], href: links.office('document'), linkPrefix: 'd',
   },
   table: {
     kind: 'table', plural: 'Таблицы', short: 'Таблицы', accusative: 'таблицу', newLabel: 'Новая таблица', untitled: 'Новая таблица',
-    empty: 'Таблиц пока нет.', icon: Table2, tint: ['#4ade80', '#16a34a'], href: links.office('table'), linkPrefix: 't',
+    empty: 'Таблиц пока нет.', icon: OfficeTableIcon, tint: ['#4ade80', '#16a34a'], href: links.office('table'), linkPrefix: 't',
   },
   presentation: {
     kind: 'presentation', plural: 'Презентации', short: 'Слайды', accusative: 'презентацию', newLabel: 'Новая презентация', untitled: 'Новая презентация',
-    empty: 'Презентаций пока нет.', icon: Presentation, tint: ['#fb923c', '#dc2626'], href: links.office('presentation'), linkPrefix: 'p',
+    empty: 'Презентаций пока нет.', icon: OfficeSlidesIcon, tint: ['#fb923c', '#dc2626'], href: links.office('presentation'), linkPrefix: 'p',
   },
 };
 

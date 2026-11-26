@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
-import { ExternalLink, List, Minus, Pin, PinOff, Plus, StickyNote, X } from 'lucide-react';
+import { ExternalLink, List, Minus, Pin, PinOff, Plus, X } from 'lucide-react';
+import { OfficeNoteIcon } from '@/shared/ui/OfficeKindIcons';
 import { links } from '@/shared/navigation/routes';
 import LinkChooserHost from '@/shared/navigation/LinkChooser';
 import { installInternalLinks, officeItemOf, setLinkRouter } from '@/shared/navigation/internalLinks';
@@ -85,7 +86,7 @@ function SignedOut() {
     <>
       <header className="nws-sticky-head"><span className="nws-sticky-fill" /><button type="button" className="nws-sticky-btn" onClick={() => void bridge?.close()} aria-label="Закрыть"><X size={16} /></button></header>
       <div className="nws-sticky-empty">
-        <StickyNote size={28} aria-hidden="true" />
+        <OfficeNoteIcon size={28} aria-hidden="true" />
         <b>Войдите в Шар</b>
         <span>Заметки на рабочем столе работают после входа в основном окне.</span>
         <button type="button" className="nx-ghost" onClick={() => void bridge?.focusMain()}>Открыть Шар</button>
