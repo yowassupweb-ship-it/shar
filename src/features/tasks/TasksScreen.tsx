@@ -15,7 +15,7 @@ import { useLongPress } from '@/shared/ui/useLongPress';
 import { askConfirm, Menu, MenuItem, Sheet, type MenuAnchor } from '@/shared/ui/overlay';
 import Splitter from '@/shared/ui/Splitter';
 import {
-  assigneesOf, canAddToFolder, canManageFolder, chainOf, deleteTask, doersOf, isDone, isDraft, loadTasks, makeChain, myId, newDraft, relevantLists, setChain, shownAssignees, STATUSES, statusOf,
+  assigneesOf, canAddToFolder, canManageFolder, chainOf, deleteTask, doersOf, isDone, isDraft, loadTasks, makeChain, myId, newDraft, relevantLists, removeFromChain, setChain, shownAssignees, STATUSES, statusOf,
   type Status, taskMarkdown, updateTask, useTasks, type Task, type TaskList,
 } from './api';
 import { FolderMenu, FolderSheet, FolderShareSheet } from './Folders';
@@ -566,9 +566,32 @@ export default function TasksScreen() {
           // Полоса выделения: сколько выбрано и что с ними сделать (как панель действий в «Фото» и Finder).
           <div className="ntl-selbar" role="toolbar" aria-label="Выбранные задачи">
             <span className="ntl-selbar-count">{selected.length ? `Выбрано: ${selected.length}` : 'Выберите задачи по порядку этапов'}</span>
-            <button type="button" className="nx-primary ntl-selbar-go" disabled={selected.length < 2} onClick={() => void joinSelected()}>
-              <Link2 size={15} aria-hidden="true" /> Объединить в цепочку
-            </button>
+            {(() => {
+              // Выделены этапы одной цепочки — кнопка не объединяет заново, а разъединяет (вся цепочка) или убирает
+              // выделенные этапы из неё (часть цепочки).
+              const all = useTasks.getState().tasks;
+              const refs = selected.map((id) => (all[id] ? chainOf(all[id]) : null));
+              const one = refs.length > 0 && refs.every((r) => r && r.id === refs[0]!.id) ? refs[0]!.id : null;
+              const whole = one ? Object.values(all).filter((t) => chainOf(t)?.id === one).length === selected.length : false;
+              if (one) {
+                return (
+                  <button type="button" className="nx-primary ntl-selbar-go" onClick={() => {
+                    const ids = [...selected];
+                    void (async () => {
+                      if (whole && !(await askConfirm({ title: 'Разъединить цепочку?', text: 'Задачи останутся на своих местах — просто перестанут быть этапами одной цепочки.', confirm: 'Разъединить' }))) return;
+                      try { await removeFromChain(ids); stopSelecting(); } catch { showToast('Не сохранилось — нет связи с сервером.', 'error'); }
+                    })();
+                  }}>
+                    <Unlink size={15} aria-hidden="true" /> {whole ? 'Разъединить цепочку' : 'Убрать из цепочки'}
+                  </button>
+                );
+              }
+              return (
+                <button type="button" className="nx-primary ntl-selbar-go" disabled={selected.length < 2} onClick={() => void joinSelected()}>
+                  <Link2 size={15} aria-hidden="true" /> Объединить в цепочку
+                </button>
+              );
+            })()}
             <button type="button" className="nx-icon-btn" aria-label="Отменить выделение" onClick={stopSelecting}><X size={16} aria-hidden="true" /></button>
           </div>
         )}
@@ -645,6 +668,8 @@ function TaskMenu({ task, anchor, onClose, onOpen, onDeleted, onSelect }: {
   return (
     <Menu anchor={anchor} label={task.title || 'Задача'} onClose={onClose}>
       <MenuItem icon={<ExternalLink size={16} />} onSelect={() => { onClose(); onOpen(task.id); }}>Открыть</MenuItem>
+      {/* Режим выделения — и отсюда (как «Выбрать» в контекстном меню Finder): эта задача становится первой выбранной. */}
+      <MenuItem icon={<SquareCheck size={16} />} onSelect={() => { onClose(); onSelect(task.id); }}>Выбрать несколько</MenuItem>
       <MenuItem icon={done ? <RotateCcw size={16} /> : <CircleCheck size={16} />} onSelect={() => apply({ isCompleted: !done, completed: !done })}>
         {done ? 'Вернуть в работу' : 'Отметить выполненной'}
       </MenuItem>
@@ -670,8 +695,7 @@ function TaskMenu({ task, anchor, onClose, onOpen, onDeleted, onSelect }: {
         {task.priority === 'high' ? 'Снять «Важно»' : 'Пометить важной'}
       </MenuItem>
       <MenuItem icon={<Copy size={16} />} onSelect={() => void copyLink()}>Скопировать ссылку</MenuItem>
-      <MenuItem icon={<SquareCheck size={16} />} onSelect={() => { onClose(); onSelect(task.id); }}>Выбрать — для цепочки</MenuItem>
-      {chain && <MenuItem icon={<Unlink size={16} />} onSelect={() => { onClose(); void setChain(task.id, null).catch(() => showToast('Не сохранилось — нет связи с сервером.', 'error')); }}>Убрать из цепочки</MenuItem>}
+      {chain && <MenuItem icon={<Unlink size={16} />} onSelect={() => { onClose(); void removeFromChain([task.id]).catch(() => showToast('Не сохранилось — нет связи с сервером.', 'error')); }}>Убрать из цепочки</MenuItem>}
       <div className="nx-menu-sep" />
       <MenuItem icon={<Trash2 size={16} />} tone="danger" onSelect={() => void remove()}>Удалить</MenuItem>
     </Menu>

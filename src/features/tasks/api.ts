@@ -133,6 +133,17 @@ export function setChain(id: string, chain: ChainRef | null): Promise<void> {
   return updateTask(id, { metadata: { ...(t.metadata || {}), chain } });
 }
 
+/** Убрать задачи из их цепочек. Остался в цепочке один этап — отвязываем и его: цепочка из одной задачи не нужна. */
+export async function removeFromChain(ids: string[]): Promise<void> {
+  const all = useTasks.getState().tasks;
+  const chains = new Set(ids.map((id) => (all[id] ? chainOf(all[id])?.id : undefined)).filter(Boolean) as string[]);
+  const extra = [...chains].flatMap((cid) => {
+    const left = Object.values(all).filter((t) => chainOf(t)?.id === cid && !ids.includes(t.id));
+    return left.length === 1 ? [left[0].id] : [];
+  });
+  await Promise.all([...ids, ...extra].map((id) => setChain(id, null)));
+}
+
 /** Объединить задачи в новую цепочку в данном порядке. Задачи из других цепочек переходят в новую. */
 export async function makeChain(ids: string[], name?: string): Promise<string> {
   const chainId = `chain-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
