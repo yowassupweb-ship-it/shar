@@ -103,6 +103,9 @@ html[data-theme="graphite"] .fsh, html[data-theme="black"] .fsh { --sh-border-au
   visibility: hidden; user-select: none;
 }
 .fsh-editbox[data-formula] .fsh-editmirror { visibility: visible; }
+/* Подсказка из столбца: зеркало видно, набранное в нём прозрачное (его показывает само поле), остаток — бледным. */
+.fsh-editbox[data-auto] .fsh-editmirror { visibility: visible; color: transparent; }
+.fsh-ghost { color: color-mix(in srgb, var(--sh-text) 45%, transparent); }
 .fsh-editor {
   position: absolute; inset: 0; box-sizing: border-box; width: 100%; height: 100%; margin: 0; padding: var(--edit-pad-top, 2px) 4px 0; resize: none; overflow: hidden;
   border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; line-height: inherit; text-align: inherit; outline: none; user-select: text;

@@ -226,6 +226,8 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   const barInput = useRef<HTMLInputElement>(null);
   /** Позиция каретки в правке (для подсказки функций и вставки ссылок щелчком). */
   const [caret, setCaret] = useState(0);
+  // Подсказка из столбца погашена (стёрли символ) — до следующего набранного.
+  const [autoOff, setAutoOff] = useState(false);
   const [suggestAt, setSuggestAt] = useState(0);
   const [suggestOff, setSuggestOff] = useState(false);
   /** «Копировать формат» (кисть): оформление, которое получит следующее выделение. */
@@ -810,8 +812,8 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     reveal(r, c);
   }, [geo, sheet, sel, reveal]);
 
-  const finishEdit = (how: 'down' | 'up' | 'right' | 'left' | 'stay' | 'cancel') => {
-    const e = edit;
+  const finishEdit = (how: 'down' | 'up' | 'right' | 'left' | 'stay' | 'cancel', text?: string) => {
+    const e = edit ? { ...edit, text: text ?? edit.text } : null;
     setEdit(null);
     grid.current?.focus({ preventScroll: true });
     if (!e || how === 'cancel') return;
@@ -1710,8 +1712,10 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       return;
     }
     if (e.key === 'Enter' && e.altKey) { e.preventDefault(); setEdit((x) => (x ? { ...x, text: `${x.text}\n` } : x)); return; }
-    if (e.key === 'Enter') { e.preventDefault(); finishEdit(e.shiftKey ? 'up' : 'down'); return; }
-    if (e.key === 'Tab') { e.preventDefault(); finishEdit(e.shiftKey ? 'left' : 'right'); return; }
+    // Подсказка из столбца принимается тем же Enter/Tab, что и правка (как в Google).
+    const withAuto = autoSuffix && edit ? autoFull : undefined;
+    if (e.key === 'Enter') { e.preventDefault(); finishEdit(e.shiftKey ? 'up' : 'down', withAuto); return; }
+    if (e.key === 'Tab') { e.preventDefault(); finishEdit(e.shiftKey ? 'left' : 'right', withAuto); return; }
     if (e.key === 'Escape') { e.preventDefault(); finishEdit('cancel'); }
   };
 
@@ -1984,6 +1988,29 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     card.style.left = `${cx * z}px`; card.style.top = `${y * z}px`; card.style.visibility = hidden ? 'hidden' : '';
   };
   placeLinkCardRef.current = placeLinkCard;
+  // Автодополнение по столбцу (как в Google): набранное — начало значения из этого же столбца → остаток бледным,
+  // Enter/Tab принимают. Берётся ближайшее по строкам; числа, формулы и короткие совпадения не подсказываем.
+  let autoFull = '';
+  const autoSuffix = (() => {
+    if (!edit || edit.bar || autoOff || !sheet || !b) return '';
+    const typed = edit.text;
+    if (!typed.trim() || typed.startsWith('=') || caret !== typed.length || typed.includes('\n')) return '';
+    const low = typed.toLocaleLowerCase('ru');
+    let best = ''; let bestDist = Infinity;
+    const data = sheet.cellData || {};
+    for (const rk of Object.keys(data)) {
+      const r = Number(rk);
+      if (r === edit.row) continue;
+      const cell = data[r]?.[edit.col];
+      if (!cell || cell.f || typeof cell.v !== 'string') continue;
+      const v = cell.v;
+      if (v.length <= typed.length || !v.toLocaleLowerCase('ru').startsWith(low)) continue;
+      const dist = Math.abs(r - edit.row);
+      if (dist < bestDist) { best = v; bestDist = dist; }
+    }
+    autoFull = best;
+    return best ? best.slice(typed.length) : '';
+  })();
   // Поле правки стоит на месте экрана, где правку начали, — при прокрутке оно не едет с ячейками (как в Google);
   // над ним тогда появляется адрес ячейки. Прокрутку запоминаем в момент открытия правки этой ячейки.
   const editKey = edit ? `${sheetId}:${edit.row}:${edit.col}` : '';
@@ -2181,12 +2208,12 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
             onUnlink={() => unlinkCell(linkCard.r0, linkCard.c0, linkCard.rich)} />
         )}
         {edit && !edit.bar && editBoxRaw && (
-          <div ref={editBoxEl} className="fsh-editbox" data-formula={edit.text.startsWith('=') || undefined}
+          <div ref={editBoxEl} className="fsh-editbox" data-formula={edit.text.startsWith('=') || undefined} data-auto={autoSuffix ? '' : undefined}
             style={editBoxStyle}>
             {editMoved && <span className="fsh-edit-ref">{a1(edit.row, edit.col)}</span>}
-            <div className="fsh-editmirror" aria-hidden="true">{renderColored(edit.text, editRefs)}{'\u200b'}</div>
+            <div className="fsh-editmirror" aria-hidden="true">{autoSuffix ? <><span>{edit.text}</span><span className="fsh-ghost">{autoSuffix}</span></> : renderColored(edit.text, editRefs)}{'\u200b'}</div>
             <textarea ref={editor} className="fsh-editor" value={edit.text} spellCheck={false}
-              onChange={(e) => { setEdit((x) => (x ? { ...x, text: e.target.value } : x)); setCaret(e.target.selectionStart); setSuggestOff(false); setSuggestAt(0); }}
+              onChange={(e) => { const grew = e.target.value.length > (edit?.text.length ?? 0); setEdit((x) => (x ? { ...x, text: e.target.value } : x)); setCaret(e.target.selectionStart); setSuggestOff(false); setSuggestAt(0); setAutoOff(!grew); }}
               onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
               onKeyDown={onEditKey}
               onBlur={(e) => { if (!root.current?.contains(e.relatedTarget as Node) && !(e.relatedTarget as HTMLElement | null)?.closest('.fsh-formula')) finishEdit('stay'); }} />
