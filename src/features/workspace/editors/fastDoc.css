@@ -280,8 +280,13 @@ span.fdoc-pgap { width: 100%; }
 .fdoc-painting { cursor: copy; }
 
 /* Тёмная тема: явно заданный тёмный цвет текста — цветом листа (как осветлял Univer), светлый на белом листе — тоже читаемым. */
+/* Тёмная тема — «инверсия» цветов документа: у каждого цвета заранее посчитан вариант для тёмного листа (docSchema.ts:
+   тот же оттенок, перевёрнутая светлота). Чёрный и почти чёрный текст — цветом листа. */
 html[data-theme="graphite"] .fdoc-content [data-ink="dark"], html[data-theme="black"] .fdoc-content [data-ink="dark"] { color: var(--page-text) !important; }
-html:not([data-theme="graphite"]):not([data-theme="black"]) .fdoc-content [data-ink="light"] { color: #5f6368 !important; }
+html[data-theme="graphite"] .fdoc-content [data-ink-c], html[data-theme="black"] .fdoc-content [data-ink-c] { color: var(--ink-dark) !important; }
+html[data-theme="graphite"] .fdoc-content [data-ink-b], html[data-theme="black"] .fdoc-content [data-ink-b] { background-color: var(--fill-dark) !important; }
+/* Светлая тема: белый текст на белом листе — серым, но не внутри тёмной заливки (белое на чёрной плашке остаётся белым). */
+html:not([data-theme="graphite"]):not([data-theme="black"]) .fdoc-content [data-ink="light"]:not([data-fill="dark"]):not([data-fill="dark"] *) { color: #5f6368 !important; }
 
 /* ── Колонтитулы: поле листа сверху/снизу — двойной щелчок; правка прямо на листе ───────────────────────── */
 .fdoc-hf-zone { position: absolute; left: 0; right: 0; z-index: 2; pointer-events: auto; }
