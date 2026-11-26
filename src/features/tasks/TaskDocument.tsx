@@ -395,7 +395,8 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
           <span className="ntd-chip-label">Заказчик</span>
           {customer ? (String(customer.id) === myId() ? 'Я' : displayName(customer)) : 'не указан'}
         </button>
-        <button type="button" className="ntd-chip" onClick={() => setPeople('assignees')} aria-label="Исполнители" {...assigneeHover.bind}>
+        {/* У этапа цепочки на месте исполнителя — ответственный за этап (своя роль цепочки, исполнитель в данных не трогается). */}
+        {!chain && <button type="button" className="ntd-chip" onClick={() => setPeople('assignees')} aria-label="Исполнители" {...assigneeHover.bind}>
           <span className="ntd-chip-label">Исполнитель</span>
           {assignees.length ? (
             <span className="ntd-faces">
@@ -403,12 +404,12 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
             </span>
           ) : <UserPlus size={14} aria-hidden="true" />}
           {assignees.length === 1 ? (assignees[0] === myId() ? 'Я' : displayName(users[assignees[0]]) || 'Исполнитель') : assignees.length ? `${assignees.length} исполнителя` : 'Исполнитель'}
-        </button>
+        </button>}
         {chain && (
           // Ответственный за этап цепочки — своя роль цепочки: кто ведёт этот этап и получит «Ваша очередь».
           <button type="button" className="ntd-chip" onClick={() => setPeople('owner')} aria-label="Ответственный за этап" title="Кто ведёт этот этап цепочки. По умолчанию — заказчик задачи">
-            {owner ? <span className={`ntd-faces${ownerIsDefault ? ' ntd-implicit' : ''}`}><Avatar name={displayName(users[owner]) || '?'} seed={owner} src={users[owner]?.avatar} person size={20} /></span> : <UserPlus size={14} aria-hidden="true" />}
             <span className="ntd-chip-label">Ответственный</span>
+            {owner ? <span className={`ntd-faces${ownerIsDefault ? ' ntd-implicit' : ''}`}><Avatar name={displayName(users[owner]) || '?'} seed={owner} src={users[owner]?.avatar} person size={20} /></span> : <UserPlus size={14} aria-hidden="true" />}
             {owner ? `${owner === myId() ? 'Я' : displayName(users[owner]) || 'Сотрудник'}${ownerIsDefault ? ' (заказчик)' : ''}` : 'не указан'}
           </button>
         )}
