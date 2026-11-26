@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useLayoutEffect, useRef } from 'react';
 
 /**
  * Перетаскиваемая граница между панелями. Ширина хранится в CSS-переменной
@@ -41,7 +41,9 @@ export default function Splitter({
     }
   }, [clamp, containerRef, cssVar, storageKey]);
 
-  useEffect(() => {
+  // Сохранённую ширину ставим до первой отрисовки: в useEffect панель успевала показаться шириной по умолчанию и
+  // при каждом заходе в раздел «откидывалась» до своей.
+  useLayoutEffect(() => {
     let saved = initial;
     try { saved = Number(localStorage.getItem(storageKey)) || initial; } catch { /* ignore */ }
     apply(saved, false);
