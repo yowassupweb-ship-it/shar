@@ -1,7 +1,8 @@
 """Цепочки задач: уведомления по ходу этапов.
 
-Цепочка хранится в самих задачах — metadata.chain = {id, order, name} (клиент: src/features/tasks/api.ts). Этап
-ведёт его ответственный — исполнитель задачи, а если исполнителя нет («задача себе») — заказчик. Здесь — кому
+Цепочка хранится в самих задачах — metadata.chain = {id, order, name, owner} (клиент: src/features/tasks/api.ts).
+Этап ведёт ответственный — отдельная роль только для цепочек (owner), по умолчанию заказчик задачи; исполнитель
+задачи — сам по себе. Здесь — кому
 и что сказать, когда этап закрыли, вернули в работу или задачу включили в цепочку:
 
   этап закрыт        → ответственному следующего незакрытого этапа: «Ваша очередь»;
@@ -47,19 +48,15 @@ def customer_of(t: Optional[dict]) -> str:
     return str(_field(t, "assigned_by_id", "assignedById", "author_id", "authorId") or "")
 
 
+def owner_of(t: Optional[dict]) -> str:
+    """Ответственный за этап цепочки: назначенный (metadata.chain.owner), по умолчанию — заказчик задачи."""
+    chain = chain_of(t) or {}
+    return str(chain.get("owner") or "") or customer_of(t)
+
+
 def owners_of(t: Optional[dict]) -> set[str]:
-    """Ответственные за этап: исполнители; «задача себе» (исполнителя нет или он — сам заказчик) — заказчик."""
-    ids: set[str] = set()
-    many = _field(t, "assigned_to_ids", "assignedToIds") or []
-    if isinstance(many, (list, tuple)):
-        ids.update(str(i) for i in many if i)
-    one = _field(t, "assigned_to_id", "assignedToId")
-    if one:
-        ids.add(str(one))
-    customer = customer_of(t)
-    if not ids or ids == {customer}:
-        return {customer} if customer else set()
-    return ids
+    owner = owner_of(t)
+    return {owner} if owner else set()
 
 
 def stages(chain_id: str) -> list[dict]:
@@ -109,9 +106,9 @@ def notify(before: Optional[dict], after: Optional[dict], actor: str, actor_name
         for uid in owners_of(after) - {actor, ""}:
             send(uid, "task_chain_reopened", task_id, text)
         return
-    # Смена ответственного — это смена исполнителя: об этом уже говорит «поручил(а) задачу». Здесь — только включение.
+    # Задачу включили в цепочку или сменили ответственного за этап — новому ответственному.
     joined = chain_of(before) is None or str((chain_of(before) or {}).get("id")) != str(chain["id"])
-    if joined:
+    if joined or owner_of(before) != owner_of(after):
         fresh = owners_of(after) - {actor, ""}
         if fresh:
             all_stages = stages(str(chain["id"]))

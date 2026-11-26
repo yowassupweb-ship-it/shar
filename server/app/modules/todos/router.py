@@ -38,7 +38,9 @@ def _roll_recurring_tasks() -> None:
 def _involved(task: dict, uid: str) -> bool:
     ids = {str(x) for x in (task.get('assigned_to_ids') or task.get('assignedToIds') or []) if x}
     direct = {str(task.get(k)) for k in ('author_id', 'assigned_by_id', 'assigned_to_id', 'assigned_to') if task.get(k)}
-    return uid in ids | direct
+    # Ответственный за этап цепочки (todos/chain.py) — тоже участник задачи.
+    owner = str((chain.chain_of(task) or {}).get('owner') or '')
+    return uid in ids | direct | ({owner} if owner else set())
 
 
 def _can_access_task(task: Optional[dict], me: Identity) -> bool:
@@ -115,6 +117,13 @@ def get_todos(userId: Optional[str] = None, taskId: Optional[str] = None, me: Id
     # Видимость считается от вошедшего. Раньше запрос без userId отдавал ВСЕ задачи компании.
     uid = me.user_id
     todos = db.get_tasks(user_id=uid)
+    # Этапы цепочек, где человек — ответственный (он может не быть ни исполнителем, ни заказчиком).
+    try:
+        owned = db.conn.fetch_all("SELECT * FROM tasks WHERE metadata->'chain'->>'owner' = %s", (uid,)) or []
+        have_ids = {str(t.get('id')) for t in todos}
+        todos = [*todos, *(dict(t) for t in owned if str(t.get('id')) not in have_ids)]
+    except Exception as e:
+        logger.debug(f"[GET /api/todos] chain owners skipped: {e}")
     lists = db.get_todo_lists(user_id=uid)
     # Папки, открытые человеку, — вместе со всеми задачами в них (todos/folders.py).
     shared_tasks, shared_lists = folders.shared_for(uid)
@@ -154,6 +163,9 @@ def _task_recipients(task: dict) -> set:
         if uid:
             recipients.add(str(uid))
     recipients |= folders.members(task.get('list_id'))  # кому открыта папка с этой задачей
+    owner = str((chain.chain_of(task) or {}).get('owner') or '')  # ответственный за этап цепочки
+    if owner:
+        recipients.add(owner)
     return recipients
 
 

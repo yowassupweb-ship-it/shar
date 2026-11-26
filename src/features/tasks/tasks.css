@@ -644,7 +644,7 @@
 .ntl-chain-stage[data-state="done"] .ntl-row .ntl-name { color: var(--text-muted); text-decoration: line-through; }
 
 /* ── «Новое» у задачи (как у материалов «Офиса») и поток агента ─────────────────────────────────────── */
-.ntl-new { display: inline-block; margin-right: 6px; padding: 1px 7px; border-radius: var(--radius-pill); background: var(--accent-fill); color: var(--on-accent, #fff); font-size: 11px; font-weight: var(--weight-semibold); line-height: 16px; vertical-align: 2px; }
+.ntl-badge-new { display: inline-block; margin-right: 6px; padding: 1px 7px; border-radius: var(--radius-pill); background: var(--accent-fill); color: var(--on-accent, #fff); font-size: 11px; font-weight: var(--weight-semibold); line-height: 16px; vertical-align: 2px; }
 .ntl-streaming, .ntd-stream { display: inline-flex; align-items: center; gap: 6px; color: var(--accent-color); }
 .ntl-streaming i, .ntd-stream i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: ntl-pulse 1s ease-in-out infinite; }
 .ntd-stream { margin-bottom: var(--space-3); padding: 4px 10px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent-fill) 10%, transparent); font-size: var(--text-sm); font-weight: var(--weight-medium); }

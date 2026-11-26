@@ -9,7 +9,7 @@ import { displayName, useChatStore } from '@/features/chat';
 import { Avatar } from '@/shared/ui/Avatar';
 import { askConfirm, Menu, MenuItem, Sheet, type MenuAnchor } from '@/shared/ui/overlay';
 import {
-  assigneesOf, canAddToFolder, chainOf, customerOf, deleteTask, shownAssignees, useTaskStream, isDraft, publishDraft, relevantLists, isDone, myId, PRIORITIES, saveText, STATUSES, statusOf, taskMarkdown, updateTask, useTasks,
+  assigneesOf, canAddToFolder, chainOf, chainOwnerOf, customerOf, deleteTask, setChain, shownAssignees, useTaskStream, isDraft, publishDraft, relevantLists, isDone, myId, PRIORITIES, saveText, STATUSES, statusOf, taskMarkdown, updateTask, useTasks,
   type Priority, type Status, type Task,
 } from './api';
 import { renderMarkdown, toggleTaskLine } from './markdown';
@@ -87,7 +87,7 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
   const [attachSheet, setAttachSheet] = useState<'office' | 'cloud' | 'link' | null>(null);
   const [uploading, setUploading] = useState(0);
   const filePick = useRef<HTMLInputElement>(null);
-  const [people, setPeople] = useState<'assignees' | 'customer' | null>(null);
+  const [people, setPeople] = useState<'assignees' | 'customer' | 'owner' | null>(null);
   const [versions, setVersions] = useState(false);
   const [newFolder, setNewFolder] = useState(false);
 
@@ -338,9 +338,10 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
   const done = isDone(task);
   // Задача «себе» — без исполнителя: заказчик и так виден, исполнитель подразумевается тот же (api.shownAssignees).
   const assignees = shownAssignees(task);
-  // Этап цепочки — у него ответственный: исполнитель, а по умолчанию заказчик (его и показываем, бледнее).
-  const inChain = Boolean(chainOf(task));
-  const owner = inChain && !assignees.length ? customerOf(task) : '';
+  // Этап цепочки — у него ответственный: своя роль цепочки (не исполнитель), по умолчанию заказчик.
+  const chain = chainOf(task);
+  const owner = chain ? chainOwnerOf(task) : '';
+  const ownerIsDefault = Boolean(chain) && !chain?.owner;
   const due = dueLabel(task.dueDate);
   const list = lists.find((l) => l.id === task.listId);
   const priority = PRIORITIES.find((p) => p.id === (task.priority || 'medium'))!;
@@ -394,18 +395,23 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
           <span className="ntd-chip-label">Заказчик</span>
           {customer ? (String(customer.id) === myId() ? 'Я' : displayName(customer)) : 'не указан'}
         </button>
-        <button type="button" className="ntd-chip" onClick={() => setPeople('assignees')} aria-label={inChain ? 'Ответственный за этап' : 'Исполнители'} {...assigneeHover.bind}
-          title={inChain ? 'Кто ведёт этот этап цепочки. По умолчанию — заказчик' : undefined}>
-          <span className="ntd-chip-label">{inChain ? 'Ответственный' : 'Исполнитель'}</span>
-          {owner ? (
-            <span className="ntd-faces ntd-implicit"><Avatar name={displayName(users[owner]) || '?'} seed={owner} src={users[owner]?.avatar} person size={20} /></span>
-          ) : assignees.length ? (
+        <button type="button" className="ntd-chip" onClick={() => setPeople('assignees')} aria-label="Исполнители" {...assigneeHover.bind}>
+          <span className="ntd-chip-label">Исполнитель</span>
+          {assignees.length ? (
             <span className="ntd-faces">
               {assignees.slice(0, 3).map((id) => { const u = users[id]; return <Avatar key={id} name={displayName(u) || '?'} seed={id} src={u?.avatar} person size={20} />; })}
             </span>
           ) : <UserPlus size={14} aria-hidden="true" />}
-          {owner ? `${owner === myId() ? 'Я' : displayName(users[owner]) || 'Заказчик'} (заказчик)` : assignees.length === 1 ? (assignees[0] === myId() ? 'Я' : displayName(users[assignees[0]]) || 'Исполнитель') : assignees.length ? `${assignees.length} исполнителя` : (inChain ? 'Ответственный' : 'Исполнитель')}
+          {assignees.length === 1 ? (assignees[0] === myId() ? 'Я' : displayName(users[assignees[0]]) || 'Исполнитель') : assignees.length ? `${assignees.length} исполнителя` : 'Исполнитель'}
         </button>
+        {chain && (
+          // Ответственный за этап цепочки — своя роль цепочки: кто ведёт этот этап и получит «Ваша очередь».
+          <button type="button" className="ntd-chip" onClick={() => setPeople('owner')} aria-label="Ответственный за этап" title="Кто ведёт этот этап цепочки. По умолчанию — заказчик задачи">
+            {owner ? <span className={`ntd-faces${ownerIsDefault ? ' ntd-implicit' : ''}`}><Avatar name={displayName(users[owner]) || '?'} seed={owner} src={users[owner]?.avatar} person size={20} /></span> : <UserPlus size={14} aria-hidden="true" />}
+            <span className="ntd-chip-label">Ответственный</span>
+            {owner ? `${owner === myId() ? 'Я' : displayName(users[owner]) || 'Сотрудник'}${ownerIsDefault ? ' (заказчик)' : ''}` : 'не указан'}
+          </button>
+        )}
         <button type="button" className="ntd-chip" data-tone={due?.late && !done ? 'danger' : undefined} onClick={open('date')} aria-haspopup="menu">
           <CalendarDays size={14} aria-hidden="true" />
           {due ? due.text : 'Срок'}
@@ -558,6 +564,19 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
       {agentSheet && <AgentSheet task={task} state={agentSheet} onClose={() => setAgentSheet(null)} onChanged={() => setAgentVersion((v) => v + 1)} />}
       {versions && <TaskVersionsSheet taskId={task.id} canRestore={!viewOnly} onClose={() => setVersions(false)} onRestore={restoreVersion} />}
       {people === 'assignees' && <PeopleSheet title="Исполнители" selected={assignees} onClose={() => setPeople(null)} onSave={(ids) => { setPeople(null); void patch({ assignedToIds: ids, assignedToId: ids[0] || null }); }} />}
+      {people === 'owner' && chain && (
+        <PeopleSheet
+          title="Ответственный за этап"
+          single
+          selected={owner ? [owner] : []}
+          onClose={() => setPeople(null)}
+          onSave={(ids) => {
+            setPeople(null);
+            const next = ids[0] && ids[0] !== customerOf(task) ? ids[0] : undefined; // заказчик — значение по умолчанию
+            void setChain(task.id, { ...chain, owner: next }).catch(() => showToast('Не сохранилось — нет связи с сервером.', 'error'));
+          }}
+        />
+      )}
       {people === 'customer' && (
         <PeopleSheet
           title="Заказчик"

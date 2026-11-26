@@ -25,8 +25,9 @@ def notices(monkeypatch):
 CHAIN_ID = f"c-site-{uuid.uuid4().hex[:8]}"  # база между прогонами не чистится — своя цепочка на прогон
 
 
-def _chain(client, tid: str, order: int):
-    r = client.put("/api/todos", json={"id": tid, "type": "todo", "metadata": {"chain": {"id": CHAIN_ID, "order": order * 1024, "name": "Сайт"}}})
+def _chain(client, tid: str, order: int, owner: str | None = None, chain_id: str = CHAIN_ID):
+    ref = {"id": chain_id, "order": order * 1024, "name": "Сайт", **({"owner": owner} if owner else {})}
+    r = client.put("/api/todos", json={"id": tid, "type": "todo", "metadata": {"chain": ref}})
     assert r.status_code == 200, r.text
 
 
@@ -37,12 +38,12 @@ def _done(client, tid: str, value: bool = True):
 
 def test_chain_turns_reopen_and_finish(users, anna, boris, clara, notices):
     a, b, c = users.ids["anna"], users.ids["boris"], users.ids["clara"]
-    t1 = _task(anna, a, "Макет")          # «себе»: ответственный — заказчик (Анна)
-    t2 = _task(anna, b, "Тестирование")   # Борис
-    t3 = _task(anna, c, "Тексты")         # Клара
+    t1 = _task(anna, a, "Макет")          # ответственный не назначен — по умолчанию заказчик (Анна)
+    t2 = _task(anna, b, "Тестирование")   # ответственный — Борис
+    t3 = _task(anna, c, "Тексты")         # ответственный — Клара
     notices.clear()
-    for i, tid in enumerate((t1, t2, t3), start=1):
-        _chain(anna, tid, i)
+    for i, (tid, owner) in enumerate(((t1, None), (t2, b), (t3, c)), start=1):
+        _chain(anna, tid, i, owner)
     owners = {(uid, kind) for uid, kind, _, _ in notices if kind == "task_chain_owner"}
     assert owners == {(b, "task_chain_owner"), (c, "task_chain_owner")}  # Анна включала сама — ей не пишем
 
@@ -96,3 +97,29 @@ def test_agent_streams_task_text(users, anna, client, monkeypatch):
     assert all(text.startswith(p["md"]) for p in streamed) and streamed[0]["agent"]
     saved = {str(t["id"]): t for t in anna.get("/api/todos").json()["todos"]}[tid]
     assert saved["metadata"]["md"] == text
+
+
+def test_owner_is_separate_from_assignee(users, anna, boris, clara, notices):
+    """Ответственный за этап — своя роль цепочки: по умолчанию заказчик, исполнитель на неё не влияет."""
+    a, b, c = users.ids["anna"], users.ids["boris"], users.ids["clara"]
+    chain_id = f"c-own-{uuid.uuid4().hex[:8]}"
+    t1 = _task(anna, b, "Бриф")
+    t2 = _task(anna, b, "Вёрстка")        # исполнитель Борис, ответственный не назначен → Анна
+    _chain(anna, t1, 1, chain_id=chain_id)
+    _chain(anna, t2, 2, chain_id=chain_id)
+    assert not [n for n in notices if n[1] == "task_chain_owner"]  # Анна сама себе не пишет, Борис не ответственный
+
+    notices.clear()
+    _done(boris, t1)                      # очередь второго этапа — его ответственной (Анне), не исполнителю
+    assert [(n[0], n[2]) for n in notices if n[1] == "task_chain_turn"] == [(a, t2)]
+
+    # Назначили ответственной Клару (она не исполнитель и не заказчик) — ей уведомление, задача у неё в списке.
+    notices.clear()
+    _chain(anna, t2, 2, owner=c, chain_id=chain_id)
+    assert [(n[0], n[2]) for n in notices if n[1] == "task_chain_owner"] == [(c, t2)]
+    mine = {str(t["id"]) for t in clara.get("/api/todos").json()["todos"]}
+    assert t2 in mine
+    assert clara.get("/api/todos", params={"taskId": t2}).status_code == 200
+    # Исполнитель при этом не менялся.
+    saved = {str(t["id"]): t for t in anna.get("/api/todos").json()["todos"]}[t2]
+    assert b in (saved.get("assignedToIds") or []) and saved["metadata"]["chain"]["owner"] == c

@@ -121,11 +121,17 @@ export function doersOf(t: Task): string[] {
 // Несколько задач (в одной папке или в разных), выполняемых по очереди: этап за этапом. Хранится в самих задачах —
 // metadata.chain = {id, order, name}: id общий у этапов цепочки, order — место этапа (шаг 1024, как ручной порядок).
 
-export interface ChainRef { id: string; order: number; name?: string }
+/** owner — ответственный за этап (роль только для цепочек); нет — заказчик задачи. */
+export interface ChainRef { id: string; order: number; name?: string; owner?: string }
 
 export function chainOf(t: Task): ChainRef | null {
   const c = t.metadata?.chain as ChainRef | null | undefined;
   return c && typeof c.id === 'string' && c.id ? c : null;
+}
+
+/** Ответственный за этап цепочки: назначенный, по умолчанию — заказчик задачи. Исполнитель — сам по себе. */
+export function chainOwnerOf(t: Task): string {
+  return String(chainOf(t)?.owner || '') || customerOf(t);
 }
 
 /** Записать задаче место в цепочке (или убрать из цепочки — null). Остальные поля metadata не трогаем. */

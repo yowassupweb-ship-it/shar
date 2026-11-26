@@ -15,7 +15,7 @@ import { useLongPress } from '@/shared/ui/useLongPress';
 import { askConfirm, Menu, MenuItem, Sheet, type MenuAnchor } from '@/shared/ui/overlay';
 import Splitter from '@/shared/ui/Splitter';
 import {
-  assigneesOf, canAddToFolder, canManageFolder, chainOf, deleteTask, doersOf, isDone, isDraft, loadTasks, makeChain, myId, newDraft, relevantLists, removeFromChain, setChain, shownAssignees, STATUSES, statusOf,
+  assigneesOf, canAddToFolder, canManageFolder, chainOf, chainOwnerOf, deleteTask, doersOf, isDone, isDraft, loadTasks, makeChain, myId, newDraft, relevantLists, removeFromChain, setChain, shownAssignees, STATUSES, statusOf,
   type Status, taskMarkdown, updateTask, useTasks, useTaskStream, markTaskSeen, type Task, type TaskList,
 } from './api';
 import { FolderMenu, FolderSheet, FolderShareSheet } from './Folders';
@@ -70,9 +70,9 @@ const Row = memo(function Row({ t, active, onOpen, onMenu, depth = 0, showStatus
   const progress = checklistProgress(md);
   const snippet = plainSnippet(md);
   const press = useLongPress((x, y) => onMenu(t, { x, y }));
-  // Задача «себе» — без лица исполнителя (заказчик и так понятен); у этапа цепочки — лицо ответственного (по
-  // умолчанию заказчик), чтобы у каждого этапа был виден тот, кто его ведёт.
-  const people = inChain ? doersOf(t) : shownAssignees(t);
+  // Задача «себе» — без лица исполнителя (заказчик и так понятен); у этапа цепочки — лицо ответственного за этап
+  // (своя роль цепочки, по умолчанию заказчик), чтобы у каждого этапа был виден тот, кто его ведёт.
+  const people = inChain ? [chainOwnerOf(t)].filter(Boolean) : shownAssignees(t);
   const stream = useTaskStream((st) => st.byId[t.id]);
   const toggle = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -112,7 +112,7 @@ const Row = memo(function Row({ t, active, onOpen, onMenu, depth = 0, showStatus
         </button>
       )}
       <span className="ntl-text">
-        <span className="ntl-name">{t.isNew && <span className="ntl-new">Новое</span>}{stream?.title || t.title || (draft ? 'Новая задача' : 'Без названия')}</span>
+        <span className="ntl-name">{t.isNew && <span className="ntl-badge-new">Новое</span>}{stream?.title || t.title || (draft ? 'Новая задача' : 'Без названия')}</span>
         {stream ? <span className="ntl-snippet ntl-streaming"><i aria-hidden="true" />{stream.agent} пишет…</span> : snippet && <span className="ntl-snippet">{snippet}</span>}
         <span className="ntl-meta">
           {draft && <span className="ntl-draft">Черновик</span>}
@@ -256,7 +256,7 @@ export default function TasksScreen() {
   const sharedIds = useMemo(() => new Set(allLists.filter((l) => l.sharedLevel).map((l) => l.id)), [allLists]);
   const base = useMemo(() => Object.values(tasks).filter((t) => {
     const people = assigneesOf(t);
-    const mine = people.includes(me) || [t.assignedById, t.authorId, t.metadata?.delegatedById].some((id) => id && String(id) === me);
+    const mine = people.includes(me) || [t.assignedById, t.authorId, t.metadata?.delegatedById, chainOf(t)?.owner].some((id) => id && String(id) === me);
     if (!mine && !(t.listId && sharedIds.has(String(t.listId)))) return false;
     if (deferred && !`${t.title} ${taskMarkdown(t)}`.toLowerCase().includes(deferred)) return false;
     return true;
@@ -298,14 +298,14 @@ export default function TasksScreen() {
       const ids = new Set<string>();
       // Задача «себе» (без исполнителя) — у самого заказчика: исполнитель по смыслу он.
       for (const t of [...open, ...done]) for (const id of doersOf(t)) ids.add(id);
-      for (const c of chains) for (const id of doersOf(lead(c))) ids.add(id);
+      for (const c of chains) { const o = chainOwnerOf(lead(c)); if (o) ids.add(o); }
       const name = (id: string) => (id === me ? 'Я' : displayName(users[id]) || 'Сотрудник');
       out = [...ids].sort((a, b) => Number(b === me) - Number(a === me) || name(a).localeCompare(name(b), 'ru')).map((id) => ({
         key: `person:${id}`, label: name(id), person: id,
         icon: <Avatar name={displayName(users[id]) || "?"} seed={id} src={users[id]?.avatar} person size={22} />,
         items: open.filter((t) => doersOf(t).includes(id)).sort(byDue),
         done: done.filter((t) => doersOf(t).includes(id)),
-        chains: chains.filter((c) => doersOf(lead(c))[0] === id),
+        chains: chains.filter((c) => chainOwnerOf(lead(c)) === id),
       }));
       const nobody = open.filter((t) => !doersOf(t).length);
       const nobodyDone = done.filter((t) => !doersOf(t).length);
@@ -374,7 +374,7 @@ export default function TasksScreen() {
     list.forEach((t, i) => {
       const cur = chainOf(t);
       const order = (i + 1) * 1024;
-      if (cur?.id !== c.id || cur.order !== order) void setChain(t.id, { id: c.id, order, ...(name ? { name } : {}) }).catch(() => showToast('Порядок этапов не сохранился — нет связи с сервером.', 'error'));
+      if (cur?.id !== c.id || cur.order !== order) void setChain(t.id, { id: c.id, order, ...(name ? { name } : {}), ...(cur?.owner ? { owner: cur.owner } : {}) }).catch(() => showToast('Порядок этапов не сохранился — нет связи с сервером.', 'error'));
     });
   };
   const joinSelected = async () => {
@@ -405,7 +405,7 @@ export default function TasksScreen() {
   const chainBlock = (c: Chain) => {
     const total = c.stages.length;
     const step = c.current ? c.stages.indexOf(c.current) + 1 : total;
-    const who = c.current ? doersOf(c.current)[0] : '';
+    const who = c.current ? chainOwnerOf(c.current) : '';
     const whoName = who ? (who === me ? 'вы' : displayName(users[who]) || 'сотрудник') : '';
     return (
       <div key={c.id} className="ntl-chain" data-complete={!c.current || undefined}>
