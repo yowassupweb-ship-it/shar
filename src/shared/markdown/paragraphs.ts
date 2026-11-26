@@ -16,6 +16,21 @@ export function unescapeBreaks(md: string): string {
 
 const ITEM = /^\s*(?:[-*+]|\d+[.)])\s/;
 
+const indentOf = (line: string) => line.length - line.trimStart().length;
+const kindOf = (line: string) => (/^\s*\d+[.)]\s/.test(line) ? 'ol' : 'ul');
+
+/** Пункт lines[at] продолжает тот же список, что ближайший пункт выше на том же отступе (а не начинает новый:
+ *  «- …» сразу за «1. …» — это два списка, и пустая строка между ними должна остаться). */
+function sameList(lines: string[], at: number): boolean {
+  const indent = indentOf(lines[at]);
+  for (let k = at - 1; k >= 0; k -= 1) {
+    if (!ITEM.test(lines[k])) { if (lines[k].trim() === '') continue; return false; }
+    if (indentOf(lines[k]) === indent) return kindOf(lines[k]) === kindOf(lines[at]);
+    if (indentOf(lines[k]) < indent) return true; // вложенный пункт под родителем — тот же список
+  }
+  return false;
+}
+
 /** Пункты списка — подряд, без пустых строк между ними (tiptap-markdown разделяет ими пункты чек-листа). */
 export function tightenLists(md: string): string {
   const lines = md.split('\n');
@@ -24,7 +39,7 @@ export function tightenLists(md: string): string {
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
     if (/^\s*(```|~~~)/.test(line)) fence = !fence;
-    const between = !fence && line === '' && i > 0 && i + 1 < lines.length && ITEM.test(lines[i - 1]) && ITEM.test(lines[i + 1]);
+    const between = !fence && line === '' && i > 0 && i + 1 < lines.length && ITEM.test(lines[i - 1]) && ITEM.test(lines[i + 1]) && sameList(lines, i + 1);
     if (!between) out.push(line);
   }
   return out.join('\n');

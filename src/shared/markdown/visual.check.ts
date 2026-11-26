@@ -25,3 +25,24 @@ export function typed(): Array<{ html: string; out: string }> {
     return { html, out };
   });
 }
+
+/** Типичные заметки: круг через визуальный редактор не должен менять markdown (то, что он потерял бы, — richMarkdown). */
+export function notes(): Array<{ src: string; out: string; ok: boolean }> {
+  const cases = [
+    '# Встреча\n\n**Итог:** договорились о сроках.\n\n- первое\n- второе\n  - вложенное\n\n1. раз\n2. два',
+    '- [ ] купить\n- [x] позвонить',
+    'Текст с *курсивом*, ~~зачёркнутым~~, `кодом` и [ссылкой](https://vs-travel.ru).',
+    '> цитата\n> вторая строка',
+    '```js\nconst a = 1;\n```',
+    'строка один\nстрока два\n\nновый абзац',
+    '## Заголовок 2\n### Заголовок 3\n\n---\n\nПосле черты',
+    '![фото](https://example.com/a.jpg#w=50)\n\nподпись',
+    'Эмодзи 🙂 и «кавычки» — тире',
+  ];
+  return cases.map((src) => {
+    const ed = new Editor({ element: document.createElement('div'), extensions: markdownExtensions(), content: toEditorMarkdown(src) });
+    const out = fromEditorMarkdown((ed.storage as unknown as { markdown: { getMarkdown: () => string } }).markdown.getMarkdown());
+    ed.destroy();
+    return { src, out, ok: out === src };
+  });
+}

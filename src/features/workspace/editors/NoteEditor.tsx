@@ -1,8 +1,9 @@
-import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Components } from 'react-markdown';
-import { Bold, CheckSquare, Plus, Redo2, Undo2, X, Code2, Eye, Heading2, ImagePlus, Italic, Link2, List, ListOrdered, Pencil, Quote, Smile, Strikethrough, Underline } from 'lucide-react';
+import { Bold, CheckSquare, Plus, Redo2, Undo2, X, Code2, Eye, FileCode2, Heading2, ImagePlus, Italic, Link2, List, ListOrdered, Pencil, Quote, Smile, Strikethrough, Underline } from 'lucide-react';
 import { uploadFileWithProgress } from '@/shared/api/uploadFile';
 import { actionOfMarker, formatLines } from '@/shared/markdown/lines';
+import { richMarkdown } from '@/shared/markdown/richMarkdown';
 import { renderTextWithEmoji } from '@/shared/emoji/emojiText';
 import { SharEmojiPicker } from '@/shared/emoji/SharEmojiPicker';
 import { askConfirm, Menu, type MenuAnchor } from '@/shared/ui/overlay';
@@ -19,11 +20,16 @@ import { Spinner } from '@/shared/ui/Spinner';
 import { ScrollTable } from '@/shared/ui/ScrollTable';
 
 /**
- * Заметка: Markdown с панелью форматирования и предпросмотром. Правка — в textarea (на телефоне это
- * единственное, что не воюет с экранной клавиатурой), предпросмотр — те же react-markdown + GFM, что и
- * в чатах. Картинку можно выбрать, перетащить или вставить из буфера — она уходит в хранилище файлов
- * Шара, а в текст ложится ссылка.
+ * Заметка: хранится markdown. «Просмотр» — те же react-markdown + GFM, что и в чатах. «Правка» — визуальная, как в
+ * задачах (VisualEditor на TipTap): жирное жирным, без звёздочек. Markdown — дополнительный инструмент (кнопка «MD»):
+ * исходный текст в поле с подсветкой и прежней панелью. Заметка с тем, что визуальный редактор не покажет без потерь
+ * (таблицы, HTML, сноски — richMarkdown), правится только в Markdown. Картинку можно выбрать, перетащить или вставить
+ * из буфера — она уходит в хранилище файлов Шара, а в текст ложится ссылка.
  */
+
+// Визуальный редактор — отдельным куском: TipTap нужен только тем, кто правит.
+const VisualEditor = lazy(() => import('@/shared/markdown/VisualEditor').then((m) => ({ default: m.VisualEditor })));
+const MD_SOURCE_KEY = 'nx:note-md-source';
 
 /** Курсор в заметке: вкладка, начало и конец выделения в её тексте и направление выделения. */
 type NoteCursor = { s: number; e: number; b: 0 | 1; t?: number };
@@ -98,6 +104,10 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
   const text = tabs[tabIndex].content;
   const [renaming, setRenaming] = useState<number | null>(null);
   const [mode, setMode] = useState<'edit' | 'preview'>(content.trim() ? 'preview' : 'edit');
+  // Markdown-исходник вместо визуальной правки: выбор человека (помним) или вынужденно — в тексте то, что визуальный
+  // редактор потеряет (таблица, HTML…).
+  const [mdSource, setMdSource] = useState(() => { try { return localStorage.getItem(MD_SOURCE_KEY) === '1'; } catch { return false; } });
+  const toggleSource = () => setMdSource((v) => { try { localStorage.setItem(MD_SOURCE_KEY, v ? '0' : '1'); } catch { /* без памяти */ } return !v; });
   // Переключение «Правка ↔ Просмотр» не сбрасывает место в тексте: привязываемся к строке исходника у верхнего края.
   // Вернулись в правку, не прокручивая просмотр, — всё как было (прокрутка и выделение до символа).
   const switching = useRef<{ to: 'edit' | 'preview'; line: number } | null>(null);
@@ -146,7 +156,11 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
   const [findIndex, setFindIndex] = useState(0);
   const [focusToken, setFocusToken] = useState(0);
   const [domRanges, setDomRanges] = useState<Range[]>([]);
-  const editing = mode === 'edit' && !readOnly;
+  const rich = useMemo(() => richMarkdown(text), [text]);
+  const sourceMode = mdSource || Boolean(rich);
+  /** Правка исходника (поле markdown); visual — правка визуальным редактором. */
+  const editing = mode === 'edit' && !readOnly && sourceMode;
+  const visual = mode === 'edit' && !readOnly && !sourceMode;
   const matches = useMemo(() => (findOpen && editing ? findAll(text, findQuery) : []), [findOpen, editing, text, findQuery]);
   const count = editing ? matches.length : domRanges.length;
   const current = count ? Math.min(findIndex, count - 1) : 0;
@@ -441,6 +455,20 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
     requestAnimationFrame(() => { el.focus(); el.setSelectionRange(caret[0], caret[1]); });
   }
 
+  /** Картинка для визуальной правки: загрузить и вернуть адрес (вставляет сам редактор). */
+  async function uploadImage(file: File): Promise<string> {
+    setBusy(true);
+    setError('');
+    try {
+      return (await uploadFileWithProgress(file, () => undefined)).url;
+    } catch (cause) {
+      setError('Не удалось загрузить картинку');
+      throw cause;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function insertImages(list: FileList | File[]) {
     const images = Array.from(list).filter((f) => f.type.startsWith('image/'));
     if (!images.length || readOnly) return;
@@ -549,13 +577,18 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
           <button type="button" aria-pressed={mode === 'edit'} onClick={() => switchMode('edit')} disabled={readOnly}><Pencil size={13} aria-hidden="true" /> Правка</button>
           <button type="button" aria-pressed={mode === 'preview'} onClick={() => switchMode('preview')}><Eye size={13} aria-hidden="true" /> Просмотр</button>
         </div>
-        {!readOnly && (
+        {!readOnly && mode === 'edit' && (
+          <button type="button" className="nx-icon-btn nws-md-toggle" aria-pressed={sourceMode} disabled={Boolean(rich)} onClick={toggleSource}
+            title={rich ? `В заметке есть ${rich} — визуальная правка её не покажет, поэтому правка в Markdown` : sourceMode ? 'Вернуться к обычной правке' : 'Markdown — править исходный текст'}
+            aria-label="Markdown"><FileCode2 size={16} aria-hidden="true" /><span>MD</span></button>
+        )}
+        {!readOnly && !visual && (
           <div className="nws-note-history" role="group" aria-label="История правок">
             <button type="button" className="nx-icon-btn" title="Отменить (Ctrl+Z)" aria-label="Отменить" disabled={!canUndo} onClick={() => travel(true)}><Undo2 size={16} /></button>
             <button type="button" className="nx-icon-btn" title="Повторить (Ctrl+Shift+Z)" aria-label="Повторить" disabled={!canRedo} onClick={() => travel(false)}><Redo2 size={16} /></button>
           </div>
         )}
-        {!readOnly && mode === 'edit' && (
+        {editing && (
           <div className="nws-tools">
             {TOOLS.map(({ id, label, icon: Icon, wrap }) => (
               <button key={id} type="button" className="nx-icon-btn" title={label} aria-label={label} onClick={() => apply(wrap)}><Icon size={16} /></button>
@@ -579,7 +612,14 @@ export function NoteEditor({ content, onContent, readOnly, loadKey, cursors = []
         <FindBar query={findQuery} onQuery={setFindQuery} count={count} index={current} onNext={() => step(1)} onPrev={() => step(-1)} onClose={closeFind} focusToken={focusToken} />
       )}
 
-      {mode === 'edit' && !readOnly ? (
+      {visual ? (
+        <div className="nws-note-visual">
+          <Suspense fallback={<div className="nws-note-visual-wait"><Spinner size={16} label="Открываю редактор" /></div>}>
+            <VisualEditor value={text} onChange={(md) => change(md, true)} uploadImage={uploadImage} autoFocus
+              placeholder="Пишите. Жирный — Ctrl+B, список — «- » в начале строки, задача — «[ ] »" />
+          </Suspense>
+        </div>
+      ) : editing ? (
         <div className="nws-note-edit" data-syntax={coloured ? 'true' : undefined}>
           <div className="nws-note-back nws-note-syntax" ref={syntax} aria-hidden="true">{coloured}{'\n'}</div>
           {backdrop && <div className="nws-note-back" ref={back} aria-hidden="true">{backdrop}{'\n'}</div>}
