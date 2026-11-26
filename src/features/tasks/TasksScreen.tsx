@@ -277,7 +277,8 @@ export default function TasksScreen() {
     // Цепочки — отдельно: их этапы (и закрытые тоже) показываются вместе, а не разбегаются по группам и «Выполненным».
     const byChain = new Map<string, Task[]>();
     for (const t of base) { const c = chainOf(t); if (c && !isDraft(t.id)) byChain.set(c.id, [...(byChain.get(c.id) || []), t]); }
-    const chains: Chain[] = [...byChain.entries()].map(([id, stages]) => {
+    // Цепочка из одного этапа — не цепочка (остаток после разборки): такая задача живёт как обычная.
+    const chains: Chain[] = [...byChain.entries()].filter(([, stages]) => stages.length > 1).map(([id, stages]) => {
       stages.sort((a, b) => (chainOf(a)!.order - chainOf(b)!.order) || String(a.createdAt).localeCompare(String(b.createdAt)));
       const name = stages.map((t) => chainOf(t)!.name).find(Boolean) || `Цепочка из ${stages.length} ${plural(stages.length, ['задачи', 'задач', 'задач'])}`;
       return { id, name, stages, current: stages.find((t) => !isDone(t)) || null, done: stages.filter(isDone).length };
@@ -326,47 +327,67 @@ export default function TasksScreen() {
     return { drafts, open: out, done: grouping === 'status' ? done : [], doneChains: grouping === 'status' ? chains.filter((c) => !c.current) : [], openCount: open.length + openStages };
   }, [base, grouping, folders, folderIds, users, me, deferred]);
 
-  // Брошенная на группу задача: в папку, в статус или к человеку (снимаем с того, у кого была в этой группировке).
-  const dropOn = (g: Group, taskId: string, from?: string) => {
-    const t = useTasks.getState().tasks[taskId];
-    if (!t) return;
-    const fail = () => showToast('Не перенеслось — нет прав или нет связи с сервером.', 'error');
+  // Что меняет перенос задачи в группу: папку, статус или исполнителя (снимаем с того, у кого была в этой
+  // группировке). null — переносить нельзя (папка только для просмотра).
+  const movePatch = (g: Group, t: Task, from?: string): Partial<Task> | null => {
     if (g.folder || g.key === 'folder:') {
-      if (g.folder && !canAddToFolder(g.folder)) { showToast('В эту папку вам можно только смотреть.', 'info'); return; }
+      if (g.folder && !canAddToFolder(g.folder)) { showToast('В эту папку вам можно только смотреть.', 'info'); return null; }
       const listId = g.folder ? g.folder.id : null;
-      if (String(t.listId || '') !== String(listId || '')) void updateTask(t.id, { listId }).catch(fail);
-    } else if (g.status) {
-      if (statusOf(t) !== g.status) void updateTask(t.id, { status: g.status }).catch(fail);
-    } else if (g.person !== undefined) {
+      return String(t.listId || '') !== String(listId || '') ? { listId } : {};
+    }
+    if (g.status) return statusOf(t) !== g.status ? { status: g.status } : {};
+    if (g.person !== undefined) {
       const cur = assigneesOf(t);
       const source = from?.startsWith('person:') ? from.slice(7) : '';
       let next = cur.filter((id) => id !== source);
       if (g.person && !next.includes(g.person)) next = [...next, g.person];
-      if (!g.person) next = cur.filter((id) => id !== source);
-      if (next.join() !== cur.join()) void updateTask(t.id, { assignedToIds: next, assignedToId: next[0] || null }).catch(fail);
+      return next.join() !== cur.join() ? { assignedToIds: next, assignedToId: next[0] || null } : {};
     }
+    return {};
+  };
+  // Этап, который вытащили из цепочки в группу, из цепочки выходит; оставшийся в одиночестве этап — тоже.
+  const unchainPatch = (t: Task): Partial<Task> => {
+    const c = chainOf(t);
+    if (!c) return {};
+    const left = Object.values(useTasks.getState().tasks).filter((x) => x.id !== t.id && chainOf(x)?.id === c.id);
+    if (left.length === 1) void setChain(left[0].id, null).catch(() => undefined);
+    return { metadata: { ...(t.metadata || {}), chain: null } };
+  };
+  // Всё, что меняется у перетащенной задачи, — одним запросом: два параллельных ответа сервера перетирали друг
+  // друга, и задача возвращалась на старое место.
+  const fail = () => showToast('Не перенеслось — нет прав или нет связи с сервером.', 'error');
+  // Брошенная на группу задача: в папку, в статус или к человеку.
+  const dropOn = (g: Group, taskId: string, from?: string) => {
+    const t = useTasks.getState().tasks[taskId];
+    if (!t) return;
+    const move = movePatch(g, t, from);
+    if (!move) return;
+    const patch = { ...move, ...unchainPatch(t) };
+    if (Object.keys(patch).length) void updateTask(t.id, patch).catch(fail);
   };
   // Ручной порядок внутри группы: задача встаёт перед той, на которую её бросили; группе раздаём taskOrder заново
-  // (шаг 1024 — пишем только тем, у кого он поменялся). Пришла из другой группы — сначала переносим и в эту группу.
+  // (шаг 1024 — пишем только тем, у кого он поменялся). Пришла из другой группы — заодно переносим в эту группу.
   const reorder = (g: Group, dragId: string, beforeId: string) => {
     const dragged = useTasks.getState().tasks[dragId];
     if (!dragged) return;
-    if (!g.items.some((t) => t.id === dragId)) dropOn(g, dragId, dragFrom.current);
+    const move = g.items.some((t) => t.id === dragId) ? {} : movePatch(g, dragged, dragFrom.current);
+    if (!move) return;
     const list = g.items.filter((t) => t.id !== dragId);
     const at = list.findIndex((t) => t.id === beforeId);
     list.splice(at < 0 ? list.length : at, 0, dragged);
     list.forEach((t, i) => {
-      const next = (i + 1) * 1024;
-      if (Number(t.taskOrder) !== next) {
-        void updateTask(t.id, { taskOrder: next }).catch(() => showToast('Порядок не сохранился — нет связи с сервером.', 'error'));
-      }
+      const order = (i + 1) * 1024;
+      const patch: Partial<Task> = t.id === dragId ? { ...move, ...unchainPatch(t) } : {};
+      if (Number(t.taskOrder) !== order) patch.taskOrder = order;
+      if (Object.keys(patch).length) void updateTask(t.id, patch).catch(t.id === dragId ? fail : () => showToast('Порядок не сохранился — нет связи с сервером.', 'error'));
     });
   };
-  // Цепочка: этап перетащили на другой этап — встаёт перед ним; задачу извне бросили на этап — она становится
-  // этапом цепочки. Порядок раздаём заново (шаг 1024), пишем только изменившимся.
-  const reorderChain = (c: Chain, dragId: string, beforeId: string) => {
+  // Цепочка: этап перетащили на другой этап — встаёт перед ним. Задача извне, брошенная на этап, в цепочку не
+  // вступает (это делается явно — «Выбрать несколько» → «Объединить»): просто переносится в группу цепочки.
+  const reorderChain = (c: Chain, g: Group | undefined, dragId: string, beforeId: string) => {
     const dragged = useTasks.getState().tasks[dragId];
     if (!dragged) return;
+    if (!c.stages.some((t) => t.id === dragId)) { if (g) dropOn(g, dragId, dragFrom.current); return; }
     const list = c.stages.filter((t) => t.id !== dragId);
     const at = list.findIndex((t) => t.id === beforeId);
     list.splice(at < 0 ? list.length : at, 0, dragged);
@@ -402,13 +423,15 @@ export default function TasksScreen() {
   const active = activeId ? tasks[activeId] : undefined;
 
   /** Цепочка: шапка (название, «этап N из M · кто сейчас») и этапы, нанизанные на линию с узлами. */
-  const chainBlock = (c: Chain) => {
+  const chainBlock = (c: Chain, g?: Group) => {
     const total = c.stages.length;
     const step = c.current ? c.stages.indexOf(c.current) + 1 : total;
     const who = c.current ? chainOwnerOf(c.current) : '';
     const whoName = who ? (who === me ? 'вы' : displayName(users[who]) || 'сотрудник') : '';
     return (
-      <div key={c.id} className="ntl-chain" data-complete={!c.current || undefined}>
+      <div key={c.id} className="ntl-chain" data-complete={!c.current || undefined}
+        // Свой этап, отпущенный мимо строк (на шапку, в зазор), остаётся в цепочке — не «выпадает» в группу.
+        onDrop={(e) => { const id = e.dataTransfer.getData(DRAG_TYPE); if (id && c.stages.some((t) => t.id === id)) { e.preventDefault(); e.stopPropagation(); setDropKey(null); } }}>
         <div className="ntl-chain-head" onContextMenu={(e) => { e.preventDefault(); setChainMenu({ chain: c, anchor: { x: e.clientX, y: e.clientY } }); }}>
           <Link2 size={14} className="ntl-chain-icon" aria-hidden="true" />
           <span className="ntl-chain-name">{c.name}</span>
@@ -427,7 +450,7 @@ export default function TasksScreen() {
                   onClick={() => void updateTask(t.id, { isCompleted: state !== 'done', completed: state !== 'done' }).catch(() => showToast('Не сохранилось — нет связи с сервером.', 'error'))}>
                   {state === 'done' ? <Check size={11} strokeWidth={3} aria-hidden="true" /> : i + 1}
                 </button>
-                <Row t={t} active={t.id === activeId} onOpen={open} onMenu={onMenu} showStatus={state !== 'done'} onDropBefore={(d, b) => reorderChain(c, d, b)}
+                <Row t={t} active={t.id === activeId} onOpen={open} onMenu={onMenu} showStatus={state !== 'done'} onDropBefore={(d, b) => reorderChain(c, g, d, b)}
                   selecting={selecting} selected={selected.includes(t.id)} onSelect={selectTask} inChain />
               </li>
             );
@@ -463,7 +486,7 @@ export default function TasksScreen() {
         </div>
         {!shut && (
           <div className="ntl-group-items">
-            {(g.chains || []).map(chainBlock)}
+            {(g.chains || []).map((c) => chainBlock(c, g))}
             {g.items.map((t) => <Row key={t.id} t={t} active={t.id === activeId} onOpen={open} onMenu={onMenu} showStatus={grouping !== 'status'} onDropBefore={(d, b) => reorder(g, d, b)}
               selecting={selecting} selected={selected.includes(t.id)} onSelect={selectTask} />)}
             {Boolean(g.done?.length) && (() => {
@@ -527,7 +550,7 @@ export default function TasksScreen() {
             <button type="button" className="ntl-group-head ntl-done-toggle" aria-expanded={showDone} onClick={() => setShowDone(!showDone)}>
               <ChevronRight size={14} className="ntl-caret" aria-hidden="true" /><span className="ntl-group-name">Выполненные</span><span className="ntl-count">{groups.done.length + groups.doneChains.length}</span>
             </button>
-            {showDone && <div className="ntl-group-items">{groups.doneChains.map(chainBlock)}{groups.done.slice(0, 200).map((t) => <Row key={t.id} t={t} active={t.id === activeId} onOpen={open} onMenu={onMenu}
+            {showDone && <div className="ntl-group-items">{groups.doneChains.map((c) => chainBlock(c))}{groups.done.slice(0, 200).map((t) => <Row key={t.id} t={t} active={t.id === activeId} onOpen={open} onMenu={onMenu}
               selecting={selecting} selected={selected.includes(t.id)} onSelect={selectTask} />)}</div>}
           </section>
         )}

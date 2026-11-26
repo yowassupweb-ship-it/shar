@@ -80,3 +80,25 @@ def test_versions_merge_restore_and_access(users, anna, boris):
     assert restored["md"] == "первый текст, дополнен"
     assert any(v["label"] == "Перед восстановлением" for v in anna.get(f"/api/todos/{task}/versions").json()["versions"])
     assert boris.get(f"/api/todos/{task}/versions").status_code == 403
+
+
+def test_drag_into_folder_and_reorder_persist(users, anna):
+    """Перетаскивание в «Задачах»: перенос в папку и ручной порядок сохраняются и видны при перечитывании."""
+    folder = _folder(anna, "Перенос")
+    a = anna.post("/api/todos", json={"type": "todo", "title": "Первая"}).json()["id"]
+    b = anna.post("/api/todos", json={"type": "todo", "title": "Вторая"}).json()["id"]
+    assert anna.put("/api/todos", json={"id": a, "type": "todo", "listId": folder}).status_code == 200
+    assert anna.put("/api/todos", json={"id": a, "type": "todo", "taskOrder": 2048}).status_code == 200
+    assert anna.put("/api/todos", json={"id": b, "type": "todo", "taskOrder": 1024}).status_code == 200
+    got = {str(t["id"]): t for t in anna.get("/api/todos").json()["todos"]}
+    assert str(got[a]["listId"]) == str(folder) and got[a]["taskOrder"] == 2048 and got[b]["taskOrder"] == 1024
+
+
+def test_long_title_is_trimmed_not_500(anna):
+    """Задача из длинного текста без переносов: заголовок обрезается, задача создаётся и правится."""
+    long = "слово " * 80
+    r = anna.post("/api/todos", json={"type": "todo", "title": long})
+    assert r.status_code in (200, 201), r.text
+    tid = r.json()["id"]
+    assert len(r.json()["title"]) <= 255 and r.json()["title"].endswith("…")
+    assert anna.put("/api/todos", json={"id": tid, "type": "todo", "title": long + "ещё"}).status_code == 200

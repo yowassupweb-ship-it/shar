@@ -339,7 +339,9 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
   // Задача «себе» — без исполнителя: заказчик и так виден, исполнитель подразумевается тот же (api.shownAssignees).
   const assignees = shownAssignees(task);
   // Этап цепочки — у него ответственный: своя роль цепочки (не исполнитель), по умолчанию заказчик.
-  const chain = chainOf(task);
+  // Цепочка из одного этапа (остаток после разборки) — не цепочка: у такой задачи обычный «Исполнитель».
+  const chainRef = chainOf(task);
+  const chain = chainRef && Object.values(tasksById).some((t) => t.id !== task.id && chainOf(t)?.id === chainRef.id) ? chainRef : null;
   const owner = chain ? chainOwnerOf(task) : '';
   const ownerIsDefault = Boolean(chain) && !chain?.owner;
   const due = dueLabel(task.dueDate);

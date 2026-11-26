@@ -7,6 +7,16 @@ from app.core.db.connection import Json
 
 logger = logging.getLogger("shar.db")
 
+TITLE_MAX = 255  # tasks.title — VARCHAR(255) на проде
+
+
+def _title(value: Any) -> Any:
+    """Заголовок длиннее столбца — обрезаем с многоточием: полный текст задачи и так лежит в описании.
+    Раньше такая задача не создавалась вовсе (500 «value too long»)."""
+    if isinstance(value, str) and len(value) > TITLE_MAX:
+        return value[:TITLE_MAX - 1].rstrip() + "…"
+    return value
+
 
 class TasksRepo:
     """Запросы области «tasks». Требует self.conn (PostgresConnection)."""
@@ -102,7 +112,7 @@ class TasksRepo:
         """
         params = (
             task.get('id'),
-            task.get('title'),
+            _title(task.get('title')),
             task.get('description'),
             task.get('status', 'pending'),
             task.get('review_comment') or task.get('reviewComment'),
@@ -184,7 +194,7 @@ class TasksRepo:
                 if key in ['tags', 'assignedToIds', 'assigned_to_ids', 'metadata']:
                     db_updates[db_field] = Json(value)
                 else:
-                    db_updates[db_field] = value
+                    db_updates[db_field] = _title(value) if db_field == 'title' else value
         
         if not db_updates:
             return self.get_task(task_id)
