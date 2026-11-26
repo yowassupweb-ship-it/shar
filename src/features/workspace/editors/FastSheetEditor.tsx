@@ -141,6 +141,7 @@ const tsvCell = (s: string) => (/[\t\n"]/.test(s) ? `"${s.replace(/"/g, '""')}"`
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 type StatKind = 'sum' | 'avg' | 'min' | 'max' | 'count' | 'countNum';
+type HeadHover = { kind: 'col' | 'row' | 'resize-col' | 'resize-row'; index: number } | null;
 
 /**
  * Фоновый поток сохранения (lib/sheetSave.worker.ts) — один на окно. null — не поднялся (тогда сохраняем по-старому).
@@ -846,6 +847,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   type Drag = { kind: 'cells' | 'rows' | 'cols' | 'resize-col' | 'resize-row' | 'fill' | 'ref' | 'object' | 'move' | 'move-rows' | 'move-cols'; index?: number; start?: number; size?: number; from?: Pos;
     obj?: SheetObject; part?: 'move' | 'nw' | 'ne' | 'sw' | 'se'; cx?: number; cy?: number };
   const drag = useRef<Drag | null>(null);
+  const headHover = useRef<HeadHover>(null);
   /**
    * Автопрокрутка при протягивании, как в Google: пока кнопка зажата за краем сетки, лист едет каждый кадр, даже
    * если мышь стоит; скорость растёт с расстоянием за край и со временем удержания. move — свежий обработчик
@@ -996,6 +998,19 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     const cursor = h?.kind === 'resize-col' ? 'col-resize' : h?.kind === 'resize-row' ? 'row-resize' : h?.kind === 'fill' ? 'crosshair' : h?.kind === 'move' || h?.kind === 'move-rows' || h?.kind === 'move-cols' ? 'grab'
       : h?.kind === 'filter' || h?.kind === 'unhide-col' || h?.kind === 'unhide-row' ? 'pointer' : painter ? 'copy' : '';
     if (grid.current && grid.current.style.cursor !== cursor) grid.current.style.cursor = cursor;
+    // Подсветка заголовка под курсором и ручки ширины/высоты (как в Google) — только верхний слой холста.
+    let next: HeadHover = null;
+    if (h?.kind === 'resize-col') next = { kind: 'resize-col', index: h.index };
+    else if (h?.kind === 'resize-row') next = { kind: 'resize-row', index: h.index };
+    else if (geo && grid.current) {
+      const box = grid.current.getBoundingClientRect(); const z = zoomRef.current;
+      const lx = (e.clientX - box.left) / z; const ly = (e.clientY - box.top) / z;
+      const h0 = (ly < HEAD_H && lx > HEAD_W) || (lx < HEAD_W && ly > HEAD_H) ? hit(e.clientX, e.clientY) : null;
+      if (h0 && ly < HEAD_H && h0.col >= 0) next = { kind: 'col', index: h0.col };
+      else if (h0 && lx < HEAD_W && h0.row >= 0) next = { kind: 'row', index: h0.row };
+    }
+    const cur = headHover.current;
+    if (cur?.kind !== next?.kind || cur?.index !== next?.index) { headHover.current = next; redraw(); }
   };
 
   const onMouseDown = (e: React.MouseEvent) => {
@@ -1884,7 +1899,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       book: b, sheet, geo, theme, scrollX: el.scrollLeft / z, scrollY: el.scrollTop / z, width: W / z, height: H / z, dpr, zoom: z,
       cf: cfLookup, cfBlank: (xs.cf || []).filter((x) => x.kind === 'blank').flatMap((x) => x.ranges),
       dv: xs.dv, notes: xs.notes, noLinks: xs.nolink, objects, selectedObject, groups: xs.groups, banding: xs.banding, onAsset: () => { assetTick.current += 1; redraw(); },
-      sel: fillTo ?? selRange, ghost: moveTo, dropAt, active: anchorM ?? { startRow: sel.anchor.row, endRow: sel.anchor.row, startColumn: sel.anchor.col, endColumn: sel.anchor.col },
+      sel: fillTo ?? selRange, ghost: moveTo, dropAt, headHover: headHover.current, active: anchorM ?? { startRow: sel.anchor.row, endRow: sel.anchor.row, startColumn: sel.anchor.col, endColumn: sel.anchor.col },
       clip: clipMark, marks: new Set(commentCells.filter((m) => !m.sheet || m.sheet === sheet.name).map((m) => m.cell)),
       peers: cursors.flatMap((cur) => {
         const p = cur.pos as SheetCursor | null;
@@ -2194,7 +2209,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       <div className="fsh-gridwrap" ref={root}>
         <div ref={grid} className="fsh-grid" tabIndex={0} role="grid" aria-label={`Лист «${sheet.name}»`} aria-rowcount={rows} aria-colcount={cols}
           onScroll={(e) => { redraw(); placeLinkCard(); if (edit) { const el = e.currentTarget; setScroll({ x: el.scrollLeft, y: el.scrollTop }); } }}
-          onMouseDown={onMouseDown} onMouseMove={onHover} onDoubleClick={onDoubleClick} onKeyDown={onKeyDown}
+          onMouseDown={onMouseDown} onMouseMove={onHover} onMouseLeave={() => { if (headHover.current) { headHover.current = null; redraw(); } }} onDoubleClick={onDoubleClick} onKeyDown={onKeyDown}
           onContextMenu={(e) => { if (e.shiftKey) return; e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }); }}>
           <div className="fsh-sizer" style={{ width: (HEAD_W + colOffs[cols]) * zoom, height: (HEAD_H + rowOffs[rows]) * zoom }} />
         </div>

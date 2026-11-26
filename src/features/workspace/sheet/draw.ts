@@ -16,7 +16,7 @@ export interface Geo {
   fr: number; fc: number; fh: number; fw: number; merges: Map<string, Range>;
 }
 export interface Theme {
-  bg: string; text: string; link: string; grid: string; head: string; headText: string; headOn: string; headFull: string; sel: string; selFill: string; borderAuto: string; frozenLine: string; dark: boolean;
+  bg: string; text: string; link: string; grid: string; head: string; headText: string; headOn: string; headHover: string; headFull: string; sel: string; selFill: string; borderAuto: string; frozenLine: string; dark: boolean;
 }
 export interface Peer { name: string; color: string; range: Range }
 export interface DrawState {
@@ -26,6 +26,8 @@ export interface DrawState {
   filter: Range | null; filtered: Set<number>; hideActive?: boolean;
   /** Куда переносится выделение при перетаскивании за рамку. */
   ghost?: Range | null;
+  /** Заголовок под курсором или ручка ширины/высоты — подсветить. */
+  headHover?: { kind: 'col' | 'row' | 'resize-col' | 'resize-row'; index: number } | null;
   /** Ячейки «r:c», где адрес в тексте — не ссылка. */
   noLinks?: Record<string, 1>;
   /** Куда встанут перетаскиваемые строки (столбцы) — линия перед индексом at. */
@@ -65,7 +67,7 @@ export function readTheme(el: Element): Theme {
   const bg = v('--sh-bg', '#fff');
   return {
     bg, text: v('--sh-text', '#1f1f1f'), link: (lightness(bg) ?? 1) < 0.4 ? '#8ab4f8' : '#1155cc', grid: v('--sh-grid', '#e2e3e3'), head: v('--sh-head', '#f8f9fa'), headText: v('--sh-head-text', '#5f6368'),
-    headOn: v('--sh-head-on', '#d3e3fd'), headFull: v('--sh-head-full', '#0b57d0'), sel: v('--sh-sel', '#1a73e8'), selFill: v('--sh-sel-fill', 'rgba(26,115,232,.1)'),
+    headOn: v('--sh-head-on', '#d3e3fd'), headHover: v('--sh-head-hover', '#e8eaed'), headFull: v('--sh-head-full', '#0b57d0'), sel: v('--sh-sel', '#1a73e8'), selFill: v('--sh-sel-fill', 'rgba(26,115,232,.1)'),
     borderAuto: v('--sh-border-auto', '#000'), frozenLine: v('--sh-head-text', '#5f6368'), dark: (lightness(bg) ?? 1) < 0.4,
   };
 }
@@ -566,7 +568,8 @@ function drawOverlay(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1
     const x = screenX(g, c, s.scrollX); const w = g.colOffs[c + 1] - g.colOffs[c];
     if (!w) return;
     const on = c >= s.sel.startColumn && c <= s.sel.endColumn;
-    ctx.fillStyle = on ? (full.cols ? theme.headFull : theme.headOn) : theme.head; fr(x, 0, w, HEAD_H);
+    const hov = s.headHover?.kind === 'col' && s.headHover.index === c;
+    ctx.fillStyle = on ? (full.cols ? theme.headFull : theme.headOn) : hov ? theme.headHover : theme.head; fr(x, 0, w, HEAD_H);
     ctx.fillStyle = theme.grid; fr(x + w - 1, 0, 1, HEAD_H);
     ctx.fillStyle = on && full.cols ? '#fff' : on ? theme.text : theme.headText;
     ctx.font = `${on ? '600 ' : ''}11px Inter, Arial, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -582,7 +585,8 @@ function drawOverlay(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1
     const y = screenY(g, r, s.scrollY); const h = g.rowOffs[r + 1] - g.rowOffs[r];
     if (!h) return;
     const on = r >= s.sel.startRow && r <= s.sel.endRow;
-    ctx.fillStyle = on ? (full.rows ? theme.headFull : theme.headOn) : theme.head; fr(0, y, HEAD_W, h);
+    const hov = s.headHover?.kind === 'row' && s.headHover.index === r;
+    ctx.fillStyle = on ? (full.rows ? theme.headFull : theme.headOn) : hov ? theme.headHover : theme.head; fr(0, y, HEAD_W, h);
     ctx.fillStyle = theme.grid; fr(0, y + h - 1, HEAD_W, 1);
     ctx.fillStyle = on && full.rows ? '#fff' : on ? theme.text : s.filtered.size && s.filter && r > s.filter.startRow && r <= s.filter.endRow ? theme.sel : theme.headText;
     ctx.font = `${on ? '600 ' : ''}11px Inter, Arial, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -629,6 +633,9 @@ function drawOverlay(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1
     if (!gr.collapsed) { ctx.beginPath(); ctx.moveTo(Math.max(HEAD_W, x1 + 3), 3.5); ctx.lineTo(x2, 3.5); ctx.lineTo(x2, 8); ctx.stroke(); }
     if (x2 >= HEAD_W) box(x2 + 2, 1, Boolean(gr.collapsed));
   }
+  // Ручка ширины столбца / высоты строки под курсором — синяя полоска на границе в заголовке (как в Google).
+  if (s.headHover?.kind === 'resize-col') { const bx = screenX2(g, s.headHover.index, s.scrollX); if (bx > HEAD_W) { ctx.fillStyle = theme.sel; fr(bx - 3, 3, 4, HEAD_H - 6); } }
+  if (s.headHover?.kind === 'resize-row') { const by = screenY2(g, s.headHover.index, s.scrollY); if (by > HEAD_H) { ctx.fillStyle = theme.sel; fr(4, by - 3, HEAD_W - 8, 4); } }
   ctx.fillStyle = theme.grid;
   fr(HEAD_W - 1, 0, 1, H);
   fr(0, HEAD_H - 1, W, 1);
