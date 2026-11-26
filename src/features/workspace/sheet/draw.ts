@@ -26,6 +26,8 @@ export interface DrawState {
   filter: Range | null; filtered: Set<number>; hideActive?: boolean;
   /** Куда переносится выделение при перетаскивании за рамку. */
   ghost?: Range | null;
+  /** Только что изменённые не нами ячейки: [строка, столбец, яркость 0…1] — мягкая вспышка. */
+  flash?: Array<[number, number, number]>;
   /** Заголовок под курсором или ручка ширины/высоты — подсветить. */
   headHover?: { kind: 'col' | 'row' | 'resize-col' | 'resize-row'; index: number } | null;
   /** Ячейки «r:c», где адрес в тексте — не ссылка. */
@@ -702,6 +704,13 @@ function drawOverlay(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1
       ctx.fillStyle = theme.sel; ctx.strokeStyle = theme.bg; ctx.lineWidth = 1;
       round(x + w - 4.5, y + h - 4.5, 7, 7, 1.5); ctx.fill(); ctx.stroke();
     });
+  }
+  if (s.flash?.length) {
+    for (const [r, c, a] of s.flash) {
+      inPanes({ startRow: r, endRow: r, startColumn: c, endColumn: c }, ({ x, y, w, h }) => {
+        ctx.globalAlpha = 0.32 * a * a; ctx.fillStyle = theme.sel; fr(x, y, w - 1, h - 1); ctx.globalAlpha = 1;
+      });
+    }
   }
   if (s.ghost) {
     // Место, куда встанут перетаскиваемые ячейки, — толстая полупрозрачная рамка.

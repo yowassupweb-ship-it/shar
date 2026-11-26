@@ -171,3 +171,31 @@ export async function mountContent(content: string): Promise<string> {
   );
   return 'ok';
 }
+
+/**
+ * Проверка потоковой правки агента: редактор с поддельным каналом совместной правки. `window.__fshLive.apply(ops)`
+ * подаёт правки как пришедшие от другого участника, `setPreviewCursors([...])` — курсоры (в т.ч. агента).
+ */
+let liveContent = '';
+let liveCursors: Array<{ userId: string; name: string; color: string; pos: Record<string, unknown>; movedAt: number }> = [];
+const fakeLive = {
+  attach: (editor: { apply: (ops: unknown[]) => void }) => { (window as unknown as { __fshLive?: unknown }).__fshLive = editor; return () => undefined; },
+  local: () => undefined,
+};
+function renderLive() {
+  root?.render(<FastSheetEditor content={liveContent} onContent={(next) => { (window as unknown as { __fshSaved?: string }).__fshSaved = next; }} readOnly={false} loadKey={0}
+    live={fakeLive as never} cursors={liveCursors as never} />);
+}
+export async function mountLive(content?: string): Promise<string> {
+  unmount();
+  liveContent = content || await bookToBase64(await newBook());
+  host = document.createElement('div');
+  host.id = 'fsh-preview';
+  host.className = 'nx';
+  host.style.cssText = 'position:fixed;inset:0;z-index:900;background:var(--sh-bg,#fff);display:flex;flex-direction:column';
+  document.body.prepend(host);
+  root = createRoot(host);
+  renderLive();
+  return 'ok';
+}
+export function setPreviewCursors(list: typeof liveCursors): void { liveCursors = list; renderLive(); }

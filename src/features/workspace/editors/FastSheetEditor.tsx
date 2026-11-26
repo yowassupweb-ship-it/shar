@@ -142,6 +142,8 @@ const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 
 type StatKind = 'sum' | 'avg' | 'min' | 'max' | 'count' | 'countNum';
 type HeadHover = { kind: 'col' | 'row' | 'resize-col' | 'resize-row'; index: number } | null;
+/** Сколько гаснет вспышка ячейки, изменённой агентом или коллегой. */
+const FLASH_MS = 700;
 
 /**
  * Фоновый поток сохранения (lib/sheetSave.worker.ts) — один на окно. null — не поднялся (тогда сохраняем по-старому).
@@ -346,6 +348,14 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
           }
         }
         recalc(b);
+        // Чужие (агента, коллеги) изменённые ячейки коротко вспыхивают — видно, что и где поменялось.
+        const now = performance.now();
+        for (const op of ops) {
+          if (op.id !== OP.VALUES || (op.params as { subUnitId?: string }).subUnitId !== sheetIdRef.current) continue;
+          const cv = (op.params as { cellValue?: Record<string, Record<string, unknown>> }).cellValue || {};
+          for (const [r, row] of Object.entries(cv)) for (const col of Object.keys(row || {})) if (flash.current.size < 4000) flash.current.set(`${r}:${col}`, now);
+        }
+        if (flash.current.size) redraw();
         // Чужая вставка или удаление строк сдвигает адреса — старая история отмены больше не точна.
         if (ops.some((op) => op.id !== OP.VALUES)) { undo.current = []; redo.current = []; }
         if (b.sheets[sheetIdRef.current] === undefined) setSheetId(b.sheetOrder[0] || '');
@@ -851,6 +861,8 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
     obj?: SheetObject; part?: 'move' | 'nw' | 'ne' | 'sw' | 'se'; cx?: number; cy?: number };
   const drag = useRef<Drag | null>(null);
   const headHover = useRef<HeadHover>(null);
+  // Ячейки, только что изменённые не нами: «r:c» → когда (вспышка гаснет за FLASH_MS).
+  const flash = useRef(new Map<string, number>());
   /**
    * Автопрокрутка при протягивании, как в Google: пока кнопка зажата за краем сетки, лист едет каждый кадр, даже
    * если мышь стоит; скорость растёт с расстоянием за край и со временем удержания. move — свежий обработчик
@@ -1902,7 +1914,7 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       book: b, sheet, geo, theme, scrollX: el.scrollLeft / z, scrollY: el.scrollTop / z, width: W / z, height: H / z, dpr, zoom: z,
       cf: cfLookup, cfBlank: (xs.cf || []).filter((x) => x.kind === 'blank').flatMap((x) => x.ranges),
       dv: xs.dv, notes: xs.notes, noLinks: xs.nolink, objects, selectedObject, groups: xs.groups, banding: xs.banding, onAsset: () => { assetTick.current += 1; redraw(); },
-      sel: fillTo ?? selRange, ghost: moveTo, dropAt, headHover: headHover.current, active: anchorM ?? { startRow: sel.anchor.row, endRow: sel.anchor.row, startColumn: sel.anchor.col, endColumn: sel.anchor.col },
+      sel: fillTo ?? selRange, ghost: moveTo, dropAt, headHover: headHover.current, flash: flashNow(), active: anchorM ?? { startRow: sel.anchor.row, endRow: sel.anchor.row, startColumn: sel.anchor.col, endColumn: sel.anchor.col },
       clip: clipMark, marks: new Set(commentCells.filter((m) => !m.sheet || m.sheet === sheet.name).map((m) => m.cell)),
       peers: cursors.flatMap((cur) => {
         const p = cur.pos as SheetCursor | null;
@@ -1916,6 +1928,20 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   };
   // После каждой перерисовки карточка ссылки встаёт под свою ячейку (см. placeLinkCard).
   useLayoutEffect(() => { placeLinkCardRef.current(); });
+  // Вспышки на этот кадр (ячейка и яркость 0…1); пока есть — следующий кадр перерисуем (только верхний слой).
+  const flashNow = () => {
+    if (!flash.current.size) return undefined;
+    const now = performance.now();
+    const out: Array<[number, number, number]> = [];
+    for (const [key, t] of flash.current) {
+      const a = 1 - (now - t) / FLASH_MS;
+      if (a <= 0) { flash.current.delete(key); continue; }
+      const [r, col] = key.split(':').map(Number);
+      out.push([r, col, a]);
+    }
+    if (flash.current.size) window.requestAnimationFrame(() => redraw());
+    return out;
+  };
   const frame = useRef(0);
   const redraw = useCallback(() => {
     if (frame.current) return;

@@ -44,9 +44,11 @@ export function useCursors(itemId: string | null, viewers: Viewer[]) {
     setPositions({});
     if (!itemId) return undefined;
     const off = realtime.subscribe((event) => {
-      const e = event as { type?: string; itemId?: string; userId?: string; cursor?: CursorPos | null };
+      const e = event as { type?: string; itemId?: string; userId?: string; name?: string; cursor?: CursorPos | null };
       if (e.type !== 'workspace_cursor' || String(e.itemId) !== String(itemId) || !e.userId) return;
       const uid = String(e.userId);
+      // Агент (правит таблицу потоком) в присутствии не значится — имя приходит вместе с курсором.
+      if (e.name) names.current[uid] = String(e.name);
       setPositions((cur) => {
         const next = { ...cur };
         if (e.cursor) next[uid] = { pos: e.cursor, movedAt: Date.now() };

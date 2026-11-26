@@ -747,6 +747,11 @@ def update_table(access: Access, args: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(operations, list) or not operations or len(operations) > 50:
         raise ToolError("operations — от 1 до 50 операций {sheet, cells, append_rows, delete_rows, create_sheet}")
     book = load_workbook(io.BytesIO(base64.b64decode(item.get("content") or "")))
+    # Таблица открыта у кого-то — правим «на глазах» через совместную правку (agent_stream), без перезаписи файла.
+    if not args.get("dry_run"):
+        streamed = _stream_table(access, item, book, operations)
+        if streamed is not None:
+            return streamed
     results = []
     for operation in operations:
         if not isinstance(operation, dict):
@@ -781,10 +786,127 @@ def update_table(access: Access, args: dict[str, Any]) -> dict[str, Any]:
                         "appendedRows": len(rows), "deletedRows": len(set(drop))})
     out = io.BytesIO()
     book.save(out)
-    content = base64.b64encode(out.getvalue()).decode("ascii")
+    content = base64.b64encode(_keep_editor_parts(item.get("content") or "", out.getvalue())).decode("ascii")
     if args.get("dry_run"):
         return {**_preview(item, content), "operations": results}
     return {**_write(access, item, content=content), **results[0], "operations": results}
+
+
+# Части файла, которые пишет свой редактор таблиц и которых openpyxl не знает (теряет при сохранении): диаграммы,
+# условное форматирование, заметки и прочее — xl/shar/extras.json; номера листов — docProps/custom.xml.
+_EDITOR_PARTS = ("xl/shar/extras.json", "docProps/custom.xml")
+
+
+def _keep_editor_parts(original_b64: str, saved: bytes) -> bytes:
+    """Вернуть в файл, сохранённый openpyxl, части своего редактора из исходного (иначе после правки агента пропадали
+    диаграммы и правила). Не вышло — файл как есть."""
+    import zipfile
+
+    try:
+        src = zipfile.ZipFile(io.BytesIO(base64.b64decode(original_b64)))
+        keep = {name: src.read(name) for name in _EDITOR_PARTS if name in src.namelist()}
+        if not keep:
+            return saved
+        dst = zipfile.ZipFile(io.BytesIO(saved))
+        missing = {name: data for name, data in keep.items() if name not in dst.namelist()}
+        if not missing:
+            return saved
+        files = {name: dst.read(name) for name in dst.namelist()}
+        types = files.get("[Content_Types].xml", b"").decode("utf-8")
+        if "xl/shar/extras.json" in missing and 'Extension="json"' not in types:
+            types = types.replace("</Types>", '<Default Extension="json" ContentType="application/json"/></Types>')
+        if "docProps/custom.xml" in missing:
+            if "/docProps/custom.xml" not in types:
+                types = types.replace("</Types>", '<Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/></Types>')
+            rels = files.get("_rels/.rels", b"").decode("utf-8")
+            if rels and "docProps/custom.xml" not in rels:
+                files["_rels/.rels"] = rels.replace("</Relationships>", '<Relationship Id="rIdSharCustom" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties" Target="docProps/custom.xml"/></Relationships>').encode("utf-8")
+        files["[Content_Types].xml"] = types.encode("utf-8")
+        files.update(missing)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+            for name, data in files.items():
+                z.writestr(name, data)
+        return out.getvalue()
+    except Exception:
+        return saved
+
+
+def _last_data_row(sheet: Any) -> int:
+    """Номер последней строки листа со значением (1…), 0 — пустой лист. max_row openpyxl считает и пустые
+    оформленные строки — добавленные строки встали бы далеко внизу."""
+    for row in range(sheet.max_row, 0, -1):
+        if any(cell.value not in (None, "") for cell in sheet[row]):
+            return row
+    return 0
+
+
+def _stream_table(access: Access, item: dict[str, Any], book: Any, operations: list[Any]) -> dict[str, Any] | None:
+    """update_table для открытой таблицы: ячейки и новые строки — потоком через совместную правку (видно, как агент
+    заполняет таблицу; правки людей не сбрасываются). None — путь не подходит (таблица закрыта, удаление строк или
+    новый лист), тогда пишем файл как раньше."""
+    from app.modules.workspace import agent_stream
+
+    if not item.get("canEdit"):
+        raise ToolError("Этот материал вам открыт только для просмотра", "permission_denied")
+    head = agent_stream.live_head(str(item["id"]))
+    if not head:
+        return None
+    for operation in operations:
+        if not isinstance(operation, dict) or operation.get("delete_rows") or operation.get("create_sheet"):
+            return None
+        name = operation.get("sheet")
+        if name and name not in book.sheetnames:
+            return None
+        if not operation.get("cells") and not operation.get("append_rows"):
+            raise ToolError("Нечего менять: передайте cells, append_rows, delete_rows и/или create_sheet")
+        if len(operation.get("cells") or []) > 2000 or len(operation.get("append_rows") or []) > 2000:
+            raise ToolError("В одной операции — не больше 2000 ячеек и 2000 строк")
+    ids = agent_stream.sheet_ids(item.get("content") or "", list(book.sheetnames))
+    batches: list[tuple[str, list[tuple[int, int, Any]]]] = []
+    results = []
+    appended_at: dict[str, int] = {}
+    for operation in operations:
+        sheet = book[operation["sheet"]] if operation.get("sheet") else book.worksheets[0]
+        writes: list[tuple[int, int, Any]] = []
+        refs = []
+        for cell in operation.get("cells") or []:
+            ref = str((cell or {}).get("ref") or "").upper()
+            if not _CELL.fullmatch(ref):
+                raise ToolError(f"Неверный адрес ячейки «{ref}»: нужен вид B2 латиницей")
+            value, link = _value_and_link(cell)
+            r, c = agent_stream.parse_ref(ref)
+            writes.append((r, c, agent_stream.cell_payload(value, link)))
+            refs.append(ref)
+        rows = operation.get("append_rows") or []
+        if rows:
+            start = appended_at.get(sheet.title, _last_data_row(sheet))
+            for i, row in enumerate(rows):
+                for c, value in enumerate(list(row)[:MAX_TABLE_COLS * 4]):
+                    cell = agent_stream.cell_payload(_cell_value(value))
+                    if cell is not None:
+                        writes.append((start + i, c, cell))
+            appended_at[sheet.title] = start + len(rows)
+        batches.append((ids[sheet.title], writes))
+        results.append({"sheet": sheet.title, "cells": len(operation.get("cells") or []), "cellRefs": refs,
+                        "appendedRows": len(rows), "deletedRows": 0})
+    # Версия «До правки агента» — как при записи файла (_write): серия правок одного агента — одна версия.
+    via = _via(access)
+    row = store.get_row(item["id"])
+    if row and (row.get("updated_via") or "") != via:
+        store.snapshot(row, access.me.user_id, force=True, label=f"До правки агента «{access.ctx.key_name}»", keep_object=True)
+    last = agent_stream.stream(str(item["id"]), access.me.user_id, _agent_label(access), batches)
+    if last is None:
+        return None
+    saved = agent_stream.wait_saved(str(item["id"]), last[0], last[1])
+    return {"id": item["id"], "updatedAt": _stamp_of(saved) or item["updatedAt"], "live": True,
+            "note": "Правка прошла у открывших таблицу на глазах (совместная правка); файл сохранит открытый редактор.",
+            **results[0], "operations": results}
+
+
+def _stamp_of(row: dict[str, Any] | None) -> str | None:
+    value = (row or {}).get("updated_at")
+    return value.isoformat() if hasattr(value, "isoformat") else (str(value) if value else None)
 
 
 def _threads(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1214,7 +1336,7 @@ TOOLS: list[dict[str, Any]] = [
                                                      "after_text": {"type": "string", "description": "для insert — уникальный фрагмент одного абзаца из format=text"},
                                                      **_DRY_RUN}, "required": ["id"]}},
     {"name": "update_table", "handler": update_table, "level": "edit",
-     "description": "Изменить ячейки, строки и листы. operations — несколько листов атомарно одной записью. value заменяет прежнюю ссылку; формулы передаются строками с =.",
+     "description": "Изменить ячейки, строки и листы. operations — несколько листов атомарно одной записью. value заменяет прежнюю ссылку; формулы передаются строками с =. Если таблица открыта у людей, ячейки и новые строки появляются у них на глазах (совместная правка, ответ live: true), их правки не сбрасываются; удаление строк и новый лист перезаписывают файл.",
      "inputSchema": {"type": "object", "properties": {
          "id": _ID, "sheet": {"type": "string"}, "cells": _CELLS,
          "append_rows": {"type": "array", "items": {"type": "array", "items": {}}},
