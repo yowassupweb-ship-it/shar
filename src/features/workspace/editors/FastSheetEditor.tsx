@@ -2172,7 +2172,13 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
             {onAddComment && btn('comment', 'Комментарий (Ctrl+Alt+M)', false, <OComment size={18} />, () => onAddComment())}
             {btn('chart', 'Вставить диаграмму', false, <OChart size={18} />, insertChart)}
             <span className="fdoc-sep" />
-            {btn('filter', b && readFilters(b)[sheetId] ? 'Убрать фильтр' : 'Создать фильтр', Boolean(b && readFilters(b)[sheetId]), <OFilter size={18} />, toggleFilter)}
+            {(() => {
+              // Кнопка «нажата», только если по столбцу выбранной ячейки фильтр что-то отсеивает: подсветка на любом
+              // столбце листа с фильтром читалась как «здесь отфильтровано».
+              const f = b ? readFilters(b)[sheetId] : undefined;
+              const here = Boolean(f && sel.anchor.col >= f.ref.startColumn && sel.anchor.col <= f.ref.endColumn && (f.filterColumns || []).some((x) => x.colId === sel.anchor.col));
+              return btn('filter', f ? 'Убрать фильтр' : 'Создать фильтр', here, <OFilter size={18} />, toggleFilter);
+            })()}
             {btn('sum', 'Сумма (СУММ)', false, <OFunctions size={18} />, sumBelow)}
             <span className="fdoc-sep" />
             <button type="button" className="fdoc-btn" title="Ещё: закрепление, сортировка, условное форматирование…" aria-label="Ещё" onMouseDown={(e) => e.preventDefault()} onClick={open('more')} aria-expanded={pop?.kind === 'more'}><OMoreVertical size={18} /></button>

@@ -322,7 +322,14 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
     if (!color) color = bg && bgL !== null ? (bgL > 0.55 ? '#1f1f1f' : '#f1f1f1') : theme.text;
     else if (theme.dark && !bg) { const l = lightness(color); if (l !== null && l < 0.35) color = theme.text; }
     const link = s.noLinks?.[`${d.r}:${d.c}`] ? null : linkOf(d.cell);
-    if (link && !(st?.cl as { rgb?: string } | undefined)?.rgb) color = theme.link;
+    // Ссылка — по заливке ячейки (как в Google): на светлой — тёмно-синяя, на тёмной — светло-голубая; без заливки — по теме.
+    if (link) {
+      const own = (st?.cl as { rgb?: string } | undefined)?.rgb;
+      const ownL = own ? lightness(own) : null;
+      if (!own) color = bg && bgL !== null ? (bgL > 0.55 ? '#1155cc' : '#8ab4f8') : theme.link;
+      // Свой цвет ссылки не читается на заливке (голубой на бирюзовом) — тоже по заливке.
+      else if (bg && bgL !== null && ownL !== null && Math.abs(bgL - ownL) < 0.3) color = bgL > 0.55 ? '#1155cc' : '#8ab4f8';
+    }
     ctx.fillStyle = color;
     const h = ({ 1: 'left', 2: 'center', 3: 'right', 4: 'left' } as Record<number, 'left' | 'center' | 'right'>)[Number(st?.ht)] || autoAlign(d.cell);
     const v = ({ 1: 'top', 2: 'middle', 3: 'bottom' } as Record<number, string>)[Number(st?.vt)] || 'bottom';
