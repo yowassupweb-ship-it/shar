@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { HiddenMark } from '@/shared/core/HiddenMark';
-import { ChevronRight, Folder as FolderIcon, FolderOpen, Users } from 'lucide-react';
+import { ChevronRight, Users } from 'lucide-react';
+import FolderGlyph from '@/shared/ui/FolderGlyph';
 import { useLongPress } from '@/shared/ui/useLongPress';
 import type { MenuAnchor } from '@/shared/ui/overlay';
 import type { Folder } from './types';
@@ -58,7 +59,8 @@ export function FolderRow({ folder, count, empty, otherKinds, open, terms, editi
 }) {
   const [over, setOver] = useState<DropZone | null>(null);
   const press = useLongPress((x, y) => onMenu({ x, y }));
-  const Icon = open ? FolderOpen : FolderIcon;
+  // Пустая — ни материалов, ни вложенных папок, ни материалов других видов (значок — контуром).
+  const hollow = empty && !otherKinds;
   // Чужая папка, открытая вам: раскладывать в ней можно с правом «Перемещение и редактирование», иначе — только владельцу.
   const own = !folder.role || folder.role === 'owner';
   const arrange = canArrange(folder);
@@ -98,7 +100,7 @@ export function FolderRow({ folder, count, empty, otherKinds, open, terms, editi
         {editing ? (
           <span className="nws-folder-toggle">
             <ChevronRight size={14} className="nws-folder-chevron" aria-hidden="true" />
-            <Icon size={18} className="nws-folder-icon" aria-hidden="true" />
+            <FolderGlyph open={open} empty={hollow} size={18} className="nws-folder-icon" />
             <input
               className="nws-folder-name"
               defaultValue={folder.title}
@@ -124,7 +126,7 @@ export function FolderRow({ folder, count, empty, otherKinds, open, terms, editi
             {...press}
           >
             <ChevronRight size={14} className="nws-folder-chevron" aria-hidden="true" />
-            <Icon size={18} className="nws-folder-icon" aria-hidden="true" />
+            <FolderGlyph open={open} empty={hollow} size={18} className="nws-folder-icon" />
             <span className="nws-folder-title"><Highlight text={folder.title} terms={terms ?? []} /></span>
             <HiddenMark kind="office_folder" id={String(folder.id)} />
             {sharedNote && <span className="nws-folder-shared" title={sharedNote} aria-label={sharedNote}><Users size={13} aria-hidden="true" /></span>}

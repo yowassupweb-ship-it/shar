@@ -1,5 +1,6 @@
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronRight, Folder, FolderOpen, HardDrive, MoreHorizontal, Users } from 'lucide-react';
+import { ChevronRight, HardDrive, MoreHorizontal, Users } from 'lucide-react';
+import FolderGlyph from '@/shared/ui/FolderGlyph';
 import { displayName, useChatStore } from '@/features/chat';
 import { realtime } from '@/shared/realtime/realtime';
 import { SearchField } from '@/shared/ui/SearchField';
@@ -199,7 +200,8 @@ function Row({ folder, path, depth, isOpen, leaf, current, dropOn, onToggle, onO
   dropProps?: (dest: CloudFolder | null, key: string) => Record<string, unknown>;
 }) {
   const shared = [...new Set([...sharedPeople(folder), ...(folder.editAccess || []).map(String)])].filter((id) => !id.startsWith('dept:') && id !== String(folder.ownerId));
-  const Icon = isOpen ? FolderOpen : Folder;
+  // Пустая — ни подпапок, ни файлов (fileCount с сервера; нет поля — считаем, что что-то есть).
+  const empty = leaf && folder.fileCount === 0;
   const rename = useContext(RenameCtx);
   const renaming = rename.id === folder.id;
   return (
@@ -229,7 +231,7 @@ function Row({ folder, path, depth, isOpen, leaf, current, dropOn, onToggle, onO
           {!leaf && <ChevronRight size={14} aria-hidden="true" data-open={isOpen ? 'true' : undefined} />}
         </button>
       ) : <span className="nftr-twist" aria-hidden="true" />}
-      <Icon size={16} aria-hidden="true" className="nftr-ico" />
+      <FolderGlyph open={isOpen} empty={empty} size={17} className="nftr-ico" />
       {renaming ? <TreeRename folder={folder} /> : <span className="nftr-label" title={folder.name}>{folder.name}</span>}
       <Faces ids={shared} />
       {onMenu && (

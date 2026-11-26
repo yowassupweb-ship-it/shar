@@ -1,7 +1,7 @@
 import { listenIntent } from '@/shared/navigation/quickIntent';
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import {
-  AlertCircle, CalendarDays, CalendarX, Check, ChevronRight, CircleCheck, CircleDot, Copy, ExternalLink, Flag, FolderClosed, FolderPlus, FolderTree, Inbox, Link2, ListTree,
+  AlertCircle, CalendarDays, CalendarX, Check, ChevronRight, CircleCheck, CircleDot, Copy, ExternalLink, Flag, FolderPlus, FolderTree, Inbox, Link2, ListTree,
   MessageSquare, MoreHorizontal, Pencil, Plus, RotateCcw, RotateCw, Search, SquareCheck, Trash2, Unlink, Users, X,
 } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
@@ -12,6 +12,7 @@ import { plural } from '@/shared/ui/format';
 import { SearchField } from '@/shared/ui/SearchField';
 import { SectionIcon } from '@/shared/ui/SectionIcon';
 import { useLongPress } from '@/shared/ui/useLongPress';
+import FolderGlyph from '@/shared/ui/FolderGlyph';
 import { askConfirm, Menu, MenuItem, Sheet, type MenuAnchor } from '@/shared/ui/overlay';
 import Splitter from '@/shared/ui/Splitter';
 import {
@@ -485,7 +486,9 @@ export default function TasksScreen() {
           onClick={() => toggleGroup(key)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleGroup(key); } }}
           onContextMenu={g.folder ? (e) => { e.preventDefault(); setFolderMenu({ list: g.folder!, anchor: { x: e.clientX, y: e.clientY } }); } : undefined}>
           <ChevronRight size={14} className="ntl-caret" aria-hidden="true" />
-          {g.icon ?? (grouping === 'folder' ? (isFolder ? <FolderClosed size={15} className="ntl-folder-icon" aria-hidden="true" /> : <Inbox size={15} className="ntl-folder-icon" aria-hidden="true" />) : <i aria-hidden="true" />)}
+          {g.icon ?? (grouping === 'folder' ? (isFolder
+            ? <FolderGlyph open={!shut} empty={!g.items.length && !g.done?.length && !g.chains?.length} size={18} className="ntl-folder-icon" />
+            : <Inbox size={18} className="ntl-folder-icon" aria-hidden="true" />) : <i aria-hidden="true" />)}
           <span className="ntl-group-name">{g.label}</span>
           {g.folder?.sharedLevel && <Users size={12} className="ntl-shared" aria-label="Общая папка" />}
           <span className="ntl-count">{g.items.length + (g.chains || []).reduce((n, c) => n + c.stages.length - c.done, 0)}</span>
