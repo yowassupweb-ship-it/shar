@@ -503,9 +503,10 @@ button.nf-crumb[data-drop="true"] { background: color-mix(in srgb, var(--accent-
 
 /* ── Дерево папок сбоку (FolderTree) ─────────────────────────────────────── */
 .nf-split { position: relative; display: flex; flex: 1; min-height: 0; --nf-side: 260px; }
-.nf-split > .nx-splitter { left: var(--nf-side); }
+.nf-split > .nx-splitter { left: min(var(--nf-side), 42%); }
 .nf-split > .nf-view { flex: 1; min-width: 0; }
-.nf-side { flex: none; width: var(--nf-side); overflow-y: auto; padding: var(--space-3) var(--space-2); border-right: 1px solid var(--border-color); background: var(--surface-panel); }
+/* Узкое окно: дерево — не больше 42% ширины (и не уже 180px), а не своей полной ширины, зажимая плитки. */
+.nf-side { flex: none; width: min(var(--nf-side), 42%); min-width: 180px; overflow-y: auto; padding: var(--space-3) var(--space-2); border-right: 1px solid var(--border-color); background: var(--surface-panel); }
 .nftr { display: grid; gap: 1px; }
 .nftr-row {
   display: flex; align-items: center; gap: 6px; width: 100%; min-height: 30px; padding: 0 8px 0 calc(4px + var(--depth, 0) * 14px);
