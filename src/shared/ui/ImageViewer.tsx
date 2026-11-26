@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, MessageSquareText, RotateCw, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, MessageSquareText, X } from 'lucide-react';
 import { thumbUrl } from './media';
 import { downloadOnClick } from '@/shared/platform/download';
 
@@ -15,8 +15,11 @@ import { downloadOnClick } from '@/shared/platform/download';
  * Жесты пишут transform прямо в DOM — без перерисовки React на каждый кадр.
  *
  * Открывается в натуральном размере: маленькое фото не растягивается, большое вписывается в экран (не крупнее).
- * В шапке — масштаб в процентах от настоящего размера; нажатие на него (или «1») — 100%, «0» — по экрану.
- * R — повернуть, Home/End — первое и последнее фото.
+ * Кнопок масштаба нет: колесо, щипок, двойной клик, +/− и 1 (100%) / 0 (по экрану); проценты коротко всплывают
+ * по центру. R — повернуть, Home/End — первое и последнее фото.
+ *
+ * Не мешает смотреть: шапка и стрелки прячутся, пока мышь стоит; лента внизу — тонкие полоски, миниатюрами
+ * раскрывается при наведении.
  */
 
 export interface ViewerItem {
@@ -32,6 +35,8 @@ const MIN = 0.1;
 /** Поля вокруг большого фото, вписанного в экран. */
 const FIT_MARGIN = 0.94;
 const MAX = 16;
+/** Сколько мышь может стоять, прежде чем шапка и стрелки уйдут. */
+const IDLE_MS = 2200;
 
 export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
   items: ViewerItem[];
@@ -57,7 +62,15 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
   const rotationRef = useRef(0);
   rotationRef.current = rotation;
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
-  const [percent, setPercent] = useState(100);
+  // Мышь стоит — шапка и стрелки уходят, фото на весь экран; любое движение или клавиша — возвращаются.
+  const [idle, setIdle] = useState(false);
+  const idleTimer = useRef(0);
+  const wake = useCallback(() => {
+    setIdle(false);
+    window.clearTimeout(idleTimer.current);
+    idleTimer.current = window.setTimeout(() => setIdle(true), IDLE_MS);
+  }, []);
+  useEffect(() => { wake(); return () => window.clearTimeout(idleTimer.current); }, [wake]);
   const zoomAtRef = useRef<(next: number, cx: number, cy: number, animate?: boolean) => void>(() => undefined);
   const item = items[index];
 
@@ -67,7 +80,6 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
   const [notice, setNotice] = useState('');
   const noticeTimer = useRef(0);
   const copyTimer = useRef(0);
-  const shownScale = useRef(1);
   const say = useCallback((text: string, ms = 1500) => {
     setNotice(text);
     window.clearTimeout(noticeTimer.current);
@@ -92,10 +104,6 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
     img.style.transition = animate ? 'transform .22s cubic-bezier(.22,1,.36,1)' : 'none';
     img.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${scale}) rotate(${rotationRef.current}deg)`;
     img.style.cursor = scale > 1 ? 'grab' : 'zoom-in';
-    if (Math.abs(scale - shownScale.current) > 0.004) {
-      shownScale.current = scale;
-      setPercent(Math.round(scale * base.current * 100));
-    }
   }, []);
 
   const reset = useCallback((animate = true) => {
@@ -133,7 +141,6 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
     base.current = k;
     img.style.width = `${Math.floor(nw * k)}px`;
     img.style.height = `${Math.floor(nh * k)}px`;
-    setPercent(Math.round(view.current.scale * k * 100));
   }, []);
   useEffect(() => { fit(); }, [rotation, fit]);
   /** 100% — настоящий размер, пиксель в пиксель; повторно — обратно по экрану. */
@@ -183,16 +190,13 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
     // Не больше экрана — картинка по центру, двигать её незачем.
     if (s <= 1) { v.x = 0; v.y = 0; }
     apply(animate);
-  }, [apply]);
+    say(`${Math.round(s * base.current * 100)}%`, 900);
+  }, [apply, say]);
   zoomAtRef.current = zoomAt;
-
-  const zoomBy = useCallback((k: number) => {
-    const r = stageRef.current?.getBoundingClientRect();
-    if (r) zoomAt(view.current.scale * k, r.left + r.width / 2, r.top + r.height / 2, true);
-  }, [zoomAt]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      wake();
       if (e.key === 'Escape') { e.preventDefault(); onClose(); }
       else if (e.key === 'ArrowRight') go(1);
       else if (e.key === 'ArrowLeft') go(-1);
@@ -206,7 +210,7 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
     };
     document.addEventListener('keydown', onKey, true);
     return () => document.removeEventListener('keydown', onKey, true);
-  }, [go, onClose, reset, zoomAt, toggleActual, items.length]);
+  }, [go, onClose, reset, zoomAt, toggleActual, items.length, wake]);
 
   // Колесо — зум (без модификаторов тоже: прокручивать тут нечего).
   useEffect(() => {
@@ -319,7 +323,8 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
   const preview = thumbUrl(item.url, 640);
 
   return createPortal(
-    <div ref={rootRef} className="nxv" role="dialog" aria-modal="true" aria-label="Просмотр фото">
+    <div ref={rootRef} className="nxv" role="dialog" aria-modal="true" aria-label="Просмотр фото" data-idle={idle || undefined}
+      onPointerMove={wake} onPointerDown={wake}>
       <header className="nxv-bar">
         <div className="nxv-meta">
           {(item.name || item.author) && <b title={item.name || item.author}>{item.name || item.author}</b>}
@@ -338,11 +343,6 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
               {copyState === 'ok' ? <Check size={18} /> : copyState === 'fail' ? <X size={18} /> : <Copy size={18} />}
             </button>
           )}
-          <button type="button" className="nxv-btn" onClick={() => zoomBy(1 / 1.4)} aria-label="Уменьшить" title="Уменьшить (−)"><ZoomOut size={18} /></button>
-          <button type="button" className="nxv-btn nxv-zoom" onClick={toggleActual} aria-label={`Масштаб ${percent}%. Нажмите: настоящий размер или по экрану`}
-            title="100% — настоящий размер (1) · ещё раз — по экрану (0)">{percent}%</button>
-          <button type="button" className="nxv-btn" onClick={() => zoomBy(1.4)} aria-label="Увеличить" title="Увеличить (+)"><ZoomIn size={18} /></button>
-          <button type="button" className="nxv-btn" onClick={() => setRotation((d) => (d + 90) % 360)} aria-label="Повернуть" title="Повернуть (R)"><RotateCw size={18} /></button>
           <a className="nxv-btn" href={item.url} download={item.name || true} onClick={(e) => { downloadOnClick(item.url, item.name)(e); say(window.sharDesktop?.downloadFile ? 'Сохранение…' : 'Скачивание началось', 1800); }} aria-label="Скачать" title="Скачать"><Download size={18} /></a>
           <a className="nxv-btn" href={item.url} target="_blank" rel="noopener noreferrer" aria-label="Открыть оригинал" title="Открыть оригинал"><ExternalLink size={18} /></a>
           <button ref={closeRef} type="button" className="nxv-btn" onClick={onClose} aria-label="Закрыть" title="Закрыть (Esc)"><X size={20} /></button>
@@ -386,6 +386,7 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
         <>
           <button type="button" className="nxv-nav" data-dir="prev" disabled={index === 0} onClick={() => go(-1)} aria-label="Предыдущее фото"><ChevronLeft size={26} /></button>
           <button type="button" className="nxv-nav" data-dir="next" disabled={index === items.length - 1} onClick={() => go(1)} aria-label="Следующее фото"><ChevronRight size={26} /></button>
+          {/* Лента — полоски (текущее фото — длиннее); наведение раскрывает миниатюры. */}
           <div ref={stripRef} className="nxv-strip" role="tablist" aria-label="Все фото">
             {items.map((it, i) => (
               <button

@@ -794,8 +794,6 @@ html.nx-locked body {
   --btn-transition: background var(--duration-fast) var(--ease-out), transform 0.08s ease;
 }
 @media (hover: hover) { .nxv-btn:hover { background: rgb(255 255 255 / .14); } }
-/* Масштаб в процентах — кнопка: 100% (настоящий размер) ↔ по экрану. */
-.nxv-zoom { width: auto; min-width: 54px; padding: 0 8px; font-size: var(--text-xs); font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; }
 /* Отбивка действий: копирование — галочка (или крест) на самой кнопке, масштаб и скачивание — плашка сверху по центру. */
 .nxv-btn[data-state="busy"] { opacity: .55; cursor: progress; }
 .nxv-btn[data-state="ok"] { background: rgb(52 199 89 / .28); color: #fff; }
@@ -860,30 +858,45 @@ html.nx-locked body {
 .nxv-nav[data-dir="next"] { right: var(--space-4); }
 .nxv-strip {
   display: flex;
+  align-items: flex-end;
   justify-content: safe center;
   gap: 4px;
-  padding: var(--space-2) var(--space-3) calc(var(--space-3) + var(--nx-safe-bottom));
+  /* Высокий отступ сверху — зона наведения: мышь у нижнего края раскрывает ленту, целиться в полоску не нужно. */
+  padding: 28px var(--space-3) calc(var(--space-3) + var(--nx-safe-bottom));
   overflow-x: auto;
   scrollbar-width: none;
   opacity: var(--viewer-bg);
+  transition: background var(--duration-base) var(--ease-out);
 }
 .nxv-strip::-webkit-scrollbar { display: none; }
+/* Свёрнутая лента — полоски: не перекрывают фото, но показывают, сколько их и где вы. */
 .nxv-thumb {
   flex: none;
-  width: 44px;
-  height: 44px;
+  width: 14px;
+  height: 4px;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 2px;
   overflow: hidden;
-  background: rgb(255 255 255 / .1);
-  opacity: .55;
+  background: rgb(255 255 255 / .38);
   cursor: pointer;
-  transition: opacity var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
+  transition: width .18s var(--ease-out), height .18s var(--ease-out), border-radius .18s var(--ease-out), background-color .18s, opacity .18s, box-shadow .18s;
 }
-.nxv-thumb img { width: 100%; height: 100%; object-fit: cover; }
-@media (hover: hover) { .nxv-thumb:hover { opacity: .85; } }
-.nxv-thumb[aria-current="true"] { opacity: 1; box-shadow: 0 0 0 2px #fff; }
+.nxv-thumb img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .18s var(--ease-out); }
+.nxv-thumb[aria-current="true"] { width: 28px; background: #fff; }
+/* Наведение (или фокус с клавиатуры) — миниатюры. */
+.nxv-strip:hover, .nxv-strip:focus-within { background: linear-gradient(transparent, rgb(0 0 0 / .55)); }
+.nxv-strip:hover .nxv-thumb, .nxv-strip:focus-within .nxv-thumb {
+  width: 48px; height: 48px; border-radius: var(--radius-sm); background: rgb(255 255 255 / .1); opacity: .6;
+}
+.nxv-strip:hover .nxv-thumb img, .nxv-strip:focus-within .nxv-thumb img { opacity: 1; }
+.nxv-strip:hover .nxv-thumb[aria-current="true"], .nxv-strip:focus-within .nxv-thumb[aria-current="true"] { opacity: 1; box-shadow: 0 0 0 2px #fff; }
+@media (hover: hover) { .nxv-strip .nxv-thumb:hover { opacity: .9; } }
+/* Мышь стоит — шапка и стрелки уходят (ImageViewer: data-idle). */
+.nxv-bar, .nxv-nav { transition: opacity var(--duration-base) var(--ease-out); }
+.nxv[data-idle] .nxv-bar, .nxv[data-idle] .nxv-nav { opacity: 0; pointer-events: none; }
+.nxv[data-idle] { cursor: none; }
+@media (prefers-reduced-motion: reduce) { .nxv-thumb, .nxv-thumb img, .nxv-bar, .nxv-nav { transition: none; } }
 @media (pointer: coarse) {
   .nxv-nav { display: none; }
 }
@@ -910,7 +923,7 @@ html.nx-locked body {
    фото (как в «Фото» iOS), а не в своих рядах сетки, отнимающих высоту. */
 .nxv > .nxv-stage { grid-row: 1 / -1; grid-column: 1; }
 .nxv > .nxv-bar { grid-row: 1; grid-column: 1; align-self: start; }
-.nxv > .nxv-strip { grid-row: 3; grid-column: 1; align-self: end; z-index: 2; background: linear-gradient(transparent, var(--media-scrim)); }
+.nxv > .nxv-strip { grid-row: 3; grid-column: 1; align-self: end; z-index: 2; }
 
 /* Один крестик в поиске: нативная кнопка очистки type=search скрыта везде в
    новом Шаре — свою кнопку «очистить» каждое поле рисует само. */
