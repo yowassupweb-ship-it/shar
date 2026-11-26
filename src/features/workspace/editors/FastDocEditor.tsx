@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { EditorContent, useEditor, useEditorState, type Editor } from '@tiptap/react';
-import { Extension } from '@tiptap/core';
+import { Extension, getMarkRange } from '@tiptap/core';
 import { uploadFileWithProgress } from '@/shared/api/uploadFile';
 import { attachmentUrl } from '@/shared/ui/format';
 import { showToast } from '@/shared/ui/Toast';
@@ -20,6 +20,7 @@ import { FastDocToolbar, Palette, Pop } from './FastDocToolbar';
 import { OClearFormat } from '@/shared/ui/OfficeIcons';
 import { DocNavigation } from './DocNavigation';
 import { DocLinkSheet } from './DocLinkSheet';
+import { LinkCard } from './LinkCard';
 import { buildSegment, fillFields, newSegmentId, PAGE_TOKEN, PAGES_TOKEN, readSegment, segmentStyled, type SegKind } from './docHeaderFooter';
 import type { EditorProps } from './types';
 import './fastDoc.css';
@@ -338,6 +339,48 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
 
   // ── Масштаб и строка состояния ──────────────────────────────────────────────
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // ── Карточка ссылки (как в Google Документах): курсор в ссылке — под её началом превью, адрес, копировать,
+  // изменить, убрать; ссылка на материал Шара — «Открыть» и «В новом окне». Общая с таблицами (LinkCard.tsx). ──
+  const [docLink, setDocLink] = useState<{ url: string; from: number; key: string } | null>(null);
+  const [docLinkClosed, setDocLinkClosed] = useState('');
+  const docLinkEl = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!editor) return undefined;
+    const update = () => {
+      const { selection } = editor.state;
+      const type = editor.schema.marks.link;
+      const range = type ? getMarkRange(selection.$from, type) : undefined;
+      const href = range ? String(editor.getAttributes('link').href || '') : '';
+      // Выделение шире ссылки — карточка не нужна (как у Google).
+      if (!range || !href || selection.to > range.to || selection.from < range.from) { setDocLink(null); return; }
+      const key = `${href}@${range.from}`;
+      setDocLink((cur) => (cur && cur.key === key ? cur : { url: href, from: range.from, key }));
+    };
+    editor.on('selectionUpdate', update);
+    editor.on('update', update);
+    return () => { editor.off('selectionUpdate', update); editor.off('update', update); };
+  }, [editor]);
+  const placeDocLink = useCallback(() => {
+    const card = docLinkEl.current; const view = editor?.view; const box = scrollRef.current?.getBoundingClientRect();
+    if (!card || !view || !docLink || !box) return;
+    let start: { left: number; bottom: number }; let caret: { bottom: number };
+    try { start = view.coordsAtPos(docLink.from); caret = view.coordsAtPos(view.state.selection.from); } catch { card.style.visibility = 'hidden'; return; }
+    const top = Math.max(caret.bottom, start.bottom) + 6;
+    const left = Math.max(box.left + 8, Math.min(start.left, box.right - card.offsetWidth - 12));
+    card.style.left = `${left}px`; card.style.top = `${top}px`;
+    card.style.visibility = top < box.top || top > box.bottom - 40 ? 'hidden' : '';
+  }, [editor, docLink]);
+  useLayoutEffect(() => { placeDocLink(); });
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !docLink) return undefined;
+    el.addEventListener('scroll', placeDocLink, { passive: true });
+    window.addEventListener('resize', placeDocLink);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && docLink) setDocLinkClosed(docLink.key); };
+    window.addEventListener('keydown', onKey);
+    return () => { el.removeEventListener('scroll', placeDocLink); window.removeEventListener('resize', placeDocLink); window.removeEventListener('keydown', onKey); };
+  }, [docLink, placeDocLink]);
   const [zoomPick, setZoomPick] = useState<number | 'fit'>(readZoom);
   const [room, setRoom] = useState(0);
   useEffect(() => {
@@ -632,6 +675,11 @@ export default function FastDocEditor({ content, onContent, readOnly, loadKey, l
       {/* Структура, страницы, слова, поиск — полосой под листом (внизу окна), чтобы верх был одной панелью. */}
       {editor && <DocNavigation editor={editor} pages={pages} onFind={() => openFind.current()} />}
       {picker && <DocInsertPicker kind={picker.kind} at={picker.at} onPick={(v) => insertText(v)} onClose={() => setPicker(null)} />}
+      {docLink && editor && docLinkClosed !== docLink.key && !linkEdit && (
+        <LinkCard cardRef={docLinkEl} url={docLink.url} readOnly={readOnly} style={{ position: 'fixed', zIndex: 60 }}
+          onEdit={() => commands['doc.operation.show-hyper-link-edit-popup']?.()}
+          onUnlink={() => { editor.chain().focus().extendMarkRange('link').unsetLink().run(); }} />
+      )}
       {linkEdit && editor && <DocLinkSheet initial={linkEdit.initial} onClose={() => setLinkEdit(null)} onApply={(url) => {
         if (!readOnly && !editor.isDestroyed) {
           const chain = editor.chain().focus().setTextSelection({ from: Math.min(linkEdit.from, editor.state.doc.content.size), to: Math.min(linkEdit.to, editor.state.doc.content.size) }).extendMarkRange('link');

@@ -10,6 +10,10 @@
   display: flex; flex-direction: column; height: 100%; min-height: 0; position: relative;
   background: var(--doc-desk);
 }
+/* Цвета карточки ссылки (LinkCard, общая с таблицами — переменные --sh-*). */
+.fdoc { --sh-card: #fff; --sh-bg: var(--page-bg); --sh-text: var(--page-text); --sh-link: #0b57d0; --sh-grid: #e2e3e3; --sh-sel: #1a73e8; --sh-head-text: #5f6368; }
+html[data-theme="graphite"] .fdoc { --sh-card: #3a3b41; --sh-link: #8ab4f8; --sh-grid: #3a3b40; --sh-sel: #8ab4f8; --sh-head-text: #a5a7ad; }
+html[data-theme="black"] .fdoc { --sh-card: #26272b; --sh-link: #8ab4f8; --sh-grid: #2a2a2e; --sh-sel: #8ab4f8; --sh-head-text: #9a9ca2; }
 html[data-theme="graphite"] .fdoc {
   --page-bg: #2b2c30; --page-text: #e9e9ec; --page-line: rgba(255, 255, 255, .16); --page-shadow: 0 0 0 1px #3c3d42;
   --doc-desk: #1f2023; --ruler-paper: #2b2c30; --ruler-margin: #232427; --ruler-line: #34363b; --ruler-tick: #8a8d93; --ruler-text: #a5a8ae; --bar-bg: #2b2c30;
