@@ -953,7 +953,7 @@ button.nws-cm-anchor { cursor: pointer; }
   background: var(--accent-fill, #0a66d6); color: #fff; font-size: 10px; font-weight: var(--weight-semibold); line-height: 15px; text-align: center;
 }
 @media (max-width: 760px) {
-  .nws-cm { position: absolute; inset: 0 0 0 auto; width: min(100%, 360px); z-index: 5; box-shadow: -8px 0 24px rgba(0, 0, 0, .2); }
+  .nws-cm { position: absolute; inset: 0 0 0 auto; width: min(100%, 360px); z-index: 5; box-shadow: -8px 0 24px rgba(0, 0, 0, .2); padding-bottom: env(safe-area-inset-bottom); }
   .nws-main { position: relative; }
 }
 /* Уголок на ячейке с открытым комментарием (как в Google Таблицах) */
@@ -1259,3 +1259,14 @@ section.univer-popup .univerjs-icon { --univer-primary-600: currentColor; }
 /* Галочка в пункте меню («Инструменты → Beta-редактор»). */
 .nws-check { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 4px; box-shadow: inset 0 0 0 1.5px var(--text-muted); color: #fff; }
 .nws-check[data-on] { background: var(--accent-fill); box-shadow: none; }
+
+/* Ответ на конкретное сообщение ветки: кому — именем и началом его сообщения. */
+.nws-cm-replyto { display: flex; align-items: center; gap: 4px; min-width: 0; margin: 2px 0 2px; color: var(--text-muted); font-size: 12px; line-height: 16px; }
+.nws-cm-replyto b { flex: none; color: var(--text-secondary, var(--text-main)); font-weight: var(--weight-semibold); }
+.nws-cm-replyto span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.nws-cm-replyto svg { flex: none; }
+.nws-cm-replyto-draft { margin: var(--space-2) 0 4px; padding-left: 2px; }
+.nws-cm-msg-reply { padding: 0; margin-top: 2px; border: 0; background: none; color: var(--text-muted); font: inherit; font-size: 12px; cursor: pointer; opacity: 0; transition: opacity .12s; }
+.nws-cm-msg:hover .nws-cm-msg-reply, .nws-cm-msg-reply:focus-visible { opacity: 1; }
+.nws-cm-msg-reply:hover { color: var(--accent-color); }
+@media (hover: none) { .nws-cm-msg-reply { opacity: 1; } }

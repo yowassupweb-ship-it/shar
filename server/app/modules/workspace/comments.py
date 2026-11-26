@@ -56,6 +56,13 @@ def summary_many(item_ids: list[Any]) -> dict[str, dict[str, int]]:
     return {r["id"]: {"open": int(r["open"]), "unanswered": int(r["unanswered"]), "resolved": int(r["resolved"])} for r in rows}
 
 
+def _clean_reply(anchor: Any) -> dict[str, Any]:
+    """У ответа — только пометка «кому» (ответ на конкретное сообщение ветки): id, имя и начало его текста."""
+    if isinstance(anchor, dict) and anchor.get("kind") == "reply" and str(anchor.get("to") or "").isdigit():
+        return {"kind": "reply", "to": str(anchor["to"]), "name": str(anchor.get("name") or "")[:120], "quote": str(anchor.get("quote") or "")[:200]}
+    return {}
+
+
 def _clean_anchor(anchor: Any) -> dict[str, Any]:
     if not isinstance(anchor, dict):
         return {}
@@ -129,7 +136,7 @@ def add_comment(item_id: str, user_id: str, body: str, anchor: Any = None, paren
         parent = int(parent_id)
     row = db.conn.fetch_one(
         f"INSERT INTO workspace_item_comments (item_id, parent_id, author_id, body, anchor) VALUES (%s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
-        (int(item_id), parent, user_id, text, store.as_json({} if parent else _clean_anchor(anchor))),
+        (int(item_id), parent, user_id, text, store.as_json(_clean_reply(anchor) if parent else _clean_anchor(anchor))),
     )
     return _present(row, _users([row]))
 

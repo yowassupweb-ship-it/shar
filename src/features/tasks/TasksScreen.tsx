@@ -2,7 +2,7 @@ import { listenIntent } from '@/shared/navigation/quickIntent';
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import {
   AlertCircle, CalendarDays, CalendarX, Check, ChevronRight, CircleCheck, CircleDot, Copy, ExternalLink, Flag, FolderClosed, FolderPlus, FolderTree, Inbox, Link2, ListTree,
-  MoreHorizontal, Pencil, Plus, RotateCcw, RotateCw, Search, SquareCheck, Trash2, Unlink, Users, X,
+  MessageSquare, MoreHorizontal, Pencil, Plus, RotateCcw, RotateCw, Search, SquareCheck, Trash2, Unlink, Users, X,
 } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
 import { displayName, useChatStore } from '@/features/chat';
@@ -122,6 +122,11 @@ const Row = memo(function Row({ t, active, onOpen, onMenu, depth = 0, showStatus
           {progress.total > 0 && <span className="ntl-progress" style={{ '--p': `${Math.round((progress.done / progress.total) * 100)}%` } as CSSProperties}>{progress.done}/{progress.total}</span>}
         </span>
       </span>
+      {Boolean(t.unreadComments) && (
+        <span className="ntl-badge-comments" aria-label={`Новых комментариев: ${t.unreadComments}`} title="Новые комментарии">
+          <MessageSquare size={12} aria-hidden="true" />{t.unreadComments! > 99 ? '99+' : t.unreadComments}
+        </span>
+      )}
       {people.length > 0 && (
         <span className="ntl-faces" aria-label={people.map((id) => displayName(users[id])).join(', ')}>
           {people.slice(0, 2).map((id) => <Avatar key={id} name={displayName(users[id]) || '?'} seed={id} src={users[id]?.avatar} person size={22} />)}
@@ -202,12 +207,21 @@ export default function TasksScreen() {
     setSelected((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
   }, []);
   const stopSelecting = () => { setSelecting(false); setSelected([]); };
+  // «Выбрать несколько» из меню этапа цепочки — выделяется вся цепочка (по порядку этапов): кнопка сразу
+  // «Разъединить цепочку»; снять отметки с части этапов — «Убрать из цепочки» только их.
+  const selectFromMenu = useCallback((id: string) => {
+    const all = useTasks.getState().tasks;
+    const ref = all[id] ? chainOf(all[id]) : null;
+    const stages = ref ? Object.values(all).filter((t) => chainOf(t)?.id === ref.id).sort((a, b) => chainOf(a)!.order - chainOf(b)!.order) : [];
+    if (stages.length > 1) { setSelecting(true); setSelected(stages.map((t) => t.id)); return; }
+    selectTask(id);
+  }, [selectTask]);
   const [chainMenu, setChainMenu] = useState<{ chain: Chain; anchor: MenuAnchor } | null>(null);
   const [chainRename, setChainRename] = useState<Chain | null>(null);
 
   useEffect(() => { void loadTasks(); }, []);
   // Открытая (в том числе по ссылке) задача — уже не «новая».
-  useEffect(() => { if (activeId && tasks[activeId]?.isNew) markTaskSeen(activeId); }, [activeId, tasks]);
+  useEffect(() => { if (activeId && (tasks[activeId]?.isNew || tasks[activeId]?.unreadComments)) markTaskSeen(activeId); }, [activeId, tasks]);
   useEffect(() => {
     const onPop = () => setActiveId(readTaskParam());
     window.addEventListener('popstate', onPop);
@@ -644,7 +658,7 @@ export default function TasksScreen() {
       {shareList && <FolderShareSheet list={shareList} onClose={() => setShareList(null)} />}
 
       {menu && <TaskMenu task={menu.task} anchor={menu.anchor} onClose={() => setMenu(null)} onOpen={open} onDeleted={(id) => { if (readTaskParam() === id) back(); }}
-        onSelect={(id) => selectTask(id)} />}
+        onSelect={selectFromMenu} />}
       {chainMenu && (
         <Menu anchor={chainMenu.anchor} label={chainMenu.chain.name} onClose={() => setChainMenu(null)}>
           <MenuItem icon={<Pencil size={16} />} onSelect={() => { setChainRename(chainMenu.chain); setChainMenu(null); }}>Переименовать</MenuItem>

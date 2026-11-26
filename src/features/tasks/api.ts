@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { realtime, type RealtimeEvent } from '@/shared/realtime/realtime';
 import { htmlToMarkdown, markdownToHtml } from './markdown';
+import { refreshTasksBadge } from './badge';
 
 /**
  * Данные раздела «Задачи»: тот же /api/todos, что у старого экрана, — задачи
@@ -40,6 +41,8 @@ export interface Task {
   chatId?: string;
   /** Поручили другие, а я её ещё не открывал (сервер: todos/seen.py). */
   isNew?: boolean;
+  /** Комментарии других после того, как я последний раз открывал задачу (сервер: todos/seen.unread_comments). */
+  unreadComments?: number;
 }
 
 export interface TaskList {
@@ -248,6 +251,17 @@ function listen() {
     if (dirty.has(id)) return;
     put({ ...cur, ...incoming, id });
   });
+  // Комментарий к задаче — как сообщение: открыта эта задача и окно на виду — сразу прочитано; иначе +1 у задачи.
+  realtime.subscribe((e: RealtimeEvent) => {
+    if (e.type !== 'task_comments' || (e as { action?: string }).action !== 'added') return;
+    const id = String(e.taskId || '');
+    const t = useTasks.getState().tasks[id];
+    if (!t) return;
+    if (openTaskId === id && document.visibilityState === 'visible') { markTaskSeen(id, true); return; }
+    const me = myId();
+    const mine = assigneesOf(t).includes(me) || [t.assignedById, t.authorId, (t.metadata?.chain as { owner?: string } | undefined)?.owner].some((x) => x && String(x) === me);
+    if (mine) put({ ...t, unreadComments: (t.unreadComments || 0) + 1 });
+  });
   // Агент пишет задачу (MCP task_create/task_update): частичный текст — только на экран, в базу пишет итог.
   realtime.subscribe((e: RealtimeEvent) => {
     if (e.type !== 'task_stream') return;
@@ -272,12 +286,16 @@ const dirty = new Set<string>();
 export const useTaskStream = create<{ byId: Record<string, { agent: string; md: string; title?: string; at: number }> }>(() => ({ byId: {} }));
 
 /** Человек открыл задачу — снять «Новое» (у себя сразу, на сервере — отметкой). */
-export function markTaskSeen(id: string): void {
+export function markTaskSeen(id: string, force = false): void {
   const t = useTasks.getState().tasks[id];
-  if (!t?.isNew || isDraft(id)) return;
-  put({ ...t, isNew: false });
-  void fetch(`/api/todos/${encodeURIComponent(id)}/seen`, { method: 'POST' }).catch(() => undefined);
+  if (!t || isDraft(id) || (!force && !t.isNew && !t.unreadComments)) return;
+  if (t.isNew || t.unreadComments) put({ ...t, isNew: false, unreadComments: 0 });
+  void fetch(`/api/todos/${encodeURIComponent(id)}/seen`, { method: 'POST' }).catch(() => undefined).finally(() => refreshTasksBadge(0));
 }
+
+/** Какая задача сейчас открыта (TaskDocument): её новые комментарии сразу прочитаны. */
+let openTaskId: string | null = null;
+export function setOpenTask(id: string | null): void { openTaskId = id; }
 
 // ── Запись ──────────────────────────────────────────────────────────────────
 

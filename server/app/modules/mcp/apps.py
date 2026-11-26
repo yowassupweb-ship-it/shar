@@ -848,7 +848,7 @@ TOOLS: list[dict[str, Any]] = [
      "description": "Поставить задачу. Исполнители получат уведомление. Без assignee_ids — задача самому человеку.",
      "inputSchema": {"type": "object", "properties": _TASK_PROPS, "required": ["title"]}},
     {"name": "task_update", "app": "tasks", "handler": task_update, "level": "edit",
-     "description": "Изменить задачу: статус, срок, исполнителей, текст (text заменяет описание целиком — сначала task_read), закрыть (done: true).",
+     "description": "Изменить задачу: статус, срок, исполнителей, текст (text заменяет описание целиком — сначала task_read), закрыть (done: true). Новый текст открывшие задачу видят по ходу, как печатается.",
      "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, **_TASK_PROPS}, "required": ["id"]}},
     {"name": "task_delete", "app": "tasks", "handler": task_delete, "level": "create",
      "description": "Удалить задачу (может автор или постановщик). Нужен confirm: true. Закрыть выполненную — task_update с done: true, а не удаление.",

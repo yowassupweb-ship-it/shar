@@ -83,6 +83,13 @@ def _clean_anchor(anchor: Any) -> dict[str, Any]:
     return {}
 
 
+def _clean_reply(anchor: Any) -> dict[str, Any]:
+    """У ответа — только пометка «кому» (ответ на конкретное сообщение ветки): id, имя и начало его текста."""
+    if isinstance(anchor, dict) and anchor.get("kind") == "reply" and str(anchor.get("to") or "").isdigit():
+        return {"kind": "reply", "to": str(anchor["to"]), "name": str(anchor.get("name") or "")[:120], "quote": str(anchor.get("quote") or "")[:200]}
+    return {}
+
+
 def _get(task_id: str, comment_id: str) -> dict[str, Any]:
     row = db.conn.fetch_one(f"SELECT {_COLUMNS} FROM task_comments WHERE id = %s AND task_id = %s",
                             (int(comment_id), str(task_id))) if str(comment_id).isdigit() else None
@@ -96,13 +103,40 @@ def _need_table() -> None:
         raise HTTPException(status_code=503, detail="Комментарии к задачам появятся после обновления сервера")
 
 
-def _announce(task: dict, by_id: str, action: str, comment_id: Any) -> None:
-    """Участникам задачи и тем, кому открыта папка, — перечитать комментарии (себе не шлём)."""
-    recipients: set[str] = set()
+def participants(task: dict) -> set[str]:
+    """Участники задачи для комментариев: заказчик, автор, исполнители, ответственный за этап цепочки и все, кто уже
+    писал комментарии. Им комментарий приходит как сообщение — уведомлением и числом на кнопке «Задачи»."""
+    ids: set[str] = set()
     for key in ("author_id", "assigned_to_id", "assigned_by_id"):
         if task.get(key):
-            recipients.add(str(task[key]))
-    recipients |= {str(x) for x in (task.get("assigned_to_ids") or []) if x}
+            ids.add(str(task[key]))
+    ids |= {str(x) for x in (task.get("assigned_to_ids") or []) if x}
+    meta = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    chain = meta.get("chain")
+    if isinstance(chain, dict) and chain.get("owner"):
+        ids.add(str(chain["owner"]))
+    try:
+        rows = db.conn.fetch_all("SELECT DISTINCT author_id FROM task_comments WHERE task_id = %s", (str(task.get("id")),)) or []
+        ids |= {str(r["author_id"]) for r in rows if r.get("author_id")}
+    except Exception:  # noqa: BLE001
+        pass
+    return ids
+
+
+def _notify(task: dict, by_id: str, by_name: str, text: str) -> None:
+    """Комментарий — как сообщение: уведомление (в Шаре, на компьютере и пушем) каждому участнику, кроме автора."""
+    from app.modules.todos.router import _send_task_notice  # router импортирует этот модуль
+
+    title = str(task.get("title") or "Задача").strip() or "Задача"
+    snippet = " ".join(text.split())
+    snippet = snippet if len(snippet) <= 160 else snippet[:159].rstrip() + "…"
+    for uid in participants(task) - {str(by_id), ""}:
+        _send_task_notice(uid, "task_comment", str(task.get("id")), f"💬 {by_name or 'Коллега'} — «{title}»\n{snippet}", by_id)
+
+
+def _announce(task: dict, by_id: str, action: str, comment_id: Any) -> None:
+    """Участникам задачи и тем, кому открыта папка, — перечитать комментарии (себе не шлём)."""
+    recipients = participants(task)
     recipients |= folders.members(task.get("list_id"))
     recipients.discard(str(by_id))
     payload = {"type": "task_comments", "taskId": str(task.get("id")), "action": action, "commentId": comment_id}
@@ -154,10 +188,14 @@ def add_task_comment(task_id: str, body: CommentBody, me: Identity = Depends(cur
         parent = int(body.parentId)
     row = db.conn.fetch_one(
         f"INSERT INTO task_comments (task_id, parent_id, author_id, body, anchor) VALUES (%s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
-        (str(task_id), parent, me.user_id, text, store.as_json({} if parent else _clean_anchor(body.anchor))),
+        (str(task_id), parent, me.user_id, text, store.as_json(_clean_reply(body.anchor) if parent else _clean_anchor(body.anchor))),
     )
     comment = _present(row, _users([row]))
     _announce(task, me.user_id, "added", comment["id"])
+    try:
+        _notify(task, me.user_id, comment["authorName"] or me.display_name, text)
+    except Exception:  # noqa: BLE001 — уведомление не должно ломать сам комментарий
+        pass
     return {"comment": comment}
 
 

@@ -1,4 +1,4 @@
-import type { Comment, CommentAnchor, Folder, FolderRole, Item, Kind, LinkEntry, SharedItem, SharesState, TrashState, VersionRow, VersionsState, Viewer } from './types';
+import type { Comment, CommentAnchor, Folder, ReplyRef, FolderRole, Item, Kind, LinkEntry, SharedItem, SharesState, TrashState, VersionRow, VersionsState, Viewer } from './types';
 
 export class WorkspaceError extends Error {
   constructor(public status: number, message: string) {
@@ -110,7 +110,7 @@ export const workspaceApi = {
 
   /** Комментарии как в Google Docs. ready = false — на сервере ещё нет таблицы (старый сервер). */
   comments: (id: string) => call<{ comments: Comment[]; ready: boolean }>(`/api/workspace/items/${enc(id)}/comments`),
-  addComment: (id: string, body: string, anchor?: CommentAnchor | null, parentId?: string | null) =>
+  addComment: (id: string, body: string, anchor?: CommentAnchor | ReplyRef | null, parentId?: string | null) =>
     call<{ comment: Comment }>(`/api/workspace/items/${enc(id)}/comments`, { method: 'POST', json: { body, anchor: anchor ?? null, parentId: parentId ?? null } }).then((r) => commentsChanged(r.comment)),
   changeComment: (id: string, commentId: string, patch: { body?: string; resolved?: boolean }) =>
     call<{ comment: Comment }>(`/api/workspace/items/${enc(id)}/comments/${enc(commentId)}`, { method: 'PATCH', json: patch }).then((r) => commentsChanged(r.comment)),

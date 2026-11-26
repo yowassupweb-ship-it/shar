@@ -105,13 +105,15 @@ export interface VersionsState {
 
 /** К чему привязан комментарий: документ — выделенный текст, таблица — ячейка листа. */
 export type CommentAnchor = { kind: 'text'; quote: string } | { kind: 'cell'; sheet: string; cell: string };
+/** У ответа в ветке — кому он: человек и начало его сообщения (в обсуждении нескольких людей видно, кто кому отвечает). */
+export type ReplyRef = { kind: 'reply'; to: string; name: string; quote: string };
 
 /** Комментарий верхнего уровня (ветка, parentId = null) или ответ в ветке. */
 export interface Comment {
   id: string;
   parentId: string | null;
   body: string;
-  anchor: CommentAnchor | Record<string, never>;
+  anchor: CommentAnchor | ReplyRef | Record<string, never>;
   authorId: string;
   authorName: string;
   authorAvatar: string;

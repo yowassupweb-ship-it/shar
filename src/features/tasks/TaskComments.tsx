@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState, type RefObject } from 'react';
-import { createPortal } from 'react-dom';
 import { ClipboardPaste, Copy, MessageSquarePlus, Scissors, TextSelect } from 'lucide-react';
 import { Menu, MenuItem } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
@@ -135,33 +134,6 @@ export function useQuoteHighlights(root: RefObject<HTMLElement | null>, quotes: 
     }
     return null;
   }, [ranges]);
-}
-
-/** Кнопка «Комментировать» над выделением в задаче (как в Google Docs). */
-export function SelectionCommentButton({ root, onComment }: { root: RefObject<HTMLElement | null>; onComment: () => void }) {
-  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
-  useEffect(() => {
-    const update = () => {
-      const el = root.current;
-      const sel = window.getSelection();
-      if (!el || !sel || sel.isCollapsed || !sel.rangeCount || !el.contains(sel.getRangeAt(0).commonAncestorContainer) || !squash(sel.toString())) { setAt(null); return; }
-      const rect = sel.getRangeAt(0).getBoundingClientRect();
-      setAt({ x: Math.min(window.innerWidth - 48, rect.right + 8), y: Math.max(8, rect.top - 4) });
-    };
-    let t = 0;
-    const later = () => { window.clearTimeout(t); t = window.setTimeout(update, 120); };
-    document.addEventListener('selectionchange', later);
-    window.addEventListener('scroll', later, true);
-    return () => { document.removeEventListener('selectionchange', later); window.removeEventListener('scroll', later, true); window.clearTimeout(t); };
-  }, [root]);
-  if (!at) return null;
-  return createPortal(
-    <button type="button" className="ntd-sel-comment" style={{ left: at.x, top: at.y }} title="Комментировать выделенное (Ctrl+Alt+M)" aria-label="Комментировать выделенное"
-      onMouseDown={(e) => e.preventDefault()} onClick={onComment}>
-      <MessageSquarePlus size={16} aria-hidden="true" />
-    </button>,
-    document.querySelector('.nx') || document.body,
-  );
 }
 
 const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);

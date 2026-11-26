@@ -24,6 +24,7 @@ import { warmEditorsInBackground } from '@/features/workspace/editorWarmup';
 import { startComputerBridge } from '@/shared/platform/computerBridge';
 import { checkMailAccess, useMail } from '@/features/mail/api';
 import { startMailBadge, useMailBadge } from '@/features/mail/badge';
+import { startTasksBadge, useTasksBadge } from '@/features/tasks/badge';
 import { showToast } from '@/shared/ui/Toast';
 import { SpotlightHost, useVisitTracker } from '@/features/spotlight';
 import { ChatFrame, chatFrameOpen, subscribeChatFrame } from '@/features/chat';
@@ -139,6 +140,9 @@ function Workspace({ me }: { me: User }) {
   // Непрочитанные во «Входящих» — единичка на «Почте» в меню (на значок приложения не идут: там чаты и заявки).
   useEffect(() => startMailBadge(), [me]);
   const unreadMail = useMailBadge((s) => s.unread);
+  // Задачи: новые поручения + непрочитанные комментарии (комментарий — как сообщение).
+  useEffect(() => startTasksBadge(), [me]);
+  const unreadTasks = useTasksBadge((s) => s.count);
 
   // Шар выбило из почтового ящика (пароль сменили или его нечем расшифровать) — сразу видно:
   // красный «!» на «Почте» и предупреждение при входе, а не плашка, которую замечаешь через неделю.
@@ -234,7 +238,7 @@ function Workspace({ me }: { me: User }) {
     <ShellContext.Provider value={setOpts}>
       <AppShell
         section={section.id}
-        badges={{ chats: unreadChats, mail: unreadMail, more: moreCount }}
+        badges={{ chats: unreadChats, tasks: unreadTasks, mail: unreadMail, more: moreCount }}
         alerts={alerts}
         navTools={navTools}
         onNavToolDrop={(id) => void addNavTool(id)}

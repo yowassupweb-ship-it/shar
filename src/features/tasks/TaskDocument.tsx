@@ -9,7 +9,7 @@ import { displayName, useChatStore } from '@/features/chat';
 import { Avatar } from '@/shared/ui/Avatar';
 import { askConfirm, Menu, MenuItem, Sheet, type MenuAnchor } from '@/shared/ui/overlay';
 import {
-  assigneesOf, canAddToFolder, chainOf, chainOwnerOf, customerOf, deleteTask, setChain, shownAssignees, useTaskStream, isDraft, publishDraft, relevantLists, isDone, myId, PRIORITIES, saveText, STATUSES, statusOf, taskMarkdown, updateTask, useTasks,
+  assigneesOf, canAddToFolder, chainOf, chainOwnerOf, customerOf, deleteTask, setChain, setOpenTask, shownAssignees, useTaskStream, isDraft, publishDraft, relevantLists, isDone, myId, PRIORITIES, saveText, STATUSES, statusOf, taskMarkdown, updateTask, useTasks,
   type Priority, type Status, type Task,
 } from './api';
 import { renderMarkdown, toggleTaskLine } from './markdown';
@@ -21,7 +21,9 @@ import { FolderSheet } from './Folders';
 import { CommentsPanel } from '@/features/workspace/CommentsPanel';
 import { useCommentSource } from '@/features/workspace/useComments';
 import type { CommentAnchor } from '@/features/workspace/types';
-import { findQuote, SelectionCommentButton, selectionAnchor, taskCommentSource, TaskTextMenu, useQuoteHighlights } from './TaskComments';
+import { recordVisit } from '@/features/spotlight';
+import { links } from '@/shared/navigation/routes';
+import { findQuote, selectionAnchor, taskCommentSource, TaskTextMenu, useQuoteHighlights } from './TaskComments';
 // Визуальный редактор (TipTap) — отдельным куском: список задач открывается без него.
 const VisualEditor = lazy(() => import('@/shared/markdown/VisualEditor').then((m) => ({ default: m.VisualEditor })));
 import { AgentReports, AgentSheet } from './AgentTask';
@@ -145,6 +147,15 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
   const openAgent = () => { taskAgent(task.id).then(setAgentSheet).catch(() => showToast('Не удалось открыть настройки агента — нет связи с сервером.', 'error')); };
   const users = useChatStore((s) => s.users);
   const allLists = useTasks((s) => s.lists);
+  // Открытая задача: её новые комментарии сразу прочитаны (api.ts, task_comments).
+  useEffect(() => { setOpenTask(task.id); return () => setOpenTask(null); }, [task.id]);
+  // «Где я» для агента «Ядра» (core/whereAmI): открытая задача — с id, чтобы «здесь», «в этой задаче» значило её,
+  // и агент правил её task_update (текст идёт открывшим потоком, на глазах).
+  const visitTitle = task.title || '';
+  useEffect(() => {
+    if (isDraft(task.id) || !visitTitle) return;
+    recordVisit({ id: task.id, kind: 'task', title: visitTitle, subtitle: 'Задача', path: links.task(task.id) });
+  }, [task.id, visitTitle]);
   const tasksById = useTasks((s) => s.tasks);
   // Только «свои» списки: созданные мной, открытые мне, или где есть мои задачи.
   const lists = useMemo(() => relevantLists(allLists, tasksById, task.listId), [allLists, tasksById, task.listId]);
@@ -594,7 +605,6 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
         <CommentsPanel comments={comments} kind="task" canModerate={String(task.authorId || '') === myId()} getAnchor={getCommentAnchor}
           onJump={jumpToQuote} focusTick={cmFocus} focusCell={cmThread} onClose={() => setCmOpen(false)} />
       )}
-      {!draft && <SelectionCommentButton root={pageRef} onComment={startComment} />}
       {textMenu && <TaskTextMenu at={textMenu} editable={editing && !viewOnly} root={pageRef.current} onComment={draft ? undefined : startComment} onClose={() => setTextMenu(null)} />}
     </div>
   );

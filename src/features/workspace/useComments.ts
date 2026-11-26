@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { realtime } from '@/shared/realtime/realtime';
 import { workspaceApi } from './api';
-import type { Comment, CommentAnchor } from './types';
+import type { Comment, CommentAnchor, ReplyRef } from './types';
 
 /** Ветка: комментарий верхнего уровня и ответы на него по порядку. */
 export interface Thread {
@@ -13,7 +13,7 @@ export interface Thread {
 export interface CommentSource {
   key: string | null;
   list: () => Promise<{ comments: Comment[]; ready: boolean }>;
-  add: (body: string, anchor?: CommentAnchor | null, parentId?: string | null) => Promise<Comment>;
+  add: (body: string, anchor?: CommentAnchor | ReplyRef | null, parentId?: string | null) => Promise<Comment>;
   change: (commentId: string, patch: { body?: string; resolved?: boolean }) => Promise<Comment>;
   remove: (commentId: string) => Promise<unknown>;
   /** Живое событие «у этого источника поменялись комментарии». */
@@ -81,7 +81,7 @@ export function useCommentSource(source: CommentSource) {
     return comments.filter((c) => !c.parentId).map((root) => ({ root, replies: replies.get(root.id) || [] }));
   }, [comments]);
 
-  const add = useCallback(async (body: string, anchor?: CommentAnchor | null, parentId?: string | null) => {
+  const add = useCallback(async (body: string, anchor?: CommentAnchor | ReplyRef | null, parentId?: string | null) => {
     if (!itemId) return;
     const comment = await src.current.add(body, anchor, parentId);
     setComments((cur) => (cur.some((c) => c.id === comment.id) ? cur : [...cur, comment]));

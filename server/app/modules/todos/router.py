@@ -142,6 +142,9 @@ def get_todos(userId: Optional[str] = None, taskId: Optional[str] = None, me: Id
     todos = [hydrate_task(todo) for todo in todos]
     # «Новое» — поручили другие, ещё не открывал (как у материалов «Офиса»; todos/seen.py).
     seen.flag_new(todos, uid)
+    unread = seen.unread_comments(uid)
+    for t in todos:
+        t['unreadComments'] = unread.get(str(t.get('id')), 0)
     lists = [snake_to_camel(list_item) for list_item in lists]
     categories = [snake_to_camel(cat) for cat in categories]
     
@@ -299,7 +302,18 @@ def mark_task_seen(task_id: str, me: Identity = Depends(current_identity)):
     """Человек открыл задачу — метка «Новое» снимается."""
     _owned_task_or_403(task_id, me)
     seen.mark(task_id, me.user_id)
+    # Другие устройства этого человека — пересчитать число на кнопке «Задачи».
+    try:
+        sse_manager.push(me.user_id, {"type": "tasks_badge", "taskId": str(task_id)})
+    except Exception:
+        pass
     return {"ok": True}
+
+
+@router.get("/api/todos/badge")
+def tasks_badge(me: Identity = Depends(current_identity)):
+    """Число на кнопке «Задачи»: новые поручения + непрочитанные комментарии (todos/seen.py)."""
+    return seen.badge(me.user_id)
 
 
 @router.post("/api/todos")

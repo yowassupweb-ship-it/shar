@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, MessageSquarePlus, MoreHorizontal, RotateCcw, Table2, TextQuote, X } from 'lucide-react';
+import { Check, CornerDownRight, MessageSquarePlus, MoreHorizontal, RotateCcw, Table2, TextQuote, X } from 'lucide-react';
 import { Avatar } from '@/shared/ui/Avatar';
 import { askConfirm, Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import { showToast } from '@/shared/ui/Toast';
 import { myId } from '@/shared/session/session';
-import type { Comment, CommentAnchor } from './types';
+import type { Comment, CommentAnchor, ReplyRef } from './types';
 import type { Thread, useComments } from './useComments';
 // Стили панели — здесь: панель живёт и вне «Офиса» (комментарии задач).
 import './workspace.css';
@@ -21,7 +21,10 @@ function when(iso: string): string {
   return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
-const isAnchor = (value: Comment['anchor']): value is CommentAnchor => Boolean(value && 'kind' in value);
+const isAnchor = (value: Comment['anchor']): value is CommentAnchor => Boolean(value && 'kind' in value && (value.kind === 'text' || value.kind === 'cell'));
+const replyRef = (value: Comment['anchor']): ReplyRef | null => (value && 'kind' in value && value.kind === 'reply' ? value : null);
+const QUOTE_MAX = 80;
+const short = (text: string) => { const s = text.replace(/\s+/g, ' ').trim(); return s.length > QUOTE_MAX ? `${s.slice(0, QUOTE_MAX - 1)}…` : s; };
 
 /** К чему привязана ветка: цитата из текста или ячейка листа. По нажатию редактор переходит к месту. */
 function AnchorChip({ anchor, onJump }: { anchor: CommentAnchor; onJump?: () => void }) {
@@ -83,11 +86,14 @@ function Composer({ placeholder, submit, onCancel, autoFocus, busyLabel = 'От�
   );
 }
 
-function Message({ comment, canModerate, onEdit, onDelete, editing, onDoneEdit }: {
+function Message({ comment, canModerate, onEdit, onDelete, editing, onDoneEdit, onReply }: {
   comment: Comment; canModerate: boolean; onEdit: () => void; onDelete: () => void; editing: boolean; onDoneEdit: (text: string | null) => Promise<void>;
+  /** Ответить именно на это сообщение (в ветке нескольких людей видно, кто кому отвечает). */
+  onReply?: () => void;
 }) {
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
   const mine = comment.authorId === myId();
+  const to = replyRef(comment.anchor);
   return (
     <div className="nws-cm-msg">
       <Avatar name={comment.authorName} seed={comment.authorId} src={comment.authorAvatar || undefined} person size={28} />
@@ -100,9 +106,15 @@ function Message({ comment, canModerate, onEdit, onDelete, editing, onDoneEdit }
             <button type="button" className="nws-cm-more" aria-label="Действия с комментарием" onClick={(e) => setMenu({ element: e.currentTarget, align: 'end' })}><MoreHorizontal size={15} /></button>
           )}
         </div>
+        {to && (
+          <p className="nws-cm-replyto" title={to.quote}>
+            <CornerDownRight size={12} aria-hidden="true" /><b>{to.name || 'Без имени'}</b>{to.quote && <span>{to.quote}</span>}
+          </p>
+        )}
         {editing
           ? <Composer placeholder="Комментарий" initial={comment.body} autoFocus busyLabel="Сохранить" submit={(text) => onDoneEdit(text)} onCancel={() => void onDoneEdit(null)} />
           : <p className="nws-cm-text">{comment.body}</p>}
+        {onReply && !editing && <button type="button" className="nws-cm-msg-reply" onClick={(e) => { e.stopPropagation(); onReply(); }}>Ответить</button>}
       </div>
       {menu && (
         <Menu anchor={menu} label="Действия с комментарием" onClose={() => setMenu(null)} compact>
@@ -119,6 +131,10 @@ function ThreadCard({ thread, comments, canModerate, active, onJump, onActivate 
 }) {
   const { root, replies } = thread;
   const [replying, setReplying] = useState(false);
+  // Кому именно отвечаем (null — всей ветке). Ответ на ответ хранится в той же ветке, с пометкой «кому» (ReplyRef).
+  const [replyTo, setReplyTo] = useState<Comment | null>(null);
+  const answer = (comment: Comment | null) => { setReplyTo(comment); setReplying(true); };
+  const stopReply = () => { setReplying(false); setReplyTo(null); };
   const [editingId, setEditingId] = useState<string | null>(null);
   const anchor = isAnchor(root.anchor) ? root.anchor : null;
 
@@ -151,11 +167,22 @@ function ThreadCard({ thread, comments, canModerate, active, onJump, onActivate 
       </div>
       {root.resolved && root.resolvedByName && <p className="nws-cm-resolved-note">Решено: {root.resolvedByName}</p>}
       {replies.map((reply) => (
-        <Message key={reply.id} comment={reply} canModerate={canModerate} editing={editingId === reply.id} onEdit={() => setEditingId(reply.id)} onDelete={() => void remove(reply)} onDoneEdit={finishEdit(reply)} />
+        <Message key={reply.id} comment={reply} canModerate={canModerate} editing={editingId === reply.id} onEdit={() => setEditingId(reply.id)} onDelete={() => void remove(reply)} onDoneEdit={finishEdit(reply)}
+          onReply={() => answer(reply)} />
       ))}
+      {replying && replyTo && (
+        <p className="nws-cm-replyto nws-cm-replyto-draft">
+          <CornerDownRight size={12} aria-hidden="true" />Ответ <b>{replyTo.authorName || 'Без имени'}</b><span>{short(replyTo.body)}</span>
+        </p>
+      )}
       {replying
-        ? <Composer placeholder="Ответить" autoFocus busyLabel="Ответить" onCancel={() => setReplying(false)} submit={async (text) => { await comments.add(text, null, root.id); setReplying(false); }} />
-        : <button type="button" className="nws-cm-reply" onClick={(e) => { e.stopPropagation(); setReplying(true); }}>Ответить</button>}
+        ? <Composer key={replyTo?.id || 'thread'} placeholder={replyTo ? `Ответ ${replyTo.authorName || ''}`.trim() : 'Ответить'} autoFocus busyLabel="Ответить" onCancel={stopReply}
+            submit={async (text) => {
+              const ref: ReplyRef | null = replyTo ? { kind: 'reply', to: replyTo.id, name: replyTo.authorName, quote: short(replyTo.body) } : null;
+              await comments.add(text, ref, root.id);
+              stopReply();
+            }} />
+        : <button type="button" className="nws-cm-reply" onClick={(e) => { e.stopPropagation(); answer(null); }}>Ответить</button>}
     </article>
   );
 }
