@@ -37,6 +37,8 @@ const FIT_MARGIN = 0.94;
 const MAX = 16;
 /** Сколько мышь может стоять, прежде чем шапка и стрелки уйдут. */
 const IDLE_MS = 2200;
+/** Сколько ждать оригинал, прежде чем показать превью. */
+const SHOW_WAIT_MS = 300;
 
 export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
   items: ViewerItem[];
@@ -103,7 +105,8 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
     const img = imgRef.current;
     if (!img) return;
     const { scale, x, y } = view.current;
-    img.style.transition = animate ? 'transform .22s cubic-bezier(.22,1,.36,1)' : 'none';
+    // Размер (превью → оригинал) меняется плавно, а не скачком; transform — плавно только по просьбе (жесты — сразу).
+    img.style.transition = `${animate ? 'transform .22s cubic-bezier(.22,1,.36,1), ' : ''}width .2s ease, height .2s ease`;
     img.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${scale}) rotate(${rotationRef.current}deg)`;
     img.style.cursor = scale > 1 ? 'grab' : 'zoom-in';
   }, []);
@@ -121,6 +124,14 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
   }, [items.length]);
 
   useEffect(() => { setFullLoaded(false); setNatural(null); setRotation(0); reset(false); }, [index, reset]);
+  // Фото появляется, когда пришёл оригинал, — но не позже чем через SHOW_WAIT_MS: дальше показываем превью.
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    setShown(false);
+    const t = window.setTimeout(() => setShown(true), SHOW_WAIT_MS);
+    return () => window.clearTimeout(t);
+  }, [index]);
+  useEffect(() => { if (fullLoaded) setShown(true); }, [fullLoaded]);
   useEffect(() => { apply(true); }, [rotation, apply]);
 
   // Фото — на весь экран, по большей стороне, которая упрётся первой (как в
@@ -139,7 +150,11 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
     const fitK = Math.min(stage.clientWidth / (turned ? nh : nw), stage.clientHeight / (turned ? nw : nh)) * FIT_MARGIN;
     // Не растягиваем: маленькое фото — как есть (100%), большое — по экрану. Это и есть масштаб 1 просмотрщика.
     // Пока на экране превью (оно меньше оригинала), вписываем его по экрану — настоящий размер узнаем у оригинала.
-    const k = fullRef.current ? Math.min(1, fitK) : fitK;
+    // Превью уже́ запрошенной ширины — сервер не растягивал: это и есть настоящий размер, вписываем как оригинал
+    // (иначе маленькое фото на долю секунды растягивалось на весь экран, а с оригиналом сжималось обратно).
+    const asked = Number(/\/api\/thumbs\/(\d+)\//.exec(img.currentSrc || img.src)?.[1]) || 0;
+    const whole = fullRef.current || (asked > 0 && nw < asked);
+    const k = whole ? Math.min(1, fitK) : fitK;
     base.current = k;
     img.style.width = `${Math.floor(nw * k)}px`;
     img.style.height = `${Math.floor(nh * k)}px`;
@@ -369,6 +384,7 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
           ref={imgRef}
           key={item.url}
           className="nxv-img"
+          data-shown={shown || fullLoaded || undefined}
           src={fullLoaded || preview === item.url ? item.url : preview}
           alt={item.name || ''}
           draggable={false}

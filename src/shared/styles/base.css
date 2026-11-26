@@ -833,8 +833,10 @@ html.nx-locked body {
   transform-origin: center;
   will-change: transform;
   -webkit-user-drag: none;
-  animation: nx-pop var(--duration-base) var(--ease-spring);
+  opacity: 0;
 }
+/* Появляется, когда пришёл оригинал (или вышло время ожидания) — сразу в нужном размере. */
+.nxv-img[data-shown] { opacity: 1; animation: nx-pop var(--duration-base) var(--ease-spring); }
 .nxv-nav {
   position: absolute;
   top: 50%;
