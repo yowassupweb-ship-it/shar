@@ -9,7 +9,7 @@ import { displayName, useChatStore } from '@/features/chat';
 import { Avatar } from '@/shared/ui/Avatar';
 import { askConfirm, Menu, MenuItem, Sheet, type MenuAnchor } from '@/shared/ui/overlay';
 import {
-  assigneesOf, canAddToFolder, deleteTask, isDraft, publishDraft, relevantLists, isDone, myId, PRIORITIES, saveText, STATUSES, statusOf, taskMarkdown, updateTask, useTasks,
+  assigneesOf, canAddToFolder, deleteTask, shownAssignees, isDraft, publishDraft, relevantLists, isDone, myId, PRIORITIES, saveText, STATUSES, statusOf, taskMarkdown, updateTask, useTasks,
   type Priority, type Status, type Task,
 } from './api';
 import { renderMarkdown, toggleTaskLine } from './markdown';
@@ -332,7 +332,8 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
   const status = statusOf(task);
   const statusInfo = STATUSES.find((s) => s.id === status) || STATUSES[1];
   const done = isDone(task);
-  const assignees = assigneesOf(task);
+  // Задача «себе» — без исполнителя: заказчик и так виден, исполнитель подразумевается тот же (api.shownAssignees).
+  const assignees = shownAssignees(task);
   const due = dueLabel(task.dueDate);
   const list = lists.find((l) => l.id === task.listId);
   const priority = PRIORITIES.find((p) => p.id === (task.priority || 'medium'))!;

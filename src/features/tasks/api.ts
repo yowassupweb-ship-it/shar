@@ -91,6 +91,55 @@ export function assigneesOf(t: Task): string[] {
   return Array.from(new Set(ids));
 }
 
+/** Заказчик задачи — кто поставил (assignedById), иначе автор. */
+export function customerOf(t: Task): string {
+  return String(t.assignedById || t.authorId || '');
+}
+
+/**
+ * Исполнители для показа. Задача «себе» (единственный исполнитель — сам заказчик) показывается без исполнителя:
+ * человек видит себя заказчиком, а исполнитель подразумевается тот же. Раньше создатель выглядел и заказчиком, и
+ * исполнителем, и это путало («кто такой исполнитель?»).
+ */
+export function shownAssignees(t: Task): string[] {
+  const ids = assigneesOf(t);
+  const customer = customerOf(t);
+  return ids.length === 1 && customer && ids[0] === customer ? [] : ids;
+}
+
+/** Кто делает задачу по смыслу: назначенные исполнители, а если их нет — сам заказчик (для группировки «по людям»). */
+export function doersOf(t: Task): string[] {
+  const ids = shownAssignees(t);
+  if (ids.length) return ids;
+  const customer = customerOf(t);
+  return customer ? [customer] : assigneesOf(t);
+}
+
+// ── Цепочка задач ─────────────────────────────────────────────────────────────
+// Несколько задач (в одной папке или в разных), выполняемых по очереди: этап за этапом. Хранится в самих задачах —
+// metadata.chain = {id, order, name}: id общий у этапов цепочки, order — место этапа (шаг 1024, как ручной порядок).
+
+export interface ChainRef { id: string; order: number; name?: string }
+
+export function chainOf(t: Task): ChainRef | null {
+  const c = t.metadata?.chain as ChainRef | null | undefined;
+  return c && typeof c.id === 'string' && c.id ? c : null;
+}
+
+/** Записать задаче место в цепочке (или убрать из цепочки — null). Остальные поля metadata не трогаем. */
+export function setChain(id: string, chain: ChainRef | null): Promise<void> {
+  const t = useTasks.getState().tasks[id];
+  if (!t) return Promise.resolve();
+  return updateTask(id, { metadata: { ...(t.metadata || {}), chain } });
+}
+
+/** Объединить задачи в новую цепочку в данном порядке. Задачи из других цепочек переходят в новую. */
+export async function makeChain(ids: string[], name?: string): Promise<string> {
+  const chainId = `chain-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  await Promise.all(ids.map((id, i) => setChain(id, { id: chainId, order: (i + 1) * 1024, ...(name ? { name } : {}) })));
+  return chainId;
+}
+
 // ── Стор ────────────────────────────────────────────────────────────────────
 
 interface State {

@@ -591,3 +591,54 @@
 .ntl-subgroup > .ntl-group-items { position: relative; margin: 0 0 4px 11px; padding-left: 30px; }
 .ntl-subgroup > .ntl-group-items::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; border-left: 1.5px solid var(--ntl-branch); }
 .ntl-group > .ntl-group-items:has(> .ntl-folder-empty:only-child)::before { display: none; }
+
+/* ── Выделение нескольких задач (для цепочки) ─────────────────────────────────────────────────────── */
+.ntl-select {
+  display: grid; place-items: center; flex: none; width: 20px; height: 20px; border-radius: 6px;
+  border: 1.5px solid var(--border-strong, var(--text-muted)); color: var(--on-accent, #fff); transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
+}
+.ntl-select[data-on] { border-color: var(--accent-fill); background: var(--accent-fill); }
+.ntl-row[data-selected] { background: color-mix(in srgb, var(--accent-fill) 10%, transparent); }
+/* Полоса действий с выбранными — снизу списка, как панель действий в «Фото» и Finder. */
+.ntl-selbar {
+  display: flex; align-items: center; gap: var(--space-2); flex: none; margin: 0 8px 8px; padding: 8px 8px 8px 14px;
+  border-radius: var(--radius-lg); background: var(--glass, var(--surface-panel)); box-shadow: 0 0 0 1px var(--glass-brd, var(--border-color)), var(--glass-shadow, 0 8px 24px rgb(0 0 0 / .14));
+  animation: nx-pop var(--duration-base) var(--ease-spring);
+}
+.ntl-selbar-count { flex: 1; min-width: 0; color: var(--text-2); font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.ntl-selbar-go { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+
+/* ── Цепочка задач: шапка и этапы, нанизанные на линию с узлами ─────────────────────────────────────── */
+.ntl-chain { position: relative; margin: 2px 0 6px; padding: 2px 0 4px; border-radius: var(--radius-md); background: color-mix(in srgb, var(--accent-fill) 4%, transparent); }
+.ntl-group-items > .ntl-chain::before { content: ''; position: absolute; left: -28.5px; top: 18px; width: 22.5px; border-top: 1.5px solid var(--ntl-branch); pointer-events: none; }
+.ntl-group-items > .ntl-chain:last-child::after { content: ''; position: absolute; left: -31px; top: 19px; bottom: -8px; width: 4px; background: var(--surface-panel); pointer-events: none; }
+.ntl-chain-head { display: flex; align-items: center; gap: 6px; min-height: 34px; padding: 4px 6px 2px 10px; }
+.ntl-chain-icon { flex: none; color: var(--accent-color); }
+.ntl-chain-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text-main); }
+.ntl-chain-sum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.ntl-chain[data-complete] .ntl-chain-sum { color: var(--state-ok); }
+.ntl-chain-head .ntl-head-btn { opacity: 0; }
+.ntl-chain:hover .ntl-chain-head .ntl-head-btn, .ntl-chain-head .ntl-head-btn:focus-visible { opacity: 1; }
+/* Линия цепочки — сквозь центры узлов; пройденная часть закрашена (до текущего этапа). */
+.ntl-chain-stages { position: relative; margin: 0; padding: 0 0 0 30px; list-style: none; }
+.ntl-chain-stages::before, .ntl-chain-stages::after {
+  content: ''; position: absolute; left: 19px; top: 22px; bottom: 22px; width: 2px; border-radius: 1px; background: var(--ntl-branch); pointer-events: none;
+}
+.ntl-chain-stages::after { bottom: auto; height: calc((100% - 44px) * var(--chain-progress, 0)); background: var(--state-ok); }
+.ntl-chain-stage { position: relative; }
+.ntl-chain-node:hover:not(:disabled) { border-color: var(--state-ok); }
+.ntl-chain-node:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 2px; }
+/* Этап без своего кружка — текст начинается ближе к узлу. */
+.ntl-chain-stage .ntl-row { padding-left: 10px; }
+.ntl-chain-node {
+  position: absolute; left: -21px; top: 50%; z-index: 1; display: grid; place-items: center; width: 20px; height: 20px; margin-top: -10px;
+  border: 2px solid var(--ntl-branch); border-radius: 50%; background: var(--surface-panel); color: var(--text-muted);
+  padding: 0; font: inherit; font-size: 10px; font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; cursor: pointer;
+  transition: background var(--duration-base) ease, border-color var(--duration-base) ease, transform var(--duration-base) var(--ease-spring);
+}
+.ntl-chain-stage[data-state="done"] .ntl-chain-node { border-color: var(--state-ok); background: var(--state-ok); color: #fff; }
+.ntl-chain-stage[data-state="current"] .ntl-chain-node { border-color: var(--accent-fill); color: var(--accent-color); background: var(--surface-panel); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-fill) 18%, transparent); transform: scale(1.08); }
+.ntl-chain-stage[data-state="next"] .ntl-row { opacity: .72; }
+.ntl-chain-stage[data-state="current"] .ntl-row .ntl-name { font-weight: var(--weight-semibold); }
+/* Закрытый этап остаётся на своём месте в цепочке — просто отмечен. */
+.ntl-chain-stage[data-state="done"] .ntl-row .ntl-name { color: var(--text-muted); text-decoration: line-through; }

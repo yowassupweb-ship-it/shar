@@ -1,8 +1,8 @@
 import { listenIntent } from '@/shared/navigation/quickIntent';
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import {
-  AlertCircle, CalendarDays, CalendarX, Check, ChevronRight, CircleCheck, CircleDot, Copy, ExternalLink, Flag, FolderClosed, FolderPlus, FolderTree, Inbox, ListTree,
-  MoreHorizontal, Plus, RotateCcw, RotateCw, Search, Trash2, Users,
+  AlertCircle, CalendarDays, CalendarX, Check, ChevronRight, CircleCheck, CircleDot, Copy, ExternalLink, Flag, FolderClosed, FolderPlus, FolderTree, Inbox, Link2, ListTree,
+  MoreHorizontal, Pencil, Plus, RotateCcw, RotateCw, Search, SquareCheck, Trash2, Unlink, Users, X,
 } from 'lucide-react';
 import { showToast } from '@/shared/ui/Toast';
 import { displayName, useChatStore } from '@/features/chat';
@@ -12,10 +12,11 @@ import { plural } from '@/shared/ui/format';
 import { SearchField } from '@/shared/ui/SearchField';
 import { SectionIcon } from '@/shared/ui/SectionIcon';
 import { useLongPress } from '@/shared/ui/useLongPress';
-import { askConfirm, Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
+import { askConfirm, Menu, MenuItem, Sheet, type MenuAnchor } from '@/shared/ui/overlay';
 import Splitter from '@/shared/ui/Splitter';
 import {
-  assigneesOf, canAddToFolder, canManageFolder, deleteTask, isDone, isDraft, loadTasks, myId, newDraft, relevantLists, STATUSES, statusOf, type Status, taskMarkdown, updateTask, useTasks, type Task, type TaskList,
+  assigneesOf, canAddToFolder, canManageFolder, chainOf, deleteTask, doersOf, isDone, isDraft, loadTasks, makeChain, myId, newDraft, relevantLists, setChain, shownAssignees, STATUSES, statusOf,
+  type Status, taskMarkdown, updateTask, useTasks, type Task, type TaskList,
 } from './api';
 import { FolderMenu, FolderSheet, FolderShareSheet } from './Folders';
 import { checklistProgress, plainSnippet } from './markdown';
@@ -48,8 +49,12 @@ function writeTaskParam(id: string | null, push: boolean) {
   if (push) window.history.pushState(state, '', url); else window.history.replaceState(state, '', url);
 }
 
-const Row = memo(function Row({ t, active, onOpen, onMenu, depth = 0, showStatus = true, onDropBefore }: {
+const Row = memo(function Row({ t, active, onOpen, onMenu, depth = 0, showStatus = true, onDropBefore, selecting = false, selected = false, onSelect, inChain = false }: {
   t: Task; active: boolean; onOpen: (id: string) => void; onMenu: (t: Task, at: MenuAnchor) => void; depth?: number;
+  /** Режим выделения нескольких задач (для цепочки): щелчок выделяет, а не открывает. */
+  selecting?: boolean; selected?: boolean; onSelect?: (id: string) => void;
+  /** Этап цепочки: отметку «выполнено» несёт узел цепочки слева, свой кружок не рисуем. */
+  inChain?: boolean;
   /** Статус в строке — кроме вида «по статусам», где он уже в заголовке группы. */
   showStatus?: boolean;
   /** Ручной порядок: задачу бросили на эту строку — встать перед ней. */
@@ -65,13 +70,14 @@ const Row = memo(function Row({ t, active, onOpen, onMenu, depth = 0, showStatus
   const progress = checklistProgress(md);
   const snippet = plainSnippet(md);
   const press = useLongPress((x, y) => onMenu(t, { x, y }));
-  const people = assigneesOf(t);
+  // Задача «себе» — без лица исполнителя (заказчик и так понятен).
+  const people = shownAssignees(t);
   const toggle = (e: React.MouseEvent) => {
     e.stopPropagation();
     void updateTask(t.id, { isCompleted: !done, completed: !done }).catch(() => showToast('Не сохранилось — нет связи с сервером.', 'error'));
   };
   return (
-    <div role="button" tabIndex={0} className="ntl-row" data-task-id={t.id} aria-current={active ? 'true' : undefined} data-done={done ? 'true' : undefined}
+    <div role="button" tabIndex={0} className="ntl-row" data-task-id={t.id} aria-current={active ? 'true' : undefined} data-done={done ? 'true' : undefined} data-selected={selected || undefined}
       data-draft={draft || undefined} data-drop-before={over || undefined} style={depth ? ({ '--depth': depth } as CSSProperties) : undefined}
       draggable={!draft}
       onDragStart={(e) => { e.dataTransfer.setData(DRAG_TYPE, t.id); e.dataTransfer.effectAllowed = 'move'; }}
@@ -84,16 +90,25 @@ const Row = memo(function Row({ t, active, onOpen, onMenu, depth = 0, showStatus
         e.preventDefault(); e.stopPropagation();
         onDropBefore(id, t.id);
       } : undefined}
-      onClick={() => onOpen(t.id)} onKeyDown={(e) => {
+      onClick={(e) => {
+        // Ctrl/⌘+щелчок — выделить (как в Finder); в режиме выделения обычный щелчок тоже выделяет.
+        if (onSelect && !draft && (selecting || e.ctrlKey || e.metaKey)) { onSelect(t.id); return; }
+        onOpen(t.id);
+      }} onKeyDown={(e) => {
         if (e.key === 'Enter') onOpen(t.id);
+        if (e.key === ' ' && selecting && onSelect) { e.preventDefault(); onSelect(t.id); }
         if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) { e.preventDefault(); onMenu(t, { element: e.currentTarget, align: 'start' }); }
       }}
       onContextMenu={(e) => { e.preventDefault(); onMenu(t, { x: e.clientX, y: e.clientY }); }}
       {...press}
     >
-      <button type="button" className="ntl-check" onClick={toggle} aria-label={done ? 'Вернуть в работу' : 'Отметить выполненной'} aria-pressed={done} disabled={draft}>
-        {done && <Check size={12} strokeWidth={3} aria-hidden="true" />}
-      </button>
+      {selecting ? (
+        <span className="ntl-select" aria-hidden="true" data-on={selected || undefined}>{selected && <Check size={12} strokeWidth={3} />}</span>
+      ) : inChain ? null : (
+        <button type="button" className="ntl-check" onClick={toggle} aria-label={done ? 'Вернуть в работу' : 'Отметить выполненной'} aria-pressed={done} disabled={draft}>
+          {done && <Check size={12} strokeWidth={3} aria-hidden="true" />}
+        </button>
+      )}
       <span className="ntl-text">
         <span className="ntl-name">{t.title || (draft ? 'Новая задача' : 'Без названия')}</span>
         {snippet && <span className="ntl-snippet">{snippet}</span>}
@@ -134,7 +149,12 @@ interface Group {
   done?: Task[];
   folder?: TaskList; person?: string; status?: Status;
   icon?: ReactNode;
+  /** Цепочки задач этой группы: этапы вместе, по порядку, закрытые остаются на своих местах. */
+  chains?: Chain[];
 }
+
+/** Цепочка задач: этапы по порядку; текущий — первый незакрытый (нет — цепочка завершена). */
+interface Chain { id: string; name: string; stages: Task[]; current: Task | null; done: number }
 
 export default function TasksScreen() {
   const mounted = useSyncExternalStore(subscribeNoop, () => true, () => false);
@@ -172,6 +192,16 @@ export default function TasksScreen() {
   const [shareList, setShareList] = useState<TaskList | null>(null);
   const [folderMenu, setFolderMenu] = useState<{ list: TaskList; anchor: MenuAnchor } | null>(null);
   const [dropKey, setDropKey] = useState<string | null>(null);
+  // Выделение нескольких задач — чтобы объединить их в цепочку (порядок этапов — порядок выделения).
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const selectTask = useCallback((id: string) => {
+    setSelecting(true);
+    setSelected((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+  }, []);
+  const stopSelecting = () => { setSelecting(false); setSelected([]); };
+  const [chainMenu, setChainMenu] = useState<{ chain: Chain; anchor: MenuAnchor } | null>(null);
+  const [chainRename, setChainRename] = useState<Chain | null>(null);
 
   useEffect(() => { void loadTasks(); }, []);
   useEffect(() => {
@@ -239,23 +269,41 @@ export default function TasksScreen() {
         || String(b.createdAt).localeCompare(String(a.createdAt));
     };
     const drafts = base.filter((t) => isDraft(t.id)).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-    const open = base.filter((t) => !isDone(t) && !isDraft(t.id));
-    const done = base.filter((t) => isDone(t) && !isDraft(t.id)).sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)));
+    // Цепочки — отдельно: их этапы (и закрытые тоже) показываются вместе, а не разбегаются по группам и «Выполненным».
+    const byChain = new Map<string, Task[]>();
+    for (const t of base) { const c = chainOf(t); if (c && !isDraft(t.id)) byChain.set(c.id, [...(byChain.get(c.id) || []), t]); }
+    const chains: Chain[] = [...byChain.entries()].map(([id, stages]) => {
+      stages.sort((a, b) => (chainOf(a)!.order - chainOf(b)!.order) || String(a.createdAt).localeCompare(String(b.createdAt)));
+      const name = stages.map((t) => chainOf(t)!.name).find(Boolean) || `Цепочка из ${stages.length} ${plural(stages.length, ['задачи', 'задач', 'задач'])}`;
+      return { id, name, stages, current: stages.find((t) => !isDone(t)) || null, done: stages.filter(isDone).length };
+    });
+    const chained = new Set(chains.flatMap((c) => c.stages.map((t) => t.id)));
+    const open = base.filter((t) => !isDone(t) && !isDraft(t.id) && !chained.has(t.id));
+    const done = base.filter((t) => isDone(t) && !isDraft(t.id) && !chained.has(t.id)).sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)));
+    // Где стоит цепочка: по папкам — в папке первого этапа; по статусам — по статусу текущего этапа; по людям — у
+    // того, у кого сейчас этап. Завершённая — по последнему этапу.
+    const lead = (c: Chain) => c.current || c.stages[c.stages.length - 1];
     let out: Group[] = [];
     if (grouping === 'status') {
-      out = STATUSES.map((s) => ({ key: `status:${s.id}`, label: s.label, tone: s.tone, status: s.id, items: open.filter((t) => statusOf(t) === s.id).sort(byDue) })).filter((g) => g.items.length);
+      out = STATUSES.map((s) => ({
+        key: `status:${s.id}`, label: s.label, tone: s.tone, status: s.id, items: open.filter((t) => statusOf(t) === s.id).sort(byDue),
+        chains: chains.filter((c) => c.current && statusOf(c.current) === s.id),
+      })).filter((g) => g.items.length || g.chains.length);
     } else if (grouping === 'people') {
       const ids = new Set<string>();
-      for (const t of [...open, ...done]) for (const id of assigneesOf(t)) ids.add(id);
+      // Задача «себе» (без исполнителя) — у самого заказчика: исполнитель по смыслу он.
+      for (const t of [...open, ...done]) for (const id of doersOf(t)) ids.add(id);
+      for (const c of chains) for (const id of doersOf(lead(c))) ids.add(id);
       const name = (id: string) => (id === me ? 'Я' : displayName(users[id]) || 'Сотрудник');
       out = [...ids].sort((a, b) => Number(b === me) - Number(a === me) || name(a).localeCompare(name(b), 'ru')).map((id) => ({
         key: `person:${id}`, label: name(id), person: id,
         icon: <Avatar name={displayName(users[id]) || "?"} seed={id} src={users[id]?.avatar} person size={22} />,
-        items: open.filter((t) => assigneesOf(t).includes(id)).sort(byDue),
-        done: done.filter((t) => assigneesOf(t).includes(id)),
+        items: open.filter((t) => doersOf(t).includes(id)).sort(byDue),
+        done: done.filter((t) => doersOf(t).includes(id)),
+        chains: chains.filter((c) => doersOf(lead(c))[0] === id),
       }));
-      const nobody = open.filter((t) => !assigneesOf(t).length);
-      const nobodyDone = done.filter((t) => !assigneesOf(t).length);
+      const nobody = open.filter((t) => !doersOf(t).length);
+      const nobodyDone = done.filter((t) => !doersOf(t).length);
       if (nobody.length || nobodyDone.length) out.push({ key: 'person:', label: 'Без исполнителя', person: '', items: nobody.sort(byDue), done: nobodyDone });
     } else {
       // Папки деревом: каждая папка — ветка (даже пустая — в неё можно бросить задачу), внутри — этапы по статусам и срокам.
@@ -263,12 +311,14 @@ export default function TasksScreen() {
         key: `folder:${l.id}`, label: l.name, tone: l.color || 'var(--note-gray)', folder: l,
         items: open.filter((t) => String(t.listId) === l.id).sort(byDue),
         done: done.filter((t) => String(t.listId) === l.id),
-      })).filter((g) => !deferred || g.items.length || g.done.length);
+        chains: chains.filter((c) => String(c.stages[0].listId) === l.id),
+      })).filter((g) => !deferred || g.items.length || g.done.length || g.chains.length);
       const outside = (t: Task) => !t.listId || !folderIds.has(String(t.listId));
-      out.push({ key: 'folder:', label: 'Без папки', items: open.filter(outside).sort(byDue), done: done.filter(outside) });
+      out.push({ key: 'folder:', label: 'Без папки', items: open.filter(outside).sort(byDue), done: done.filter(outside), chains: chains.filter((c) => outside(c.stages[0])) });
     }
     // Общий список выполненных — только по статусам; по папкам и людям они у каждой группы свои.
-    return { drafts, open: out, done: grouping === 'status' ? done : [], openCount: open.length };
+    const openStages = chains.reduce((n, c) => n + c.stages.length - c.done, 0);
+    return { drafts, open: out, done: grouping === 'status' ? done : [], doneChains: grouping === 'status' ? chains.filter((c) => !c.current) : [], openCount: open.length + openStages };
   }, [base, grouping, folders, folderIds, users, me, deferred]);
 
   // Брошенная на группу задача: в папку, в статус или к человеку (снимаем с того, у кого была в этой группировке).
@@ -307,6 +357,33 @@ export default function TasksScreen() {
       }
     });
   };
+  // Цепочка: этап перетащили на другой этап — встаёт перед ним; задачу извне бросили на этап — она становится
+  // этапом цепочки. Порядок раздаём заново (шаг 1024), пишем только изменившимся.
+  const reorderChain = (c: Chain, dragId: string, beforeId: string) => {
+    const dragged = useTasks.getState().tasks[dragId];
+    if (!dragged) return;
+    const list = c.stages.filter((t) => t.id !== dragId);
+    const at = list.findIndex((t) => t.id === beforeId);
+    list.splice(at < 0 ? list.length : at, 0, dragged);
+    const name = c.stages.map((t) => chainOf(t)?.name).find(Boolean);
+    list.forEach((t, i) => {
+      const cur = chainOf(t);
+      const order = (i + 1) * 1024;
+      if (cur?.id !== c.id || cur.order !== order) void setChain(t.id, { id: c.id, order, ...(name ? { name } : {}) }).catch(() => showToast('Порядок этапов не сохранился — нет связи с сервером.', 'error'));
+    });
+  };
+  const joinSelected = async () => {
+    const ids = selected.filter((id) => useTasks.getState().tasks[id] && !isDraft(id));
+    if (ids.length < 2) { showToast('Выберите хотя бы две задачи — этапы цепочки.', 'info'); return; }
+    try { await makeChain(ids); stopSelecting(); showToast(`Цепочка из ${ids.length} ${plural(ids.length, ['этапа', 'этапов', 'этапов'])}`, 'success'); } catch { showToast('Цепочка не сохранилась — нет связи с сервером.', 'error'); }
+  };
+  const unchain = async (c: Chain) => {
+    if (!(await askConfirm({ title: `Разъединить «${c.name}»?`, text: 'Задачи останутся на своих местах — просто перестанут быть этапами одной цепочки.', confirm: 'Разъединить' }))) return;
+    await Promise.all(c.stages.map((t) => setChain(t.id, null))).catch(() => showToast('Не сохранилось — нет связи с сервером.', 'error'));
+  };
+  const renameChain = (c: Chain, name: string) => {
+    for (const t of c.stages) { const cur = chainOf(t); if (cur) void setChain(t.id, { ...cur, name: name.trim() || undefined }); }
+  };
   const dragFrom = useRef<string | undefined>(undefined);
   const dropProps = (g: Group) => ({
     onDragOver: (e: React.DragEvent) => { if (!e.dataTransfer.types.includes(DRAG_TYPE)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (dropKey !== g.key) setDropKey(g.key); },
@@ -318,6 +395,42 @@ export default function TasksScreen() {
 
   if (!mounted) return null;
   const active = activeId ? tasks[activeId] : undefined;
+
+  /** Цепочка: шапка (название, «этап N из M · кто сейчас») и этапы, нанизанные на линию с узлами. */
+  const chainBlock = (c: Chain) => {
+    const total = c.stages.length;
+    const step = c.current ? c.stages.indexOf(c.current) + 1 : total;
+    const who = c.current ? doersOf(c.current)[0] : '';
+    const whoName = who ? (who === me ? 'вы' : displayName(users[who]) || 'сотрудник') : '';
+    return (
+      <div key={c.id} className="ntl-chain" data-complete={!c.current || undefined}>
+        <div className="ntl-chain-head" onContextMenu={(e) => { e.preventDefault(); setChainMenu({ chain: c, anchor: { x: e.clientX, y: e.clientY } }); }}>
+          <Link2 size={14} className="ntl-chain-icon" aria-hidden="true" />
+          <span className="ntl-chain-name">{c.name}</span>
+          <span className="ntl-chain-sum">{c.current ? `Этап ${step} из ${total}${whoName ? ` · ${whoName}` : ''}` : `Завершена · ${total} ${plural(total, ['этап', 'этапа', 'этапов'])}`}</span>
+          <button type="button" className="ntl-head-btn" aria-label={`Действия с цепочкой «${c.name}»`}
+            onClick={(e) => { e.stopPropagation(); setChainMenu({ chain: c, anchor: { element: e.currentTarget, align: 'end' } }); }}><MoreHorizontal size={14} aria-hidden="true" /></button>
+        </div>
+        <ol className="ntl-chain-stages" style={{ '--chain-progress': String(total > 1 ? Math.min(1, Math.max(0, (step - (c.current ? 1 : 0)) / (total - 1))) : 1) } as CSSProperties}>
+          {c.stages.map((t, i) => {
+            const state = isDone(t) ? 'done' : t === c.current ? 'current' : 'next';
+            return (
+              <li key={t.id} className="ntl-chain-stage" data-state={state}>
+                {/* Узел цепочки — он же отметка «выполнено» этапа (номер этапа, пройденный — с галочкой). */}
+                <button type="button" className="ntl-chain-node" aria-pressed={state === 'done'} disabled={selecting}
+                  aria-label={state === 'done' ? `Этап ${i + 1} пройден — вернуть в работу` : `Этап ${i + 1}${state === 'current' ? ' — сейчас' : ''}: отметить выполненным`}
+                  onClick={() => void updateTask(t.id, { isCompleted: state !== 'done', completed: state !== 'done' }).catch(() => showToast('Не сохранилось — нет связи с сервером.', 'error'))}>
+                  {state === 'done' ? <Check size={11} strokeWidth={3} aria-hidden="true" /> : i + 1}
+                </button>
+                <Row t={t} active={t.id === activeId} onOpen={open} onMenu={onMenu} showStatus={state !== 'done'} onDropBefore={(d, b) => reorderChain(c, d, b)}
+                  selecting={selecting} selected={selected.includes(t.id)} onSelect={selectTask} inChain />
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+    );
+  };
 
   const groupBlock = (g: Group) => {
     const key = `${grouping}:${g.key}`;
@@ -333,7 +446,7 @@ export default function TasksScreen() {
           {g.icon ?? (grouping === 'folder' ? (isFolder ? <FolderClosed size={15} className="ntl-folder-icon" aria-hidden="true" /> : <Inbox size={15} className="ntl-folder-icon" aria-hidden="true" />) : <i aria-hidden="true" />)}
           <span className="ntl-group-name">{g.label}</span>
           {g.folder?.sharedLevel && <Users size={12} className="ntl-shared" aria-label="Общая папка" />}
-          <span className="ntl-count">{g.items.length}</span>
+          <span className="ntl-count">{g.items.length + (g.chains || []).reduce((n, c) => n + c.stages.length - c.done, 0)}</span>
           {(isFolder || g.key === 'folder:') && (!g.folder || canAddToFolder(g.folder)) && (
             <button type="button" className="ntl-head-btn" title="Новая задача здесь" aria-label={`Новая задача в «${g.label}»`}
               onClick={(e) => { e.stopPropagation(); create({ listId: g.folder?.id ?? null }); }}><Plus size={14} aria-hidden="true" /></button>
@@ -345,7 +458,9 @@ export default function TasksScreen() {
         </div>
         {!shut && (
           <div className="ntl-group-items">
-            {g.items.map((t) => <Row key={t.id} t={t} active={t.id === activeId} onOpen={open} onMenu={onMenu} showStatus={grouping !== 'status'} onDropBefore={(d, b) => reorder(g, d, b)} />)}
+            {(g.chains || []).map(chainBlock)}
+            {g.items.map((t) => <Row key={t.id} t={t} active={t.id === activeId} onOpen={open} onMenu={onMenu} showStatus={grouping !== 'status'} onDropBefore={(d, b) => reorder(g, d, b)}
+              selecting={selecting} selected={selected.includes(t.id)} onSelect={selectTask} />)}
             {Boolean(g.done?.length) && (() => {
               const doneKey = `${key}:done`;
               const shown = openDone.has(doneKey);
@@ -354,11 +469,12 @@ export default function TasksScreen() {
                   <button type="button" className="ntl-done-toggle ntl-sub-head" aria-expanded={shown} onClick={() => toggleDone(doneKey)}>
                     <ChevronRight size={13} className="ntl-caret" aria-hidden="true" /><span className="ntl-group-name">Выполненные</span><span className="ntl-count">{g.done!.length}</span>
                   </button>
-                  {shown && <div className="ntl-group-items">{g.done!.slice(0, 200).map((t) => <Row key={t.id} t={t} active={t.id === activeId} onOpen={open} onMenu={onMenu} showStatus={false} />)}</div>}
+                  {shown && <div className="ntl-group-items">{g.done!.slice(0, 200).map((t) => <Row key={t.id} t={t} active={t.id === activeId} onOpen={open} onMenu={onMenu} showStatus={false}
+                    selecting={selecting} selected={selected.includes(t.id)} onSelect={selectTask} />)}</div>}
                 </div>
               );
             })()}
-            {!g.items.length && !g.done?.length && grouping === 'folder' && <p className="ntl-folder-empty">{isFolder ? 'Пусто — перетащите сюда задачу или нажмите +' : 'Все задачи разложены по папкам'}</p>}
+            {!g.items.length && !g.done?.length && !g.chains?.length && grouping === 'folder' && <p className="ntl-folder-empty">{isFolder ? 'Пусто — перетащите сюда задачу или нажмите +' : 'Все задачи разложены по папкам'}</p>}
           </div>
         )}
       </section>
@@ -401,12 +517,13 @@ export default function TasksScreen() {
           </section>
         )}
         {groups.open.map(groupBlock)}
-        {groups.done.length > 0 && (
+        {(groups.done.length > 0 || groups.doneChains.length > 0) && (
           <section className="ntl-group" aria-label="Выполненные">
             <button type="button" className="ntl-group-head ntl-done-toggle" aria-expanded={showDone} onClick={() => setShowDone(!showDone)}>
-              <ChevronRight size={14} className="ntl-caret" aria-hidden="true" /><span className="ntl-group-name">Выполненные</span><span className="ntl-count">{groups.done.length}</span>
+              <ChevronRight size={14} className="ntl-caret" aria-hidden="true" /><span className="ntl-group-name">Выполненные</span><span className="ntl-count">{groups.done.length + groups.doneChains.length}</span>
             </button>
-            {showDone && <div className="ntl-group-items">{groups.done.slice(0, 200).map((t) => <Row key={t.id} t={t} active={t.id === activeId} onOpen={open} onMenu={onMenu} />)}</div>}
+            {showDone && <div className="ntl-group-items">{groups.doneChains.map(chainBlock)}{groups.done.slice(0, 200).map((t) => <Row key={t.id} t={t} active={t.id === activeId} onOpen={open} onMenu={onMenu}
+              selecting={selecting} selected={selected.includes(t.id)} onSelect={selectTask} />)}</div>}
           </section>
         )}
       </>
@@ -435,12 +552,26 @@ export default function TasksScreen() {
               onClick={(e) => setViewMenu({ element: e.currentTarget, align: 'end' })}>
               <GroupIcon size={16} aria-hidden="true" />
             </button>
+            <button type="button" className="nx-ghost ntl-tool" aria-pressed={selecting} title={selecting ? 'Закончить выделение' : 'Выбрать задачи — объединить в цепочку (или Ctrl+щелчок)'}
+              aria-label="Выбрать задачи" onClick={() => (selecting ? stopSelecting() : setSelecting(true))}>
+              <SquareCheck size={16} aria-hidden="true" />
+            </button>
             <button type="button" className="nx-ghost ntl-tool" aria-pressed={compact} title={compact ? 'Обычный список' : 'Компактный список деревом'} aria-label={compact ? 'Обычный список' : 'Компактный список деревом'} onClick={toggleCompact}>
               <ListTree size={16} aria-hidden="true" />
             </button>
           </div>
         </header>
         <div className="ntl-list nx-scroll-y">{body}</div>
+        {selecting && (
+          // Полоса выделения: сколько выбрано и что с ними сделать (как панель действий в «Фото» и Finder).
+          <div className="ntl-selbar" role="toolbar" aria-label="Выбранные задачи">
+            <span className="ntl-selbar-count">{selected.length ? `Выбрано: ${selected.length}` : 'Выберите задачи по порядку этапов'}</span>
+            <button type="button" className="nx-primary ntl-selbar-go" disabled={selected.length < 2} onClick={() => void joinSelected()}>
+              <Link2 size={15} aria-hidden="true" /> Объединить в цепочку
+            </button>
+            <button type="button" className="nx-icon-btn" aria-label="Отменить выделение" onClick={stopSelecting}><X size={16} aria-hidden="true" /></button>
+          </div>
+        )}
       </aside>
 
       {!narrow && (
@@ -461,7 +592,15 @@ export default function TasksScreen() {
       {folderSheet && <FolderSheet list={folderSheet.list} onClose={() => setFolderSheet(null)} onSaved={() => { if (grouping !== 'folder') setGrouping('folder'); }} />}
       {shareList && <FolderShareSheet list={shareList} onClose={() => setShareList(null)} />}
 
-      {menu && <TaskMenu task={menu.task} anchor={menu.anchor} onClose={() => setMenu(null)} onOpen={open} onDeleted={(id) => { if (readTaskParam() === id) back(); }} />}
+      {menu && <TaskMenu task={menu.task} anchor={menu.anchor} onClose={() => setMenu(null)} onOpen={open} onDeleted={(id) => { if (readTaskParam() === id) back(); }}
+        onSelect={(id) => selectTask(id)} />}
+      {chainMenu && (
+        <Menu anchor={chainMenu.anchor} label={chainMenu.chain.name} onClose={() => setChainMenu(null)}>
+          <MenuItem icon={<Pencil size={16} />} onSelect={() => { setChainRename(chainMenu.chain); setChainMenu(null); }}>Переименовать</MenuItem>
+          <MenuItem icon={<Unlink size={16} />} onSelect={() => { const c = chainMenu.chain; setChainMenu(null); void unchain(c); }}>Разъединить цепочку</MenuItem>
+        </Menu>
+      )}
+      {chainRename && <ChainNameSheet chain={chainRename} onClose={() => setChainRename(null)} onSave={(name) => { renameChain(chainRename, name); setChainRename(null); }} />}
 
       {active ? (
         <TaskDocument key={active.id} task={active} onBack={back} onGone={back} onCreated={(id) => { writeTaskParam(id, false); setActiveId(id); }} />
@@ -484,9 +623,10 @@ const withDueTime = (t: Task, day: string) => { const time = parseDue(t.dueDate)
 const isoDay = (plusDays: number) => { const d = new Date(); d.setDate(d.getDate() + plusDays); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
 /** Контекстное меню задачи — как в macOS: действие, статусы, сроки, удаление в самом низу. */
-function TaskMenu({ task, anchor, onClose, onOpen, onDeleted }: {
-  task: Task; anchor: MenuAnchor; onClose: () => void; onOpen: (id: string) => void; onDeleted: (id: string) => void;
+function TaskMenu({ task, anchor, onClose, onOpen, onDeleted, onSelect }: {
+  task: Task; anchor: MenuAnchor; onClose: () => void; onOpen: (id: string) => void; onDeleted: (id: string) => void; onSelect: (id: string) => void;
 }) {
+  const chain = chainOf(task);
   const done = isDone(task);
   const status = statusOf(task);
   const apply = (patch: Partial<Task>) => {
@@ -530,8 +670,25 @@ function TaskMenu({ task, anchor, onClose, onOpen, onDeleted }: {
         {task.priority === 'high' ? 'Снять «Важно»' : 'Пометить важной'}
       </MenuItem>
       <MenuItem icon={<Copy size={16} />} onSelect={() => void copyLink()}>Скопировать ссылку</MenuItem>
+      <MenuItem icon={<SquareCheck size={16} />} onSelect={() => { onClose(); onSelect(task.id); }}>Выбрать — для цепочки</MenuItem>
+      {chain && <MenuItem icon={<Unlink size={16} />} onSelect={() => { onClose(); void setChain(task.id, null).catch(() => showToast('Не сохранилось — нет связи с сервером.', 'error')); }}>Убрать из цепочки</MenuItem>}
       <div className="nx-menu-sep" />
       <MenuItem icon={<Trash2 size={16} />} tone="danger" onSelect={() => void remove()}>Удалить</MenuItem>
     </Menu>
+  );
+}
+
+/** Название цепочки (видно в её шапке у всех участников). */
+function ChainNameSheet({ chain, onClose, onSave }: { chain: Chain; onClose: () => void; onSave: (name: string) => void }) {
+  const [name, setName] = useState(chain.stages.map((t) => chainOf(t)?.name).find(Boolean) || '');
+  return (
+    <Sheet title="Название цепочки" onClose={onClose}
+      footer={<><button type="button" className="nx-ghost" onClick={onClose}>Отмена</button><button type="button" className="nx-primary" onClick={() => onSave(name)}>Сохранить</button></>}>
+      <label className="nx-label">
+        <span>Например: «Корп сайт — публикация» или «Тур: от черновика до продажи»</span>
+        <input autoFocus value={name} maxLength={80} placeholder={chain.name} onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') onSave(name); }} />
+      </label>
+    </Sheet>
   );
 }
