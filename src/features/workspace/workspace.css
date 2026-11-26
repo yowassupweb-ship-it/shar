@@ -1180,7 +1180,7 @@ html:is([data-theme="graphite"], [data-theme="black"]) .nws-text-marks > span { 
 .nws-list[data-density="compact"] .nws-rows { gap: 0; }
 .nws-list[data-density="compact"] .nws-group { margin: var(--space-2) var(--space-2) 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
 .nws-list[data-density="compact"] .nws-row { gap: 6px; min-height: 26px; padding: 2px 8px; border-radius: 6px; }
-.nws-list[data-density="compact"] .nws-kind-icon { width: 22px; height: 22px; border-radius: 6px; }
+.nws-list[data-density="compact"] .nws-kind-icon { width: 20px; height: 20px; border-radius: 5.5px; }
 .nws-list[data-density="compact"] .nws-kind-icon svg { width: 16px; height: 16px; }
 .nws-list[data-density="compact"] .nws-row-title { font-size: var(--text-sm); font-weight: var(--weight-regular, 400); }
 .nws-list[data-density="compact"] .nws-row-snippet:not([data-hit]) { display: none; }
