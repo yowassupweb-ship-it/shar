@@ -19,8 +19,9 @@ export function mountDoc(content: string): string {
   host = document.createElement('div');
   host.id = 'fdoc-preview';
   host.className = 'nx';
-  host.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;background:var(--bg-color,#fff)';
-  document.body.appendChild(host);
+  host.style.cssText = 'position:fixed;inset:0;z-index:900;display:flex;flex-direction:column;background:var(--bg-color,#fff)';
+  // Первым в body: меню и всплывающие окна встают в первый .nx на странице (overlay.tsx) — пусть это будет превью.
+  document.body.prepend(host);
   root = createRoot(host);
   root.render(<FastDocEditor content={content} onContent={(next) => { (window as unknown as { __fdocSaved?: string }).__fdocSaved = next; }} readOnly={false} loadKey={0} />);
   return 'ok';

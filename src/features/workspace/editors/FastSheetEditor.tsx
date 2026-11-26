@@ -3,7 +3,7 @@ import {
   ArrowDownAZ, ArrowUpZA, CopyPlus, Eye, EyeOff, Filter, Link2, ListChecks, Lock, NotebookPen, 
   Ungroup, Group as GroupIcon, Palette as PaletteIcon, ChevronsDownUp, Rows3, Columns3, PanelTop, PanelBottom, PanelLeft, PanelRight, Plus as PlusIcon,
   Shuffle, Scissors as SplitIcon, Space, CopyMinus, Tag, ArrowLeft, ArrowRight, List as ListIcon, Brackets, ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine, ArrowUpToLine,
-  ClipboardPaste, Columns2, Copy, Eraser, Grid2x2, MessageSquarePlus, Plus, Scissors, Square, TableCellsMerge,
+  ChevronLeft, ChevronRight, ClipboardPaste, Columns2, Copy, Eraser, Grid2x2, MoreHorizontal, MessageSquarePlus, Plus, Scissors, Square, TableCellsMerge,
   TableCellsSplit, Trash2, 
 } from 'lucide-react';
 import type { Workbook as ExcelWorkbook } from 'exceljs';
@@ -195,6 +195,9 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
   const [, setScroll] = useState({ x: 0, y: 0 });
   const [view, setView] = useState({ w: 800, h: 600 });
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // Страница контекстного меню (вложенные — как в iOS/macOS); при каждом открытии — первая.
+  const [menuPage, setMenuPage] = useState<'main' | 'paste' | 'insert' | 'delete' | 'more'>('main');
+  useEffect(() => { if (menu) setMenuPage('main'); }, [menu]);
   const [pop, setPop] = useState<{ kind: string; at: DOMRect; trigger: HTMLElement } | null>(null);
   const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -2319,27 +2322,64 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
       </div>
 
       {menu && (
+        // Как контекстные меню iOS/macOS: на первой странице — частое (как у Google), редкое — на вложенных страницах.
         <Menu anchor={menu} label="Действия с ячейками" onClose={() => setMenu(null)}>
-          {!readOnly && <MenuItem icon={<Scissors size={16} />} onSelect={() => { setMenu(null); copy(true, null); }}>Вырезать <kbd className="nx-menu-kbd">Ctrl+X</kbd></MenuItem>}
-          <MenuItem icon={<Copy size={16} />} onSelect={() => { setMenu(null); copy(false, null); }}>Копировать <kbd className="nx-menu-kbd">Ctrl+C</kbd></MenuItem>
-          {!readOnly && <MenuItem icon={<ClipboardPaste size={16} />} onSelect={() => { setMenu(null); commands['univer.command.paste'](); }}>Вставить <kbd className="nx-menu-kbd">Ctrl+V</kbd></MenuItem>}
-          {!readOnly && <MenuItem icon={<ClipboardPaste size={16} />} onSelect={() => { setMenu(null); commands['sheet.command.paste-value'](); }}>Вставить только значения <kbd className="nx-menu-kbd">Ctrl+Shift+V</kbd></MenuItem>}
-          {!readOnly && clip.current && <MenuItem icon={<ClipboardPaste size={16} />} onSelect={() => { setMenu(null); commands['sheet.command.paste-format'](); }}>Вставить только формат</MenuItem>}
-          {!readOnly && clip.current && <MenuItem icon={<ClipboardPaste size={16} />} onSelect={() => { setMenu(null); paste(clip.current!.tsv, 'transpose'); }}>Вставить транспонированно</MenuItem>}
-          {!readOnly && (
+          {menuPage !== 'main' && <MenuItem icon={<ChevronLeft size={16} />} onSelect={() => setMenuPage('main')}><b>{({ paste: 'Специальная вставка', insert: 'Вставить ячейки', delete: 'Удалить ячейки', more: 'Ещё действия' } as Record<string, string>)[menuPage]}</b></MenuItem>}
+          {menuPage !== 'main' && <div className="nx-menu-sep" />}
+          {menuPage === 'main' && (
             <>
-              <div className="nx-menu-sep" />
-              <MenuItem icon={<ArrowUpToLine size={16} />} onSelect={() => { setMenu(null); insertRows(true); }}>Вставить строку выше</MenuItem>
+              {!readOnly && <MenuItem icon={<Scissors size={16} />} onSelect={() => { setMenu(null); copy(true, null); }}>Вырезать <kbd className="nx-menu-kbd">Ctrl+X</kbd></MenuItem>}
+              <MenuItem icon={<Copy size={16} />} onSelect={() => { setMenu(null); copy(false, null); }}>Копировать <kbd className="nx-menu-kbd">Ctrl+C</kbd></MenuItem>
+              {!readOnly && <MenuItem icon={<ClipboardPaste size={16} />} onSelect={() => { setMenu(null); commands['univer.command.paste'](); }}>Вставить <kbd className="nx-menu-kbd">Ctrl+V</kbd></MenuItem>}
+              {!readOnly && <MenuItem icon={<ClipboardPaste size={16} />} onSelect={() => setMenuPage('paste')}>Специальная вставка<ChevronRight size={14} className="nx-menu-more" /></MenuItem>}
+              {!readOnly && (
+                <>
+                  <div className="nx-menu-sep" />
+                  <MenuItem icon={<ArrowUpToLine size={16} />} onSelect={() => { setMenu(null); insertRows(true); }}>Вставить строку выше</MenuItem>
+                  <MenuItem icon={<ArrowLeftToLine size={16} />} onSelect={() => { setMenu(null); insertCols(true); }}>Вставить столбец слева</MenuItem>
+                  <MenuItem icon={<PlusIcon size={16} />} onSelect={() => setMenuPage('insert')}>Вставить ячейки<ChevronRight size={14} className="nx-menu-more" /></MenuItem>
+                  <div className="nx-menu-sep" />
+                  <MenuItem icon={<Trash2 size={16} />} onSelect={() => { setMenu(null); removeRows(); }}>Удалить {selRange.endRow > selRange.startRow ? 'строки' : 'строку'}</MenuItem>
+                  <MenuItem icon={<Columns2 size={16} />} onSelect={() => { setMenu(null); removeCols(); }}>Удалить {selRange.endColumn > selRange.startColumn ? 'столбцы' : 'столбец'}</MenuItem>
+                  <MenuItem icon={<Trash2 size={16} />} onSelect={() => setMenuPage('delete')}>Удалить ячейки<ChevronRight size={14} className="nx-menu-more" /></MenuItem>
+                  <div className="nx-menu-sep" />
+                  <MenuItem icon={<Link2 size={16} />} onSelect={() => { setMenu(null); commands['sheet.operation.insert-hyper-link-toolbar'](); }}>Вставить ссылку <kbd className="nx-menu-kbd">Ctrl+K</kbd></MenuItem>
+                  <MenuItem icon={<NotebookPen size={16} />} onSelect={() => { setMenu(null); setNoteEdit({ r: sel.anchor.row, c: sel.anchor.col, text: xs.notes?.[`${sel.anchor.row}:${sel.anchor.col}`] || '' }); }}>{xs.notes?.[`${sel.anchor.row}:${sel.anchor.col}`] ? 'Изменить заметку' : 'Вставить заметку'} <kbd className="nx-menu-kbd">Shift+F2</kbd></MenuItem>
+                </>
+              )}
+              {onAddComment && <MenuItem icon={<MessageSquarePlus size={16} />} onSelect={() => { setMenu(null); onAddComment(); }}>Комментарий <kbd className="nx-menu-kbd">Ctrl+Alt+M</kbd></MenuItem>}
+              {!readOnly && (
+                <>
+                  <div className="nx-menu-sep" />
+                  <MenuItem icon={<MoreHorizontal size={16} />} onSelect={() => setMenuPage('more')}>Ещё действия<ChevronRight size={14} className="nx-menu-more" /></MenuItem>
+                </>
+              )}
+            </>
+          )}
+          {menuPage === 'paste' && (
+            <>
+              <MenuItem icon={<ClipboardPaste size={16} />} onSelect={() => { setMenu(null); commands['sheet.command.paste-value'](); }}>Вставить только значения <kbd className="nx-menu-kbd">Ctrl+Shift+V</kbd></MenuItem>
+              {clip.current && <MenuItem icon={<ClipboardPaste size={16} />} onSelect={() => { setMenu(null); commands['sheet.command.paste-format'](); }}>Вставить только формат</MenuItem>}
+              {clip.current && <MenuItem icon={<ClipboardPaste size={16} />} onSelect={() => { setMenu(null); paste(clip.current!.tsv, 'transpose'); }}>Вставить транспонированно</MenuItem>}
+            </>
+          )}
+          {menuPage === 'insert' && (
+            <>
               <MenuItem icon={<ArrowDownToLine size={16} />} onSelect={() => { setMenu(null); insertRows(false); }}>Вставить строку ниже</MenuItem>
-              <MenuItem icon={<ArrowLeftToLine size={16} />} onSelect={() => { setMenu(null); insertCols(true); }}>Вставить столбец слева</MenuItem>
               <MenuItem icon={<ArrowRightToLine size={16} />} onSelect={() => { setMenu(null); insertCols(false); }}>Вставить столбец справа</MenuItem>
-              <MenuItem icon={<Trash2 size={16} />} onSelect={() => { setMenu(null); removeRows(); }}>Удалить {selRange.endRow > selRange.startRow ? 'строки' : 'строку'}</MenuItem>
-              <MenuItem icon={<Columns2 size={16} />} onSelect={() => { setMenu(null); removeCols(); }}>Удалить {selRange.endColumn > selRange.startColumn ? 'столбцы' : 'столбец'}</MenuItem>
               <MenuItem icon={<ArrowRightToLine size={16} />} onSelect={() => { setMenu(null); shiftCells('right'); }}>Вставить ячейки со сдвигом вправо</MenuItem>
               <MenuItem icon={<ArrowDownToLine size={16} />} onSelect={() => { setMenu(null); shiftCells('down'); }}>Вставить ячейки со сдвигом вниз</MenuItem>
+            </>
+          )}
+          {menuPage === 'delete' && (
+            <>
               <MenuItem icon={<Trash2 size={16} />} onSelect={() => { setMenu(null); shiftCells('left'); }}>Удалить ячейки со сдвигом влево</MenuItem>
               <MenuItem icon={<Trash2 size={16} />} onSelect={() => { setMenu(null); shiftCells('up'); }}>Удалить ячейки со сдвигом вверх</MenuItem>
-              <div className="nx-menu-sep" />
+              <MenuItem icon={<Eraser size={16} />} onSelect={() => { setMenu(null); clearValues(); }}>Очистить содержимое <kbd className="nx-menu-kbd">Del</kbd></MenuItem>
+            </>
+          )}
+          {menuPage === 'more' && (
+            <>
               <MenuItem icon={<EyeOff size={16} />} onSelect={() => { setMenu(null); setHidden(false, true); }}>Скрыть {selRange.endRow > selRange.startRow ? `строки ${selRange.startRow + 1}–${selRange.endRow + 1}` : `строку ${selRange.startRow + 1}`}</MenuItem>
               <MenuItem icon={<EyeOff size={16} />} onSelect={() => { setMenu(null); setHidden(true, true); }}>Скрыть {selRange.endColumn > selRange.startColumn ? `столбцы ${colName(selRange.startColumn)}–${colName(selRange.endColumn)}` : `столбец ${colName(selRange.startColumn)}`}</MenuItem>
               {hasHidden(false) && <MenuItem icon={<Eye size={16} />} onSelect={() => { setMenu(null); setHidden(false, false); }}>Показать скрытые строки</MenuItem>}
@@ -2349,29 +2389,21 @@ export default function FastSheetEditor({ content, onContent, readOnly, loadKey,
               <MenuItem icon={<ArrowUpZA size={16} />} onSelect={() => { setMenu(null); sortBy(true); }}>Сортировать Я → А</MenuItem>
               <MenuItem icon={<Filter size={16} />} onSelect={() => { setMenu(null); toggleFilter(); }}>{b && readFilters(b)[sheetId] ? 'Убрать фильтр' : 'Создать фильтр'}</MenuItem>
               <div className="nx-menu-sep" />
-              <MenuItem icon={<Eraser size={16} />} onSelect={() => { setMenu(null); clearValues(); }}>Очистить содержимое <kbd className="nx-menu-kbd">Del</kbd></MenuItem>
-              <MenuItem icon={<Link2 size={16} />} onSelect={() => { setMenu(null); commands['sheet.operation.insert-hyper-link-toolbar'](); }}>Вставить ссылку <kbd className="nx-menu-kbd">Ctrl+K</kbd></MenuItem>
-              <MenuItem icon={<NotebookPen size={16} />} onSelect={() => { setMenu(null); setNoteEdit({ r: sel.anchor.row, c: sel.anchor.col, text: xs.notes?.[`${sel.anchor.row}:${sel.anchor.col}`] || '' }); }}>{xs.notes?.[`${sel.anchor.row}:${sel.anchor.col}`] ? 'Изменить заметку' : 'Вставить заметку'} <kbd className="nx-menu-kbd">Shift+F2</kbd></MenuItem>
               <MenuItem icon={<ListChecks size={16} />} onSelect={() => { setMenu(null); setPanel('dv'); }}>Проверка данных…</MenuItem>
               <MenuItem icon={<PaletteIcon size={16} />} onSelect={() => { setMenu(null); setPanel('cf'); }}>Условное форматирование…</MenuItem>
+              <MenuItem icon={<Lock size={16} />} onSelect={() => { setMenu(null); setPanel('protect'); }}>Защитить диапазон…</MenuItem>
+              <MenuItem icon={<Brackets size={16} />} onSelect={() => { setMenu(null); setPanel('names'); }}>Именованные диапазоны…</MenuItem>
+              <div className="nx-menu-sep" />
               <MenuItem icon={<GroupIcon size={16} />} onSelect={() => { setMenu(null); groupSel(true, true); }}>Сгруппировать строки {selRange.startRow + 1}–{selRange.endRow + 1}</MenuItem>
               {(xs.groups?.rows || []).some((g0) => g0.start <= selRange.endRow && selRange.startRow <= g0.end) && <MenuItem icon={<Ungroup size={16} />} onSelect={() => { setMenu(null); groupSel(true, false); }}>Разгруппировать строки</MenuItem>}
               <MenuItem icon={<ChevronsDownUp size={16} />} onSelect={() => { setMenu(null); groupSel(false, true); }}>Сгруппировать столбцы {colName(selRange.startColumn)}–{colName(selRange.endColumn)}</MenuItem>
               {(xs.groups?.cols || []).some((g0) => g0.start <= selRange.endColumn && selRange.startColumn <= g0.end) && <MenuItem icon={<Ungroup size={16} />} onSelect={() => { setMenu(null); groupSel(false, false); }}>Разгруппировать столбцы</MenuItem>}
-              <MenuItem icon={<Lock size={16} />} onSelect={() => { setMenu(null); setPanel('protect'); }}>Защитить диапазон…</MenuItem>
-              <MenuItem icon={<Brackets size={16} />} onSelect={() => { setMenu(null); setPanel('names'); }}>Именованные диапазоны…</MenuItem>
               <div className="nx-menu-sep" />
               <MenuItem icon={<SplitIcon size={16} />} onSelect={() => { setMenu(null); splitText(); }}>Разделить текст на столбцы</MenuItem>
               <MenuItem icon={<CopyMinus size={16} />} onSelect={() => { setMenu(null); removeDuplicates(); }}>Удалить повторы</MenuItem>
               <MenuItem icon={<Space size={16} />} onSelect={() => { setMenu(null); trimSpaces(); }}>Удалить лишние пробелы</MenuItem>
               <MenuItem icon={<Shuffle size={16} />} onSelect={() => { setMenu(null); shuffleRows(); }}>Перемешать строки</MenuItem>
               <MenuItem icon={merged ? <TableCellsSplit size={16} /> : <TableCellsMerge size={16} />} onSelect={() => { setMenu(null); toggleMerge(); }}>{merged ? 'Отменить объединение' : 'Объединить ячейки'}</MenuItem>
-            </>
-          )}
-          {onAddComment && (
-            <>
-              <div className="nx-menu-sep" />
-              <MenuItem icon={<MessageSquarePlus size={16} />} onSelect={() => { setMenu(null); onAddComment(); }}>Комментарий <kbd className="nx-menu-kbd">Ctrl+Alt+M</kbd></MenuItem>
             </>
           )}
         </Menu>

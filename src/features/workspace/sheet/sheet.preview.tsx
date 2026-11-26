@@ -32,9 +32,11 @@ export async function mount(): Promise<string> {
   document.querySelectorAll('#fsh-preview').forEach((el) => el.remove());
   host = document.createElement('div');
   host.id = 'fsh-preview';
-  host.style.cssText = 'position:fixed;inset:40px 40px 40px 40px;z-index:99999;display:flex;flex-direction:column;border:1px solid #888;';
   host.className = 'nx';
-  document.body.appendChild(host);
+  host.style.cssText = 'position:fixed;inset:40px 40px 40px 40px;z-index:900;display:flex;flex-direction:column;border:1px solid #888;';
+  host.className = 'nx';
+  // Первым в body: меню и всплывающие окна встают в первый .nx на странице (overlay.tsx) — пусть это будет превью.
+  document.body.prepend(host);
   root = createRoot(host);
   // Время рендера (React Profiler) — для замеров: window.__fshRenders.
   const w = window as unknown as { __fshRenders?: number[] };
@@ -63,9 +65,11 @@ export async function mountPair(): Promise<string> {
   document.querySelectorAll('#fsh-preview').forEach((el) => el.remove());
   host = document.createElement('div');
   host.id = 'fsh-preview';
-  host.style.cssText = 'position:fixed;inset:40px;z-index:99999;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;';
   host.className = 'nx';
-  document.body.appendChild(host);
+  host.style.cssText = 'position:fixed;inset:40px;z-index:900;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;';
+  host.className = 'nx';
+  // Первым в body: меню и всплывающие окна встают в первый .nx на странице (overlay.tsx) — пусть это будет превью.
+  document.body.prepend(host);
   type Ed = { apply: (ops: unknown[]) => void };
   const editors: Ed[] = [];
   const channel = (me: number) => ({
@@ -97,9 +101,11 @@ export async function mountBig(rows = 3000, cols = 12): Promise<string> {
   document.querySelectorAll('#fsh-preview').forEach((el) => el.remove());
   host = document.createElement('div');
   host.id = 'fsh-preview';
-  host.style.cssText = 'position:fixed;inset:40px;z-index:99999;display:flex;flex-direction:column;border:1px solid #888;';
   host.className = 'nx';
-  document.body.appendChild(host);
+  host.style.cssText = 'position:fixed;inset:40px;z-index:900;display:flex;flex-direction:column;border:1px solid #888;';
+  host.className = 'nx';
+  // Первым в body: меню и всплывающие окна встают в первый .nx на странице (overlay.tsx) — пусть это будет превью.
+  document.body.prepend(host);
   root = createRoot(host);
   root.render(<FastSheetEditor content={content} onContent={() => undefined} readOnly={false} loadKey={0} />);
   return 'ok';
@@ -128,9 +134,11 @@ export async function mountDemo(): Promise<string> {
   document.querySelectorAll('#fsh-preview').forEach((el) => el.remove());
   host = document.createElement('div');
   host.id = 'fsh-preview';
-  host.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;';
   host.className = 'nx';
-  document.body.appendChild(host);
+  host.style.cssText = 'position:fixed;inset:0;z-index:900;display:flex;flex-direction:column;';
+  host.className = 'nx';
+  // Первым в body: меню и всплывающие окна встают в первый .nx на странице (overlay.tsx) — пусть это будет превью.
+  document.body.prepend(host);
   root = createRoot(host);
   // Время рендера (React Profiler) — для замеров: window.__fshRenders.
   const w = window as unknown as { __fshRenders?: number[] };
@@ -148,8 +156,10 @@ export async function mountContent(content: string): Promise<string> {
   unmount();
   host = document.createElement('div');
   host.id = 'fsh-preview';
-  host.style.cssText = 'position:fixed;inset:0;z-index:99999;background:var(--sh-bg,#fff);display:flex;flex-direction:column';
-  document.body.appendChild(host);
+  host.className = 'nx';
+  host.style.cssText = 'position:fixed;inset:0;z-index:900;background:var(--sh-bg,#fff);display:flex;flex-direction:column';
+  // Первым в body: меню и всплывающие окна встают в первый .nx на странице (overlay.tsx) — пусть это будет превью.
+  document.body.prepend(host);
   root = createRoot(host);
   // Время рендера (React Profiler) — для замеров: window.__fshRenders.
   const w = window as unknown as { __fshRenders?: number[] };

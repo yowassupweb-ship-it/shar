@@ -207,6 +207,8 @@ function drawRegion(ctx: CanvasRenderingContext2D, s: DrawState, r0: number, r1:
       if (st0.st) add.st = { s: 1 };
       style = { ...(style || {}), ...add } as Style;
     }
+    // Тёмная тема: явная белая заливка (так красят «без заливки» в Excel) — как фон листа, а не белое пятно.
+    if (theme.dark) { const rgb = (style?.bg as { rgb?: string } | undefined)?.rgb; if (rgb && (lightness(rgb) ?? 0) >= 0.97) style = { ...style, bg: undefined } as Style; }
     drawn.push({ r: rr, c: cc, x, y, w, h, cell, style });
   };
   for (let r = r0; r <= r1; r += 1) {

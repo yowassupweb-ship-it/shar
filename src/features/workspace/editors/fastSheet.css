@@ -22,11 +22,13 @@ html[data-theme="black"] .fsh {
 .fdoc-pop-row { display: flex; gap: 2px; padding: 4px; }
 
 /* Строка формул: адрес · fx · содержимое. */
-.fsh-formula { display: flex; align-items: center; gap: 0; flex: none; height: 30px; border-top: 1px solid var(--sh-grid); border-bottom: 1px solid var(--sh-grid); background: var(--sh-bg); }
-.fsh-name { width: 96px; height: 100%; padding: 0 8px; border: 0; border-right: 1px solid var(--sh-grid); background: transparent; color: var(--sh-text); font: inherit; font-size: 13px; outline: none; }
-.fsh-fx { padding: 0 10px; color: var(--sh-head-text); font-style: italic; font-size: 13px; border-right: 1px solid var(--sh-grid); }
-.fsh-bar-input { flex: 1; min-width: 0; height: 100%; padding: 0 10px; border: 0; background: transparent; color: var(--sh-text); font: inherit; font-size: 13px; outline: none; }
-.fsh-name:focus-visible, .fsh-bar-input:focus-visible { box-shadow: inset 0 0 0 2px var(--sh-sel); }
+.fsh-formula { display: flex; align-items: center; gap: 0; flex: none; height: 34px; padding: 0 6px; border-top: 1px solid var(--sh-grid); border-bottom: 1px solid var(--sh-grid); background: var(--sh-bg); }
+/* Поле адреса — как поле поиска в macOS: скругление, подсветка при наведении, своё кольцо фокуса. */
+.fsh-name { width: 92px; height: 26px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--sh-text); font: inherit; font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; outline: none; transition: background var(--duration-fast, 120ms) ease; }
+.fsh-name:hover { background: var(--surface-hover); }
+.fsh-fx { display: grid; place-items: center; width: 34px; height: 20px; margin: 0 4px; border-left: 1px solid var(--sh-grid); border-right: 1px solid var(--sh-grid); color: var(--sh-head-text); font: italic 500 13px/1 Georgia, 'Times New Roman', serif; }
+.fsh-bar-input { flex: 1; min-width: 0; height: 26px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--sh-text); font: inherit; font-size: 13px; outline: none; }
+.nx .fsh .fsh-name:focus-visible, .nx .fsh .fsh-bar-input:focus-visible { background: var(--sh-card, var(--sh-bg)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--sh-sel) 55%, transparent); }
 
 /* Сетка: окно прокрутки, «распорка» на весь лист; видимые ячейки — абсолютно. */
 .fsh-grid { position: relative; flex: 1; min-height: 0; overflow: auto; outline: none; user-select: none; -webkit-user-select: none; font-family: Arial, Inter, sans-serif; font-size: 10pt; }
@@ -130,15 +132,17 @@ html[data-theme="graphite"] .fsh, html[data-theme="black"] .fsh { --sh-border-au
 .fsh-font span { display: inline-block; max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Листы и сводка выделения. */
-.fsh-tabs { display: flex; align-items: center; gap: 2px; flex: none; height: 36px; padding: 0 8px; overflow-x: auto; border-top: 1px solid var(--sh-grid); background: var(--sh-head); scrollbar-width: none; }
+.fsh-tabs { display: flex; align-items: center; gap: 4px; flex: none; height: 40px; padding: 0 8px; overflow-x: auto; border-top: 1px solid var(--sh-grid); background: var(--sh-head); scrollbar-width: none; }
 .fsh-tab-add { display: grid; place-items: center; flex: none; width: 28px; height: 28px; margin-right: 6px; border: 0; border-radius: 50%; background: transparent; color: var(--sh-head-text); cursor: pointer; }
 .fsh-tab-add:hover { background: var(--surface-hover); color: var(--sh-text); }
 .fsh-tab {
-  position: relative; flex: none; height: 28px; padding: 0 14px; border: 0; border-radius: 6px; background: transparent; color: var(--sh-head-text);
-  font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap;
+  position: relative; flex: none; height: 28px; padding: 0 14px; border: 0; border-radius: 8px; background: transparent; color: var(--sh-head-text);
+  font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;
+  transition: background var(--duration-fast, 120ms) ease, color var(--duration-fast, 120ms) ease, box-shadow var(--duration-fast, 120ms) ease;
 }
-.fsh-tab:hover { background: var(--surface-hover); }
-.fsh-tab[aria-selected="true"] { background: var(--sh-head-on); color: var(--sh-text); font-weight: 600; }
+.fsh-tab:hover { background: var(--surface-hover); color: var(--sh-text); }
+/* Выбранный лист — светлая «карточка» на сером, как сегмент в macOS, а не синяя заливка. */
+.fsh-tab[aria-selected="true"] { background: var(--sh-card, var(--sh-bg)); color: var(--sh-text); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, .14), 0 0 0 .5px rgba(0, 0, 0, .08); }
 .fsh-tab[style*="--tab"]::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: 2px; height: 3px; border-radius: 2px; background: var(--tab); }
 .fsh-tab-input { flex: none; width: 120px; height: 26px; padding: 0 8px; border: 2px solid var(--sh-sel); border-radius: 6px; background: var(--sh-bg); color: var(--sh-text); font: inherit; font-size: 13px; outline: none; }
 .fsh-summary {
@@ -266,3 +270,7 @@ html[data-theme="graphite"] .fsh, html[data-theme="black"] .fsh { --sh-border-au
 .nx .fsh .fsh-grid::-webkit-scrollbar { width: 12px; height: 12px; }
 .nx .fsh .fsh-grid::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--sh-text) 22%, transparent); border-width: 3px; }
 .nx .fsh .fsh-grid::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--sh-text) 40%, transparent); }
+
+/* Пункт-переход на вложенную страницу контекстного меню — стрелка справа. */
+.nx-menu-item > span:has(> .nx-menu-more) { display: flex; flex: 1; align-items: center; min-width: 0; }
+.nx-menu-more { margin-left: auto; padding-left: 12px; box-sizing: content-box; flex: none; color: var(--text-muted); }
