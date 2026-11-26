@@ -68,6 +68,8 @@ export default function ImageViewer({ items, start, onClose, onJump, onCopy }: {
   const wake = useCallback(() => {
     setIdle(false);
     window.clearTimeout(idleTimer.current);
+    // На телефоне мыши нет — шапку (и крестик) не прячем: иначе выйти из просмотра было бы нечем.
+    if (window.matchMedia('(pointer: coarse)').matches) return;
     idleTimer.current = window.setTimeout(() => setIdle(true), IDLE_MS);
   }, []);
   useEffect(() => { wake(); return () => window.clearTimeout(idleTimer.current); }, [wake]);

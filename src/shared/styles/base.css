@@ -921,6 +921,10 @@ html.nx-locked body {
 
 /* Просмотр фото: сцена на весь экран, полоса сверху и лента снизу — поверх
    фото (как в «Фото» iOS), а не в своих рядах сетки, отнимающих высоту. */
+/* Колонка — не шире экрана: без этого длинное имя файла в шапке (в одну строку) растягивало сетку, и крестик
+   уезжал за край телефона — из просмотра было не выйти. */
+.nxv { grid-template-columns: minmax(0, 1fr); }
+.nxv-actions { flex: none; }
 .nxv > .nxv-stage { grid-row: 1 / -1; grid-column: 1; }
 .nxv > .nxv-bar { grid-row: 1; grid-column: 1; align-self: start; }
 .nxv > .nxv-strip { grid-row: 3; grid-column: 1; align-self: end; z-index: 2; }
