@@ -1026,3 +1026,30 @@ def push_to_viewers(item_id: str, payload: dict[str, Any], *, exclude: str = "")
                 sse_manager.push(uid, payload)
     except Exception as exc:
         log.warning("workspace: could not push live event: %s", exc)
+
+
+# Имена по умолчанию: раньше новый материал создавался без названия, и в списке стояло пять одинаковых «Новая
+# таблица». Теперь имя настоящее и не повторяется: «Новая таблица», «Новая таблица (1)», «(2)»… (заметки — без имени).
+DEFAULT_TITLES = {"document": "Новый документ", "table": "Новая таблица", "presentation": "Новая презентация"}
+
+
+def unique_title(kind: str, title: str, owner_id: str) -> str:
+    """Имя без повтора среди своих материалов того же вида (корзина не в счёт): занято — добавляем (1), (2)…"""
+    default = DEFAULT_TITLES.get(kind, "")
+    base = (title or "").strip() or default
+    if not base:
+        return title
+    alive = "deleted_at IS NULL AND " if trash_ready() else ""
+    rows = db.conn.fetch_all(
+        f"SELECT title FROM workspace_items WHERE {alive}owner_id = %s AND kind = %s AND (title = %s OR starts_with(title, %s) OR title = '')",
+        (owner_id, kind, base, base + " (")) or []
+    taken = {str(r["title"] or "") for r in rows}
+    # Старые материалы без названия в списке выглядят как имя по умолчанию — значит, оно уже занято.
+    if base == default and "" in taken:
+        taken.add(base)
+    if base not in taken:
+        return base
+    n = 1
+    while f"{base} ({n})" in taken:
+        n += 1
+    return f"{base} ({n})"[:200]

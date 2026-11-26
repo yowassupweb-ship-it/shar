@@ -180,6 +180,7 @@ def create_item(body: ItemCreate, me: Identity = Depends(current_identity)):
         store.validate_content(body.kind, content)
     except WorkspaceError as exc:
         raise _raise(exc) from exc
+    title = store.unique_title(body.kind, title, me.user_id)  # «Новая таблица (1)» вместо второй «Новой таблицы»
     row = db.conn.fetch_one(
         """INSERT INTO workspace_items (kind, title, text_content, meta, owner_id)
            VALUES (%s, %s, %s, %s, %s) RETURNING id""",

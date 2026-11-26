@@ -675,3 +675,21 @@ def test_trash_keeps_deleted_for_30_days_and_lets_folder_members_delete(anna, bo
     assert anna.delete(f"/api/workspace/items/{note['id']}").status_code == 200
     assert anna.delete(f"/api/workspace/trash/{note['id']}").status_code == 200
     assert anna.post(f"/api/workspace/trash/{note['id']}/restore").status_code == 404
+
+
+def test_new_items_get_numbered_names(anna):
+    """Новые материалы без названия — «Новая таблица», «Новая таблица (1)», «(2)»; копия с занятым именем — тоже с номером."""
+    import uuid
+
+    names = []
+    for _ in range(3):
+        r = anna.post("/api/workspace/items", json={"kind": "presentation", "title": "", "content": DECK})
+        assert r.status_code == 201, r.text
+        names.append(r.json()["item"]["title"])
+    base = names[0].split(" (")[0]
+    assert base == "Новая презентация"
+    assert len(set(names)) == 3 and all(n == base or n.startswith(base + " (") for n in names)
+    own = f"Отчёт {uuid.uuid4().hex[:6]}"
+    first = anna.post("/api/workspace/items", json={"kind": "presentation", "title": own, "content": DECK}).json()["item"]["title"]
+    second = anna.post("/api/workspace/items", json={"kind": "presentation", "title": own, "content": DECK}).json()["item"]["title"]
+    assert first == own and second == f"{own} (1)"
