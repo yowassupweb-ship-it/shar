@@ -5,7 +5,7 @@ import { lazyComponent } from '@/shared/ui/lazy';
 import {
   AlertCircle, Check, Archive, ChevronDown, ChevronRight, ClipboardPaste, Copy, Download, Files, ExternalLink, Folder, FolderInput, FolderPlus, Link2,
   FileUp, Filter, FolderTree, History, Info, Mail, MoreHorizontal, Pencil, Pin, PinOff, RotateCw, Send, Trash2, Upload, Users, PenLine, X } from 'lucide-react';
-import { CChevronDown, CFilter, CFolderPlus, CGrid, CList, CSort, CUpload } from '@/shared/ui/ContourIcons';
+import { CChevronDown, CFilter, CFolderPlus, CSort, CUpload } from '@/shared/ui/ContourIcons';
 import { showToast } from '@/shared/ui/Toast';
 import { AgentMenuItems } from '@/shared/core/AgentMenuItems';
 import { SearchField } from '@/shared/ui/SearchField';
@@ -17,7 +17,7 @@ import { Avatar } from '@/shared/ui/Avatar';
 import { askConfirm, Menu, MenuItem, type MenuAnchor } from '@/shared/ui/overlay';
 import {
   cachedFolder, createFolder, deleteItem, fetchImageDims, fileUrl, fmtBytes, fmtDate, fmtDateShort, kindOf, loadFolder, myId, patchFolderCache,
-  moveFile, moveFolder, pinFolder, prefetchFolder, sharedPeople, registerUpload, renameItem, replaceFileContent, setFolderColor, type CloudFile, type CloudFolder,
+  moveFile, moveFolder, pinFolder, prefetchFolder, registerUpload, renameItem, replaceFileContent, setFolderColor, type CloudFile, type CloudFolder,
 } from './api';
 import { FileGlyph } from './FileGlyph';
 import { FolderTile } from './FolderTile';
@@ -41,7 +41,6 @@ const ImageViewer = lazyComponent(() => import('@/shared/ui/ImageViewer'));
  * редактирование; остальным — открыть, скачать, отправить.
  */
 
-type Mode = 'grid' | 'list';
 type Filter = 'all' | 'image' | 'video' | 'doc';
 const FILTERS: Record<Filter, string> = { all: 'Все файлы', image: 'Фото', video: 'Видео', doc: 'Документы' };
 type Target = { kind: 'file'; item: CloudFile } | { kind: 'folder'; item: CloudFolder };
@@ -49,13 +48,8 @@ interface Uploading { id: string; name: string; pct: number }
 
 /** Тип перетаскивания «свой файл или папка внутри раздела»; чужие файлы с рабочего стола приходят как «Files». */
 const DRAG_TYPE = 'application/x-shar-cloud-item';
-const MODE_KEY = 'nx:files-mode';
 const LONG_PRESS = 450;
 const FOLDER_COLORS = ['#ff6b6b', '#ff9f43', '#f6c945', '#52c878', '#45c6c8', '#5a9cff', '#a783ff', '#9298a3'];
-
-function readMode(): Mode {
-  try { return localStorage.getItem(MODE_KEY) === 'list' ? 'list' : 'grid'; } catch { return 'grid'; }
-}
 
 const canEdit = (it: { ownerId: string; editAccess?: string[] }) =>
   String(it.ownerId) === myId() || (it.editAccess || []).map(String).includes(myId());
@@ -96,7 +90,6 @@ export default function CloudView({ lead, tools, trail, onOpenFolder, onCrumb, h
   const here = trail[trail.length - 1];
   const [data, setData] = useState(() => cachedFolder(folderId));
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>(() => (cachedFolder(folderId) ? 'ready' : 'loading'));
-  const [mode, setMode] = useState<Mode>(readMode);
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
   const [menu, setMenu] = useState<{ target: Target; anchor: MenuAnchor; path?: CloudFolder[] } | null>(null);
@@ -153,7 +146,6 @@ export default function CloudView({ lead, tools, trail, onOpenFolder, onCrumb, h
     return () => { off(); window.clearTimeout(timer); window.removeEventListener('focus', onFocus); };
   }, [refresh]);
 
-  useEffect(() => { try { localStorage.setItem(MODE_KEY, mode); } catch { /* ignore */ } }, [mode]);
 
   // Файл по ссылке: прокрутить к нему и подсветить.
   useEffect(() => {
@@ -643,30 +635,11 @@ ${url}` });
     <InlineName initial={t.item.name} onCommit={(n) => void commitRename(t, n)} onCancel={() => setRenaming(null)} />
   ) : <span className="nf-name" title={t.item.name}>{t.item.name}<HiddenMark kind={t.kind === 'folder' ? 'cloud_folder' : 'file'} id={String(t.item.id)} /></span>);
 
-  // Построчный вид — таблица: название, тип, размер, дата изменения, владелец. В сетке этих ячеек нет.
-  const ownerCell = (ownerId: string) => {
-    const u = users[String(ownerId)];
-    return (
-      <span className="nf-cell nf-c-owner">
-        {String(ownerId) === myId() ? 'Вы' : u ? <><Avatar name={displayName(u)} seed={String(u.id)} src={u.avatar} person size={18} /><span>{displayName(u)}</span></> : '—'}
-      </span>
-    );
-  };
-  const listCells = (type: string, size: string, date: string, ownerId: string) => (
-    <>
-      <span className="nf-cell nf-c-type" title={type}>{type}</span>
-      <span className="nf-cell nf-c-size">{size}</span>
-      <span className="nf-cell nf-c-date">{date}</span>
-      {ownerCell(ownerId)}
-    </>
-  );
-  const plural = (n: number) => (n % 10 === 1 && n % 100 !== 11 ? 'элемент' : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 'элемента' : 'элементов');
-
   // ── Разметка ──────────────────────────────────────────────────────────────
   let body: ReactNode;
   if (!data && phase === 'loading') {
     body = (
-      <div className={`nf-items nf-${mode}`} aria-busy="true" aria-label="Загружаю файлы">
+      <div className="nf-items nf-grid" aria-busy="true" aria-label="Загружаю файлы">
         {Array.from({ length: 8 }, (_, i) => <div key={i} className="nf-item nf-skel"><span className="nx-skel nf-skel-thumb" /><span className="nx-skel nx-skel-line" /></div>)}
       </div>
     );
@@ -693,20 +666,13 @@ ${url}` });
   } else {
     body = (
       <>
-        {mode === 'list' && (
-          <div className="nf-thead" aria-hidden="true">
-            <span /><span>Название</span><span>Тип</span><span>Размер</span><span>Изменён</span><span>Владелец</span><span />
-          </div>
-        )}
         {(folders.length > 0 || creating) && (
           <section aria-label="Папки">
             <h3 className="nf-group">Папки</h3>
-            <div className={`nf-items nf-${mode}`}>
+            <div className="nf-items nf-grid">
               {creating && (
                 <div className="nf-item nf-folder" data-editing="true">
-                  {mode === 'grid'
-                    ? <span className="nft"><span className="nft-empty">Пусто</span></span>
-                    : <span className="nf-thumb"><Folder size={22} aria-hidden="true" /></span>}
+                  <span className="nft"><span className="nft-empty">Пусто</span></span>
                   <InlineName initial="Новая папка" onCommit={(n) => void commitCreate(n)} onCancel={() => setCreating(false)} />
                 </div>
               )}
@@ -729,23 +695,13 @@ ${url}` });
                     {...dropTarget(f.id, f.name, `f:${f.id}`)}
                   >
                     {checkBox(f.id, 'folder', f.name)}
-                    {mode === 'grid'
-                      ? <FolderTile folder={f} />
-                      : <span className="nf-thumb"><Folder size={22} aria-hidden="true" /></span>}
+                    <FolderTile folder={f} />
                     <span className="nf-text">
                       {nameOrInput(t)}
-                      {mode === 'list' ? (
-                        <span className="nf-badges">
-                          {f.isPinned && <Pin size={11} aria-label="Закреплена" />}
-                          {sharedPeople(f).length > 0 && <><Users size={11} aria-hidden="true" /> {sharedPeople(f).length}</>}
-                        </span>
-                      ) : (
-                        <span className="nf-meta">
-                          {typeof f.fileCount === 'number' ? `${f.fileCount} ${f.fileCount === 1 ? 'файл' : f.fileCount < 5 && f.fileCount > 0 ? 'файла' : 'файлов'}` : fmtDate(f.updatedAt)}
-                        </span>
-                      )}
+                      <span className="nf-meta">
+                        {typeof f.fileCount === 'number' ? `${f.fileCount} ${f.fileCount === 1 ? 'файл' : f.fileCount < 5 && f.fileCount > 0 ? 'файла' : 'файлов'}` : fmtDate(f.updatedAt)}
+                      </span>
                     </span>
-                    {mode === 'list' && listCells('Папка', typeof f.fileCount === 'number' ? `${f.fileCount} ${plural(f.fileCount)}` : '', fmtDate(f.updatedAt), f.ownerId)}
                     {moreBtn(t)}
                   </div>
                 );
@@ -756,10 +712,10 @@ ${url}` });
         {(files.length > 0 || uploads.length > 0) && (
           <section aria-label="Файлы">
             <h3 className="nf-group">Файлы</h3>
-            <div className={`nf-items nf-${mode}`}>
+            <div className="nf-items nf-grid">
               {uploads.map((u) => (
                 <div key={u.id} className="nf-item nf-uploading" aria-busy="true">
-                  <span className="nf-thumb"><Upload size={mode === 'grid' ? 28 : 18} aria-hidden="true" /></span>
+                  <span className="nf-thumb"><Upload size={28} aria-hidden="true" /></span>
                   <span className="nf-text">
                     <span className="nf-name">{u.name}</span>
                     <span className="nf-progress" role="progressbar" aria-valuenow={u.pct} aria-valuemin={0} aria-valuemax={100}><i style={{ width: `${u.pct}%` }} /></span>
@@ -788,23 +744,17 @@ ${url}` });
                     {checkBox(f.id, 'file', f.name)}
                     <span className="nf-thumb" data-kind={k}>
                       {k === 'image'
-                        ? <img src={thumbUrl(fileUrl(f.url), mode === 'grid' ? 320 : 64)} alt="" loading="lazy" decoding="async" draggable={false} />
-                        : <FileGlyph name={f.name} kind={k} size={mode === 'grid' ? 'lg' : 'sm'} />}
+                        ? <img src={thumbUrl(fileUrl(f.url), 320)} alt="" loading="lazy" decoding="async" draggable={false} />
+                        : <FileGlyph name={f.name} kind={k} size="lg" />}
                     </span>
                     <span className="nf-text">
                       {nameOrInput(t)}
-                      {mode === 'grid' && (
-                        <span className="nf-meta">
-                          {[dims[f.id]?.[0] ? `${dims[f.id][0]}×${dims[f.id][1]}` : '', fmtBytes(f.size), fmtDateShort(f.createdAt)].filter(Boolean)
-                            .map((part, i, all) => <span key={i} className="nf-meta-part">{part}{i < all.length - 1 ? ' ·' : ''}</span>)}
-                          {owner && <span className="nf-owner" title={`Владелец: ${displayName(owner)}`}><Avatar name={displayName(owner)} seed={String(owner.id)} src={owner.avatar} person size={14} /></span>}
-                        </span>
-                      )}
+                      <span className="nf-meta">
+                        {[dims[f.id]?.[0] ? `${dims[f.id][0]}×${dims[f.id][1]}` : '', fmtBytes(f.size), fmtDateShort(f.createdAt)].filter(Boolean)
+                          .map((part, i, all) => <span key={i} className="nf-meta-part">{part}{i < all.length - 1 ? ' ·' : ''}</span>)}
+                        {owner && <span className="nf-owner" title={`Владелец: ${displayName(owner)}`}><Avatar name={displayName(owner)} seed={String(owner.id)} src={owner.avatar} person size={14} /></span>}
+                      </span>
                     </span>
-                    {mode === 'list' && listCells(
-                      [f.name.includes('.') ? (f.name.split('.').pop() || '').toUpperCase() : 'Файл', dims[f.id]?.[0] ? `${dims[f.id][0]}×${dims[f.id][1]}` : ''].filter(Boolean).join(' · '),
-                      fmtBytes(f.size), fmtDate(f.updatedAt || f.createdAt), f.ownerId,
-                    )}
                     {moreBtn(t)}
                   </div>
                 );
@@ -850,10 +800,6 @@ ${url}` });
           </button>
           <button type="button" className="nf-rbtn" aria-haspopup="menu" aria-expanded={Boolean(sortMenu)} title={`Сортировка: ${SORTS[sort].label}`} aria-label={`Сортировка: ${SORTS[sort].label}`}
             onClick={(e) => setSortMenu({ element: e.currentTarget, align: 'end' })}><CSort size={20} /></button>
-          <div className="nf-rseg" role="group" aria-label="Вид">
-            <button type="button" aria-pressed={mode === 'grid'} onClick={() => setMode('grid')} aria-label="Сеткой" title="Сеткой"><CGrid size={20} /></button>
-            <button type="button" aria-pressed={mode === 'list'} onClick={() => setMode('list')} aria-label="Списком" title="Списком"><CList size={20} /></button>
-          </div>
           <button type="button" className="nf-rbtn" onClick={() => setCreating(true)} disabled={creating} aria-label="Новая папка" title="Новая папка"><CFolderPlus size={20} /></button>
           <button type="button" className="nf-rbtn" data-primary="" onClick={() => fileInput.current?.click()} aria-label="Загрузить" title="Загрузить файлы"><CUpload size={20} /></button>
         </div>
