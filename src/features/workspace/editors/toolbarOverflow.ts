@@ -34,9 +34,13 @@ export function useToolbarOverflow(bar: RefObject<HTMLElement | null>, count: nu
       setFit((cur) => (cur === next ? cur : next));
     };
     const soon = () => { if (!frame) frame = requestAnimationFrame(measure); };
+    // Следим и за самой панелью, и за каждой группой: группа шире стала (догрузился шрифт, длинное название стиля
+    // или шрифта) — ширина панели та же, но помещается уже меньше. Раньше замер так и оставался по первому показу.
     const ro = new ResizeObserver(soon);
     ro.observe(el);
+    el.querySelectorAll<HTMLElement>(':scope > [data-tb-group]').forEach((g) => ro.observe(g));
     measure();
+    void document.fonts?.ready.then(soon);
     return () => { ro.disconnect(); if (frame) cancelAnimationFrame(frame); };
   }, [bar, count, reserve, moreAlways]);
 
