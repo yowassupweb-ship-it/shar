@@ -33,6 +33,7 @@ class SubscribeBody(BaseModel):
     subscription: Dict[str, Any]
     userAgent: str = ""
     platform: str = ""
+    caps: str = ""  # присылает сервис-воркер: что он умеет (см. store.upsert_subscription)
 
 
 @router.post("/api/push/subscriptions")
@@ -42,7 +43,7 @@ def subscribe(body: SubscribeBody, me: Identity = Depends(current_identity)):
         raise HTTPException(status_code=400, detail="Invalid payload")
     if not service.is_configured():
         raise HTTPException(status_code=503, detail="Web push is not configured on server")
-    saved = store.upsert_subscription(me.user_id, body.subscription, body.userAgent, body.platform)
+    saved = store.upsert_subscription(me.user_id, body.subscription, body.userAgent, body.platform, body.caps)
     return {"success": True, "endpoint": saved.get("endpoint"), "updatedAt": str(saved.get("updated_at") or "")}
 
 

@@ -29,13 +29,50 @@ CREATE TABLE IF NOT EXISTS push_prefs (
     prefs   JSONB NOT NULL DEFAULT '{}'::jsonb
 )""")
 
+# Что умеет сервис-воркер устройства (через запятую): «dismiss» — снимать уведомление по пушу-«отмене»
+# (public/notifications-sw.js сообщает это сам при обновлении). Старому воркеру такой пуш показал бы пустое
+# уведомление — поэтому «отмену» шлём только тем, кто её умеет.
+schema.register("push_subscriptions_caps", "ALTER TABLE push_subscriptions ADD COLUMN IF NOT EXISTS caps TEXT NOT NULL DEFAULT ''")
+
 MAX_SUBSCRIPTIONS_PER_USER = 20
 
+_caps_ready: bool | None = None
 
-def upsert_subscription(user_id: str, subscription: Dict[str, Any], user_agent: str = "", platform: str = "") -> Dict[str, Any]:
+
+def caps_ready() -> bool:
+    """Столбец caps на проде появляется шагом схемы — до него всё работает по-старому, без «отмен»."""
+    global _caps_ready
+    if _caps_ready is None:
+        try:
+            _caps_ready = bool(db.conn.fetch_one(
+                "SELECT 1 AS x FROM information_schema.columns WHERE table_name = 'push_subscriptions' AND column_name = 'caps'"))
+        except Exception:  # noqa: BLE001
+            return False
+    return _caps_ready
+
+
+def upsert_subscription(user_id: str, subscription: Dict[str, Any], user_agent: str = "", platform: str = "", caps: str = "") -> Dict[str, Any]:
     """Подписка принадлежит устройству (endpoint). Если на нём входил другой человек —
-    она переходит к вошедшему сейчас: иначе общий компьютер показывал бы пуши обоим."""
+    она переходит к вошедшему сейчас: иначе общий компьютер показывал бы пуши обоим.
+    caps пишет только сервис-воркер; страница их не знает и не затирает."""
     endpoint = str(subscription.get("endpoint") or "").strip()
+    if caps_ready():
+        row = db.conn.fetch_one(
+            """
+            INSERT INTO push_subscriptions (endpoint, user_id, subscription, user_agent, platform, caps)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (endpoint) DO UPDATE SET
+                user_id = EXCLUDED.user_id, subscription = EXCLUDED.subscription,
+                user_agent = CASE WHEN EXCLUDED.user_agent <> '' THEN EXCLUDED.user_agent ELSE push_subscriptions.user_agent END,
+                platform = CASE WHEN EXCLUDED.caps <> '' THEN push_subscriptions.platform ELSE EXCLUDED.platform END,
+                caps = CASE WHEN EXCLUDED.caps <> '' THEN EXCLUDED.caps ELSE push_subscriptions.caps END,
+                updated_at = NOW()
+            RETURNING endpoint, updated_at
+            """,
+            (endpoint, user_id, Json(subscription), user_agent[:400], platform[:80], caps[:80]),
+        )
+        _trim(user_id)
+        return dict(row) if row else {"endpoint": endpoint}
     row = db.conn.fetch_one(
         """
         INSERT INTO push_subscriptions (endpoint, user_id, subscription, user_agent, platform)
@@ -47,6 +84,11 @@ def upsert_subscription(user_id: str, subscription: Dict[str, Any], user_agent: 
         """,
         (endpoint, user_id, Json(subscription), user_agent[:400], platform[:80]),
     )
+    _trim(user_id)
+    return dict(row) if row else {"endpoint": endpoint}
+
+
+def _trim(user_id: str) -> None:
     # Старые подписки сверх лимита уходят: браузеры переподписываются, а записи копятся.
     db.conn.execute_query(
         """
@@ -55,11 +97,11 @@ def upsert_subscription(user_id: str, subscription: Dict[str, Any], user_agent: 
         """,
         (user_id, user_id, MAX_SUBSCRIPTIONS_PER_USER),
     )
-    return dict(row) if row else {"endpoint": endpoint}
 
 
 def subscriptions_of(user_id: str) -> List[Dict[str, Any]]:
-    return [dict(r) for r in db.conn.fetch_all("SELECT endpoint, subscription, user_agent FROM push_subscriptions WHERE user_id = %s", (user_id,))]
+    cols = "endpoint, subscription, user_agent" + (", caps" if caps_ready() else "")
+    return [dict(r) for r in db.conn.fetch_all(f"SELECT {cols} FROM push_subscriptions WHERE user_id = %s", (user_id,))]
 
 
 def count_for(user_id: str) -> int:

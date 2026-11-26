@@ -91,6 +91,20 @@ def send_to_user(user_id: str, payload: Dict[str, Any], *, mobile_only: bool = F
     return {"sent": sum(1 for r in results if r is True), "failed": sum(1 for r in results if r is False)}
 
 
+def dismiss(user_id: str, chat_id: str) -> Dict[str, int]:
+    """Чат прочитан на одном из устройств — снять его уведомление на остальных, даже где Шар закрыт.
+    Тот же Topic, что у пуша сообщения: если тот ещё не доставлен (телефон без сети), «отмена» его заменит."""
+    if not is_configured() or not user_id or not chat_id:
+        return {"sent": 0, "failed": 0}
+    items = [it for it in store.subscriptions_of(str(user_id)) if "dismiss" in str(it.get("caps") or "").split(",")]
+    if not items:
+        return {"sent": 0, "failed": 0}
+    tag = f"chat-{chat_id}"
+    data = json.dumps({"type": "dismiss", "chatId": str(chat_id), "tag": tag}, ensure_ascii=False)
+    results = list(_pool.map(lambda it: _send_one(it, data, tag), items))
+    return {"sent": sum(1 for r in results if r is True), "failed": sum(1 for r in results if r is False)}
+
+
 def notify(recipient_ids: Iterable[str], *, title: str, body: str = "", url: str = "/", tag: str = "message",
            online: Iterable[str] = (), **extra: Any) -> Dict[str, int]:
     """Пуш получателям с учётом их настроек (реакции можно отключить).

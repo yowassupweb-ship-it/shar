@@ -54,6 +54,21 @@ self.addEventListener('install', (event) => {
   );
 });
 
+// Что умеет этот воркер — сервер шлёт пуш-«отмену» (снять уведомление прочитанного чата) только тем, кто её умеет:
+// старый воркер показал бы на её месте пустое уведомление. Сообщаем при каждом обновлении воркера.
+const SW_CAPS = 'dismiss';
+
+async function reportCaps(subscription) {
+  try {
+    const sub = subscription || await self.registration.pushManager.getSubscription();
+    if (!sub) return;
+    await fetch('/api/push/subscriptions', {
+      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription: sub.toJSON(), userAgent: (self.navigator && self.navigator.userAgent) || '', platform: 'sw', caps: SW_CAPS }),
+    });
+  } catch (_) { /* нет связи или не вошли — сообщим при следующем обновлении */ }
+}
+
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
@@ -63,6 +78,7 @@ self.addEventListener('activate', (event) => {
         .map((key) => caches.delete(key))
     );
     await self.clients.claim();
+    await reportCaps();
   })());
 });
 
@@ -271,6 +287,11 @@ self.addEventListener('message', (event) => {
   const data = event.data;
   if (!data) return;
 
+  if (data.type === 'report-caps') {
+    event.waitUntil(reportCaps());
+    return;
+  }
+
   if (data.type === 'sync-muted-chats') {
     // Full sync on page load
     const uid = String(data.userId || '');
@@ -329,6 +350,30 @@ self.addEventListener('push', (event) => {
     payload = event.data ? event.data.json() : {};
   } catch (_) {
     payload = {};
+  }
+
+  // Чат прочитан на другом устройстве — снять его уведомление здесь (сервер: push/service.dismiss). Ничего не
+  // показываем; Safari обязан что-то показать на каждый пуш — показываем беззвучное и сразу убираем (как skip ниже).
+  if (payload.type === 'dismiss') {
+    const cid = String(payload.chatId || '');
+    const ua0 = (self.navigator && self.navigator.userAgent) || '';
+    const mustShow0 = /Safari/i.test(ua0) && !/Chrome|CriOS|Chromium|Edg|Android|Firefox|FxiOS/i.test(ua0);
+    if (cid) pendingPushCancel[cid] = true; // пуш этого чата ещё ждёт своих 3 секунд — не показывать
+    event.waitUntil((async () => {
+      const list = await self.registration.getNotifications().catch(() => []);
+      list.forEach((n) => {
+        const tag = String(n.tag || '');
+        const nChatId = String((n.data && n.data.chatId) || '');
+        if (cid && (tag === `chat-${cid}` || nChatId === cid)) n.close();
+      });
+      if (mustShow0) {
+        await self.registration.showNotification('Шар', { body: ' ', tag: 'shar-silent', silent: true, data: { url: '/' } }).catch(() => undefined);
+        const shown = await self.registration.getNotifications({ tag: 'shar-silent' }).catch(() => []);
+        shown.forEach((n) => n.close());
+      }
+      await syncBadge();
+    })());
+    return;
   }
 
   const kind = getNotifKind(payload);
@@ -476,7 +521,7 @@ self.addEventListener('pushsubscriptionchange', (event) => {
       // на старую, отозванную, и уведомления не приходили до следующего открытия Шара.
       await fetch('/api/push/subscriptions', {
         method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subscription: newSubscription.toJSON(), userAgent: (self.navigator && self.navigator.userAgent) || '', platform: 'sw' }),
+        body: JSON.stringify({ subscription: newSubscription.toJSON(), userAgent: (self.navigator && self.navigator.userAgent) || '', platform: 'sw', caps: SW_CAPS }),
       }).catch(() => undefined);
       // Notify the app client so it can re-register with the server
       const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });

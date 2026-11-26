@@ -10,6 +10,8 @@ from app.core.realtime import sse_manager
 from app.core.security import Identity, current_identity
 from app.modules.chats.access import require_member
 from app.modules.chats.cache import _update_chat_cache_field
+from app.modules.push import activity as push_activity
+from app.modules.push import service as push_service
 
 router = APIRouter()
 
@@ -22,6 +24,7 @@ def send_typing_indicator(chat_id: str, body: dict = Body(...), me: Identity = D
     # Кто печатает — из сессии, а не из тела запроса: иначе можно «печатать» за другого.
     user_id = me.user_id
     user_name = me.display_name
+    push_activity.touch(user_id)  # набирает текст — живая переписка, пуши на телефон не нужны
     # Defaults true for back-compat; the client sends false the instant the
     # composer goes back to empty, so the receiver can clear it right away
     # instead of waiting out its own timeout.
@@ -109,6 +112,12 @@ def mark_messages_as_read(chat_id: str, data_payload: dict, background_tasks: Ba
         })
     except Exception:
         pass
+
+    # Читает — значит, сейчас в Шаре. Если по этому чату ему уходил пуш — снять уведомление на всех его устройствах,
+    # в том числе там, где Шар закрыт (сокет туда не дойдёт). Одна «отмена» на пуш: take_pushed стирает отметку.
+    push_activity.touch(user_id)
+    if push_activity.take_pushed(user_id, str(chat_id)):
+        background_tasks.add_task(push_service.dismiss, user_id, str(chat_id))
 
     def _persist_read_marker():
         try:

@@ -11,6 +11,7 @@ from app.core.camel import snake_to_camel
 from app.core.db import db
 from app.core.realtime import sse_manager
 from app.core.security import Identity, current_identity, ensure_self_or_admin
+from app.modules.push import activity as push_activity
 from app.modules.push import service as push_service
 
 router = APIRouter()
@@ -182,15 +183,18 @@ def send_notification_message(user_id: str, notification_data: dict):
     # Web Push (фоновое системное уведомление). Шлём ВСЕГДА, без проверки «в сети»: у
     # уведомления автор — сам получатель, обычный пуш сообщений его исключает, а скрытая
     # вкладка может держать живой сокет. Браузер/SW гасит пуш, если окно в фокусе.
+    # Человек сейчас работает в Шаре — открытый Шар покажет уведомление сам, телефон не трогаем (push/activity.py).
     try:
-        push_service.notify(
-            [str(user_id)],
-            title="🔔 Колокольчик",
-            body=(content or '')[:80] or "Новое уведомление",
-            url=f"/account?tab=messages&chat={notifications_chat['id']}",
-            tag=f"chat-{notifications_chat['id']}",
-            chatId=str(notifications_chat['id']),
-        )
+        if not push_activity.is_active(str(user_id)):
+            push_activity.mark_pushed(str(user_id), str(notifications_chat['id']))
+            push_service.notify(
+                [str(user_id)],
+                title="🔔 Колокольчик",
+                body=(content or '')[:80] or "Новое уведомление",
+                url=f"/account?tab=messages&chat={notifications_chat['id']}",
+                tag=f"chat-{notifications_chat['id']}",
+                chatId=str(notifications_chat['id']),
+            )
     except Exception as _push_err:
         logger.debug(f"Notification web push skipped: {_push_err}")
 

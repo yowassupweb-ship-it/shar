@@ -27,6 +27,7 @@ from app.modules.chats.cache import (
 )
 from app.modules.chats.inline import _externalize_message
 from app.modules.chats.schemas import MessageCreate
+from app.modules.push import activity as push_activity
 from app.modules.push import service as push_service
 from app.modules.realtime.frames import (
     valid_client_message_id as _valid_client_message_id,
@@ -288,6 +289,7 @@ def send_message(chat_id: str, message_data: MessageCreate, background_tasks: Ba
     # каждого участника (кто в сети), в общем чате это десятки запросов, и
     # автор ждал их до подтверждения отправки. Собеседники к этому моменту
     # уже получили сообщение по сокету — пуш только для тех, кто не в сети.
+    push_activity.touch(str(message_data.authorId))  # пишет сейчас — пуши ему на телефон не нужны (push/activity.py)
     background_tasks.add_task(_dispatch_web_push)
     background_tasks.add_task(_deferred_writes)
 
@@ -313,6 +315,9 @@ def _send_message_web_push(chat: dict, chat_id: str, message_data, author_name: 
         # компьютере Шар (в том числе свёрнутый в трей) показывает сообщение сам, а телефон без пуша молчал бы.
         # Раньше «в сети» исключало пуш совсем — пока Шар открыт на компьютере, телефон ничего не получал.
         online = [uid for uid in recipient_ids if _call_presence_count(uid) > 0]
+        # Кто прямо сейчас работает в Шаре (пишет, читает, набирает) — пуша не получает вовсе: открытый Шар покажет
+        # сообщение сам, а телефон жужжал на каждую реплику живой переписки (push/activity.py).
+        recipient_ids = [uid for uid in recipient_ids if not push_activity.is_active(uid)]
         if not recipient_ids:
             return
         chat_title = chat.get('title') or chat.get('name') or 'Новое сообщение'
@@ -326,6 +331,9 @@ def _send_message_web_push(chat: dict, chat_id: str, message_data, author_name: 
             senderName=author_name,
             online=online,
         )
+        # Прочтёт на любом устройстве — уведомление снимется и на остальных (receipts.mark-read → service.dismiss).
+        for uid in recipient_ids:
+            push_activity.mark_pushed(uid, str(chat_id))
         # Tell the SENDER (not the recipients — they get the OS notification itself)
         # that at least one recipient's device actually received a push for this
         # message, distinct from them having read it.

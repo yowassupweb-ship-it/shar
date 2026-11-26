@@ -866,6 +866,9 @@ export class BrowserPushService {
           platform: typeof navigator !== 'undefined' ? navigator.platform : '',
         }),
       });
+      // Пусть воркер сам скажет серверу, что умеет (снимать уведомления прочитанных чатов): страница этого не знает,
+      // а старый воркер сообщение просто проигнорирует — и сервер не пошлёт ему непонятный пуш.
+      registration.active?.postMessage({ type: 'report-caps' });
 
     } catch {
       // non-critical: web push subscription failure doesn't break notifications
