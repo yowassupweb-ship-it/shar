@@ -93,6 +93,8 @@ export const routeSource = (id: string, extChatId: string, chatId: string | null
 /** Диалог с клиентом: все площадки в одном списке, у каждого диалога — своя. */
 export interface SocialDialog {
   id: string;
+  /** Кому написали: сообществу (комментарии, группа, сообщения сообществу) или боту (личная переписка с ботом). */
+  to: 'community' | 'bot';
   accountId: string;
   platform: Platform;
   platformLabel: string;
@@ -141,9 +143,10 @@ export interface DialogMessage {
 }
 
 /** mode: «Диалоги» — личные и беседы, «Комментарии» — комментарии к постам (две вкладки раздела). */
-export function listDialogs(mode: 'dialogs' | 'comments' | 'all', filter: { waiting?: boolean; platform?: Platform | ''; q?: string }) {
+export function listDialogs(mode: 'dialogs' | 'comments' | 'all', filter: { waiting?: boolean; platform?: Platform | ''; q?: string; to?: 'community' | 'bot' | '' }) {
   const qs = new URLSearchParams(mode === 'all' ? {} : { kind: mode });
   if (filter.waiting) qs.set('filter', 'waiting');
+  if (filter.to) qs.set('to', filter.to);
   if (filter.platform) qs.set('platform', filter.platform);
   if (filter.q?.trim()) qs.set('q', filter.q.trim());
   return call<{ dialogs: SocialDialog[]; waiting: { dialogs: number; comments: number } }>(`/api/social/dialogs?${qs}`);

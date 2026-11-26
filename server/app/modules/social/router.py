@@ -648,10 +648,15 @@ def _accounts() -> Dict[str, dict]:
 
 
 @router.get("/api/social/dialogs")
-def list_dialogs(kind: str = "", filter: str = "", platform: str = "", q: str = "", limit: int = 300, me: Identity = Depends(require_tool)):
+def list_dialogs(kind: str = "", filter: str = "", platform: str = "", q: str = "", to: str = "", limit: int = 300, me: Identity = Depends(require_tool)):
     """Диалоги всех площадок, свежие сверху. kind=comments — комментарии, kind=dialogs — личные и беседы
-    (в разделе это две вкладки); filter=waiting — только ждущие ответа."""
+    (в разделе это две вкладки); filter=waiting — только ждущие ответа; to=community|bot — кому написали
+    (dialogs.audience)."""
     where, params = [], []
+    if to == "bot":
+        where.append(D.BOT_SQL)
+    elif to == "community":
+        where.append(f"NOT {D.BOT_SQL}")
     if kind == "comments":
         where.append("d.kind = 'comments'")
     elif kind == "dialogs":

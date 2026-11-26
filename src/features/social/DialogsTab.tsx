@@ -82,14 +82,16 @@ export default function DialogsTab() {
   const narrow = useSyncExternalStore(subscribeNarrow, () => window.matchMedia(NARROW).matches, () => false);
   const [waitingOnly, setWaitingOnly] = useState(false);
   const [platform, setPlatform] = useState<Platform | ''>('');
+  // Кому написали: сообществу (комментарии, группа обсуждения, сообщения сообществу) или боту (личная переписка с ботом).
+  const [to, setTo] = useState<'community' | 'bot' | ''>('');
   const [q, setQ] = useState('');
   const [list, setList] = useState<Awaited<ReturnType<typeof listDialogs>> | null>(null);
   const [error, setError] = useState('');
   const [tick, setTick] = useState(0); // social_changed по открытому диалогу
 
   const load = useCallback(() => {
-    listDialogs(mode, { waiting: waitingOnly, platform, q }).then((d) => { setList(d); setError(''); }).catch((e: Error) => setError(e.message));
-  }, [mode, waitingOnly, platform, q]);
+    listDialogs(mode, { waiting: waitingOnly, platform, q, to }).then((d) => { setList(d); setError(''); }).catch((e: Error) => setError(e.message));
+  }, [mode, waitingOnly, platform, q, to]);
   useEffect(() => { const t = window.setTimeout(load, q ? 250 : 0); return () => window.clearTimeout(t); }, [load, q]);
   useEffect(() => realtime.subscribe((event) => {
     const e = event as { type?: string; dialogId?: string };
@@ -144,7 +146,13 @@ export default function DialogsTab() {
             <button type="button" aria-pressed={platform === ''} onClick={() => setPlatform('')}>Все</button>
             <button type="button" aria-pressed={platform === 'vk'} onClick={() => setPlatform('vk')}>ВК</button>
             <button type="button" aria-pressed={platform === 'max'} onClick={() => setPlatform('max')}>MAX</button>
+            <button type="button" aria-pressed={platform === 'telegram'} onClick={() => setPlatform('telegram')}>TG</button>
           </div>
+        </div>
+        <div className="nx-segment nsd-to" role="group" aria-label="Кому написали">
+          <button type="button" aria-pressed={to === ''} onClick={() => setTo('')}>Всё</button>
+          <button type="button" aria-pressed={to === 'community'} onClick={() => setTo('community')} title="Комментарии под постами, группа обсуждения, сообщения сообществу">Сообществу</button>
+          <button type="button" aria-pressed={to === 'bot'} onClick={() => setTo('bot')} title="Личная переписка с ботом (Telegram, MAX)">Боту</button>
         </div>
         <SearchField value={q} onChange={setQ} placeholder="Клиент, текст, пост" label="Поиск" />
       </div>
@@ -160,7 +168,7 @@ export default function DialogsTab() {
             <SocialAvatar platform={d.platform} name={d.title || d.clientName} seed={d.id} src={d.avatar} size={38} />
             <span className="nsd-row-text">
               <span className="nsd-row-top"><b>{d.title || d.clientName}</b><time>{when(d.lastAt)}</time></span>
-              <span className="nsd-row-src" data-kind={d.kind}>{d.kind === 'comments' ? <><b className="nsd-tag">Комментарий</b>{d.context ? ` · Пост: ${d.context}` : d.sourceTitle ? ` · ${d.sourceTitle}` : ''}</> : `${KIND_LABEL[d.kind]}${d.kind === 'group' && d.sourceTitle && d.sourceTitle !== d.title ? ` · ${d.sourceTitle}` : ''}`}</span>
+              <span className="nsd-row-src" data-kind={d.kind}>{d.to === 'bot' && <b className="nsd-tag nsd-tag-bot">Боту</b>}{d.kind === 'comments' ? <><b className="nsd-tag">Комментарий</b>{d.context ? ` · Пост: ${d.context}` : d.sourceTitle ? ` · ${d.sourceTitle}` : ''}</> : `${KIND_LABEL[d.kind]}${d.kind === 'group' && d.sourceTitle && d.sourceTitle !== d.title ? ` · ${d.sourceTitle}` : ''}`}</span>
               <span className="nsd-row-last">{d.lastDir === 'out' && <span className="nsd-you">Вы: </span>}{d.lastDir === 'in' && d.handled && <span className="nsd-you">Ответ дан · </span>}{d.lastText}</span>
             </span>
             {d.waiting && <span className="nsd-dot" aria-label="Ждёт ответа" />}

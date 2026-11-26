@@ -152,3 +152,6 @@
 
 /* Комментарий в общей ленте — меткой, чтобы отличался от переписки с первого взгляда. */
 .nsd-tag { display: inline-block; padding: 0 6px; margin-right: 1px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent-fill) 16%, transparent); color: var(--accent-color); font-size: 11px; font-weight: var(--weight-semibold); line-height: 17px; }
+/* «Боту» — личная переписка с ботом (а не сообществу): своим цветом, чтобы не путать с комментариями. */
+.nsd-tag-bot { margin-right: 4px; background: color-mix(in srgb, var(--note-purple, #8b5cf6) 18%, transparent); color: var(--note-purple, #8b5cf6); }
+.nsd-to { margin-top: var(--space-2); }

@@ -170,7 +170,7 @@ function AddSheet({ onClose, onAdded }: { onClose: () => void; onAdded: (a: Soci
   };
   return (
     <Sheet
-      title="Подключить ВКонтакте или MAX"
+      title="Подключить ВКонтакте, MAX или Telegram"
       onClose={onClose}
       busy={busy}
       footer={(
@@ -184,8 +184,16 @@ function AddSheet({ onClose, onAdded }: { onClose: () => void; onAdded: (a: Soci
         <div className="nx-segment" role="group" aria-label="Мессенджер">
           <button type="button" aria-pressed={platform === 'vk'} onClick={() => setPlatform('vk')}>ВКонтакте</button>
           <button type="button" aria-pressed={platform === 'max'} onClick={() => setPlatform('max')}>MAX</button>
+          <button type="button" aria-pressed={platform === 'telegram'} onClick={() => setPlatform('telegram')}>Telegram</button>
         </div>
-        {platform === 'vk' ? (
+        {platform === 'telegram' ? (
+          <ol className="nsc-steps">
+            <li>В @BotFather создайте бота (/newbot) и скопируйте токен.</li>
+            <li>Канал: «Изменить» → «Администраторы» → добавьте бота (публикация и удаление сообщений).</li>
+            <li>Комментарии: в группе обсуждения канала тоже сделайте бота администратором — тогда он видит все комментарии.</li>
+            <li>Вставьте токен ниже. Ответы на комментарии уходят от имени бота, личные сообщения боту — тоже в Шар.</li>
+          </ol>
+        ) : platform === 'vk' ? (
           <ol className="nsc-steps">
             <li>В сообществе: Управление → Сообщения — включите сообщения сообщества.</li>
             <li>Управление → Работа с API → Ключи доступа → Создать ключ с правами «Управление сообществом», «Сообщения сообщества», «Стена».</li>
@@ -198,7 +206,7 @@ function AddSheet({ onClose, onAdded }: { onClose: () => void; onAdded: (a: Soci
           </ol>
         )}
         <label className="nx-label">{platform === 'vk' ? 'Ключ доступа сообщества' : 'Токен бота'}
-          <input className="nx-field" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" spellCheck={false} placeholder={platform === 'vk' ? 'vk1.a.…' : 'Токен из кабинета MAX'} />
+          <input className="nx-field" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" spellCheck={false} placeholder={platform === 'vk' ? 'vk1.a.…' : platform === 'telegram' ? '123456789:AA…' : 'Токен из кабинета MAX'} />
         </label>
         <label className="nx-label">Название в Шаре (необязательно)
           <input className="nx-field" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="По умолчанию — название сообщества" />

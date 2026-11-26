@@ -236,8 +236,19 @@ def notify(dialog_id: str) -> None:
             pass
 
 
+# Кому написали: боту — личная переписка с ботом (Telegram, MAX: личные сообщения там идут именно боту); всё остальное —
+# сообществу (комментарии под постами, группа обсуждения, беседы, личные сообщения сообществу ВКонтакте, бизнес-аккаунт).
+BOT_PLATFORMS = ("telegram", "max")
+BOT_SQL = "(a.platform IN ('telegram', 'max') AND d.kind = 'private')"
+
+
+def audience(kind: str, platform: str) -> str:
+    return "bot" if platform in BOT_PLATFORMS and kind == "private" else "community"
+
+
 def view(row: Dict[str, Any], platforms: Dict[str, str], account: Dict[str, Any]) -> dict:
     return {
+        "to": audience(row["kind"], account.get("platform") or ""),
         "id": row["id"], "accountId": row["account_id"], "platform": account.get("platform"),
         "platformLabel": platforms.get(account.get("platform") or "", ""), "account": account.get("title") or "",
         "kind": row["kind"], "title": row.get("title") or "", "clientName": row.get("client_name") or "",

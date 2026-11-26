@@ -207,3 +207,25 @@ def test_read_status_of_our_messages(monkeypatch, admin, account):
     assert deliveries(vk_dialog) == [("read", True), ("sent", True)], "чаще, чем раз в несколько секунд, площадку не спрашиваем"
     R._read_checked.clear()
     assert deliveries(vk_dialog) == [("read", True), ("read", True)]
+
+
+def tg_private(text="Добрый день, хочу тур", mid=None, uid=501):
+    mid = mid or next(_ids)
+    return {"update_id": mid, "message": {
+        "message_id": mid, "chat": {"id": uid, "type": "private", "first_name": "Пётр"},
+        "from": {"id": uid, "first_name": "Пётр", "username": "petr"}, "text": text,
+    }}
+
+
+def test_split_community_and_bot(client, admin, account):
+    """«Кому написали»: комментарий под постом — сообществу, личное сообщение боту — боту; фильтр to= в списке диалогов."""
+    hook = f"/api/social/hook/{account['id']}/{account['secret']}"
+    assert client.post(hook, json=tg_comment(text="Сколько стоит?")).status_code == 200
+    assert client.post(hook, json=tg_private(text="Есть места на май?")).status_code == 200
+    every = admin.get("/api/social/dialogs").json()["dialogs"]
+    kinds = {d["lastText"]: d["to"] for d in every if d["accountId"] == account["id"]}
+    assert kinds.get("Сколько стоит?") == "community" and kinds.get("Есть места на май?") == "bot"
+    bot = admin.get("/api/social/dialogs?to=bot").json()["dialogs"]
+    community = admin.get("/api/social/dialogs?to=community").json()["dialogs"]
+    assert all(d["to"] == "bot" for d in bot) and any(d["lastText"] == "Есть места на май?" for d in bot)
+    assert all(d["to"] == "community" for d in community) and not any(d["lastText"] == "Есть места на май?" for d in community)
