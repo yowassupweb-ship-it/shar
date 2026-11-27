@@ -131,6 +131,10 @@ def get_todos(userId: Optional[str] = None, taskId: Optional[str] = None, me: Id
         have = {str(t.get('id')) for t in todos}
         todos = [*todos, *(t for t in shared_tasks if str(t.get('id')) not in have)]
     if shared_lists:
+        # Папка могла прийти и обычным списком (например, в ней задачи человека) — тогда без уровня доступа, и клиент
+        # считал её своей: давал завести в ней задачу, а сервер отказывал (403). Уровень дописываем и туда.
+        levels = {str(l.get('id')): l.get('shared_level') for l in shared_lists}
+        lists = [{**l, 'shared_level': levels[str(l.get('id'))]} if str(l.get('id')) in levels and str(l.get('creator_id') or '') != uid else l for l in lists]
         have_lists = {str(l.get('id')) for l in lists}
         lists = [*lists, *(l for l in shared_lists if str(l.get('id')) not in have_lists)]
     categories = db.get_todo_categories()

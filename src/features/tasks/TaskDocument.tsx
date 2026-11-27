@@ -235,8 +235,10 @@ export default function TaskDocument({ task, onBack, onGone, onCreated }: {
       const rep = repeatIdOf(created);
       if (rep !== 'none') syncTaskRepeat(created, rep).catch(() => showToast('Календарь не обновился — нет связи с сервером.', 'error'));
       onCreated?.(created.id);
-    } catch {
-      showToast('Задача не создалась — нет связи с сервером. Черновик сохранён.', 'error');
+    } catch (cause) {
+      // Сервер отказал по делу (нет прав на папку и т. п.) — говорим его словами; «нет связи» — только когда её нет.
+      const detail = (cause as { detail?: string } | null)?.detail;
+      showToast(detail ? `Задача не создалась: ${detail}. Черновик сохранён.` : 'Задача не создалась — нет связи с сервером. Черновик сохранён.', 'error');
       setPublishing(false);
     }
   }, [draft, publishing, task.id, onCreated]);

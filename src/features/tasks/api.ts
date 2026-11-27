@@ -301,7 +301,12 @@ export function setOpenTask(id: string | null): void { openTaskId = id; }
 
 async function send(method: 'POST' | 'PUT', body: Record<string, unknown>): Promise<Task> {
   const res = await fetch('/api/todos', { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (!res.ok) throw new Error(String(res.status));
+  if (!res.ok) {
+    // Отказ сервера («папка открыта только на просмотр») — его словами; иначе — код ответа.
+    let detail = '';
+    try { detail = String((await res.json())?.detail || ''); } catch { /* не JSON */ }
+    throw Object.assign(new Error(detail || String(res.status)), { status: res.status, detail });
+  }
   return (await res.json()) as Task;
 }
 

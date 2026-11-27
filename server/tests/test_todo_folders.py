@@ -102,3 +102,15 @@ def test_long_title_is_trimmed_not_500(anna):
     tid = r.json()["id"]
     assert len(r.json()["title"]) <= 255 and r.json()["title"].endswith("…")
     assert anna.put("/api/todos", json={"id": tid, "type": "todo", "title": long + "ещё"}).status_code == 200
+
+
+def test_view_folder_keeps_level_when_listed_twice(users, anna, boris):
+    """Папка «на просмотр», где у человека есть своя задача, приходит и обычным списком — уровень доступа всё равно
+    виден (иначе клиент давал завести в ней задачу, а сервер отказывал 403)."""
+    folder = _folder(anna, "Только смотреть")
+    anna.post("/api/todos", json={"type": "todo", "title": "Борису", "listId": folder, "assignedToId": users.ids["boris"], "assignedToIds": [users.ids["boris"]]})
+    assert anna.put(f"/api/todos/lists/{folder}/shares", json={"shares": [{"userId": users.ids["boris"], "level": "view"}]}).status_code == 200
+    lists = {str(l["id"]): l for l in boris.get("/api/todos").json()["lists"]}
+    assert lists[str(folder)].get("sharedLevel") == "view"
+    r = boris.post("/api/todos", json={"type": "todo", "title": "Своя", "listId": folder})
+    assert r.status_code == 403 and "просмотр" in r.json()["detail"]
